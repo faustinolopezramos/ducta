@@ -1,0 +1,155 @@
+/* ============================================================================
+   Ducta — capa de marca sobre Furo
+
+   Furo aporta el layout; la paleta vive en conf.py y aplica el tema "Lima"
+   (verde lima + pizarra, extraído del logotipo). Modo claro forzado.
+
+   Tokens propios:
+     --ducta-accent  lima de marca exacta (#84CC16), solo decorativo.
+   ========================================================================== */
+
+/* Inter (texto) + JetBrains Mono (código): las mismas familias que la UI.
+   Degrada con elegancia si el build no tiene red. */
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
+
+/* ---------------------------------------------------------------------------
+   Modo claro forzado
+   ------------------------------------------------------------------------- */
+.theme-toggle-container {
+  display: none;
+}
+
+:root {
+  color-scheme: light;
+}
+
+/* Ocultar título del header */
+header .header-center .brand,
+.mobile-header .header-center .brand {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------------------
+   Encabezados
+   ------------------------------------------------------------------------- */
+article[role="main"] h1 {
+  font-weight: 600;
+  letter-spacing: -0.011em;
+  padding-bottom: 0.28em;
+  margin-bottom: 0.85em;
+  border-bottom: 2px solid var(--ducta-accent);
+}
+article[role="main"] h2 {
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  margin-top: 2.2rem;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--color-background-border);
+}
+article[role="main"] h3 { font-weight: 600; }
+article[role="main"] { line-height: 1.66; }
+
+/* ---------------------------------------------------------------------------
+   Código
+   ------------------------------------------------------------------------- */
+.highlight {
+  border: 1px solid var(--color-background-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+div.highlight pre { padding: 14px 16px; }
+
+code.literal {
+  border-radius: 5px;
+  padding: 0.1em 0.4em;
+  font-weight: 500;
+}
+
+button.copybtn { border-radius: 6px; }
+button.copybtn:hover {
+  background: var(--color-brand-primary);
+  border-color: var(--color-brand-primary);
+}
+
+/* ---------------------------------------------------------------------------
+   Admoniciones — acento lima para note / tip / hint / seealso
+   ------------------------------------------------------------------------- */
+.admonition.note,
+.admonition.tip,
+.admonition.hint,
+.admonition.seealso {
+  border-left-color: var(--color-brand-primary) !important;
+}
+.admonition.note > .admonition-title::before,
+.admonition.tip > .admonition-title::before,
+.admonition.hint > .admonition-title::before,
+.admonition.seealso > .admonition-title::before {
+  color: var(--color-brand-primary);
+}
+
+/* ---------------------------------------------------------------------------
+   Cards de sphinx-design (landing)
+   ------------------------------------------------------------------------- */
+.sd-card {
+  border: 1px solid var(--color-background-border) !important;
+  border-radius: 14px !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.sd-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--ducta-accent) !important;
+  box-shadow: 0 12px 28px rgba(30, 40, 50, 0.12);
+}
+.sd-card .sd-card-title { font-weight: 600; }
+.sd-btn, .btn { border-radius: 8px; }
+
+/* ---------------------------------------------------------------------------
+   Tablas
+   ------------------------------------------------------------------------- */
+article[role="main"] table.docutils {
+  border: 1px solid var(--color-background-border);
+  border-radius: 10px;
+  overflow: hidden;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   Firmas de API (autodoc)
+   ------------------------------------------------------------------------- */
+dl.py > dt {
+  border-left: 3px solid var(--ducta-accent);
+  border-radius: 0 8px 8px 0;
+}
+
+/* Foco de teclado accesible. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--ducta-accent);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+   Sidebar: logo centrado
+   ------------------------------------------------------------------------- */
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  text-align: center;
+}
+.sidebar-logo-container {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+.sidebar-logo {
+  margin: 0 auto;
+}
+.sidebar-brand-text {
+  text-align: center;
+  width: 100%;
+}

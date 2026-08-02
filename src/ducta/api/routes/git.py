@@ -1,0 +1,452 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
+from loguru import logger
+from pydantic import BaseModel
+
+from ducta.api.core.git_sync import GitSyncError
+from ducta.api.dependencies import (
+    ConfigLockManagerDep,
+    CurrentUserDep,
+    GitSyncManagerDep,
+    WorkspaceManagerDep,
+    require_permission,
+)
+from ducta.api.models.git import (
+    BlameLine,
+    BlameResponse,
+    CommitInfo,
+    DiffResponse,
+    GitIdentityConfig,
+    GitIdentityResponse,
+    RevertRequest,
+    RevertResponse,
+)
+from ducta.api.models.git_sync import (
+    GitCommitInfo,
+    GitCommitRequest,
+    GitCommitResponse,
+    GitExternalChangesResponse,
+    GitHistoryResponse,
+    GitStageRequest,
+    GitStageResponse,
+    GitSyncStatus,
+)
+from ducta.api.utils.git_utils import safe_path
+
+_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
+
+
+def _validate_sha(sha: str) -> None:
+    if not _SHA_RE.match(sha):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid commit SHA: '{sha}'. Expected 7–40 hexadecimal characters.",
+        )
+
+
+def _safe_rel(root, path: str) -> str:
+    try:
+        return str(safe_path(root, path).relative_to(root))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+def _build_git_status(status: dict) -> GitSyncStatus:
+    return GitSyncStatus(
+        staged=status.get("staged", []),
+        unstaged=status.get("unstaged", []),
+        untracked=status.get("untracked", []),
+        branch=status.get("branch", "unknown"),
+        head=status.get("head", "unknown"),
+        available=status.get("available", False),
+        error=status.get("error"),
+    )
+
+
+def _validate_git_paths(paths: Optional[list[str]], workspace_root: Path) -> Optional[list[Path]]:
+    if paths is None:
+        return None
+    validated: list[Path] = []
+    for p in paths:
+        try:
+            validated.append(safe_path(workspace_root, p))
+        except ValueError as ve:
+            raise ValueError(f"Path traversal detected: {ve}")
+    return validated
+
+
+# ── Git history routes ────────────────────────────────────────────────────────
+
+router = APIRouter(prefix="/git", tags=["Git"])
+
+
+class GitLogResponse(BaseModel):
+    commits: List[CommitInfo]
+    count: int
+
+
+@router.get(
+    "/log", response_model=GitLogResponse, dependencies=[Depends(require_permission("git.read"))]
+)
+async def git_log(
+    manager: WorkspaceManagerDep,
+    path: Optional[str] = Query(default=None, description="Filter by file path"),
+    limit: int = Query(default=50, ge=1, le=500),
+) -> GitLogResponse:
+    safe_file_path = _safe_rel(manager.root, path) if path else None
+    raw = manager.get_git_log(path=safe_file_path, limit=limit)
+    commits = [CommitInfo(**c) for c in raw]
+    return GitLogResponse(commits=commits, count=len(commits))
+
+
+@router.get(
+    "/log/{path:path}",
+    response_model=GitLogResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def git_log_for_file(
+    path: str,
+    manager: WorkspaceManagerDep,
+    limit: int = Query(default=50, ge=1, le=500),
+) -> GitLogResponse:
+    safe_file_path = _safe_rel(manager.root, path)
+    raw = manager.get_git_log(path=safe_file_path, limit=limit)
+    commits = [CommitInfo(**c) for c in raw]
+    return GitLogResponse(commits=commits, count=len(commits))
+
+
+@router.get(
+    "/commit/{sha}",
+    response_model=CommitInfo,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_commit(sha: str, manager: WorkspaceManagerDep) -> CommitInfo:
+    _validate_sha(sha)
+    try:
+        return CommitInfo(**manager.get_commit(sha))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get(
+    "/diff/{sha}",
+    response_model=DiffResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_commit_diff(sha: str, manager: WorkspaceManagerDep) -> DiffResponse:
+    _validate_sha(sha)
+    try:
+        diff_text, parent_sha = manager.get_commit_diff(sha)
+        return DiffResponse(commit_a=parent_sha, commit_b=sha, diff=diff_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get(
+    "/diff/{sha1}/{sha2}",
+    response_model=DiffResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_diff_between(
+    sha1: str,
+    sha2: str,
+    manager: WorkspaceManagerDep,
+    path: Optional[str] = Query(default=None, description="Restrict diff to a specific file"),
+) -> DiffResponse:
+    _validate_sha(sha1)
+    _validate_sha(sha2)
+    safe_file_path = _safe_rel(manager.root, path) if path else None
+    diff_text = manager.get_git_diff(sha1, sha2, path=safe_file_path)
+    return DiffResponse(commit_a=sha1, commit_b=sha2, path=safe_file_path, diff=diff_text)
+
+
+@router.post(
+    "/revert",
+    response_model=RevertResponse,
+    dependencies=[Depends(require_permission("git.revert"))],
+)
+async def revert_file(body: RevertRequest, manager: WorkspaceManagerDep) -> RevertResponse:
+    _validate_sha(body.commit)
+    safe_file_path = _safe_rel(manager.root, body.path)
+    try:
+        new_sha = manager.revert_file(safe_file_path, body.commit, message=body.message)
+        return RevertResponse(
+            path=safe_file_path, restored_from=body.commit, new_commit_sha=new_sha
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(
+    "/blame/{path:path}",
+    response_model=BlameResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def git_blame(path: str, manager: WorkspaceManagerDep) -> BlameResponse:
+    safe_file_path = _safe_rel(manager.root, path)
+    try:
+        lines = [BlameLine(**line) for line in manager.get_file_blame(safe_file_path)]
+        return BlameResponse(path=safe_file_path, lines=lines)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.get(
+    "/config",
+    response_model=GitIdentityResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_git_config(manager: WorkspaceManagerDep) -> GitIdentityResponse:
+    identity = manager.get_git_identity()
+    return GitIdentityResponse(
+        name=identity.get("name"),
+        email=identity.get("email"),
+        configured=bool(identity.get("name") and identity.get("email")),
+    )
+
+
+@router.put(
+    "/config",
+    response_model=GitIdentityResponse,
+    dependencies=[Depends(require_permission("git.write"))],
+)
+async def set_git_config(
+    body: GitIdentityConfig, manager: WorkspaceManagerDep
+) -> GitIdentityResponse:
+    try:
+        manager.set_git_identity(body.name, body.email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return GitIdentityResponse(name=body.name, email=body.email, configured=True)
+
+
+# ── Git Sync operations ───────────────────────────────────────────────────────
+
+
+class GitPushPullResponse(BaseModel):
+    success: bool
+    message: str
+    git_status: Optional[GitSyncStatus] = None
+
+
+@router.get(
+    "/status",
+    response_model=GitSyncStatus,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_git_status(git_sync: GitSyncManagerDep) -> GitSyncStatus:
+    return _build_git_status(git_sync.status())
+
+
+@router.post(
+    "/stage",
+    response_model=GitStageResponse,
+    dependencies=[Depends(require_permission("git.write"))],
+)
+async def stage_changes(
+    request: GitStageRequest,
+    git_sync: GitSyncManagerDep,
+    lock_mgr: ConfigLockManagerDep,
+    user: CurrentUserDep,
+) -> GitStageResponse:
+    try:
+        return await run_in_threadpool(_do_stage, request, git_sync, lock_mgr)
+    except GitSyncError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to stage changes: {e}")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Unexpected error staging changes", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to stage changes")
+
+
+def _do_stage(request: GitStageRequest, git_sync, lock_mgr) -> GitStageResponse:
+    # Runs on a worker thread: acquires the file lock (blocking fcntl polling)
+    # and calls into GitPython, neither of which is safe on the event loop.
+    with lock_mgr.write_lock(timeout=5.0):
+        try:
+            paths = _validate_git_paths(request.paths, git_sync.workspace_root)
+        except ValueError as ve:
+            raise HTTPException(status_code=400, detail=str(ve))
+        staged_count = git_sync.stage_changes(paths=paths, force=request.force)
+        status = _build_git_status(git_sync.status())
+        return GitStageResponse(
+            success=True,
+            staged_count=staged_count,
+            message=f"Staged {staged_count} files",
+            git_status=status,
+        )
+
+
+@router.post(
+    "/commit",
+    response_model=GitCommitResponse,
+    dependencies=[Depends(require_permission("git.write"))],
+)
+async def commit_changes(
+    request: GitCommitRequest,
+    git_sync: GitSyncManagerDep,
+    lock_mgr: ConfigLockManagerDep,
+    user: CurrentUserDep,
+) -> GitCommitResponse:
+    try:
+        return await run_in_threadpool(_do_commit, request, git_sync, lock_mgr)
+    except GitSyncError as e:
+        raise HTTPException(status_code=400, detail=f"Failed to commit: {e}")
+    except Exception:
+        logger.error("Unexpected error committing", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to commit changes")
+
+
+def _do_commit(request: GitCommitRequest, git_sync, lock_mgr) -> GitCommitResponse:
+    with lock_mgr.write_lock(timeout=5.0):
+        author = None
+        if request.author_name and request.author_email:
+            author = (request.author_name, request.author_email)
+        committed = git_sync.auto_commit_if_staged(message=request.message, author=author)
+        status = _build_git_status(git_sync.status())
+        return GitCommitResponse(
+            success=committed,
+            commit_hash=status.head if committed else None,
+            message=(
+                f"Committed: {request.message or 'Auto: config update via API'}"
+                if committed
+                else "No staged changes to commit"
+            ),
+            git_status=status,
+        )
+
+
+@router.post(
+    "/pull",
+    response_model=GitPushPullResponse,
+    dependencies=[Depends(require_permission("git.write"))],
+)
+async def pull_remote_changes(
+    git_sync: GitSyncManagerDep,
+    lock_mgr: ConfigLockManagerDep,
+    user: CurrentUserDep,
+) -> GitPushPullResponse:
+    try:
+        return await run_in_threadpool(_do_pull, git_sync, lock_mgr)
+    except Exception:
+        logger.error("Error pulling changes", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to pull external changes")
+
+
+def _do_pull(git_sync, lock_mgr) -> GitPushPullResponse:
+    with lock_mgr.write_lock(timeout=20.0):
+        success, msg = git_sync.pull_changes()
+        return GitPushPullResponse(
+            success=success,
+            message=msg,
+            git_status=_build_git_status(git_sync.status()) if success else None,
+        )
+
+
+@router.post(
+    "/push",
+    response_model=GitPushPullResponse,
+    dependencies=[Depends(require_permission("git.write"))],
+)
+async def push_local_changes(
+    git_sync: GitSyncManagerDep,
+    lock_mgr: ConfigLockManagerDep,
+    user: CurrentUserDep,
+) -> GitPushPullResponse:
+    try:
+        return await run_in_threadpool(_do_push, git_sync, lock_mgr)
+    except Exception:
+        logger.error("Error pushing changes", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to push commits")
+
+
+def _do_push(git_sync, lock_mgr) -> GitPushPullResponse:
+    with lock_mgr.write_lock(timeout=15.0):
+        success, msg = git_sync.push_changes()
+        return GitPushPullResponse(
+            success=success,
+            message=msg,
+            git_status=_build_git_status(git_sync.status()) if success else None,
+        )
+
+
+@router.get(
+    "/external-changes",
+    response_model=GitExternalChangesResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def detect_external_changes(
+    git_sync: GitSyncManagerDep,
+    force_fetch: bool = False,
+) -> GitExternalChangesResponse:
+    try:
+        has_changes = git_sync.detect_external_changes(force_fetch=force_fetch)
+        status = git_sync.status()
+        return GitExternalChangesResponse(
+            has_changes=has_changes,
+            local_commit=status.get("head"),
+            remote_commit="N/A",
+            force_fetched=force_fetch,
+        )
+    except Exception:
+        logger.error("Error detecting external changes", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to detect external changes")
+
+
+@router.get(
+    "/history",
+    response_model=GitHistoryResponse,
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_commit_history(
+    git_sync: GitSyncManagerDep,
+    max_count: int = Query(default=10, ge=1, le=500),
+) -> GitHistoryResponse:
+    try:
+        commits = git_sync.get_commit_history(max_count=max_count)
+        return GitHistoryResponse(
+            commits=[
+                GitCommitInfo(
+                    sha=c["sha"], message=c["message"], author=c["author"], date=c["date"]
+                )
+                for c in commits
+            ],
+            count=len(commits),
+            available=git_sync.is_available(),
+        )
+    except Exception:
+        logger.error("Error getting commit history", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to get commit history")
+
+
+@router.get("/remote", dependencies=[Depends(require_permission("git.read"))])
+async def get_remote_url(git_sync: GitSyncManagerDep) -> dict:
+    remote_url = git_sync.get_remote_url()
+    return {"remote_url": remote_url, "available": remote_url is not None}

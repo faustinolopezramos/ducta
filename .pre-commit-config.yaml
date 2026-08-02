@@ -1,0 +1,50 @@
+# Pre-commit hooks for Ducta: Python core (ruff) + basic hygiene + UI quality gate.
+#
+# Setup (one-time, per machine):
+#   pip install pre-commit   # or: poetry install (it's in the dev dependency group)
+#   pre-commit install       # wires this into .git/hooks/pre-commit
+#
+# Run on demand against everything already tracked:
+#   pre-commit run --all-files
+#
+# NOTE: the ruff-pre-commit `rev` below should be kept in sync with the `ruff`
+# version pinned in pyproject.toml's dev dependency group. Run
+# `pre-commit autoupdate` to bump it to the latest compatible tag.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      - id: ruff
+        name: ruff (lint, core)
+        args: [--fix]
+      - id: ruff-format
+        name: ruff (format, core)
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-yaml
+      - id: check-toml
+      - id: check-case-conflict
+
+  # UI checks only run when something under src/ducta/ui/ changes.
+  - repo: local
+    hooks:
+      - id: ui-quality
+        name: ui quality gate (WCAG contrast + design tokens)
+        entry: bash -c 'cd src/ducta/ui && npm run ui:quality'
+        language: system
+        files: ^src/ducta/ui/
+        pass_filenames: false
+
+      - id: ui-typecheck
+        name: ui typecheck (tsc)
+        entry: bash -c 'cd src/ducta/ui && npx tsc -b'
+        language: system
+        files: ^src/ducta/ui/.*\.(ts|tsx)$
+        pass_filenames: false

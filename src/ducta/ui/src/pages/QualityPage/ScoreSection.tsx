@@ -1,0 +1,82 @@
+import { colors } from "../../theme/tokens";
+import { Button } from "../../components/ui/Button";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { StatusBadge } from "../../components/ui/StatusBadge";
+import { useQualityScore } from "../../api/qualityApi";
+import { IconGauge, IconX } from "@tabler/icons-react";
+import { card, label } from "./shared";
+
+// ─────────────────────────────────────────────
+// COMPOSITE SCORE (linked from Execution History via ?run_id=)
+// ─────────────────────────────────────────────
+
+function metricCard(title: string, value: string) {
+  return (
+    <div style={{ flex: 1, minWidth: 100, padding: "10px 12px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.bg }}>
+      <div style={label}>{title}</div>
+      <div style={{ fontSize: 18, fontWeight: 600, color: colors.text, fontFamily: "var(--font-mono)" }}>{value}</div>
+    </div>
+  );
+}
+
+export function ScoreSection({ runId, onClear }: { runId: string; onClear: () => void }) {
+  const score = useQualityScore(runId);
+
+  return (
+    <div style={{ ...card, borderColor: colors.accent }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+        <IconGauge size={16} color={colors.accent} />
+        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
+          Pipeline quality score
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 400, fontSize: 12, color: colors.textMuted, marginLeft: 8 }}>
+            {runId}
+          </span>
+        </h2>
+        <Button variant="ghost" size="sm" onClick={onClear} leftIcon={<IconX size={14} />}>
+          Clear
+        </Button>
+      </div>
+
+      {score.isLoading && <p style={{ fontSize: 12, color: colors.textMuted }}>Loading…</p>}
+
+      {!score.isLoading && score.isError && (
+        <EmptyState
+          icon={IconGauge}
+          title="No quality data for this run"
+          description="The pipeline ran without quality checks, or its reports were removed."
+          size="sm"
+        />
+      )}
+
+      {score.data && (
+        <div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            {metricCard("Health index", score.data.health_index?.toFixed(3) ?? "—")}
+            {metricCard("Sanity score", score.data.sanity_score?.toFixed(3) ?? "—")}
+            {metricCard("DQ score", score.data.dq_score?.toFixed(3) ?? "—")}
+          </div>
+          {score.data.nodes_blocked?.length > 0 && (
+            <div style={{ marginBottom: 10 }}>
+              <span style={label}>Nodes blocked</span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {score.data.nodes_blocked.map((n: string) => (
+                  <StatusBadge key={n} status="failed" label={n} size="sm" />
+                ))}
+              </div>
+            </div>
+          )}
+          {score.data.gate_actions && Object.keys(score.data.gate_actions).length > 0 && (
+            <div>
+              <span style={label}>Gate actions</span>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {Object.entries(score.data.gate_actions as Record<string, string>).map(([node, action]) => (
+                  <StatusBadge key={node} status={action === "block" ? "failed" : "success"} label={`${node}: ${action}`} size="sm" />
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

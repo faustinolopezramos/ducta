@@ -1,0 +1,44 @@
+# ==============================================================================
+# DEV override — loaded automatically by `docker compose up` (no flags needed).
+#
+# Turns the stack into a live development environment built on the miniconda
+# `dev` image: your local ./src is mounted into the container and the API
+# hot-reloads on save. Nothing to install on your machine — no Python, Java,
+# Spark or Poetry setup. Just:
+#
+#     docker compose up --build      # first time (builds the dev image)
+#     docker compose up              # afterwards
+#     # edit files under src/ … the server reloads automatically
+#
+# Run the test suite in the same environment:
+#     docker compose run --rm ducta pytest
+#     docker compose run --rm ducta pytest tests/path/to/test.py -k my_case
+#
+# Open a shell with everything installed:
+#     docker compose run --rm ducta bash
+#
+# For a PRODUCTION-style run instead (baked image, no mounts), use only the base
+# file:
+#     docker compose -f docker-compose.yml up --build
+# ==============================================================================
+
+services:
+  ducta:
+    image: ducta:dev
+    build:
+      target: dev                 # the miniconda contributor image (see Dockerfile)
+    # dev image has no ENTRYPOINT, so run the reload server directly.
+    command:
+      - uvicorn
+      - ducta.api.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+      - --reload-dir
+      - /workspace/src
+    volumes:
+      - ./src:/workspace/src       # your code, live
+      - ./tests:/workspace/tests   # so `pytest` sees your tests
+      - ducta-data:/ducta/data

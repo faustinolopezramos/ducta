@@ -1,0 +1,70 @@
+# ==============================================================================
+# Cross-platform Compose file — works the same on macOS (Intel & Apple Silicon),
+# Linux (amd64 & arm64) and Windows (Docker Desktop / WSL2).
+#
+# This runs the FULL Ducta app in one container: the FastAPI backend serves the
+# compiled React UI and the API on the same port (single origin — the same thing
+# `ducta ui` does natively). Use this whenever the native install misbehaves on
+# your OS.
+#
+# Portability choices:
+#   • No `version:` key — Compose v2 (the `docker compose` plugin) ignores it.
+#   • A named volume (ducta-data) instead of a host bind-mount, so there are no
+#     Windows path / permission differences and Docker manages ownership.
+#   • The image builds natively for the host CPU (no `platform:` pin).
+#   • Every setting has a default, so `docker compose up` runs with no .env file.
+#
+# Quick start (any OS):
+#   docker compose up --build
+#   open http://localhost:8000/          # the Ducta UI
+#   #    http://localhost:8000/docs      # API docs   ·   /health = liveness
+# Optional: copy .env.example to .env to override ports / settings.
+# ==============================================================================
+
+services:
+
+  # ---------------------------------------------------------------
+  # Ducta — React UI + FastAPI backend on one port (served by `ducta ui`)
+  # ---------------------------------------------------------------
+  ducta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime          # lean production image (dev override builds the `dev` stage)
+    image: ducta:latest
+    container_name: ducta
+    # Same entry point the CLI uses; the image's default CMD is identical, so
+    # this is here only to make the run explicit and overridable.
+    command: ["ui", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
+    ports:
+      - "${API_PORT:-8000}:8000"       # UI + API
+      - "${SPARK_UI_PORT:-4040}:4040"  # Spark UI (when a pipeline runs a Spark job)
+    environment:
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONUNBUFFERED=1
+      # Execution history persists on the named volume by default; override or
+      # set empty to disable.
+      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:////ducta/data/ducta.db}
+      - LAKE_BASE_PATH=/ducta/data/lake
+    volumes:
+      - ducta-data:/ducta/data
+    restart: unless-stopped
+    healthcheck:
+      # Uses the container's Python (no curl/wget), so it is identical on every host.
+      test: ["CMD", "python", "-c", "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+volumes:
+  ducta-data:

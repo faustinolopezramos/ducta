@@ -1,0 +1,31 @@
+"""Regression test: a bug inside the preflight validator itself must be
+logged at a visible level (warning), not `debug` (typically suppressed in
+production) — the fail-open behavior itself (continue without preflight) is
+intentional and unchanged.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+from ducta.core.executor import PipelineExecutor
+
+
+def _executor() -> PipelineExecutor:
+    executor = PipelineExecutor.__new__(PipelineExecutor)
+    executor.context = MagicMock()
+    executor.context.global_settings = {"preflight_enabled": True}
+    return executor
+
+
+class TestPreflightValidatorCrashIsLoggedVisibly:
+    def test_validator_exception_logs_a_warning(self):
+        executor = _executor()
+        with patch(
+            "ducta.core.preflight.validate_pipeline",
+            side_effect=RuntimeError("validator bug"),
+        ):
+            with patch("ducta.core.executor.logger") as mock_logger:
+                executor._run_preflight("pipeline1")  # must not raise (fail-open)
+                mock_logger.warning.assert_called_once()
+                mock_logger.debug.assert_not_called()

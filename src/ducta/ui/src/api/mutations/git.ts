@@ -1,0 +1,72 @@
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import client from "../client";
+import { toastStore } from "../../hooks/useModalStack";
+import { defaultOnError } from "./errors";
+
+interface GitRevertPayload {
+  path: string;
+  commit: string;
+  message?: string;
+}
+
+// ── Git Mutations ─────────────────────────────────────────────────────────────
+
+/**
+ * POST /git/stage
+ * Stages files for commit. Pass no paths to stage all changes.
+ */
+export const useGitStage = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ paths, force }: { paths?: string[]; force?: boolean } = {}) =>
+      client.post("/git/stage", { ...(paths ? { paths } : {}), ...(force ? { force } : {}) }).then((r) => r.data),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["git"] }); },
+    onError: defaultOnError,
+  });
+};
+
+/**
+ * POST /git/commit
+ * Commits currently staged files. Use after useGitStage.
+ */
+export const useGitCommitChanges = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ message, author_name, author_email }: { message?: string; author_name?: string; author_email?: string } = {}) =>
+      client.post("/git/commit", { message, author_name, author_email }).then((r) => r.data),
+    onSuccess: (data: { commit_sha?: string }) => {
+      queryClient.invalidateQueries({ queryKey: ["git"] });
+      const sha = data?.commit_sha ? ` · ${String(data.commit_sha).slice(0, 7)}` : "";
+      toastStore.getState().show(`Changes committed${sha}`, "success");
+    },
+    onError: defaultOnError,
+  });
+};
+
+/**
+ * POST /git/revert
+ * Restores a file to its state at a given commit.
+ */
+export const useGitRevert = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ path, commit, message }: GitRevertPayload) =>
+      client.post("/git/revert", { path, commit, ...(message ? { message } : {}) }).then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git"] });
+    },
+    onError: defaultOnError,
+  });
+};
+
+export const useGitPull = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      client.post("/git/pull").then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git"] });
+    },
+    onError: defaultOnError,
+  });
+};

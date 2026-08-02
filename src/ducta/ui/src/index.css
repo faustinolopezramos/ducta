@@ -1,0 +1,275 @@
+@import "./theme/ducta-theme.css";
+@import "./theme/tokens.css";
+@import "./theme/layout.css";
+@import "./theme/pages.css";
+@import "./theme/pipeline-layout.css";
+@import "./theme/pipeline-hud.css";
+@import "./theme/pipeline-diagram.css";
+@import "./theme/pipeline-panels.css";
+@import "./theme/pipeline-overlays.css";
+
+#root {
+  min-height: 100vh;
+  width: 100%;
+}
+
+.ducta-app-root {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.t-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.t-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  transition: all 0.2s ease;
+}
+
+.t-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+.t-h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
+.t-h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+.t-p { font-size: 16px; color: var(--text-muted); line-height: 1.5; }
+
+.t-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+@media (max-width: 768px) {
+  .t-container { padding: 0 16px; }
+  .projects-page { padding: 28px 16px; }
+  .projects-header, .projects-header__actions { align-items: stretch; flex-direction: column; }
+  .projects-header { gap: 20px; margin-bottom: 28px; }
+  .projects-header__actions .tui-btn { width: 100%; }
+  .projects-grid, .pipelines-grid { grid-template-columns: minmax(0, 1fr); }
+  .page-header__content { align-items: stretch !important; flex-direction: column; }
+  .page-header__actions { flex-wrap: wrap; }
+}
+
+/* Focus ring (keyboard navigation) */
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px var(--primary-light);
+}
+
+/* Form elements */
+input,
+textarea,
+select,
+button {
+  font-family: var(--font-sans);
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-dim);
+}
+
+select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Animations from prototype */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes toastFadeOut {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.toast {
+  animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  pointer-events: auto;
+}
+
+.toast.exiting {
+  animation: toastSlideOut 0.3s cubic-bezier(0.7, 0, 0.84, 0) forwards;
+}
+
+/* ── Focus ring for interactive elements on toasts ──── */
+.toast button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ────────────────────────────────────────────────────── */
+/* RESPONSIVE DESIGN — Mobile + Tablet breakpoints      */
+/* ────────────────────────────────────────────────────── */
+
+/* Tablets (768px to 1199px) */
+@media (max-width: 1199px) {
+  /* Reduce padding on pages */
+  div[role="main"],
+  .page-container {
+    padding: 24px 32px !important;
+  }
+
+  /* Smaller headers */
+  h1 {
+    font-size: 22px !important;
+  }
+}
+
+/* Mobile devices (below 768px) */
+@media (max-width: 767px) {
+  /* Reduce padding on mobile */
+  div[role="main"],
+  .page-container {
+    padding: 16px 20px !important;
+  }
+
+  /* Full-width headers */
+  h1 {
+    font-size: 20px !important;
+  }
+
+  h2 {
+    font-size: 18px !important;
+  }
+
+  /* Stack flex layouts vertically */
+  .responsive-flex {
+    flex-direction: column !important;
+  }
+
+  /* Hide non-essential buttons on mobile */
+  .hide-on-mobile {
+    display: none !important;
+  }
+
+  /* Accessible touch targets on mobile */
+  button,
+  [role="button"],
+  .MuiButtonBase-root {
+    min-height: 44px;
+  }
+
+  .MuiButton-root {
+    padding: 10px 14px !important;
+    font-size: 14px !important;
+  }
+
+  .MuiIconButton-root {
+    width: 44px;
+    height: 44px;
+  }
+}
+
+/* Respect reduced motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Removed global background effects */
+
+/* ── Page Transitions ───────────────────────────────── */
+.page-transition {
+  animation: pageFadeIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@view-transition {
+  navigation: auto; /* Habilita transiciones de vistas nativas ultra-fluidas */
+}
+
+/* ── Form validation with :user-invalid ────────────── */
+input:user-invalid,
+textarea:user-invalid,
+select:user-invalid {
+  border-color: var(--danger) !important;
+  background-color: var(--errorBg) !important;
+}
+
+input:user-invalid + .error-message,
+textarea:user-invalid + .error-message {
+  display: block;
+  color: var(--danger);
+  font-size: 11px;
+  margin-top: 4px;
+  animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}

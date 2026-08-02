@@ -1,0 +1,146 @@
+/* Ducta UI — Button primitive. Token-driven; no hardcoded colors. */
+
+.tui-btn {
+  --_h: 36px;
+  --_px: var(--space-4);
+  --_fs: var(--text-base);
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: var(--_h);
+  padding: 0 var(--_px);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-family: var(--font-sans);
+  font-size: var(--_fs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+  transition:
+    background var(--dur-base) var(--ease-out),
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow var(--dur-base) var(--ease-out),
+    color var(--dur-base) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.tui-btn:active {
+  transform: translateY(1px);
+}
+
+.tui-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.tui-btn:disabled,
+.tui-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ── Sizes ───────────────────────────────────────────────────────────────── */
+.tui-btn--sm { --_h: 28px; --_px: var(--space-3); --_fs: var(--text-sm); }
+.tui-btn--md { --_h: 36px; --_px: var(--space-4); --_fs: var(--text-base); }
+.tui-btn--lg { --_h: 44px; --_px: var(--space-5); --_fs: var(--text-lg); }
+
+.tui-btn--block { width: 100%; }
+
+.tui-btn--icon {
+  padding: 0;
+  width: var(--_h);
+  aspect-ratio: 1;
+}
+
+/* ── Variants ────────────────────────────────────────────────────────────── */
+.tui-btn--primary {
+  background: var(--primary);
+  color: var(--on-accent);
+  border-color: var(--primary);
+}
+.tui-btn--primary:hover:not(:disabled) {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+}
+
+.tui-btn--secondary {
+  background: var(--surface-elevated);
+  color: var(--text);
+  border-color: var(--border);
+}
+.tui-btn--secondary:hover:not(:disabled) {
+  border-color: var(--border-hover);
+  background: var(--surface);
+}
+
+.tui-btn--ghost {
+  background: transparent;
+  color: var(--text-muted);
+  border-color: transparent;
+}
+.tui-btn--ghost:hover:not(:disabled) {
+  background: var(--accent-a08);
+  color: var(--text);
+}
+
+.tui-btn--danger {
+  background: var(--danger);
+  color: var(--bg-contrast-danger);
+  border-color: var(--danger);
+}
+.tui-btn--danger:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--danger) 88%, black);
+  border-color: color-mix(in oklab, var(--danger) 88%, black);
+}
+
+/* ── Content + icons ─────────────────────────────────────────────────────── */
+.tui-btn__content {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.tui-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.tui-btn__icon :where(svg) {
+  width: 1.05em;
+  height: 1.05em;
+  display: block;
+}
+
+/* ── Loading ─────────────────────────────────────────────────────────────── */
+.tui-btn.is-loading {
+  pointer-events: none;
+}
+.tui-btn.is-loading .tui-btn__content {
+  opacity: 0;
+}
+.tui-btn__spinner {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: var(--radius-full);
+  animation: tui-spin 0.6s linear infinite;
+}
+
+@keyframes tui-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tui-btn,
+  .tui-btn__spinner { transition: none; animation-duration: 0.01ms; }
+}

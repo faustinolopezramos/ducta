@@ -1,0 +1,31 @@
+/* Ducta UI — Toolbar. */
+
+.tui-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  flex-wrap: wrap;
+}
+
+.tui-toolbar--bordered {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.tui-toolbar__group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.tui-toolbar__group--end { margin-left: auto; }
+
+@media (max-width: 640px) {
+  .tui-toolbar { flex-direction: column; align-items: stretch; }
+  .tui-toolbar__group { justify-content: space-between; }
+  .tui-toolbar__group--end { margin-left: 0; }
+}

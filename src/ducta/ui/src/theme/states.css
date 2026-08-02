@@ -1,0 +1,423 @@
+/* ─── Ducta Design System — Interactive State Variants ───────────────────── */
+/* Prefix: .ducta-btn, .ducta-input, .ducta-tab, .ducta-badge                 */
+/* Avoids MUI collision. Pairs with glass.css + ducta-theme.css.               */
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* BUTTONS — .ducta-btn                                                        */
+/* ══════════════════════════════════════════════════════════════════════════ */
+.ducta-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border-hover);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  letter-spacing: var(--tracking-wide);
+  padding: 0.65rem 1.25rem;
+  cursor: pointer;
+  width: auto;
+  transition:
+    background     var(--dur-base) var(--ease-out),
+    border-color   var(--dur-base) var(--ease-out),
+    box-shadow     var(--dur-base) var(--ease-out),
+    transform      var(--dur-fast) var(--ease-out),
+    color          var(--dur-base) var(--ease-out),
+    opacity        var(--dur-base) var(--ease-out);
+}
+
+/* ── Hover (ghost base) */
+.ducta-btn:hover {
+  border-color: var(--accent-a40);
+  box-shadow: var(--glow-xs);
+  transform: translateY(-1px);
+  color: var(--accent);
+}
+
+/* ── Active (press) */
+.ducta-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+/* ── Disabled */
+.ducta-btn:disabled,
+.ducta-btn[disabled] {
+  opacity: 0.38;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
+  pointer-events: none;
+}
+
+/* ── Loading */
+.ducta-btn[data-loading] {
+  pointer-events: none;
+  opacity: 0.75;
+}
+
+.ducta-btn[data-loading]::before {
+  content: '';
+  width: 1em;
+  height: 1em;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: btnSpin 0.7s linear infinite;
+  position: static;
+  background: none;
+  transform: none;
+  flex-shrink: 0;
+}
+
+/* ── Primary — filled cyan */
+.ducta-btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--bg-contrast);
+  font-weight: 600;
+  box-shadow: var(--glow-sm);
+}
+
+.ducta-btn--primary:hover {
+  background: var(--accent-dim);
+  border-color: var(--accent-dim);
+  box-shadow: var(--glow-lg);
+  color: var(--bg-contrast);
+  transform: translateY(-1px);
+}
+
+.ducta-btn--primary:active {
+  background: var(--accent-dark);
+  border-color: var(--accent-dark);
+  box-shadow: var(--glow-sm);
+  transform: translateY(1px);
+}
+
+/* ── Ghost — transparent + accent border */
+.ducta-btn--ghost {
+  border-color: var(--border-hover);
+  background: transparent;
+  color: var(--text);
+}
+
+.ducta-btn--ghost:hover {
+  background: var(--accent-a08);
+  border-color: var(--accent-a40);
+  color: var(--accent);
+  box-shadow: var(--glow-xs);
+}
+
+.ducta-btn--ghost:active {
+  background: var(--accent-a12);
+}
+
+/* ── Danger — red semantic */
+.ducta-btn--danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--bg-contrast-danger);
+  font-weight: 600;
+  box-shadow: var(--glow-red-sm);
+}
+
+.ducta-btn--danger:hover {
+  background: var(--danger-hover);
+  border-color: var(--danger-hover);
+  box-shadow: var(--glow-red-md);
+  color: var(--bg-contrast-danger);
+  transform: translateY(-1px);
+}
+
+.ducta-btn--danger:active {
+  box-shadow: var(--glow-red-sm);
+  transform: translateY(1px);
+}
+
+/* ── Full width helper */
+.ducta-btn--block {
+  width: 100%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* INPUTS — .ducta-input                                                       */
+/* ══════════════════════════════════════════════════════════════════════════ */
+.ducta-input {
+  width: 100%;
+  background: var(--overlay-subtle);
+  border: 1px solid var(--overlay-light-strong);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  padding: 0.65rem 0.8rem;
+  outline: 2px solid transparent;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    box-shadow   var(--dur-base) var(--ease-out),
+    background   var(--dur-base) var(--ease-out);
+}
+
+.ducta-input::placeholder {
+  color: var(--overlay-light);
+  font-size: var(--text-sm);
+}
+
+/* ── Hover */
+.ducta-input:hover {
+  border-color: var(--border-hover);
+}
+
+/* ── Focus */
+.ducta-input:focus {
+  border-color: var(--accent);
+  background: var(--overlay-dark);
+  box-shadow:
+    0 0 0 2px var(--accent-a12),
+    var(--glow-sm);
+}
+
+/* ── Error state */
+.ducta-input--error {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 2px var(--red-a12), var(--glow-red-sm);
+}
+
+.ducta-input--error:focus {
+  box-shadow: 0 0 0 2px var(--red-a30), var(--glow-red-md);
+}
+
+/* ── Disabled */
+.ducta-input:disabled,
+.ducta-input[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--overlay-light);
+}
+
+/* ── Input wrapper with label */
+.ducta-field {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.ducta-field__label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: var(--tracking-wide);
+}
+
+.ducta-field__hint {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  margin-top: 0.2rem;
+}
+
+.ducta-field--error .ducta-field__hint {
+  color: var(--red);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* TABS — .ducta-tab                                                           */
+/* ══════════════════════════════════════════════════════════════════════════ */
+.ducta-tabs {
+  display: flex;
+  gap: 0.5rem;
+  position: relative;
+}
+
+.ducta-tab {
+  position: relative;
+  overflow: hidden;
+  flex: 1;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  padding: 0.6rem 1rem;
+  cursor: pointer;
+  transition:
+    border-color var(--dur-base) var(--ease-out),
+    color        var(--dur-base) var(--ease-out),
+    box-shadow   var(--dur-base) var(--ease-out);
+}
+
+/* Shimmer sweep on hover */
+.ducta-tab::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-a12),
+    transparent
+  );
+  transition: left 0.5s var(--ease-out);
+  pointer-events: none;
+}
+
+.ducta-tab:hover::before {
+  left: 100%;
+}
+
+/* Active bottom bar */
+.ducta-tab::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform var(--dur-base) var(--ease-spring);
+}
+
+/* ── Hover */
+.ducta-tab:hover {
+  border-color: var(--accent-a20);
+  color: var(--accent-dim);
+}
+
+/* ── Active */
+.ducta-tab.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 15px var(--accent-a20);
+}
+
+.ducta-tab.is-active::after {
+  transform: scaleX(1);
+}
+
+/* ── Disabled */
+.ducta-tab:disabled,
+.ducta-tab[disabled] {
+  opacity: 0.38;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* STATUS BADGES — .ducta-badge                                                */
+/* ══════════════════════════════════════════════════════════════════════════ */
+.ducta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+}
+
+/* Leading dot */
+.ducta-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+/* ── Idle */
+.ducta-badge--idle {
+  color: var(--text-muted);
+  border-color: rgba(156, 177, 192, 0.25);
+  background: rgba(156, 177, 192, 0.08);
+}
+
+/* ── Running */
+.ducta-badge--running {
+  color: var(--accent);
+  border-color: var(--glass-border-3);
+  background: var(--accent-a08);
+  animation: badgePulse 2.5s infinite var(--ease-futurist);
+}
+
+.ducta-badge--running::before {
+  animation: dotPulse 2.5s infinite var(--ease-futurist);
+}
+
+/* ── Success */
+.ducta-badge--success {
+  color: var(--green);
+  border-color: var(--green-a30);
+  background: var(--green-a10);
+}
+
+/* ── Error */
+.ducta-badge--error {
+  color: var(--red);
+  border-color: var(--red-a30);
+  background: var(--red-a12);
+}
+
+/* ── Warning */
+.ducta-badge--warning {
+  color: var(--amber);
+  border-color: var(--amber-a30);
+  background: var(--amber-a15);
+}
+
+/* ── Purple / info */
+.ducta-badge--info {
+  color: var(--purple);
+  border-color: var(--purple-a30);
+  background: var(--purple-a15);
+}
+
+@keyframes badgePulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-a20); }
+  50%       { box-shadow: 0 0 0 4px transparent; }
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* Reduced motion                                                               */
+/* ══════════════════════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .ducta-btn,
+  .ducta-input,
+  .ducta-tab,
+  .ducta-badge {
+    transition: none;
+  }
+
+  .ducta-btn:hover,
+  .ducta-btn--primary:hover,
+  .ducta-btn--danger:hover {
+    transform: none;
+  }
+
+  .ducta-badge--running,
+  .ducta-badge--running::before {
+    animation: none;
+  }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════ */
+/* @keyframes — btnSpin referenced by .ducta-btn[data-loading]                 */
+/* Defined here as a local duplicate (also in index.css) to allow             */
+/* states.css to be used standalone without index.css as a dependency.        */
+/* ══════════════════════════════════════════════════════════════════════════ */
+@keyframes btnSpin {
+  to { transform: rotate(360deg); }
+}

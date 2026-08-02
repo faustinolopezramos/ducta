@@ -1,0 +1,187 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * DUCTA — ORIGINAL "TERRAZO" THEME
+ *
+ * Una identidad cálida y terrosa que se aleja del azul corporativo.
+ *   – Acento: terracota
+ *   – Fondos light: beige/taupe
+ *   – Fondos dark: carbón cálido
+ *   – Semántica: teal para éxito, ámbar para warning, rojo profundo para error
+ *
+ * CANONICAL BASE — the single source of truth for the terracotta identity.
+ * (Replaces the legacy monochrome variables.css, which has been removed.)
+ * tokens.css layers the derived scales/alpha-variants on top of this file.
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Base palette (Light) ─────────────────────────── */
+  --bg: #F8F5F2;
+  --surface: #FFFFFF;
+  --surface-elevated: #FFFFFF;
+  --border: #E8E0DA;
+  --border-hover: #D4C9C0;
+  --text: #211C18;
+  --text-muted: #6B6158;
+  --text-dim: #766B63;
+
+  /* ── Primary — Terracotta ───────────────────────────
+     #B04A2C (down from #C75B39) keeps the warm terracotta identity while
+     reaching 5.4:1 against white — WCAG AA for button/link text. */
+  --primary: #B04A2C;
+  --primary-foreground: #FFFFFF;
+  --primary-light: rgba(176, 74, 44, 0.08);
+  /* Bare brand accent — used across states.css / glass.css (was undefined at
+     :root, so accented focus/active states silently lost their color). */
+  --accent: var(--primary);
+
+  /* ── Semantic Palette ────────────────────────────────
+     success lowered to #1F7A5B so white/teal pairings clear AA (5.2:1);
+     warning stays as a *surface* hue — text on light uses --warning-strong. */
+  --success: #1F7A5B;
+  --warning: #CF8A2E;
+  --danger: #C34141;
+  --info: var(--blue);
+
+  /* ── Shadows ───────────────────────────────────────── */
+  --shadow-sm: 0 2px 4px rgba(100, 70, 50, 0.06);
+  --shadow: 0 5px 15px rgba(100, 70, 50, 0.08);
+  --shadow-lg: 0 30px 60px rgba(100, 70, 50, 0.1);
+
+  /* ── Radii ─────────────────────────────────────────── */
+  --radius: 8px;
+  --radius-sm: 4px;
+  --radius-lg: 12px;
+
+  /* ── Typography ────────────────────────────────────── */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', "SF Mono", monospace;
+
+  /* ── Layout ────────────────────────────────────────── */
+  --header-height: 64px;
+  --sidebar-width: 240px;
+  --rail-width: 56px;
+}
+
+/* ── Dark mode "Midnight Taupe" ─────────────────────── */
+[data-theme="dark"] {
+  --bg: #1A1513;
+  --surface: #241F1C;
+  --surface-elevated: #2D2723;
+  --border: #3A3430;
+  --border-hover: #4D4540;
+  --text: #EAE2DC;
+  --text-muted: #B8ACA3;
+  --text-dim: #B2A59B;
+
+  --primary: #E07A5F;
+  --primary-foreground: #1A1513;
+  --primary-light: rgba(224, 122, 95, 0.1);
+  --accent: var(--primary);
+
+  --success: #4DB6A0;
+  --warning: #E8A848;
+  --danger: #E85555;
+
+  /* Warning text on light surfaces resolves to the strong dark-amber token
+     (#8F5E1E, 5.1:1 on light); on dark it can stay the vivid --warning. */
+  --warning-strong: var(--warning);
+
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.3);
+  --shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 30px 60px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Global defaults ────────────────────────────────── */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  background: var(--bg);
+  color: var(--text);
+  transition: background 0.3s, color 0.3s;
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-hover);
+}
+
+/* ── Selection ──────────────────────────────────────── */
+::selection {
+  background: var(--primary-light);
+  color: var(--primary);
+}
+
+/* ── Code blocks ────────────────────────────────────── */
+code, pre {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+/* ── Links ─────────────────────────────────────────── */
+a {
+  color: var(--primary);
+  text-decoration: none;
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--primary);
+  opacity: 0.8;
+}
+
+/* ── Animations ─────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+@keyframes slideInRight {
+  from { transform: translateX(100%); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.animate-in {
+  animation: fadeIn 0.4s ease-out forwards;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}

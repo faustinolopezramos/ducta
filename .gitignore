@@ -1,0 +1,56 @@
+# Python
+__pycache__/
+src/ducta/__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+
+# Test / lint / type-check caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Ducta runtime state (run certificates, chain state, audit log, locks) and logs
+.ducta/
+logs/
+
+# Node / UI
+node_modules/
+src/ducta/ui/dist/
+src/ducta/ui/.storybook-static/
+src/ducta/ui/.design-sync/
+src/ducta/ui/ds-bundle/
+*.tsbuildinfo
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/
+
+# Editor backup/swap files
+*.swp
+*.swo
+*~
+*.bak
+*.orig
+
+# Other test/tooling caches
+.tox/
+.nox/
+
+# Sphinx build output
+docs/_build/

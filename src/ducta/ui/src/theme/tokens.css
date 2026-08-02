@@ -1,0 +1,232 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * DUCTA — UNIFIED DESIGN TOKENS
+ *
+ * Single source of truth for scale tokens (spacing, type, radii, elevation,
+ * motion), the extended palette, and SEMANTIC STATUS tokens. Layered ON TOP of
+ * theme/ducta-theme.css (the canonical terracotta base + dark-mode neutrals), so
+ * the brand colors there stay authoritative. This file only ADDS the scales and
+ * the derived tokens that the rest of the app already references but were never
+ * defined — e.g. semantic.ts (--blue-a12, --purple-a15…) and states.css
+ * (--text-base, --accent-a40, --glow-xs, --radius-pill…). Import AFTER
+ * ducta-theme.css.
+ *
+ * Alpha variants use color-mix() so they track the theme automatically and never
+ * drift from their base hue. Status tokens always expose fg + bg + border so a
+ * status is conveyed by icon + text + color (WCAG 1.4.1 — never color alone).
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* ── Spacing scale (4-pt grid) ───────────────────────────────────────────── */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── Type scale ──────────────────────────────────────────────────────────── */
+  --text-xs:   12px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-lg:   16px;
+  --text-xl:   20px;
+  --text-2xl:  24px;
+  --text-3xl:  32px;
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+
+  --weight-regular:  400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  --tracking-tight: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide:  0.01em;
+  --tracking-wider: 0.02em;
+
+  /* Display font: fall back to the sans stack (no external dependency). */
+  --font-display: var(--font-sans);
+
+  /* ── Radii (extends --radius / --radius-sm from ducta-theme.css) ─────────── */
+  --radius-md:   8px;
+  --radius-lg:   14px;
+  --radius-pill: 999px;
+  --radius-full: 9999px;
+
+  /* ── Elevation (extends --shadow / --shadow-lg from ducta-theme.css) ─────── */
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.12);
+
+  /* ── Motion ──────────────────────────────────────────────────────────────── */
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+  --ease-out:      cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-futurist: cubic-bezier(0.7, 0, 0.3, 1);
+
+  /* ── Extended palette (node-type colors, harmonized with Terrazo) ────────── */
+  --blue:   #3B7DD8;
+  --green:  #2D8F6F;
+  --amber:  #D4872C;
+  --red:    #C73B3B;
+  --purple: #9B72AA;
+  --teal:   #1A8B7A;
+
+  --teal-a15:   color-mix(in srgb, var(--teal) 15%, transparent);
+  --blue-a12:   color-mix(in srgb, var(--blue) 12%, transparent);
+  --blue-a30:   color-mix(in srgb, var(--blue) 30%, transparent);
+  --green-a10:  color-mix(in srgb, var(--green) 10%, transparent);
+  --green-a30:  color-mix(in srgb, var(--green) 30%, transparent);
+  --amber-a15:  color-mix(in srgb, var(--amber) 15%, transparent);
+  --amber-a30:  color-mix(in srgb, var(--amber) 30%, transparent);
+  --purple-a15: color-mix(in srgb, var(--purple) 15%, transparent);
+  --purple-a30: color-mix(in srgb, var(--purple) 30%, transparent);
+  --red-a12:    color-mix(in srgb, var(--red) 12%, transparent);
+  --red-a30:    color-mix(in srgb, var(--red) 30%, transparent);
+
+  /* ── Accent (primary) alpha steps used by states.css / glass.css ─────────── */
+  --accent-a08: color-mix(in oklab, var(--primary) 8%, transparent);
+  --accent-a12: color-mix(in oklab, var(--primary) 12%, transparent);
+  --accent-a20: color-mix(in oklab, var(--primary) 20%, transparent);
+  --accent-a40: color-mix(in oklab, var(--primary) 40%, transparent);
+  --accent-dim: color-mix(in oklab, var(--primary) 8%, transparent);
+  --accent-dark: color-mix(in oklab, var(--primary) 80%, black);
+  /* Previously used but never defined (states.css / glass.css) — now resolve to
+     the terracotta brand so accented hovers, chips and glass surfaces render. */
+  --accent-hover: color-mix(in oklab, var(--primary) 86%, black);
+  --accent-a15: color-mix(in srgb, var(--primary) 15%, transparent);
+  --accent-bg: var(--primary-light);
+
+  /* ── Dependency lens (upstream = where data comes from; downstream = blast
+   *    radius of a change). Directional colors, never reused for status. ────── */
+  --lens-up: var(--amber);
+  --lens-down: var(--blue);
+  --lens-up-soft: color-mix(in srgb, var(--amber) 10%, transparent);
+  --lens-down-soft: color-mix(in srgb, var(--blue) 10%, transparent);
+
+  /* ── Pipeline canvas: node types + edges ─────────────────────────────────
+   *    Semantic per node type, so a card's accent, its port dots and its
+   *    minimap dot always agree. These alias the extended palette above — the
+   *    canvas gets its own names so it can be retuned on its own. ─────────── */
+  --node-source:    var(--blue);
+  --node-transform: var(--purple);
+  --node-ml:        var(--teal);
+  --node-sink:      var(--green);
+  --node-custom:    var(--amber);
+
+  --edge:          var(--border-hover);
+  --edge-hot:      var(--primary);
+  --edge-dim-op:   0.15;
+
+  /* ── Canvas dot grid ─────────────────────────────────────────────────────── */
+  --canvas-dot: rgba(0, 0, 0, 0.10);
+
+  /* ── Glows / focus emphasis ──────────────────────────────────────────────── */
+  --glow-xs: 0 0 0 3px color-mix(in oklab, var(--primary) 12%, transparent);
+  --glow-sm: 0 0 0 4px color-mix(in oklab, var(--primary) 16%, transparent);
+  --glow-lg: 0 0 24px color-mix(in oklab, var(--primary) 28%, transparent);
+  --glow-red-sm: 0 0 0 4px color-mix(in oklab, var(--danger) 16%, transparent);
+  --glow-red-md: 0 0 16px color-mix(in oklab, var(--danger) 28%, transparent);
+  --glow-md: 0 0 16px color-mix(in oklab, var(--primary) 24%, transparent);
+
+  /* ── Surfaces / overlays / contrast ──────────────────────────────────────── */
+  --surface-solid: var(--surface-elevated);
+  --minimap-bg: var(--surface-elevated);
+  /* Previously used but never defined (states.css / glass.css). Warm-tinted so
+     hovers and glass panels stay on the terracotta identity in both themes. */
+  --surface-hover: color-mix(in srgb, var(--primary) 5%, var(--surface));
+  --surface-glass: color-mix(in srgb, var(--surface) 82%, transparent);
+  --glass-border: color-mix(in srgb, var(--border-hover) 60%, transparent);
+  --overlay-subtle: rgba(0, 0, 0, 0.03);
+  --overlay-light: rgba(255, 255, 255, 0.6);
+  --overlay-light-strong: rgba(255, 255, 255, 0.85);
+  --overlay-dark: rgba(0, 0, 0, 0.45);
+  --glass-border-3: rgba(24, 95, 165, 0.18);
+  --danger-hover: color-mix(in oklab, var(--danger) 12%, transparent);
+
+  /* Text color to place on a filled accent / danger surface. */
+  --bg-contrast: #ffffff;
+  --bg-contrast-danger: #ffffff;
+  --on-accent: #ffffff;
+
+  /* ── Focus ring ──────────────────────────────────────────────────────────── */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
+
+  /* ── Warning text on light surfaces ─────────────────────────────────────────
+     --warning (#CF8A2E) is a *surface* hue (dots, tints); as text on light it
+     only reaches 2.6:1, so text uses --warning-strong (#8F5E1E ≈ 5.1:1 on bg).
+     In dark mode it resolves back to the vivid --warning (7.9:1). */
+  --warning-strong: #8F5E1E;
+
+  /* ── Semantic STATUS tokens (fg / bg / border) ───────────────────────────── */
+  --status-idle-fg:     var(--text-dim);
+  --status-idle-bg:     color-mix(in oklab, var(--text-dim) 10%, transparent);
+  --status-idle-border: color-mix(in oklab, var(--text-dim) 24%, transparent);
+
+  --status-pending-fg:     var(--text-muted);
+  --status-pending-bg:     color-mix(in oklab, var(--text-muted) 12%, transparent);
+  --status-pending-border: color-mix(in oklab, var(--text-muted) 26%, transparent);
+
+  --status-running-fg:     var(--primary);
+  --status-running-bg:     color-mix(in oklab, var(--primary) 12%, transparent);
+  --status-running-border: color-mix(in oklab, var(--primary) 32%, transparent);
+
+  --status-success-fg:     var(--success);
+  --status-success-bg:     color-mix(in oklab, var(--success) 12%, transparent);
+  --status-success-border: color-mix(in oklab, var(--success) 32%, transparent);
+
+  --status-warning-fg:     var(--warning);
+  --status-warning-bg:     color-mix(in oklab, var(--warning) 14%, transparent);
+  --status-warning-border: color-mix(in oklab, var(--warning) 34%, transparent);
+
+  --status-failed-fg:     var(--danger);
+  --status-failed-bg:     color-mix(in oklab, var(--danger) 12%, transparent);
+  --status-failed-border: color-mix(in oklab, var(--danger) 32%, transparent);
+
+  --status-cancelled-fg:     var(--text-dim);
+  --status-cancelled-bg:     color-mix(in oklab, var(--text-dim) 10%, transparent);
+  --status-cancelled-border: color-mix(in oklab, var(--text-dim) 24%, transparent);
+
+  --status-skipped-fg:     var(--text-dim);
+  --status-skipped-bg:     color-mix(in oklab, var(--text-dim) 10%, transparent);
+  --status-skipped-border: color-mix(in oklab, var(--text-dim) 24%, transparent);
+}
+
+/* ── Dark-mode parity: only neutrals/overlays/contrast change; the vivid
+ *    palette + status hues read well on dark as-is. ──────────────────────────── */
+[data-theme="dark"] {
+  --canvas-dot: rgba(255, 255, 255, 0.10);
+  --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
+  --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.6);
+
+  --overlay-subtle: rgba(255, 240, 230, 0.04);
+  --overlay-light: rgba(255, 240, 230, 0.06);
+  --overlay-light-strong: rgba(255, 240, 230, 0.12);
+  --overlay-dark: rgba(0, 0, 0, 0.65);
+  --glass-border-3: rgba(255, 240, 230, 0.14);
+
+  --bg-contrast: #1A1513;
+  --bg-contrast-danger: #ffffff;
+  --on-accent: #1A1513;
+
+  /* Slightly lift the palette so it stays legible on the warm dark surface. */
+  --blue:   #6A9EE0;
+  --green:  #4DB6A0;
+  --amber:  #E8A848;
+  --red:    #E85555;
+  --purple: #B892CB;
+  --teal:   #3DB8A8;
+}

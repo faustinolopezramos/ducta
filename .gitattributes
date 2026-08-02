@@ -1,0 +1,32 @@
+# Normalize line endings so a Windows checkout never introduces CRLF into files
+# that are consumed inside Linux containers or by POSIX shells. Without this, a
+# CRLF Dockerfile / shell script / entrypoint can fail to build or run on
+# Docker Desktop (which uses a Linux VM on macOS and Windows alike).
+
+# Default: treat everything as text and check it out with LF.
+* text=auto eol=lf
+
+# Files that MUST keep LF (run inside Linux / by /bin/sh).
+Dockerfile      text eol=lf
+*.sh            text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.py            text eol=lf
+*.toml          text eol=lf
+.env.example    text eol=lf
+
+# Windows-only scripts that MUST keep CRLF.
+*.bat           text eol=crlf
+*.cmd           text eol=crlf
+*.ps1           text eol=crlf
+
+# Binary assets — never touch line endings.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.pdf           binary
+*.whl           binary
+*.parquet       binary
+*.jar           binary

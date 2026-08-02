@@ -1,0 +1,59 @@
+/* ────────────────────────────────────────────────────── */
+/* DUCTA REDESIGN — PIPELINE PAGE STYLES                  */
+/* ────────────────────────────────────────────────────── */
+
+
+/* ── View Tabs (non-flow modes) ── */
+.pipeline-view-tabs {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 3px;
+  z-index: 30;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 4px;
+  box-shadow: var(--shadow-md);
+}
+
+.view-tab {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background var(--dur-fast, 120ms) ease-out, color var(--dur-fast, 120ms) ease-out;
+  font-family: var(--font-sans);
+}
+
+.view-tab:hover {
+  color: var(--text);
+  background: var(--primary-light);
+}
+
+.view-tab.active {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.view-tab:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.view-tab.monitor-tab {
+  color: var(--success);
+}
+
+.view-tab.monitor-tab.active {
+  background: var(--success);
+  color: #fff;
+}

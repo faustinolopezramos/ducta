@@ -1,0 +1,280 @@
+/* ────────────────────────────────────────────────────── */
+/* DUCTA REDESIGN — LAYOUT STYLES                         */
+/* ────────────────────────────────────────────────────── */
+
+.ducta-app-layout {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+}
+
+.ducta-main-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ducta-content {
+  flex: 1;
+  overflow-y: auto;
+  position: relative;
+}
+
+/* ── Icon rail (primary navigation) ──────────────────── */
+.ducta-rail {
+  width: var(--rail-width);
+  flex-shrink: 0;
+  background-color: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 50;
+}
+
+.ducta-rail-logo {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  flex-shrink: 0;
+  color: var(--primary);
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+.ducta-rail-logo:hover {
+  transform: scale(1.06);
+  opacity: 0.9;
+}
+
+.ducta-rail-nav {
+  flex: 1;
+  padding: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+/* Hairline group separator between the projects domain and workspace tools */
+.rail-divider {
+  width: 24px;
+  height: 1px;
+  background: var(--border);
+  margin: 6px 0;
+  flex-shrink: 0;
+}
+
+.rail-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius);
+  color: var(--text-muted);
+  text-decoration: none;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.rail-item:hover {
+  background-color: var(--surface-hover);
+  color: var(--text);
+}
+
+.rail-item:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.rail-item.active {
+  background-color: var(--primary-light);
+  color: var(--primary);
+}
+
+/* Accent marker anchored to the rail's edge on the active destination */
+.rail-item.active::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 22px;
+  border-radius: 0 3px 3px 0;
+  background-color: var(--primary);
+}
+
+/* Hover flyout label to the right of the rail */
+.rail-flyout {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 5px 10px;
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.12s ease;
+  z-index: 60;
+}
+
+.rail-item:hover .rail-flyout,
+.rail-item:focus-visible .rail-flyout {
+  opacity: 1;
+  visibility: visible;
+}
+
+.ducta-rail-footer {
+  padding: 10px 0 12px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.rail-version {
+  font-size: 9px;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+}
+
+/* Header */
+.ducta-header {
+  height: var(--header-height);
+  border-bottom: 1px solid var(--border);
+  background-color: color-mix(in srgb, var(--surface) 82%, transparent);
+  backdrop-filter: saturate(1.2) blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  z-index: 40;
+  flex-shrink: 0;
+}
+
+.header-context {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Workspace context reads as a subtle chip, so it's legibly the current scope */
+.context-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 550;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.context-label {
+  max-width: 240px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.env-badge {
+  background-color: var(--primary-light);
+  color: var(--primary);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, transparent);
+  padding: 4px 10px;
+  border-radius: var(--radius-pill, 999px);
+  font-size: 10.5px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.icon-btn:hover {
+  background-color: var(--surface-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.user-profile {
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.user-profile:hover {
+  background-color: var(--surface-hover);
+  color: var(--text);
+}
+
+@media (max-width: 768px) {
+  .ducta-app-layout { flex-direction: column-reverse; height: 100dvh; }
+  .ducta-rail { width: 100%; height: 56px; border-right: 0; border-top: 1px solid var(--border); flex-direction: row; justify-content: center; }
+  .ducta-rail-logo, .ducta-rail-footer { display: none; }
+  .ducta-rail-nav { flex-direction: row; justify-content: space-around; padding: 6px 8px; gap: 2px; overflow-x: auto; }
+  .rail-divider { width: 1px; height: 24px; margin: 0 4px; }
+  .rail-item { width: 40px; height: 40px; flex: 0 0 auto; }
+  .rail-item.active::before { left: 50%; top: auto; bottom: -6px; transform: translateX(-50%); width: 22px; height: 3px; border-radius: 3px 3px 0 0; }
+  .rail-flyout { display: none; }
+  .ducta-header { height: auto; min-height: var(--header-height); padding: 8px 12px; }
+  .header-context { min-width: 0; gap: 6px; }
+  .context-item { min-width: 0; padding: 5px 8px; }
+  .context-label { max-width: min(48vw, 220px); }
+}
+
+@media (max-width: 560px) {
+  .env-badge, .header-context > svg { display: none; }
+  .ducta-header { padding: 8px; }
+}

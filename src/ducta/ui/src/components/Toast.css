@@ -1,0 +1,77 @@
+/* ── Toast ─────────────────────────────────────── */
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 6px;
+  box-shadow: var(--shadow-md);
+  animation: slideInRight 0.3s ease;
+  min-width: 300px;
+  max-width: 500px;
+  color: var(--text);
+}
+
+.toast--success { background: var(--success); }
+.toast--error   { background: var(--danger); }
+.toast--warn    { background: var(--warning); }
+.toast--info    { background: var(--success); }
+
+.toast__icon {
+  font-size: 18px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.toast__body {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.toast__close {
+  background: var(--overlay-light);
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.2s;
+}
+
+.toast__close:hover {
+  background: var(--overlay-light-strong);
+}
+
+/* ── Toast Container ──────────────────────────── */
+
+.toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast-container > * {
+  pointer-events: auto;
+}
+
+/* ── Animation ────────────────────────────────── */
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}

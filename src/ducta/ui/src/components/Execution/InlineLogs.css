@@ -1,0 +1,706 @@
+.ilog {
+  --ilog-bg: #0f1117;
+  --ilog-surface: #161b22;
+  --ilog-border: rgba(255, 255, 255, 0.08);
+  --ilog-border-strong: rgba(255, 255, 255, 0.12);
+  --ilog-overlay: rgba(255, 255, 255, 0.04);
+  --ilog-hover: rgba(255, 255, 255, 0.06);
+  --ilog-accent: #58a6ff;
+  --ilog-text: #e1e4e8;
+  --ilog-text-dim: #8b949e;
+  --ilog-text-muted: #6e7681;
+  --ilog-red: #f85149;
+  --ilog-red-bg: rgba(248, 81, 73, 0.10);
+  --ilog-amber: #d29922;
+  --ilog-amber-bg: rgba(210, 153, 34, 0.10);
+  --ilog-green: #3fb950;
+  --ilog-green-bg: rgba(63, 185, 80, 0.10);
+  --ilog-blue: #58a6ff;
+  --ilog-blue-bg: rgba(88, 166, 255, 0.08);
+
+  background: var(--ilog-bg);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+.ilog--light {
+  --ilog-bg: #f0f2f5;
+  --ilog-surface: #ffffff;
+  --ilog-border: rgba(0, 0, 0, 0.12);
+  --ilog-border-strong: rgba(0, 0, 0, 0.18);
+  --ilog-overlay: rgba(0, 0, 0, 0.04);
+  --ilog-hover: rgba(0, 0, 0, 0.06);
+  --ilog-accent: #0969da;
+  --ilog-text: #1b1f24;
+  --ilog-text-dim: #4d5562;
+  --ilog-text-muted: #6e7781;
+  --ilog-red: #cf222e;
+  --ilog-red-bg: rgba(207, 34, 46, 0.14);
+  --ilog-amber: #7d5200;
+  --ilog-amber-bg: rgba(154, 103, 0, 0.13);
+  --ilog-green: #116329;
+  --ilog-green-bg: rgba(26, 127, 55, 0.13);
+  --ilog-blue: #0969da;
+  --ilog-blue-bg: rgba(9, 105, 218, 0.12);
+
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.10);
+}
+
+.ilog--inline {
+  margin-top: 12px;
+  border: 1px solid var(--ilog-border-strong);
+  border-radius: 10px;
+}
+
+/* ── Fullscreen ────────────────────────────────────────────────────────────── */
+
+.ilog--fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  border-radius: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  animation: ilog-fs-in 0.2s ease-out;
+}
+
+@keyframes ilog-fs-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.ilog__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 299;
+  animation: ilog-fade-in 0.2s ease-out;
+}
+
+@keyframes ilog-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ── Resize handle ──────────────────────────────────────────────────────────── */
+
+.ilog__resize-handle {
+  height: 6px;
+  cursor: row-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.ilog__resize-handle:hover {
+  background: var(--ilog-hover);
+}
+
+.ilog__resize-handle-bar {
+  width: 40px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ilog-border-strong);
+  transition: all 0.15s;
+}
+
+.ilog__resize-handle:hover .ilog__resize-handle-bar {
+  background: var(--ilog-accent);
+  width: 60px;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────────── */
+
+.ilog__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--ilog-surface);
+  border-bottom: 1px solid var(--ilog-border);
+  gap: 16px;
+  flex-shrink: 0;
+}
+
+.ilog__header-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ilog__header-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.ilog__status-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ilog-text);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.02em;
+}
+
+.ilog__status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ilog-accent);
+  flex-shrink: 0;
+}
+
+.ilog__status-dot--running {
+  animation: ilog-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes ilog-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(88, 166, 255, 0); }
+}
+
+.ilog__status-dot--idle {
+  background: var(--ilog-text-muted);
+}
+
+.ilog__divider {
+  width: 1px;
+  height: 14px;
+  background: var(--ilog-border);
+  flex-shrink: 0;
+}
+
+.ilog__entry-count {
+  font-size: 10px;
+  color: var(--ilog-text-dim);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+}
+
+.ilog__chips-group {
+  display: flex;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  padding: 0 4px;
+  scrollbar-width: none;
+}
+
+.ilog__chips-group::-webkit-scrollbar {
+  display: none;
+}
+
+.ilog__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: var(--ilog-overlay);
+  border: 1px solid var(--ilog-border);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--ilog-text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: all 0.15s;
+}
+
+.ilog__chip:hover {
+  border-color: var(--ilog-border-strong);
+}
+
+.ilog__chip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: background 0.2s;
+}
+
+.ilog__chip--running .ilog__chip-dot {
+  animation: ilog-pulse 1.6s ease-in-out infinite;
+}
+
+.ilog__chip--success {
+  color: var(--ilog-green);
+  border-color: rgba(63, 185, 80, 0.25);
+}
+
+.ilog__chip--failed {
+  color: var(--ilog-red);
+  border-color: rgba(248, 81, 73, 0.25);
+}
+
+.ilog__chip--running {
+  color: var(--ilog-accent);
+  border-color: rgba(88, 166, 255, 0.25);
+}
+
+.ilog__btn {
+  background: none;
+  border: none;
+  color: var(--ilog-text-dim);
+  cursor: pointer;
+  padding: 5px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  transition: all 0.15s;
+}
+
+.ilog__btn:hover {
+  color: var(--ilog-text);
+  background: var(--ilog-hover);
+}
+
+.ilog__btn--close:hover {
+  color: var(--ilog-red);
+  background: var(--ilog-red-bg);
+}
+
+/* ── Minimized bar ──────────────────────────────────────────────────────────── */
+
+.ilog--minimized {
+  box-shadow: none;
+}
+
+.ilog__minibar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 16px;
+  background: var(--ilog-surface);
+  border: 1px solid var(--ilog-border-strong);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ilog-text-dim);
+  font-family: var(--font-mono);
+  transition: all 0.15s;
+}
+
+.ilog__minibar:hover {
+  background: var(--ilog-hover);
+  border-color: var(--ilog-accent);
+}
+
+.ilog__minibar-spacer {
+  flex: 1;
+}
+
+.ilog__mini-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 12px;
+  letter-spacing: 0.02em;
+}
+
+.ilog__mini-badge--error {
+  color: var(--ilog-red);
+  background: var(--ilog-red-bg);
+}
+
+.ilog__mini-badge--warn {
+  color: var(--ilog-amber);
+  background: var(--ilog-amber-bg);
+}
+
+/* ── Body ───────────────────────────────────────────────────────────────────── */
+
+.ilog__body {
+  display: flex;
+  overflow: hidden;
+  flex-shrink: 1;
+  min-height: 0;
+}
+
+.ilog__body--inline {
+  max-height: 480px;
+}
+
+.ilog__body--footer {
+  max-height: 380px;
+  min-height: 180px;
+}
+
+@media (max-width: 768px) {
+  .ilog__body--footer {
+    max-height: 240px;
+    min-height: 140px;
+  }
+  .ilog__sidebar {
+    display: none;
+  }
+}
+
+.ilog__body--expanded {
+  flex: 1;
+}
+
+.ilog__body--fullscreen {
+  flex: 1;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────────────────────────── */
+
+.ilog__sidebar {
+  width: 140px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--ilog-border);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  background: var(--ilog-surface);
+}
+
+.ilog__sidebar-divider {
+  height: 1px;
+  background: var(--ilog-border);
+  margin: 4px 10px;
+}
+
+/* ── Content area ──────────────────────────────────────────────────────────────── */
+
+.ilog__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
+/* ── Toolbar ────────────────────────────────────────────────────────────────── */
+
+.ilog__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: var(--ilog-surface);
+  border-bottom: 1px solid var(--ilog-border);
+  flex-shrink: 0;
+}
+
+.ilog__level-pills {
+  display: flex;
+  gap: 2px;
+  background: var(--ilog-bg);
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--ilog-border);
+}
+
+.ilog__level-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--ilog-text-dim);
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ilog__level-pill:hover:not(.ilog__level-pill--disabled) {
+  color: var(--ilog-text);
+  background: var(--ilog-hover);
+}
+
+.ilog__level-pill--active {
+  background: var(--ilog-surface) !important;
+  color: var(--ilog-text) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.ilog__level-pill--disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.ilog__level-badge {
+  font-size: 9px;
+  opacity: 0.6;
+  font-weight: 400;
+}
+
+.ilog__search-box {
+  position: relative;
+  width: 180px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.ilog__search-box:focus-within {
+  width: 220px;
+}
+
+.ilog__search-icon {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ilog-text-muted);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.ilog__search-input {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--ilog-bg);
+  border: 1px solid var(--ilog-border);
+  border-radius: 6px;
+  color: var(--ilog-text);
+  outline: none;
+  padding: 5px 8px 5px 28px;
+  width: 100%;
+  transition: all 0.15s;
+}
+
+.ilog__search-input::placeholder {
+  color: var(--ilog-text-muted);
+  font-size: 10px;
+}
+
+.ilog__search-input:focus {
+  border-color: var(--ilog-accent);
+  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+}
+
+.ilog__search-clear {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--ilog-text-dim);
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  border-radius: 3px;
+}
+
+.ilog__search-clear:hover {
+  color: var(--ilog-text);
+  background: var(--ilog-hover);
+}
+
+/* ── Log list ──────────────────────────────────────────────────────────────── */
+
+.ilog__list-container {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+
+.ilog__list-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+  padding: 32px;
+}
+
+.ilog__list-empty-icon {
+  opacity: 0.3;
+}
+
+.ilog__list-empty-text {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ilog-text-muted);
+  letter-spacing: 0.03em;
+}
+
+.ilog__list-empty-hint {
+  font-size: 10px;
+  color: var(--ilog-text-muted);
+  opacity: 0.5;
+  margin-top: -4px;
+}
+
+.ilog__scroll-to-latest {
+  position: absolute;
+  bottom: 20px;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.ilog__scroll-btn {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--ilog-accent);
+  border: none;
+  border-radius: 20px;
+  color: white;
+  cursor: pointer;
+  padding: 7px 16px;
+  pointer-events: auto;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  transition: all 0.15s;
+  letter-spacing: 0.03em;
+}
+
+.ilog__scroll-btn:hover {
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+  transform: translateY(-1px);
+}
+
+/* ── Connection lost banner ──────────────────────────────────────────────── */
+
+.ilog__footer-error {
+  padding: 5px 16px;
+  background: var(--ilog-red-bg);
+  color: var(--ilog-red);
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  border-top: 1px solid rgba(248, 81, 73, 0.2);
+  animation: ilog-slide-up 0.3s ease-out;
+}
+
+@keyframes ilog-slide-up {
+  from { transform: translateY(100%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.ilog__reconnect-btn {
+  margin-left: auto;
+  background: transparent;
+  color: var(--ilog-red);
+  border: 1px solid var(--ilog-red);
+  padding: 3px 10px;
+  border-radius: 5px;
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.ilog__reconnect-btn:hover {
+  background: var(--ilog-red);
+  color: white;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   LIGHT MODE OVERRIDES — scoped under .ilog--light so dark mode is untouched.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+/* Header: stronger bottom border for visual separation */
+.ilog--light .ilog__header {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.14);
+}
+
+/* Toolbar: subtle warm tint so it separates from the pure-white header */
+.ilog--light .ilog__toolbar {
+  background: #f7f8fa;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.10);
+}
+
+/* Level pill active: stronger shadow + outline for clear indication */
+.ilog--light .ilog__level-pill--active {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+/* Search input: visible border so it doesn't blend with toolbar */
+.ilog--light .ilog__search-input {
+  border-color: rgba(0, 0, 0, 0.18);
+  background: #ffffff;
+}
+
+.ilog--light .ilog__search-input:focus {
+  border-color: #0969da;
+  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.12);
+}
+
+/* Sidebar: light tint to distinguish from main content area */
+.ilog--light .ilog__sidebar {
+  background: #f5f6f8;
+  border-right: 1px solid rgba(0, 0, 0, 0.10);
+}
+
+/* Scroll-to-latest: stronger shadow for visibility on light backgrounds */
+.ilog--light .ilog__scroll-btn {
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.ilog--light .ilog__scroll-btn:hover {
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+/* Minibar: visible border in light mode */
+.ilog--light .ilog__minibar {
+  border-color: rgba(0, 0, 0, 0.14);
+  background: #fafbfc;
+}
+
+.ilog--light .ilog__minibar:hover {
+  background: rgba(9, 105, 218, 0.04);
+  border-color: #0969da;
+}
+
+/* Log level badge: slightly stronger for readability */
+.ilog--light .ilog__level-badge {
+  opacity: 0.75;
+}
+
+/* Node chips: stronger borders */
+.ilog--light .ilog__chip {
+  border-color: rgba(0, 0, 0, 0.12);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.ilog--light .ilog__chip--success {
+  border-color: rgba(26, 127, 55, 0.30);
+  background: rgba(26, 127, 55, 0.06);
+}
+
+.ilog--light .ilog__chip--failed {
+  border-color: rgba(207, 34, 46, 0.30);
+  background: rgba(207, 34, 46, 0.06);
+}
+
+.ilog--light .ilog__chip--running {
+  border-color: rgba(9, 105, 218, 0.30);
+  background: rgba(9, 105, 218, 0.06);
+}
+
+/* Connection lost banner: stronger visibility */
+.ilog--light .ilog__footer-error {
+  background: rgba(207, 34, 46, 0.08);
+  border-top-color: rgba(207, 34, 46, 0.20);
+}

@@ -1,0 +1,74 @@
+/* Ducta UI — StatusBadge. Color comes only from --status-* tokens. */
+
+.tui-status {
+  --_fg: var(--status-idle-fg);
+  --_bg: var(--status-idle-bg);
+  --_bd: var(--status-idle-border);
+
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-sans);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  line-height: 1;
+  color: var(--_fg);
+  white-space: nowrap;
+}
+
+/* ── Sizes ───────────────────────────────────────────────────────────────── */
+.tui-status--sm { font-size: var(--text-xs); padding: 3px var(--space-2); }
+.tui-status--md { font-size: var(--text-sm); padding: 4px var(--space-3); }
+
+/* ── Variants ────────────────────────────────────────────────────────────── */
+.tui-status--subtle {
+  background: var(--_bg);
+  border: 1px solid var(--_bd);
+}
+.tui-status--solid {
+  background: var(--_fg);
+  border: 1px solid var(--_fg);
+  color: var(--bg-contrast);
+}
+.tui-status--dot {
+  background: transparent;
+  border: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+.tui-status--dot .tui-status__icon { display: none; }
+.tui-status--dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--_fg);
+  flex: none;
+}
+
+.tui-status__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--_fg);
+}
+.tui-status__icon :where(svg) { display: block; }
+.tui-status__icon--spin { animation: tui-status-spin 0.9s linear infinite; }
+
+@keyframes tui-status-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tui-status__icon--spin { animation: none; }
+}
+
+/* ── Status → token wiring ───────────────────────────────────────────────── */
+.tui-status--idle      { --_fg: var(--status-idle-fg);      --_bg: var(--status-idle-bg);      --_bd: var(--status-idle-border); }
+.tui-status--pending   { --_fg: var(--status-pending-fg);   --_bg: var(--status-pending-bg);   --_bd: var(--status-pending-border); }
+.tui-status--running   { --_fg: var(--status-running-fg);   --_bg: var(--status-running-bg);   --_bd: var(--status-running-border); }
+.tui-status--success   { --_fg: var(--status-success-fg);   --_bg: var(--status-success-bg);   --_bd: var(--status-success-border); }
+.tui-status--warning   { --_fg: var(--status-warning-fg);   --_bg: var(--status-warning-bg);   --_bd: var(--status-warning-border); }
+.tui-status--failed    { --_fg: var(--status-failed-fg);    --_bg: var(--status-failed-bg);    --_bd: var(--status-failed-border); }
+.tui-status--cancelled { --_fg: var(--status-cancelled-fg); --_bg: var(--status-cancelled-bg); --_bd: var(--status-cancelled-border); }
+.tui-status--skipped   { --_fg: var(--status-skipped-fg);   --_bg: var(--status-skipped-bg);   --_bd: var(--status-skipped-border); }

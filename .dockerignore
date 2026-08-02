@@ -1,0 +1,47 @@
+# VCS / editor / OS
+.git
+.gitignore
+.DS_Store
+.vscode
+.idea
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Tests, docs, scripts — not needed inside the image
+tests/
+docs/
+scripts/
+
+# UI toolchain — the frontend IS built in the ui-build stage from source, but
+# these are rebuilt/generated inside the image, so keep them out of the context.
+src/ducta/ui/node_modules/
+src/ducta/ui/dist/
+src/ducta/ui/.storybook-static/
+src/ducta/ui/storybook-static/
+# design-sync working state (not needed to build the app)
+src/ducta/ui/.ds-sync/
+src/ducta/ui/.design-sync/
+src/ducta/ui/ds-bundle/
+
+# Docker / compose files themselves
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Env files
+.env
+.env.*
+!.env.example

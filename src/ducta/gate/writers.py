@@ -1,0 +1,275 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from typing import Any, Dict
+
+from loguru import logger  # type: ignore
+
+from ducta.gate.base import BaseIO
+from ducta.gate.constants import DEFAULT_CSV_OPTIONS, WriteMode
+from ducta.gate.exceptions import ConfigurationError, WriteOperationError
+from ducta.gate.validators import ConfigValidator, DataValidator
+
+DESTINATION_EMPTY_ERROR = "Destination path cannot be empty"
+
+_data_validator = DataValidator()
+
+
+def normalize_partition_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize partition configuration keys."""
+    partition_val = config.get("partition")
+    if partition_val is None:
+        partition_val = config.get("partition_col")
+    if partition_val is None:
+        partition_val = config.get("partition_columns")
+
+    if partition_val is not None:
+        config = {**config}  # shallow copy – do not mutate caller's dict
+        config["partition"] = partition_val
+        config["partition_col"] = (
+            partition_val[0]
+            if isinstance(partition_val, (list, tuple)) and len(partition_val) == 1
+            else partition_val
+        )
+        config["partition_columns"] = (
+            partition_val if isinstance(partition_val, list) else [partition_val]
+        )
+    return config
+
+
+class SparkWriterMixin:
+    """Mixin for Spark-based writers with enhanced write mode and schema handling."""
+
+    FORMAT: str = ""  # Override in concrete writer subclasses
+    MAX_RECOMMENDED_PARTITIONS: int = 5
+
+    def _configure_spark_writer(self, dataframe: Any, config: Dict[str, Any]) -> Any:
+        """Configure Spark DataFrame writer with write mode and schema options."""
+        _data_validator.validate_dataframe(dataframe)
+
+        config = normalize_partition_config(config)
+
+        write_mode = self._determine_write_mode(config)
+        writer = dataframe.write.format(self._get_format()).mode(write_mode)
+        logger.debug("Writer configured with mode: {}", write_mode)
+
+        writer = self._apply_partition(writer, dataframe, config)
+        writer = self._apply_overwrite_and_replacewhere(writer, config, write_mode)
+
+        for option_key, option_value in config.get("options", {}).items():
+            writer = writer.option(option_key, option_value)
+            logger.debug("Extra option applied: {}={}", option_key, option_value)
+
+        return writer
+
+    def _determine_write_mode(self, config: Dict[str, Any]) -> str:
+        """Determine the write mode."""
+        write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
+        valid_modes = [mode.value for mode in WriteMode]
+        if write_mode not in valid_modes:
+            # A typo (or a stale/renamed mode) must never silently fall back
+            # to OVERWRITE — that's the single most destructive mode
+            # available, so a config mistake should never translate into it.
+            raise ConfigurationError(f"Invalid write_mode '{write_mode}'. Valid: {valid_modes}")
+        return write_mode
+
+    def _apply_partition(
+        self,
+        writer: Any,
+        dataframe: Any,
+        config: Dict[str, Any],
+    ) -> Any:
+        """Apply partitioning if configured and columns exist."""
+        partition_columns = config.get("partition")
+        if not partition_columns:
+            return writer
+
+        if isinstance(partition_columns, str):
+            partition_columns = [partition_columns]
+        elif not isinstance(partition_columns, list):
+            raise ConfigurationError(
+                f"Partition columns must be str or list, not {type(partition_columns)}"
+            ) from None
+
+        if len(partition_columns) > self.MAX_RECOMMENDED_PARTITIONS:
+            logger.warning(
+                "Partitioning by {} columns may cause excessive small files. "
+                "Consider reducing to {} or fewer columns for better performance. "
+                "Current partitions: {}",
+                len(partition_columns),
+                self.MAX_RECOMMENDED_PARTITIONS,
+                partition_columns,
+            )
+
+        _data_validator.validate_columns_exist(dataframe, partition_columns)
+        writer = writer.partitionBy(*partition_columns)
+        logger.debug("partitionBy applied: {}", partition_columns)
+        return writer
+
+    def _apply_overwrite_and_replacewhere(
+        self, writer: Any, config: Dict[str, Any], write_mode: str
+    ) -> Any:
+        """Apply overwriteSchema and replaceWhere when appropriate."""
+        overwrite_schema = bool(
+            config.get("overwrite_schema", self._get_default_overwrite_schema())
+        )
+        if overwrite_schema and self._supports_overwrite_schema():
+            writer = writer.option("overwriteSchema", "true")
+            logger.debug("overwriteSchema=true applied")
+
+        if (
+            str(config.get("overwrite_strategy", "")).lower() == "replacewhere"
+            and write_mode == WriteMode.OVERWRITE.value
+        ):
+            writer = self._apply_replace_where_strategy(writer, config)
+
+        return writer
+
+    def _apply_replace_where_strategy(self, writer: Any, config: Dict[str, Any]) -> Any:
+        """Apply replaceWhere or replace_predicate for Delta format."""
+        if self._get_format() != "delta":
+            raise ConfigurationError(
+                "overwrite_strategy=replaceWhere is supported only for Delta"
+            ) from None
+
+        predicate = config.get("replace_predicate")
+        if predicate:
+            writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
+            logger.debug("replaceWhere applied with custom predicate: {}", predicate)
+            return writer
+
+        partition_col = config.get("partition_col")
+        start_date = config.get("start_date")
+        end_date = config.get("end_date")
+        missing = [
+            key
+            for key, value in {
+                "partition_col": partition_col,
+                "start_date": start_date,
+                "end_date": end_date,
+            }.items()
+            if not value
+        ]
+        if missing:
+            raise ConfigurationError(f"replaceWhere requires: {', '.join(missing)}") from None
+
+        if not (
+            ConfigValidator.validate_date_format(start_date)
+            and ConfigValidator.validate_date_format(end_date)
+        ):
+            raise ConfigurationError(
+                f"Invalid date format: {start_date} - {end_date}. Expected: YYYY-MM-DD"
+            ) from None
+
+        predicate = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
+        writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
+        logger.debug("replaceWhere applied: {}", predicate)
+        return writer
+
+    def _get_format(self) -> str:
+        """Get the writer format from the FORMAT class attribute."""
+        return self.FORMAT
+
+    def _supports_overwrite_schema(self) -> bool:
+        """Return whether the format supports overwriteSchema."""
+        return self._get_format() in ["delta", "parquet"]
+
+    def _get_default_overwrite_schema(self) -> bool:
+        """Default value for overwriteSchema option."""
+        return self._get_format() == "delta"
+
+    def _print_write_separator(self, destination: str) -> None:
+        """Print data writing separator via progress_reporter if provided in context."""
+        reporter = self._ctx_get("progress_reporter", None)
+        if reporter and hasattr(reporter, "report_saving"):
+            try:
+                reporter.report_saving(destination)
+                return
+            except Exception:
+                pass
+        logger.debug("Saving output to: {}", destination)
+
+
+class BaseSparkWriter(BaseIO, SparkWriterMixin):
+    """Base class for all Spark writers with a shared write template."""
+
+    def __init__(self, context: Any):
+        super().__init__(context)
+
+    def _prepare_write_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Hook for subclasses to customize config before writing."""
+        return config
+
+    def write(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write data to destination using Spark."""
+        if not destination or not str(destination).strip():
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+
+        config = self._prepare_write_config(config)
+
+        self._print_write_separator(destination)
+        logger.info("Writing {} data to: {}", self.FORMAT.upper(), destination)
+
+        try:
+            writer = self._configure_spark_writer(dataframe, config)
+            writer.save(destination)
+            logger.success("{} data written successfully to: {}", self.FORMAT.upper(), destination)
+        except WriteOperationError:
+            raise
+        except Exception as error:
+            raise WriteOperationError(
+                f"Failed to write {self.FORMAT.upper()} to {destination}: {error}"
+            ) from error
+
+
+class DeltaWriter(BaseSparkWriter):
+    """Delta Lake writer with advanced partition and selective replace support."""
+
+    FORMAT = "delta"
+
+
+class ParquetWriter(BaseSparkWriter):
+    """Writer for Parquet format."""
+
+    FORMAT = "parquet"
+
+
+class CSVWriter(BaseSparkWriter):
+    """Writer for CSV format."""
+
+    FORMAT = "csv"
+
+    def _prepare_write_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge CSV-specific default options into config."""
+        csv_defaults = {**DEFAULT_CSV_OPTIONS, "quote": '"', "escape": '"'}
+        merged_options = {**csv_defaults, **config.get("options", {})}
+        return {**config, "options": merged_options}
+
+
+class JSONWriter(BaseSparkWriter):
+    """Writer for JSON format."""
+
+    FORMAT = "json"
+
+
+class ORCWriter(BaseSparkWriter):
+    """Writer for ORC format."""
+
+    FORMAT = "orc"

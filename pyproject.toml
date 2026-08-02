@@ -1,0 +1,279 @@
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+# ==============================================================================
+# Project metadata
+# ==============================================================================
+[tool.poetry]
+name = "ducta"
+version = "0.1.0"
+description = "A unified data-pipeline framework for batch, streaming, ML, and hybrid workflows."
+authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
+maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
+readme = "README.md"
+license = "Apache-2.0"
+homepage = "https://github.com/faustinolopezramos/ducta"
+repository = "https://github.com/faustinolopezramos/ducta"
+documentation = "https://github.com/faustinolopezramos/ducta/tree/main/docs"
+keywords = [
+    "data-pipeline",
+    "etl",
+    "spark",
+    "streaming",
+    "orchestration",
+    "workflow",
+    "data-quality",
+    "mlops",
+]
+classifiers = [
+    # First public release: alpha until the API is declared stable.
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Topic :: System :: Distributed Computing",
+]
+
+packages = [
+    { include = "ducta", from = "src" },
+]
+
+include = [
+    { path = "src/ducta/ui/dist", format = ["sdist", "wheel"] },
+]
+
+exclude = [
+    "src/ducta/**/__pycache__",
+    # UI: only the built `dist/` (re-added via `include` above) ships. Everything
+    # else under ui/ is dev/build tooling. These must be excluded explicitly
+    # because the build runs outside a git checkout, so Poetry cannot fall back
+    # to .gitignore and would otherwise sweep in all of node_modules/.
+    "src/ducta/ui/node_modules",
+    "src/ducta/ui/src",
+    "src/ducta/ui/ds-bundle",
+    "src/ducta/ui/.ds-sync",
+    "src/ducta/ui/.design-sync",
+    "src/ducta/ui/.storybook",
+    "src/ducta/ui/.storybook-static",
+    "src/ducta/ui/*.ts",
+    "src/ducta/ui/*.d.ts",
+    "src/ducta/ui/*.tsbuildinfo",
+    "src/ducta/ui/*.json",
+    "src/ducta/ui/*.html",
+    "src/ducta/ui/README.md",
+    "**/.DS_Store",
+]
+
+[tool.poetry.urls]
+"Source" = "https://github.com/faustinolopezramos/ducta"
+"Issues" = "https://github.com/faustinolopezramos/ducta/issues"
+"Changelog" = "https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md"
+
+# ==============================================================================
+# Runtime dependencies
+#
+# The core install is intentionally lean (pure-Python). Everything heavy —
+# Spark, the API server, databases, MLOps, monitoring — is opt-in via extras,
+# so `pip install ducta` stays small and `pip install "ducta[all]"` is complete.
+# ==============================================================================
+[tool.poetry.dependencies]
+# Upper bound is 3.14, not 4.0: Poetry derives the Python classifiers from this
+# range, so `<4.0` advertised support for 3.14 that is neither tested nor
+# reachable (pyspark and pyarrow have no 3.14 wheels). Raise it per version, as
+# each becomes supported and enters the CI matrix.
+python = ">=3.10,<3.14"
+
+# --- Core (always installed) ---
+loguru = "^0.7.0"
+PyYAML = "^6.0"
+pandas = "^2.0.0"
+python-dotenv = "^1.0.0"
+typing-extensions = "^4.3.0"
+pydantic = "^2.0.0"
+pydantic-settings = "^2.0.0"
+rich = "^13.0.0"
+tomli = { version = "^1.2.0", python = "<3.11" }
+tomli-w = "^1.0.0"
+# AST-based SQL sanitization for the JDBC gateway. Core (not optional): without
+# it SQLSanitizer loses its structural layer, so the documented security posture
+# would depend on an undeclared package being present by luck.
+# Upper bound is deliberate. SQLSanitizer scans for expression classes by name,
+# and sqlglot renames/removes them across majors — `Truncate` vanished in 30.x,
+# which used to disable the entire AST scan behind a log warning. The scan now
+# resolves names defensively and fails closed, but a major bump still needs a
+# human to re-check `SQLSanitizer.DANGEROUS_EXPRESSIONS` against the new API.
+sqlglot = ">=23.0.0,<31.0.0"
+
+# --- Big data (extra: spark) ---
+pyspark = { version = "^3.5.0", optional = true }
+# Lower bound: Spark 3.5 interop. Upper bound <20 is mlflow's constraint; the
+# floor must stay <=18 or Python 3.13 has no wheels (first cp313 build is 18.0.0)
+# and pip falls back to a source build that fails.
+pyarrow = { version = ">=15.0.0,<20.0.0", optional = true }
+# Python 3.12 removed `distutils` from the stdlib, and venvs stopped shipping
+# setuptools by default — but pyspark 3.5 still imports it, in the pandas bridge
+# (`require_minimum_pandas_version`) and in `pyspark.sql.connect`. Without this,
+# `pip install "ducta[spark]"` on 3.12/3.13 gives you an install where converting
+# a pandas DataFrame to Spark raises ModuleNotFoundError. setuptools re-provides
+# distutils via its bundled shim. Drop once the floor is pyspark >= 4.0.
+setuptools = { version = ">=68.0.0", python = ">=3.12", optional = true }
+
+# --- API server (extra: api) ---
+fastapi = { version = ">=0.104.0,<1.0.0", optional = true }
+msgpack = { version = "^1.0.0", optional = true }
+uvicorn = { version = "^0.23.0", extras = ["standard"], optional = true }
+python-jose = { version = "^3.3.0", extras = ["cryptography"], optional = true }
+bcrypt = { version = "^4.0.0", optional = true }
+
+# --- Database persistence (extra: database) ---
+sqlalchemy = { version = "^2.0.0", extras = ["asyncio"], optional = true }
+alembic = { version = "^1.14.0", optional = true }
+aiosqlite = { version = "^0.20.0", optional = true }
+asyncpg = { version = "^0.30.0", optional = true }
+psycopg2-binary = { version = "^2.9.0", optional = true }
+
+# --- Infrastructure (extra: api) ---
+GitPython = { version = "^3.1.0", optional = true }
+watchdog = { version = "^4.0.0", optional = true }
+redis = { version = "^5.0.0", optional = true }
+
+# --- MLOps (extra: mlops) ---
+mlflow = { version = "^2.10.0", optional = true }
+scikit-learn = { version = "^1.3.0", optional = true }
+numpy = { version = "^1.24.0", optional = true }
+# Used by hyperparams.HyperparamConfig.build_distributions() for range-spec
+# ('min'/'max') parameters (scipy.stats.uniform/loguniform).
+scipy = { version = "^1.11.0", optional = true }
+
+# --- Databricks Connect (extra: databricks — MUTUALLY EXCLUSIVE with `spark`) ---
+# databricks-connect ships its own `pyspark` top-level package and overwrites the
+# real one on install, after which only remote Databricks sessions work and
+# `mode: local` fails with "Only remote Spark sessions are supported". It is
+# therefore deliberately NOT part of `all`.
+databricks-connect = { version = "^14.0.0", optional = true }
+
+# --- Monitoring (extra: monitoring) ---
+prometheus-client = { version = "^0.17.0", optional = true }
+
+[tool.poetry.extras]
+spark = ["pyspark", "pyarrow", "setuptools"]
+api = [
+    "fastapi", "uvicorn", "python-jose", "bcrypt", "msgpack",
+    "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
+    "GitPython", "watchdog", "redis",
+]
+database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
+mlops = ["mlflow", "scikit-learn", "numpy", "scipy"]
+monitoring = ["prometheus-client"]
+# Remote Databricks execution. Install INSTEAD OF `spark`, never alongside it:
+# databricks-connect overwrites the `pyspark` package and disables local mode.
+databricks = ["databricks-connect"]
+# Everything that can coexist in one environment. `databricks` is excluded on
+# purpose — see the databricks-connect note above.
+all = [
+    "pyspark", "pyarrow", "setuptools",
+    "fastapi", "uvicorn", "python-jose", "bcrypt", "msgpack",
+    "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
+    "GitPython", "watchdog", "redis",
+    "mlflow", "scikit-learn", "numpy", "scipy",
+    "prometheus-client",
+]
+
+# ==============================================================================
+# Development dependencies
+# ==============================================================================
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+mypy = "^1.8.0"
+ruff = "^0.4.0"
+# Required by starlette's TestClient; without it the API endpoint tests skip.
+httpx = ">=0.24"
+pre-commit = "^3.7.0"
+
+# Documentation toolchain (Sphinx). Build with: poetry run sphinx-build docs docs/_build
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+sphinx = "^7.0"
+furo = ">=2024.1.29"
+myst-parser = "^2.0"
+sphinx-copybutton = "^0.5"
+sphinx-design = "^0.5"
+
+# ==============================================================================
+# Console entry point
+# ==============================================================================
+[tool.poetry.scripts]
+ducta = "ducta.console.wrapper:main"
+
+# ==============================================================================
+# Tooling
+# ==============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --import-mode=importlib --strict-markers"
+pythonpath = ["src"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "spark: tests that require a real PySpark session (skipped when pyspark is absent)",
+    "network: tests that intentionally perform real network I/O (e.g. JDBC driver downloads)",
+]
+
+[tool.coverage.run]
+source = ["ducta"]
+branch = true
+omit = [
+    "src/ducta/ui/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+show_error_codes = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests may shadow imports and use assert-heavy patterns freely.
+"tests/**" = ["F401", "F811"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["ducta"]
+
+[tool.ruff.format]
+quote-style = "double"
