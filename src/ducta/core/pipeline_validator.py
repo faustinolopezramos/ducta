@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.core.errors import ConfigurationError, SchemaValidationError
 from ducta.core.utils import extract_pipeline_nodes as _extract_pipeline_nodes_util
 from ducta.core.utils import get_node_dependencies as _get_node_dependencies_util
 from ducta.setting.validators import FormatPolicy
@@ -47,7 +48,7 @@ class PipelineValidator:
     ) -> None:
         """Validate required parameters for pipeline execution."""
         if not pipeline_name:
-            raise ValueError("Pipeline name is required")
+            raise ConfigurationError("Pipeline name is required")
 
         logger.debug(
             f"Validating params for '{pipeline_name}': requires_dates={requires_dates}, start_date={start_date}, end_date={end_date}, context_start_date={context_start_date}, context_end_date={context_end_date}"
@@ -67,25 +68,25 @@ class PipelineValidator:
     ) -> None:
         """Validate that either user or context dates are provided."""
         if not (start_date or context_start_date):
-            raise ValueError("Start date is required")
+            raise ConfigurationError("Start date is required")
         if not (end_date or context_end_date):
-            raise ValueError("End date is required")
+            raise ConfigurationError("End date is required")
 
     @staticmethod
     def validate_pipeline_config(pipeline: Dict[str, Any]) -> None:
         """Validate basic pipeline configuration."""
         if not isinstance(pipeline, dict):
-            raise ValueError("Pipeline configuration must be a dictionary")
+            raise ConfigurationError("Pipeline configuration must be a dictionary")
 
         if "nodes" not in pipeline:
-            raise ValueError("Pipeline must contain 'nodes' key")
+            raise ConfigurationError("Pipeline must contain 'nodes' key")
 
         nodes = pipeline["nodes"]
         if not nodes:
-            raise ValueError("Pipeline must have at least one node")
+            raise ConfigurationError("Pipeline must have at least one node")
 
         if not isinstance(nodes, list):
-            raise ValueError("Pipeline 'nodes' must be a list")
+            raise ConfigurationError("Pipeline 'nodes' must be a list")
 
     @staticmethod
     def validate_node_configs(
@@ -98,7 +99,7 @@ class PipelineValidator:
                 missing_nodes.append(node_name)
 
         if missing_nodes:
-            raise ValueError(f"Missing node configurations: {', '.join(missing_nodes)}")
+            raise ConfigurationError(f"Missing node configurations: {', '.join(missing_nodes)}")
 
     @staticmethod
     def validate_no_dag_cycles(
@@ -580,7 +581,7 @@ class PipelineValidator:
     def validate_dataframe_schema(result_df: Any) -> None:
         """Validate that the result DataFrame has a non-empty schema."""
         if result_df is None:
-            raise ValueError("Result DataFrame is None")
+            raise SchemaValidationError("Result DataFrame is None")
 
         if isinstance(result_df, str):
             logger.debug("Result is a string (artifact URI). Skipping schema validation.")
@@ -596,10 +597,10 @@ class PipelineValidator:
 
         if hasattr(result_df, "columns"):
             if not result_df.columns:
-                raise ValueError("DataFrame has no columns defined")
+                raise SchemaValidationError("DataFrame has no columns defined")
             return
 
-        raise ValueError(
+        raise SchemaValidationError(
             f"Unsupported DataFrame type: {type(result_df)}. "
             "Expected Spark or Pandas DataFrame with schema/columns."
         )
@@ -614,7 +615,7 @@ class PipelineValidator:
         already warns and skips the write for empty frames.
         """
         if not result_df.schema.fields:
-            raise ValueError("Spark DataFrame schema is empty - no fields defined")
+            raise SchemaValidationError("Spark DataFrame schema is empty - no fields defined")
 
     @staticmethod
     def _validate_pandas_df(result_df: Any) -> None:
@@ -622,4 +623,4 @@ class PipelineValidator:
         if result_df.empty:
             logger.warning("Pandas DataFrame is empty (no rows)")
         if not list(result_df.columns):
-            raise ValueError("Pandas DataFrame has no columns defined")
+            raise SchemaValidationError("Pandas DataFrame has no columns defined")

@@ -2,7 +2,7 @@
 
 `with _stdout_capture_lock:` blocked forever. A hung execution (cancel/timeout
 can't actually kill a running thread — same limitation as
-`ducta.core.node_executor`) keeps holding this process-global lock, which
+`ducta.core.execution`) keeps holding this process-global lock, which
 serialises the entire pipeline body (os.dup2/os.chdir/sys.path mutation are
 process-global). That silently wedged every future execution forever with no
 visible error. `_acquire_stdout_capture_lock` fails fast with a clear

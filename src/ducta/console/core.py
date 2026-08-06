@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.core.errors import DuctaError as EngineError
+from ducta.core.errors import ExecutionError as EngineExecutionError
 from ducta.setting.environments import (
     DEFAULT_ENVIRONMENTS,  # noqa: F401
     ENV_ALIASES,  # noqa: F401
@@ -86,12 +88,25 @@ class ExitCode(Enum):
     SECURITY_ERROR = 6
 
 
-class DuctaError(Exception):
-    """Base exception for all Ducta-related errors."""
+class DuctaError(EngineError):
+    """Base exception for errors raised by the console itself.
+
+    Derives from :class:`ducta.core.errors.DuctaError` so that one ``except``
+    clause in :meth:`UnifiedCLI.run` covers both the console's own errors and
+    the ones the engine raises. Before that, the two hierarchies were unrelated
+    classes that merely shared a name, and an engine error — a bad pipeline
+    config, a failed preflight — fell through to the catch-all handler and
+    exited 1 with the message "Unexpected error", discarding the ``exit_code``
+    the engine had already worked out.
+
+    ``exit_code`` is stored as the plain ``int`` the base class declares. The
+    constructor still takes an :class:`ExitCode` because that is what every
+    console call site passes, and the enum is the readable spelling.
+    """
 
     def __init__(self, message: str, exit_code: ExitCode = ExitCode.GENERAL_ERROR):
         super().__init__(message)
-        self.exit_code = exit_code
+        self.exit_code = exit_code.value if isinstance(exit_code, ExitCode) else int(exit_code)
 
 
 class ConfigurationError(DuctaError):
@@ -108,11 +123,12 @@ class ValidationError(DuctaError):
         super().__init__(message, ExitCode.VALIDATION_ERROR)
 
 
-class ExecutionError(DuctaError):
-    """Raised when pipeline execution fails."""
-
-    def __init__(self, message: str):
-        super().__init__(message, ExitCode.EXECUTION_ERROR)
+#: Pipeline execution failures come from the engine, which raises
+#: :class:`ducta.core.errors.ExecutionError` (and its subclasses
+#: ``PipelineExecutionError``, ``ChainExecutionError``, ``NodeTimeoutError``).
+#: The console never raised its own version — the class existed but had no
+#: ``raise`` site anywhere — so this is an alias rather than a parallel type.
+ExecutionError = EngineExecutionError
 
 
 class SecurityError(DuctaError):

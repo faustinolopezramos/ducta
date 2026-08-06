@@ -426,7 +426,7 @@ class ExecutionManager:
 
         token = execution_id_var.set(execution_id)
         try:
-            skip_info = await asyncio.to_thread(
+            outcome = await asyncio.to_thread(
                 run_pipeline_sync,
                 execution_id,
                 source_path,
@@ -446,11 +446,21 @@ class ExecutionManager:
             )
             exit_code = 0
             with self._execution_lock:
-                if skip_info:
-                    record.status = ExecutionStatus.SKIPPED
-                    error_message = str(skip_info.get("reason", "Skipped: missing dependencies"))
-                else:
+                # A run can finish without raising and still not have done its
+                # work: absent inputs (skipped) or a quality gate that rejected
+                # the data (gate_blocked). Both used to land on SUCCESS.
+                if not outcome:
                     record.status = ExecutionStatus.SUCCESS
+                elif outcome.get("status") == "gate_blocked":
+                    exit_code = 1
+                    record.status = ExecutionStatus.GATE_BLOCKED
+                    error_message = (
+                        f"Quality gate blocked node "
+                        f"'{outcome.get('node', '?')}': {outcome.get('reason', 'blocked')}"
+                    )
+                else:
+                    record.status = ExecutionStatus.SKIPPED
+                    error_message = str(outcome.get("reason", "Skipped: missing dependencies"))
 
         except asyncio.CancelledError:
             exit_code = 1

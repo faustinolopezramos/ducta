@@ -162,3 +162,38 @@ class TestInterpolateConfigPaths:
         config = {"filepath": 123}
         VariableInterpolator.interpolate_config_paths(config, {})
         assert config["filepath"] == 123
+
+
+class TestSensitiveNameMatchingIsPerComponent:
+    """The credential guard must not reject names that merely contain a token.
+
+    It was a substring search (`re.search(r"(KEY|SECRET|...)")`), so it also
+    refused `${MONKEY_DIR}`, `${TOKENIZER_PATH}` and `${KEYSTONE_ROOT}` — none of
+    which is a credential by any reading. Matching per `_`/`-`/`.` component
+    keeps every real case rejected.
+    """
+
+    @pytest.mark.parametrize(
+        "var_name",
+        ["MONKEY_DIR", "TOKENIZER_PATH", "KEYSTONE_ROOT", "PASSWORDLESS_MODE", "TURNKEY_BUILD"],
+    )
+    def test_a_name_that_merely_contains_a_token_still_interpolates(self, var_name, monkeypatch):
+        monkeypatch.setenv(var_name, "/data")
+        assert VariableInterpolator.interpolate(f"${{{var_name}}}/out", {}) == "/data/out"
+
+    @pytest.mark.parametrize(
+        "var_name",
+        [
+            "AWS_SECRET_ACCESS_KEY",
+            "DB_PASSWORD",
+            "GITHUB_TOKEN",
+            "SERVICE_CREDENTIAL",
+            "api-key",
+            "app.secret",
+            "TOKEN",
+        ],
+    )
+    def test_a_real_credential_name_is_still_refused(self, var_name, monkeypatch):
+        monkeypatch.setenv(var_name, "hunter2")
+        with pytest.raises(ConfigLoadError):
+            VariableInterpolator.interpolate(f"${{{var_name}}}", {})

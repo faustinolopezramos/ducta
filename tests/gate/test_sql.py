@@ -473,3 +473,79 @@ class TestUnityCatalogDDL:
     def test_replace_where_clause(self):
         sql = UnityCatalogDDL.replace_where_clause("event_date", "2024-01-01", "2024-01-31")
         assert sql == "`event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+
+
+class TestSetOperatorsAreReadOnlyToo:
+    """UNION/INTERSECT/EXCEPT sit at the AST root, so they were rejected outright.
+
+    `ALLOWED_AST_TYPES` only listed Select/CTE/With, but sqlglot parses
+    `SELECT ... UNION SELECT ...` as a `Union` node. An ordinary read-only
+    analytics query came back as "Only SELECT and WITH queries are allowed.
+    Got: Union".
+    """
+
+    @pytest.mark.skipif(not SQLGLOT_AVAILABLE, reason="requires sqlglot")
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT a FROM t UNION SELECT b FROM u",
+            "SELECT a FROM t UNION ALL SELECT b FROM u",
+            "SELECT a FROM t INTERSECT SELECT b FROM u",
+            "SELECT a FROM t EXCEPT SELECT b FROM u",
+            "WITH x AS (SELECT 1 AS a) SELECT a FROM x UNION SELECT 2",
+        ],
+    )
+    def test_a_read_only_set_operation_is_accepted(self, query):
+        assert SQLSanitizer.sanitize_query(query) == query
+
+    @pytest.mark.skipif(not SQLGLOT_AVAILABLE, reason="requires sqlglot")
+    def test_a_dangerous_branch_inside_a_union_is_still_rejected(self):
+        # Admitting the Union root must not admit what is under it:
+        # `_check_ast_for_dangerous_operations` walks every Select in the tree.
+        with pytest.raises(ConfigurationError):
+            SQLSanitizer.sanitize_query("SELECT a FROM t UNION SELECT b INTO evil FROM u")
+
+    def test_a_stacked_statement_after_a_union_is_still_rejected(self):
+        with pytest.raises(ConfigurationError):
+            SQLSanitizer.sanitize_query("SELECT a FROM t UNION SELECT b FROM u; DROP TABLE t")
+
+
+class TestDoubledQuoteEscapes:
+    """`''` is how SQL escapes a quote inside a literal.
+
+    Treating the second quote as a terminator left the rest of the literal
+    looking like bare SQL, so a keyword or a semicolon appearing in the user's
+    own *data* tripped the denylist. It failed closed, so this was a false
+    rejection rather than a hole — but a legitimate query was refused.
+    """
+
+    def test_a_keyword_inside_an_escaped_literal_is_masked(self):
+        masked = SQLSanitizer._mask_string_literals("SELECT * FROM t WHERE n = 'it''s a drop-in'")
+        assert "drop" not in masked.lower()
+        assert masked.startswith("SELECT * FROM t WHERE n = ")
+
+    def test_a_query_with_an_escaped_quote_is_accepted(self):
+        query = "SELECT * FROM t WHERE note = 'it''s a drop-in'"
+        assert SQLSanitizer.sanitize_query(query) == query
+
+    def test_a_semicolon_inside_an_escaped_literal_is_not_a_statement_break(self):
+        assert SQLSanitizer._count_semicolons_outside_strings("SELECT 'a'';' FROM t") == 0
+
+    def test_a_query_with_a_semicolon_in_an_escaped_literal_is_accepted(self):
+        query = "SELECT * FROM t WHERE note = 'a'';'"
+        assert SQLSanitizer.sanitize_query(query) == query
+
+    def test_a_real_stacked_statement_is_still_rejected(self):
+        with pytest.raises(ConfigurationError):
+            SQLSanitizer.sanitize_query("SELECT 'it''s' FROM t; DROP TABLE t")
+
+
+class TestVacuumRetention:
+    def test_a_string_retention_is_coerced(self):
+        assert UnityCatalogDDL.vacuum("`c`.`s`.`t`", "168") == "VACUUM `c`.`s`.`t` RETAIN 168 HOURS"
+
+    def test_a_non_numeric_retention_is_rejected(self):
+        # The one value in this class that is neither a quoted identifier nor an
+        # escaped literal, so it needs its own guard.
+        with pytest.raises(ConfigurationError):
+            UnityCatalogDDL.vacuum("`c`.`s`.`t`", "168 HOURS; DROP TABLE t")

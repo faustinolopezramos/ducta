@@ -328,33 +328,18 @@ class ConfigManager:
     @classmethod
     def from_layer_config(cls, layer_context: Dict[str, str]) -> "ConfigManager":
         """Create ConfigManager from layered project configuration.
-
-        Parameters
-        ----------
-        layer_context : Dict[str, str]
-            Dictionary with keys: global_settings, pipelines_config, nodes_config,
-                                 input_config, output_config, layer_path
-
-        Returns
-        -------
-        ConfigManager
-            Configured instance ready to use layer-specific configuration
         """
-        # Create instance with minimal initialization
         instance = cls.__new__(cls)
         instance.original_cwd = Path.cwd()
         instance.base_path = Path(layer_context.get("layer_path", "."))
 
-        # Set configuration paths directly
         config_dir = Path(layer_context.get("global_settings", ".")).parent
         instance.active_config_dir = config_dir.resolve()
         instance.active_config_file = Path(layer_context.get("global_settings", "global.yaml")).name
 
-        # Detect format
         instance.active_format = None
         instance._detect_format_from_filename(instance.active_config_file)
 
-        # Initialize discovery for compatibility
         instance.discovery = ConfigDiscovery(str(instance.base_path))
 
         logger.debug(f"Initialized ConfigManager from layer config: {config_dir}")
@@ -422,11 +407,6 @@ class AppConfigManager:
         base = env_configs.get("base", {})
         env_specific = env_configs.get(env, {})
         merged = {**base, **env_specific}
-        # When an environment points to its own global_settings file, that file is
-        # a partial *override*, not a full replacement: remember the base file so
-        # the loader can deep-merge the env settings over the base (see
-        # ContextLoader.load_from_paths). Without this, an env file that omits a
-        # key silently drops the base value.
         base_gs = base.get("global_settings_path")
         env_gs = env_specific.get("global_settings_path")
         if env != "base" and base_gs and env_gs and base_gs != env_gs:

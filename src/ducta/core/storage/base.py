@@ -21,6 +21,8 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
+import tempfile
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, List, Optional
@@ -78,9 +80,16 @@ class LocalStorageBackend(StorageBackend):
     ) -> str:
         target = self._resolve_path(key)
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_suffix(".tmp")
-        tmp.write_bytes(data)
-        os.replace(tmp, target)
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(target.parent), prefix=f".{target.name}.", suffix=".tmp"
+        )
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(data)
+            os.replace(tmp_name, target)
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
         return str(target)
 
     def get_object(self, key: str) -> bytes:
@@ -101,15 +110,21 @@ class LocalStorageBackend(StorageBackend):
         return target.is_file()
 
     def list_objects(self, prefix: str = "") -> List[str]:
-        target_dir = self._resolve_path(prefix) if prefix else self.root_dir
-        if not target_dir.exists():
+        """List object keys starting with *prefix*."""
+        clean_prefix = prefix.lstrip("/")
+
+        base = self._resolve_path(clean_prefix) if clean_prefix else self.root_dir
+        if not base.is_dir():
+            base = base.parent
+        if not base.is_dir() or (base != self.root_dir and self.root_dir not in base.parents):
             return []
-        if target_dir.is_file():
-            return [prefix]
+
         results: List[str] = []
-        for p in target_dir.rglob("*"):
-            if p.is_file():
-                rel = str(p.relative_to(self.root_dir))
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = str(p.relative_to(self.root_dir))
+            if rel.startswith(clean_prefix):
                 results.append(rel)
         return sorted(results)
 
@@ -168,17 +183,27 @@ class S3StorageBackend(StorageBackend):
         return res["Body"].read()
 
     def delete_object(self, key: str) -> bool:
+        """Delete an object; False when it did not exist."""
+        if not self.exists(key):
+            return False
         full = self._full_key(key)
         self._get_client().delete_object(Bucket=self.bucket, Key=full)
         return True
 
     def exists(self, key: str) -> bool:
+        """True if the key exists. Raises on errors that are not "not found"."""
         full = self._full_key(key)
+        client = self._get_client()
         try:
-            self._get_client().head_object(Bucket=self.bucket, Key=full)
+            client.head_object(Bucket=self.bucket, Key=full)
             return True
-        except Exception:
-            return False
+        except Exception as exc:
+            status = getattr(exc, "response", {}).get("ResponseMetadata", {}).get("HTTPStatusCode")
+            error_code = str(getattr(exc, "response", {}).get("Error", {}).get("Code", ""))
+            if status == 404 or error_code in ("404", "NoSuchKey", "NotFound"):
+                return False
+            logger.error("S3 head_object failed for '{}' (not a 404): {}", full, exc)
+            raise
 
     def list_objects(self, prefix: str = "") -> List[str]:
         full_prefix = self._full_key(prefix)
@@ -194,20 +219,17 @@ class S3StorageBackend(StorageBackend):
 
 
 _storage_instance: Optional[StorageBackend] = None
+_storage_lock = threading.Lock()
 
 
-def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
-    """Factory function returning configured StorageBackend singleton."""
-    global _storage_instance
-    if _storage_instance is not None and backend_type is None:
-        return _storage_instance
-
+def _build_storage_backend(backend_type: Optional[str]) -> StorageBackend:
+    """Construct a backend from *backend_type* (or the DUCTA_STORAGE_* env)."""
     btype = (backend_type or os.getenv("DUCTA_STORAGE_BACKEND", "local")).lower()
 
     if btype in ("s3", "minio"):
         bucket = os.getenv("DUCTA_STORAGE_BUCKET", "ducta-artifacts")
         prefix = os.getenv("DUCTA_STORAGE_PREFIX", "")
-        backend = S3StorageBackend(bucket=bucket, prefix=prefix)
+        backend: StorageBackend = S3StorageBackend(bucket=bucket, prefix=prefix)
         logger.info(f"Initialized S3StorageBackend (bucket={bucket})")
     else:
         root_dir = os.getenv("DUCTA_STORAGE_PATH")
@@ -215,6 +237,20 @@ def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
         backend = LocalStorageBackend(root_dir=path_obj)
         logger.info(f"Initialized LocalStorageBackend (path={backend.root_dir})")
 
-    if backend_type is None:
-        _storage_instance = backend
     return backend
+
+
+def get_storage_backend(backend_type: Optional[str] = None) -> StorageBackend:
+    """Factory function returning configured StorageBackend singleton."""
+    global _storage_instance
+
+    if backend_type is not None:
+        return _build_storage_backend(backend_type)
+
+    if _storage_instance is not None:
+        return _storage_instance
+
+    with _storage_lock:
+        if _storage_instance is None:
+            _storage_instance = _build_storage_backend(None)
+    return _storage_instance

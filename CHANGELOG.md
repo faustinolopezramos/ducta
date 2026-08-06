@@ -33,9 +33,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gateway — and it was dead. Lexical and structural checks now both run,
   expression classes resolve by name at call time, an unresolvable scan fails
   closed, and `sqlglot` is bounded `<31`.
+- **Ingestion nodes built SQL by string concatenation, unsanitized.**
+  `type: ingestion` composed `SELECT {columns} FROM {table} WHERE {where}` from
+  three config fields and handed it to the JDBC driver. `columns` was checked to
+  be a list of strings but not that each was an identifier, and `table` and
+  `where` were not checked at all; a declared `query` went straight through. The
+  project already ships `SQLSanitizer` for exactly this, and `sqlglot` is a core
+  dependency because of it — the ingestion node was simply the one SQL path that
+  never called it. Identifiers are now matched against an identifier pattern and
+  both the composed statement and any declared `query` go through the sanitizer.
+- **`UnityCatalogDDL.vacuum()` interpolated its retention unchecked.** Every
+  other method in that class escapes its arguments; this one formatted `hours`
+  straight into `RETAIN {hours} HOURS`. Now coerced to `int`, raising
+  `ConfigurationError` otherwise.
 
 ### Changed
 
+- **The CLI now exits with a meaningful status code.** Previously every
+  invocation exited 0 (see *Fixed*), so this is a new observable contract rather
+  than an adjustment to an old one. Scripts that only checked for a non-zero
+  exit will start seeing failures they previously missed:
+
+  | Code | Meaning | Example |
+  |---|---|---|
+  | 0 | success | a run that completed all of its work |
+  | 1 | unexpected error, interrupted | an internal bug, `Ctrl-C` |
+  | 2 | the configuration could not be loaded or is invalid | unknown `--env`, failed preflight |
+  | 3 | the request itself was invalid | unknown `--pipeline`, a missing or malformed argument |
+  | 4 | the run did not complete its work | a node failed or timed out, a quality gate blocked |
+
+- **A blocked quality gate no longer reports success.** `skip_downstream` — the
+  default gate behaviour — deliberately lets a run finish without raising, and
+  four of the five places that start a pipeline discarded the result entirely,
+  so a run that rejected its data was indistinguishable from a clean one. The
+  CLI (including the layered path and `--sweep`), `ducta certify --reproduce`
+  and the API now all read the outcome. `ExecutionStatus` gains
+  **`gate_blocked`**, distinct from `skipped` (data absent) and `failed`
+  (something broke) — a new value in API responses.
+- **A blocking quality gate means the same thing in hybrid pipelines as in
+  batch.** Hybrid counted `gate_blocked` as a batch-phase failure, so the same
+  gate aborted a hybrid run with an exception — taking the rest of the pipeline
+  chain with it — while a batch run finished as `GATE_BLOCKED`. Hybrid now halts
+  before the streaming phase (which would consume data that was never produced)
+  without reporting a failure.
+- **Quality gates are less strict by default.** `min_pass_rate` now defaults to
+  `0.0` (off) instead of `1.0`. The old default contradicted `max_warnings: -1`
+  sitting beside it: the pass rate counts every failed check regardless of
+  severity, so a gate configured with nothing but `enabled: true` blocked on the
+  very warnings the other setting declared tolerable. Out of the box a gate now
+  means exactly one thing — any ERROR blocks. Set `min_pass_rate: 1.0`
+  explicitly to restore the previous behaviour.
+- **`ducta.console.core.DuctaError` now derives from
+  `ducta.core.errors.DuctaError`,** and its `exit_code` is a plain `int` rather
+  than an `ExitCode` enum member. The two hierarchies were unrelated classes
+  that merely shared a name. `console.core.ExecutionError` is now an alias of
+  the engine's — it never had a `raise` site of its own.
+- **`SQLSanitizer` accepts set operations.** `SELECT … UNION SELECT …` parses
+  with a `Union` at the AST root, which was not in the allow-list, so an
+  ordinary read-only analytics query was refused. `Union`, `Intersect`, `Except`
+  and `Subquery` are now allowed; the lexical and keyword layers still see the
+  whole statement, and the dangerous-operation scan already walked every
+  `Select` in the tree.
+- **`LayerContextBuilder.build_context_args()` returns the environment** in its
+  result dict. It used to accept an `env` argument and ignore it, which is how a
+  caller came to drop it (see *Fixed*). `LayerConfig.environments_path` is
+  removed — it was assigned and never read.
 - **Relicensed from AGPL-3.0-or-later to Apache-2.0.** Made before the first
   PyPI publish, with a single copyright holder and no external contributors,
   so the change carries no compatibility obligations. The prior AGPL network
@@ -49,6 +111,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tests for five paths that had none**, each of which was hiding one of the
+  defects above: `UnifiedCLI.run`'s exit codes, `PipelineExecutor.run_pipeline`
+  driven end to end for a batch pipeline, `_execute_unified_hybrid_pipeline`,
+  `_fail_timed_out_nodes`, and streaming resource-conflict detection. The
+  run-status bug is the clearest case for why they were needed: ten unit tests
+  covered `resolve_status` and `absorb_trace` as pure functions and all of them
+  passed while the facade called the two in the wrong order.
 - **Spark integration tests** (`tests/integration/`, marked `@pytest.mark.spark`).
   The suite had 1259 tests running in 3 seconds against a mocked Spark and *zero*
   tests behind the `spark` marker, so CI installed a JDK and pyspark for nothing
@@ -59,6 +128,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Every `ducta` command exited 0, including failures.** The console script is
+  declared as `ducta.console.wrapper:main` and invoked as `sys.exit(main())`,
+  but `wrapper.main()` called the CLI and discarded what it returned — so the
+  entry point evaluated `sys.exit(None)`. Every exit code the CLI computed, for
+  every failure, was thrown away at the process boundary: no script wrapping
+  `ducta` could tell a broken run from a clean one, and no CI step could fail on
+  one.
+- **Errors raised by the engine exited 1 and returned HTTP 500.**
+  `ducta.core.errors` declares an `exit_code` and an `http_status` per class of
+  failure, and nothing outside `ducta.core` read either. The CLI caught only its
+  own unrelated `DuctaError`, so an invalid configuration, a failed preflight and
+  a genuine crash were indistinguishable; the API re-wrapped engine errors as a
+  bare `RuntimeError` before any handler could see the type. The CLI now maps
+  them to the codes in *Changed* above, the API gains an exception handler that
+  answers with each error's declared status, and the execution runner no longer
+  destroys the exception — so a failed background execution records the engine's
+  structured detail instead of a flattened string.
+- **A run's status never reflected what its nodes did.** `run_pipeline` called
+  `resolve_status()` in an `else` branch and `absorb_trace()` in the `finally`.
+  Python runs `else` first, so the status was always decided against an empty
+  node list: `resolve_status`'s failed-node branch could never fire, and its
+  `not self.nodes` guard was trivially true. The trace now lands first, and the
+  run certificate records the resolved status.
+- **A node that finished inside its budget could be recorded as a timeout.**
+  The completion loop breaks out as soon as new nodes become ready, leaving
+  already-finished futures in the running set until the next pass; the timeout
+  sweep judged them by elapsed time alone. Because the first failure aborts the
+  run, one deferred completion could fail an entire pipeline. Finished futures
+  are now skipped and read for their real result.
+- **Streaming resource-conflict detection had never reported a conflict.** It
+  compared the starting pipeline against the status snapshots returned by
+  `list_running_pipelines()`, which carry the pipeline definition under
+  `pipeline_config` and have no top-level `nodes` key — so every running
+  pipeline contributed an empty resource set and every intersection was empty.
+  Shared Kafka topics, file paths and Delta tables are detected again.
+- **`ducta config validate --env <env>` ignored the environment on layered
+  projects.** It resolved an environment, passed it to `build_context_args`
+  (which ignored it) and then built its `Context` without one — validating
+  against the base configuration whatever `--env` said, so any error that only
+  exists under an `environments:` override went unreported. The streaming CLI's
+  fallback `load_context()` dropped `env` the same way.
+- **`RunLedger.start()` created a second ledger.** It constructed its own
+  instance instead of going through `ledger_for()`, so the executor facade held
+  one ledger and every component below it held another — two locks guarding the
+  same list, for a class whose stated purpose is to give that bookkeeping one
+  thread-safe implementation.
+- **`block_threshold: null` raised a bare `TypeError` from inside gate
+  evaluation.** Those two thresholds were coerced at the use site, outside the
+  `try/except` that turns every other malformed gate key into a
+  `QualityConfigError`.
+- **`${MONKEY_DIR}` and `${TOKENIZER_PATH}` were refused as credentials.** The
+  guard that stops secrets being interpolated into config matched
+  `KEY|SECRET|TOKEN|…` as a substring anywhere in the variable name. It now
+  matches per `_`/`-`/`.`-separated component; every real credential name is
+  still rejected.
+- **A query with an escaped quote was rejected as an injection attempt.**
+  `SQLSanitizer` did not understand the SQL-standard doubled-quote escape, so in
+  `WHERE note = 'it''s a drop-in'` the rest of the literal was read as bare SQL
+  and tripped the keyword denylist. It failed closed, so this refused valid
+  queries rather than admitting dangerous ones.
+- **Layer import paths accumulated across runs.** `inject_sys_path` only ever
+  added, and every layer names its package `src`, so running more than one layer
+  in a process (`--all-layers`, the API serving two layered projects) left each
+  layer stacked on `sys.path` with a stale `sys.modules['src']` — after which
+  the second layer silently imported the first layer's node functions. A new
+  `layer_sys_path()` context manager restores both on exit.
 - **The UI's file browser could never list a directory.**
   `WorkspaceManager.list_directory` called `posix_relative(self.root, item)`, but
   the helper's signature is `(path, base)` — so it computed

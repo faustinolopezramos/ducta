@@ -112,28 +112,49 @@ class TestJit:
         second = compile_function(f)
         assert second is first
 
-    def test_stale_cache_entry_with_mismatched_identity_is_not_reused(self):
-        # Regression: the cache used to be keyed purely by id(func), with no
-        # reference to the original function object kept alongside the
-        # compiled one. If CPython ever reused a garbage-collected function's
-        # id() for an unrelated object, a lookup could silently return a
-        # different function's compiled code. Simulate that here by planting
-        # a stale entry under the same id() with a *different* original
-        # function object.
-        import ducta.core.utils as utils_module
-
+    def test_distinct_functions_do_not_share_a_cache_entry(self):
+        # The cache is keyed on the function object itself (a WeakKeyDictionary),
+        # so two functions can never collide. It used to be keyed on id(func),
+        # which meant a garbage-collected function's id could be reused by an
+        # unrelated object and hand back the wrong compiled code — a hazard the
+        # old implementation had to carry an extra strong reference to guard
+        # against, at the cost of never releasing anything it had ever seen.
         @jit
         def f(x):
             return x * 2
 
-        def unrelated_original(y):
-            return y
+        @jit
+        def g(x):
+            return x + 1
 
-        def unrelated_compiled(y):
-            return "WRONG"
+        compiled_f = compile_function(f)
+        compiled_g = compile_function(g)
 
-        utils_module._jit_compile_cache[id(f)] = (unrelated_original, unrelated_compiled)
+        assert compile_function(f) is compiled_f
+        assert compile_function(g) is compiled_g
 
-        result = compile_function(f)
+    def test_cache_does_not_retain_collected_functions(self):
+        # The point of the weak keying: a function that goes out of scope must
+        # not be pinned in memory (with its module and closure) for the life of
+        # the process just because it was compiled once.
+        import gc
 
-        assert result is not unrelated_compiled
+        import ducta.core.utils as utils_module
+
+        def _cache_size():
+            return len(utils_module._jit_compile_cache) + len(utils_module._jit_fallback)
+
+        def _make():
+            @jit
+            def transient(x):
+                return x * 3
+
+            compile_function(transient)
+            return _cache_size()
+
+        baseline = _cache_size()
+        size_with_entry = _make()
+        gc.collect()
+
+        assert size_with_entry == baseline + 1
+        assert _cache_size() == baseline

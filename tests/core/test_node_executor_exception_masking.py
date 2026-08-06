@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ducta.core.node_executor import NodeExecutor
+from ducta.core.execution.runner import NodeExecutor
 
 
 def _node_executor_with_fake_coordinator(coordinate_error, cleanup_error) -> NodeExecutor:

@@ -29,7 +29,6 @@ _IO_TOKEN_SPLIT = re.compile(r"[._\-/]+")
 class MLOpsAutoConfigurator:
     """Auto-configures MLOps based on context and node patterns."""
 
-    # Node name patterns that indicate ML workload
     ML_NODE_PATTERNS = [
         "train",
         "model",
@@ -45,7 +44,6 @@ class MLOpsAutoConfigurator:
         "experiment",
     ]
 
-    # Function name patterns that indicate ML libraries
     ML_FUNCTION_PATTERNS = [
         "sklearn",
         "xgboost",
@@ -61,13 +59,20 @@ class MLOpsAutoConfigurator:
         "grid_search",
     ]
 
-    # ML-related input/output patterns. Matched as whole tokens (see
-    # should_enable_mlops), not substrings — "metrics" was deliberately
-    # dropped: it's too generic a term for ordinary BI/analytics dataset
-    # names ("sales_metrics_daily") to gate MLOps auto-detection on, unlike
-    # "model"/"weights"/"checkpoint"/"hyperparams" which are specific enough
-    # to rarely appear in non-ML datasets.
     ML_IO_PATTERNS = ["model", "weights", "checkpoint", "hyperparams"]
+
+    @staticmethod
+    def _iter_io_keys(raw: Any) -> List[str]:
+        """Normalize an ``input``/``output`` declaration to a list of dataset keys."""
+        if raw is None:
+            return []
+        if isinstance(raw, str):
+            return [raw]
+        if isinstance(raw, dict):
+            return [str(v) for v in raw.values()]
+        if isinstance(raw, (list, tuple, set)):
+            return [str(item) for item in raw]
+        return [str(raw)]
 
     @classmethod
     def get_logging_strategy(cls, ml_stage: str) -> Dict[str, bool]:
@@ -78,7 +83,6 @@ class MLOpsAutoConfigurator:
         elif "train" in stage or "eval" in stage or "test" in stage:
             return {"log_metrics": True, "log_schema": False, "log_artifacts": True}
         else:
-            # Default generic strategy
             return {"log_metrics": True, "log_schema": True, "log_artifacts": True}
 
     @classmethod
@@ -86,46 +90,36 @@ class MLOpsAutoConfigurator:
         """
         Detect if a node needs MLOps automatically.
         """
-        # Explicit ML configuration
         if "ml" in node_config:
             return True
 
-        # Explicit opt-out
         if node_config.get("mlops_enabled") is False:
             return False
 
         name = node_name or node_config.get("name", "")
 
-        # Check node name
         if any(pattern in name.lower() for pattern in cls.ML_NODE_PATTERNS):
             logger.debug(f"MLOps auto-enabled for node '{name}' (pattern match in name)")
             return True
 
-        # Check function name.
-        # `function` may be a string (legacy) or a dict (streaming transform: {key, params}).
-        # A dict signals a registered streaming transform, never an ML function, so skip ML matching.
         function_cfg = node_config.get("function", "")
         function = function_cfg.lower() if isinstance(function_cfg, str) else ""
         if any(pattern in function for pattern in cls.ML_FUNCTION_PATTERNS):
             logger.debug(f"MLOps auto-enabled for node '{name}' (pattern match in function)")
             return True
 
-        # Check for ML-related hyperparameters
         if "hyperparams" in node_config:
             logger.debug(f"MLOps auto-enabled for node '{name}' (has hyperparams)")
             return True
 
-        # Check for ML-related metrics
         if "metrics" in node_config:
             logger.debug(f"MLOps auto-enabled for node '{name}' (has metrics)")
             return True
 
-        # Check input/output patterns — whole-token match (split on ./_/-//),
-        # not substring: a plain `pattern in io_str` check would false-positive
-        # on e.g. "underscore" containing "score", or an ordinary analytics
-        # dataset like "sales_metrics_daily" containing "metrics" as a
-        # substring of an unrelated compound name.
-        for io_item in [*node_config.get("input", []), *node_config.get("output", [])]:
+        for io_item in [
+            *cls._iter_io_keys(node_config.get("input")),
+            *cls._iter_io_keys(node_config.get("output")),
+        ]:
             io_str = str(io_item).lower()
             tokens = set(_IO_TOKEN_SPLIT.split(io_str))
             if tokens & set(cls.ML_IO_PATTERNS):
@@ -153,20 +147,16 @@ class MLOpsAutoConfigurator:
         """
         Determine if MLOps should be initialized for a pipeline.
         """
-        # Check global override
         mlops_global = global_settings.get("mlops", {})
 
-        # Explicit disable
         if mlops_global.get("enabled") is False:
             logger.info("MLOps disabled by global settings")
             return False
 
-        # Explicit enable
         if mlops_global.get("enabled") is True:
             logger.info("MLOps enabled by global settings")
             return True
 
-        # Auto-detect: check if any node needs MLOps
         ml_nodes = cls.detect_pipeline_ml_nodes(nodes_config)
 
         if ml_nodes:

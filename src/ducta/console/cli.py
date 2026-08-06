@@ -32,7 +32,6 @@ from ducta.console import execution, template
 from ducta.console.commands import ExecutionCommands, QualityCommands, handle_config
 from ducta.console.core import (
     ConfigCache,
-    DuctaError,
     ExitCode,
     LoggerManager,
     ValidationError,
@@ -45,6 +44,7 @@ from ducta.console.validation import (
     validate_positive_number,
     validate_required_field,
 )
+from ducta.core.errors import DuctaError as EngineError
 
 HELP_BASE_PATH = "Base path for config discovery"
 HELP_LAYER_NAME = "Layer name for config discovery"
@@ -167,11 +167,16 @@ class UnifiedCLI:
         try:
             parsed_args = self._parse_and_setup_logging(args)
             return self._dispatch_subcommand(parsed_args)
-        except DuctaError as e:
+        except EngineError as e:
+            # Covers both the console's own errors and everything the engine
+            # raises on purpose: `ducta.console.core.DuctaError` derives from
+            # `ducta.core.errors.DuctaError`. Each class declares the exit code
+            # its kind of failure deserves, so a bad pipeline config exits 2 and
+            # a failed run exits 4 instead of both collapsing to 1 here.
             logger.error("Ducta error: {}", e)
             if parsed_args is not None and getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
-            return e.exit_code.value
+            return e.exit_code
         except KeyboardInterrupt:
             logger.warning("Execution interrupted by user")
             return ExitCode.GENERAL_ERROR.value
@@ -203,11 +208,7 @@ class UnifiedCLI:
         return parsed_args
 
     def _build_dispatch_table(self):
-        """Map each subcommand to its (argument validator, handler).
-
-        The validator (or None) runs before the handler; both receive the parsed
-        argparse namespace and the handler returns the process exit code.
-        """
+        """Map each subcommand to its (argument validator, handler)."""
         return {
             "start": (validate_start_arguments, lambda a: ExecutionCommands().handle_start(a)),
             "stream": (None, self._handle_stream_command),
@@ -237,6 +238,10 @@ class UnifiedCLI:
                 validator(parsed_args)
             return handler(parsed_args)
         except ValidationError as e:
+            # Deliberately caught here rather than by `run()`'s handler, which
+            # would map it to the same exit code but print a plain log line. Bad
+            # arguments are the most common failure a user hits, so they get the
+            # annotated rendering; everything else falls through to `run()`.
             try:
                 from ducta.console.ux.error_analyzer import format_error_for_developer
                 from ducta.console.ux.rich_logger import RichLoggerManager

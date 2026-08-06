@@ -7,7 +7,7 @@ with a clear message instead of surfacing as a mysterious ImportError somewhere 
 
 
 def test_data_output_manager_importable():
-    from ducta.gate.output import DataOutputManager  # noqa: F401  (core/executor.py)
+    from ducta.gate.output import DataOutputManager  # noqa: F401  (core/executors/base.py)
 
 
 def test_is_cloud_path_importable_from_output():

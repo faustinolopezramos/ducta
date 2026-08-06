@@ -180,7 +180,7 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         config_manager = _init_config_manager(parsed_args)
         context = execution.ContextInitializer(config_manager).initialize(env)
         executor = PipelineExecutor(context, str(config_manager.get_config_directory()))
-        executor.run_pipeline(
+        run = executor.run_pipeline(
             pipeline_name=pipeline,
             start_date=getattr(parsed_args, "start_date", None),
             end_date=getattr(parsed_args, "end_date", None),
@@ -188,6 +188,17 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         )
     except Exception as e:  # noqa: BLE001
         logger.error("Reproduction run failed: {}", e)
+        return ExitCode.EXECUTION_ERROR.value
+
+    # A blocked gate returns normally, so the fingerprint comparison below would
+    # run against outputs the reproduction never wrote and report "not
+    # reproducible" for the wrong reason.
+    if run.gate_blocked:
+        logger.error(
+            "Reproduction run was blocked by a quality gate on {}; cannot compare "
+            "fingerprints against the certificate.",
+            ", ".join(sorted(run.gate_blocked)),
+        )
         return ExitCode.EXECUTION_ERROR.value
 
     fresh = getattr(context, "_output_fingerprints", {}) or {}

@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 from ducta.console.commands.execution_cmds import ExecutionCommands
 from ducta.console.core import CLIConfig, ExitCode
+from ducta.core.results import PipelineRunResult, RunStatus
 
 
 class TestReuseUpstreamRerunAllConflict:
@@ -55,8 +56,6 @@ def _cmd_with_fake_executor(exec_obj):
 
     exec_obj.validate_pipeline.return_value = True
     exec_obj.list_pipelines.return_value = ["my_pipeline"]
-    exec_obj.run_pipeline_chain.return_value = None
-    exec_obj.reused_pipelines = None
 
     context_init = MagicMock()
     context_init.initialize.return_value = MagicMock()
@@ -71,22 +70,68 @@ def _cmd_with_fake_executor(exec_obj):
         ducta.core.PipelineExecutor = original
 
 
+def _executor_returning(run_result: PipelineRunResult):
+    """An executor whose chain run produces *run_result*.
+
+    Everything the CLI reports now comes off the typed result, so the test no
+    longer has to model which sub-executor a pipeline type happened to use, nor
+    stub two levels of private attributes.
+    """
+    exec_obj = MagicMock()
+    exec_obj.run_pipeline_chain.return_value = run_result
+    return exec_obj
+
+
 class TestGateBlockedReportsNonZeroExit:
     def test_gate_blocked_node_is_not_reported_as_success(self):
-        exec_obj = MagicMock()
-        exec_obj.batch_executor._skipped_atomic_node = None
-        exec_obj.batch_executor.node_executor.gate_blocked = {
-            "risky_node": {"status": "gate_blocked", "error": "score 0.4 below threshold 0.8"}
-        }
+        exec_obj = _executor_returning(
+            PipelineRunResult(
+                pipeline="my_pipeline",
+                status=RunStatus.GATE_BLOCKED,
+                gate_blocked={
+                    "risky_node": {
+                        "status": "gate_blocked",
+                        "error": "score 0.4 below threshold 0.8",
+                    }
+                },
+            )
+        )
+
+        result = _cmd_with_fake_executor(exec_obj)
+
+        assert result == ExitCode.EXECUTION_ERROR.value
+
+    def test_hybrid_gate_block_is_not_reported_as_success(self):
+        # A hybrid pipeline runs its batch phase through HybridExecutor's own
+        # node_executor. The result carries gate blocks from whichever executor
+        # ran, so the CLI no longer has to know which one that was.
+        exec_obj = _executor_returning(
+            PipelineRunResult(
+                pipeline="my_pipeline",
+                status=RunStatus.GATE_BLOCKED,
+                gate_blocked={"hybrid_node": {"status": "gate_blocked", "error": "freshness gate"}},
+            )
+        )
 
         result = _cmd_with_fake_executor(exec_obj)
 
         assert result == ExitCode.EXECUTION_ERROR.value
 
     def test_clean_run_still_reports_success(self):
-        exec_obj = MagicMock()
-        exec_obj.batch_executor._skipped_atomic_node = None
-        exec_obj.batch_executor.node_executor.gate_blocked = {}
+        exec_obj = _executor_returning(PipelineRunResult(pipeline="my_pipeline"))
+
+        result = _cmd_with_fake_executor(exec_obj)
+
+        assert result == ExitCode.SUCCESS.value
+
+    def test_streaming_run_reports_success(self):
+        exec_obj = _executor_returning(
+            PipelineRunResult(
+                pipeline="my_pipeline",
+                status=RunStatus.RUNNING,
+                streaming_execution_ids=["exec-1"],
+            )
+        )
 
         result = _cmd_with_fake_executor(exec_obj)
 
@@ -94,13 +139,23 @@ class TestGateBlockedReportsNonZeroExit:
 
     def test_missing_deps_skip_still_takes_priority_and_reports_success(self):
         # Unchanged existing behavior: an atomic --node skip (missing deps)
-        # is reported as success, same as before this fix.
-        exec_obj = MagicMock()
-        exec_obj.batch_executor._skipped_atomic_node = {
-            "node": "n1",
-            "reason": "missing upstream input",
-        }
-        exec_obj.batch_executor.node_executor.gate_blocked = {}
+        # is reported as success.
+        exec_obj = _executor_returning(
+            PipelineRunResult(
+                pipeline="my_pipeline",
+                status=RunStatus.SKIPPED,
+                skipped={"n1": "missing upstream input"},
+            )
+        )
+
+        result = _cmd_with_fake_executor(exec_obj)
+
+        assert result == ExitCode.SUCCESS.value
+
+    def test_reused_upstream_pipelines_are_reported(self):
+        exec_obj = _executor_returning(
+            PipelineRunResult(pipeline="my_pipeline", reused_pipelines=["raw", "clean"])
+        )
 
         result = _cmd_with_fake_executor(exec_obj)
 

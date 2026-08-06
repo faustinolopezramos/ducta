@@ -29,9 +29,18 @@ from loguru import logger  # type: ignore
 try:
     from pyspark.sql import DataFrame  # type: ignore
     from pyspark.sql.streaming import StreamingQuery  # type: ignore
+
+    SPARK_TYPES_AVAILABLE = True
 except ImportError:  # PySpark not installed (e.g. pure-Python test environments)
     DataFrame = Any  # type: ignore
     StreamingQuery = Any  # type: ignore
+    #: Whether the names above are real classes. They double as type annotations
+    #: and, historically, as ``isinstance`` targets — but ``typing.Any`` cannot be
+    #: used with ``isinstance``: it raises ``TypeError: typing.Any cannot be used
+    #: with isinstance()``. Any code that wants a *runtime* check must consult
+    #: this flag (or use :func:`looks_like_dataframe`) rather than the name.
+    SPARK_TYPES_AVAILABLE = False
+
 
 try:
     import pyspark.sql.functions as _f  # type: ignore
@@ -52,6 +61,26 @@ from ducta.stream.readers import StreamingReaderFactory
 from ducta.stream.trigger_scheduler import TriggerScheduler
 from ducta.stream.validators import StreamingValidator
 from ducta.stream.writers import StreamingWriterFactory
+
+
+def looks_like_dataframe(value: Any) -> bool:
+    """Whether *value* is a Spark DataFrame, without requiring pyspark to be importable.
+
+    Prefers a real ``isinstance`` check. When pyspark is absent there is no class
+    to check against, so it falls back to the structural signature a streaming
+    DataFrame must have — which is what the caller actually depends on. The
+    alternative (skipping validation entirely) would let a transformation that
+    returns the wrong thing fail much later, inside Spark, with an unrelated
+    message.
+    """
+    if value is None:
+        return False
+    if SPARK_TYPES_AVAILABLE:
+        return isinstance(value, DataFrame)
+    return hasattr(value, "writeStream") or (
+        hasattr(value, "schema") and hasattr(value, "isStreaming")
+    )
+
 
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
@@ -451,7 +480,13 @@ class StreamingQueryManager:
                     cause=e,
                 ) from e
 
-            if not isinstance(transformed_df, DataFrame):
+            # `looks_like_dataframe`, not `isinstance(transformed_df, DataFrame)`:
+            # when pyspark is absent that name is `typing.Any`, and isinstance
+            # against it raises TypeError. The TypeError was then swallowed by
+            # the outer handler and re-reported as a generic
+            # "Failed to apply transformation", so a perfectly valid transform
+            # looked like a transform failure.
+            if not looks_like_dataframe(transformed_df):
                 raise StreamingError(
                     f"Transformation function must return a DataFrame, got {type(transformed_df)}",
                     error_code="INVALID_RETURN_TYPE",

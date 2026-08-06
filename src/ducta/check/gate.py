@@ -119,17 +119,29 @@ class QualityGateEvaluator:
         try:
             max_errors = int(cfg.get("max_errors", 0))
             max_warnings = int(cfg.get("max_warnings", -1))
-            min_pass_rate = float(cfg.get("min_pass_rate", 1.0))
+            # Default 0.0 = off. It used to default to 1.0, which contradicted
+            # `max_warnings: -1` sitting right above it: the pass rate counts
+            # every failed check regardless of severity, so a gate configured
+            # with nothing but `enabled: true` blocked on the very warnings the
+            # other knob declared tolerable. Each knob is now independent, and
+            # the out-of-the-box gate means exactly one thing: any ERROR blocks.
+            min_pass_rate = float(cfg.get("min_pass_rate", 0.0))
             score_threshold = float(cfg.get("score_threshold", 0.0))
+            # Optional legacy thresholds. Coerced here rather than at the use
+            # site so a malformed value raises QualityConfigError like every
+            # other key instead of a raw TypeError from `float(None)`.
+            raw_block = cfg.get("block_threshold")
+            raw_warn = cfg.get("warn_threshold")
+            block_threshold = float(raw_block) if raw_block is not None else None
+            warn_threshold = float(raw_warn) if raw_warn is not None else None
         except (TypeError, ValueError) as e:
             raise QualityConfigError(
                 f"Invalid quality gate config for '{gate_name}': {e}. "
                 "'max_errors'/'max_warnings' must be integers, "
-                "'min_pass_rate'/'score_threshold' must be numbers."
+                "'min_pass_rate'/'score_threshold'/'block_threshold'/'warn_threshold' "
+                "must be numbers."
             ) from e
         required_checks = cfg.get("required_checks") or []
-        block_threshold = cfg.get("block_threshold")
-        warn_threshold = cfg.get("warn_threshold")
         raw_behavior = str(cfg.get("behavior", GateBehavior.SKIP_DOWNSTREAM.value))
         aliases = {"block": GateBehavior.STOP_ALL.value, "warn": GateBehavior.WARN_ONLY.value}
         normalized = aliases.get(raw_behavior, raw_behavior)
@@ -190,9 +202,9 @@ class QualityGateEvaluator:
                 _block(f"Required check '{check_name}' failed")
 
         # Legacy score thresholds, only when explicitly configured.
-        if block_threshold is not None and score < float(block_threshold):
+        if block_threshold is not None and score < block_threshold:
             _block(f"Score {score:.4f} below block_threshold {block_threshold}")
-        elif warn_threshold is not None and score < float(warn_threshold):
+        elif warn_threshold is not None and score < warn_threshold:
             _warn(f"Score {score:.4f} below warn_threshold {warn_threshold}")
 
         # Legacy mandatory_checks: blocks on failure (absence tolerated).

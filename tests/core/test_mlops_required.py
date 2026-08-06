@@ -13,8 +13,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ducta.core.executor import BaseExecutor, BatchExecutor
-from ducta.core.node_executor import NodeExecutor
+from ducta.core.execution.runner import NodeExecutor
+from ducta.core.executors.base import BaseExecutor
+from ducta.core.executors.batch import BatchExecutor
+from ducta.core.settings import CoreSettings
 
 
 def _base_executor(mlops_required: bool) -> BaseExecutor:
@@ -26,6 +28,8 @@ def _base_executor(mlops_required: bool) -> BaseExecutor:
     executor._mlflow_required = mlops_required
     executor._mlops_auto_config = MagicMock()
     executor._mlops_auto_config.should_init_mlops_for_pipeline.return_value = True
+    # __new__ bypasses __init__; settings are resolved once at construction.
+    executor.settings = CoreSettings.from_context(executor.context)
     return executor
 
 
@@ -34,6 +38,7 @@ def _batch_executor(mlops_required: bool) -> BatchExecutor:
     executor.context = MagicMock()
     executor.context.global_settings = {"mlops_required": mlops_required, "mlops_enabled": True}
     executor._mlflow_required = mlops_required
+    executor.settings = CoreSettings.from_context(executor.context)
     return executor
 
 
@@ -61,7 +66,7 @@ class TestStartMlopsIntegrationRequired:
     def test_required_true_raises_when_construction_fails(self):
         executor = _batch_executor(mlops_required=True)
         with patch(
-            "ducta.core.executor.MLOpsExecutorIntegration",
+            "ducta.core.executors.base.MLOpsExecutorIntegration",
             side_effect=RuntimeError("boom"),
         ):
             with pytest.raises(RuntimeError, match="mlops_required=true"):
@@ -71,7 +76,9 @@ class TestStartMlopsIntegrationRequired:
         executor = _batch_executor(mlops_required=True)
         fake_integration = MagicMock()
         fake_integration.is_available.return_value = False
-        with patch("ducta.core.executor.MLOpsExecutorIntegration", return_value=fake_integration):
+        with patch(
+            "ducta.core.executors.base.MLOpsExecutorIntegration", return_value=fake_integration
+        ):
             with pytest.raises(RuntimeError, match="mlops_required=true"):
                 executor._start_mlops_integration({}, "pipeline1", {})
 
@@ -79,14 +86,16 @@ class TestStartMlopsIntegrationRequired:
         executor = _batch_executor(mlops_required=False)
         fake_integration = MagicMock()
         fake_integration.is_available.return_value = False
-        with patch("ducta.core.executor.MLOpsExecutorIntegration", return_value=fake_integration):
+        with patch(
+            "ducta.core.executors.base.MLOpsExecutorIntegration", return_value=fake_integration
+        ):
             integration, run_id = executor._start_mlops_integration({}, "pipeline1", {})
         assert run_id is None
 
     def test_required_false_degrades_to_warning_on_exception(self):
         executor = _batch_executor(mlops_required=False)
         with patch(
-            "ducta.core.executor.MLOpsExecutorIntegration",
+            "ducta.core.executors.base.MLOpsExecutorIntegration",
             side_effect=RuntimeError("boom"),
         ):
             integration, run_id = executor._start_mlops_integration({}, "pipeline1", {})

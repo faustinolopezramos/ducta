@@ -15,7 +15,7 @@ import threading
 import time
 from unittest.mock import MagicMock
 
-from ducta.core.node_executor import NodeExecutor
+from ducta.core.execution.runner import NodeExecutor
 
 
 def _node_executor_with_fake_coordinator(sleep_seconds: float) -> NodeExecutor:

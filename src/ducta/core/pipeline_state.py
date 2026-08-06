@@ -69,7 +69,6 @@ class CircuitBreaker:
                     f"({self.success_count}/{self.half_open_max_calls})"
                 )
 
-                # If enough successes in half-open, close the circuit
                 if self.success_count >= self.half_open_max_calls:
                     self._close_circuit()
 
@@ -80,7 +79,6 @@ class CircuitBreaker:
             self.last_failure_time = datetime.now()
 
             if self.state == CircuitBreakerState.HALF_OPEN:
-                # Failure in half-open state reopens circuit
                 logger.warning("Circuit breaker failure in HALF_OPEN state - reopening circuit")
                 self._open_circuit()
                 return True
@@ -103,7 +101,6 @@ class CircuitBreaker:
                 return True
 
             elif self.state == CircuitBreakerState.OPEN:
-                # Check if timeout expired
                 if self.last_failure_time is None:
                     return False
 
@@ -114,15 +111,12 @@ class CircuitBreaker:
                         "- transitioning to HALF_OPEN"
                     )
                     self._transition_to_half_open()
-                    # CRITICAL: Increment happens inside lock to prevent race condition
                     self.half_open_calls = 1
                     return True
 
                 return False
 
             elif self.state == CircuitBreakerState.HALF_OPEN:
-                # Allow limited calls in half-open state
-                # CRITICAL: All operations inside lock to prevent race condition
                 if self.half_open_calls < self.half_open_max_calls:
                     self.half_open_calls += 1
                     return True
@@ -198,9 +192,6 @@ class NodeExecutionInfo:
     error: Optional[str] = None
     dependencies: List[str] = field(default_factory=list)
     dependents: Set[str] = field(default_factory=set)
-    retry_count: int = 0
-    max_retries: int = 3
-    retry_delay: float = 5.0  # seconds
     execution_metadata: Dict[str, Any] = field(default_factory=dict)
     resources: List[Any] = field(default_factory=list)
 
@@ -216,8 +207,6 @@ class UnifiedPipelineState:
         """Initialize the unified pipeline state."""
         self._lock = threading.RLock()
         self._nodes: Dict[str, NodeExecutionInfo] = {}
-
-        # New circuit breaker with auto-reset
         self._circuit_breaker = CircuitBreaker(
             failure_threshold=circuit_breaker_threshold,
             timeout=timedelta(minutes=circuit_breaker_timeout_minutes),
@@ -229,7 +218,6 @@ class UnifiedPipelineState:
         self._streaming_queries: Dict[str, Any] = {}
         self._streaming_stopper: Optional[Callable[[str], bool]] = None
         self._cross_dependencies: Dict[str, Set[str]] = {}
-        self._pending_timers: List[threading.Timer] = []
 
     def register_node(
         self,
@@ -280,7 +268,6 @@ class UnifiedPipelineState:
 
             node = self._nodes[node_name]
 
-            # Check circuit breaker before execution
             if not self._circuit_breaker.can_execute():
                 logger.warning(
                     f"Circuit breaker blocked execution of node '{node_name}' - "
@@ -318,7 +305,6 @@ class UnifiedPipelineState:
                 meta["quality_score"] = quality_score
             node.execution_metadata = meta
 
-            # Record success in circuit breaker (helps with recovery)
             self._circuit_breaker.record_success()
 
             if node.node_type == NodeType.BATCH and output_path:
@@ -332,73 +318,27 @@ class UnifiedPipelineState:
             self._notify_dependents(node_name)
 
     def fail_node_execution(self, node_name: str, error: str) -> None:
-        """Handle node failure with retry logic and circuit breaker.
-
-        ``_propagate_failure`` (which can call a streaming query's blocking
-        ``.stop()``) is invoked *after* this method's own lock is released,
-        not from inside the ``with self._lock:`` block below: since
-        ``self._lock`` is an RLock, calling it from inside would only look
-        released to *this* thread (reentrancy), while every other thread
-        stays blocked on the still-held outer lock for as long as the stop
-        call takes — stalling unrelated nodes' state transitions.
-        """
-        should_propagate = False
+        """Record a node failure and propagate it to dependent nodes."""
         with self._lock:
             if node_name not in self._nodes:
                 raise ValueError(f"Node '{node_name}' not registered")
 
             node = self._nodes[node_name]
 
-            # Record failure in circuit breaker
             should_open = self._circuit_breaker.record_failure()
 
+            node.status = NodeStatus.FAILED
+            node.end_time = time.time()
             if should_open:
                 logger.critical(
                     f"Circuit breaker triggered for node '{node_name}' - "
                     f"state: {self._circuit_breaker.get_state().value}"
                 )
-                node.status = NodeStatus.FAILED
                 node.error = f"Circuit breaker triggered: {error}"
-                node.end_time = time.time()
-                should_propagate = True
             else:
-                # Quality Gate blocks are deterministic failures: retrying will not
-                # change the outcome (the data is what it is). Skip the retry cycle.
-                # We detect gate blocks via the error string tag set by the executor
-                _is_gate_block = error.startswith("[QualityGateBlocked]")
+                node.error = error
 
-                if not _is_gate_block and node.retry_count < node.max_retries:
-                    node.retry_count += 1
-                    node.status = NodeStatus.RETRYING
-                    logger.warning(
-                        f"Node '{node_name}' failed (attempt {node.retry_count}/"
-                        f"{node.max_retries}). Retrying in {node.retry_delay}s"
-                    )
-                    timer = threading.Timer(node.retry_delay, self._retry_node, args=[node_name])
-                    self._pending_timers.append(timer)
-                    timer.start()
-                else:
-                    node.status = NodeStatus.FAILED
-                    node.error = error
-                    node.end_time = time.time()
-                    should_propagate = True
-
-        if should_propagate:
-            self._propagate_failure(node_name)
-
-    def _retry_node(self, node_name: str) -> None:
-        """Retry node execution after failure."""
-        with self._lock:
-            if node_name not in self._nodes:
-                return
-
-            node = self._nodes[node_name]
-            if node.status == NodeStatus.RETRYING:
-                node.status = NodeStatus.PENDING
-                logger.info(f"Retrying node '{node_name}'")
-
-            # Remove expired timers from the list
-            self._pending_timers = [t for t in self._pending_timers if t.is_alive()]
+        self._propagate_failure(node_name)
 
     def register_streaming_query(self, node_name: str, query: Any) -> None:
         """Register a streaming query for tracking."""
@@ -533,16 +473,7 @@ class UnifiedPipelineState:
             logger.error(f"Error invoking stopper for '{streaming_node}': {e}")
 
     def stop_dependent_streaming_nodes(self, failed_batch_node: str) -> List[str]:
-        """Stop streaming nodes that depend on a failed batch node.
-
-        The affected (node, query) pairs are snapshotted under the lock; the
-        actual `.stop()`/stopper calls run outside it (see
-        `_attempt_stop_by_handle`/`_attempt_stop_by_id`). Holding the lock
-        across a blocking stop call would otherwise stall every other node's
-        state transitions (this is called from `fail_node_execution`, itself
-        already holding the same re-entrant lock) for as long as that
-        streaming query takes to stop.
-        """
+        """Stop streaming nodes that depend on a failed batch node."""
         stopped_nodes: List[str] = []
         to_stop: List[Any] = []
 
@@ -663,12 +594,6 @@ class UnifiedPipelineState:
 
     def cleanup(self) -> None:
         """Clean up all resources and stop active streaming queries"""
-        # Cancel any pending retry timers before resetting state
-        with self._lock:
-            for timer in self._pending_timers:
-                timer.cancel()
-            self._pending_timers.clear()
-
         with self._lock:
             for node_name, query in self._streaming_queries.items():
                 self._stop_query(node_name, query)

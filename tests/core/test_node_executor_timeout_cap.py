@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ducta.core.node_executor import NodeExecutor
+from ducta.core.execution.runner import NodeExecutor
 
 
 def _node_executor(node_timeout_seconds) -> NodeExecutor:

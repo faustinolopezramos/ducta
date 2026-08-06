@@ -184,6 +184,11 @@ def _try_validate_layered(parsed_args) -> Optional[int]:
                 nodes_config=context_args["nodes_config"],
                 input_config=context_args["input_config"],
                 output_config=context_args["output_config"],
+                # Without this, `ducta config validate --env prod` resolved an
+                # environment and then validated the base configuration, so any
+                # error that only exists under an `environments:` override went
+                # unreported.
+                env=context_args["env"],
                 validate=False,
             )
             # Layer node functions ("src.X") import relative to the layer root.

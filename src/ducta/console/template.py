@@ -1435,7 +1435,7 @@ class TemplateCommand:
 
         except TemplateError as e:
             logger.error("Template error: {}", e)
-            return e.exit_code.value
+            return e.exit_code
         except Exception as e:
             logger.error("Unexpected error: {}", e)
             return ExitCode.GENERAL_ERROR.value

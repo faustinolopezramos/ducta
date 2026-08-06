@@ -229,10 +229,34 @@ class TestLayerContextBuilder:
         lc = LayerConfig("bronze", {"path": "bronze"})
         detector = LayeredProjectDetector(project_root=temp_dir)
         detector.layers["bronze"] = lc
-        LayerContextBuilder.inject_sys_path(detector, "bronze")
-        assert str(src) in sys.path
-        # Cleanup
-        sys.path = [p for p in sys.path if p != str(src)]
+        before = list(sys.path)
+        try:
+            LayerContextBuilder.inject_sys_path(detector, "bronze")
+            # Roots are resolved, so compare resolved (on macOS a temp dir under
+            # /var resolves to /private/var).
+            assert str(src.resolve()) in sys.path
+            # The layer root goes ahead of its src/, so `import src.foo` finds
+            # this layer's package before any same-named one further up.
+            assert sys.path.index(str(temp_dir.resolve() / "bronze")) < sys.path.index(
+                str(src.resolve())
+            )
+        finally:
+            sys.path[:] = before
+
+    def test_layer_sys_path_restores_what_it_added(self, temp_dir):
+        import sys
+
+        from ducta.setting.layered_config import layer_sys_path
+
+        (temp_dir / "bronze" / "src").mkdir(parents=True)
+        detector = LayeredProjectDetector(project_root=temp_dir)
+        detector.layers["bronze"] = LayerConfig("bronze", {"path": "bronze"})
+
+        before = list(sys.path)
+        with layer_sys_path(detector, "bronze"):
+            assert str((temp_dir / "bronze" / "src").resolve()) in sys.path
+        # Running a second layer in the same process must not inherit the first.
+        assert sys.path == before
 
 
 class TestDetectAndPrepareLayeredExecution:
@@ -304,3 +328,57 @@ class TestDetectAndPrepareLayeredExecution:
             found, kind, context_args = detect_and_prepare_layered_execution(args)
             assert found is True
             assert kind is None
+
+
+class TestEnvTravelsWithTheContextArgs:
+    """`env` is part of the returned contract, not a parameter that goes nowhere.
+
+    It used to be accepted and ignored: the method took an `env` argument, never
+    read it, and returned a dict without it. Every caller then had to remember
+    to pass the environment to `Context(...)` separately — and
+    `ducta config validate` did not, so a layered project was validated against
+    its base configuration whatever `--env` said.
+    """
+
+    def _layer(self, temp_dir):
+        layer_path = temp_dir / "bronze"
+        config_path = layer_path / "config"
+        config_path.mkdir(parents=True)
+        (layer_path / "global.yaml").write_text("")
+        for name in ("pipelines", "nodes", "input", "output"):
+            (config_path / f"{name}.yaml").write_text("")
+        detector = LayeredProjectDetector(project_root=temp_dir)
+        detector.layers["bronze"] = LayerConfig("bronze", {"path": "bronze"})
+        return detector
+
+    def test_the_requested_env_is_returned(self, temp_dir):
+        detector = self._layer(temp_dir)
+
+        args = LayerContextBuilder.build_context_args(detector, "bronze", "prod")
+
+        assert args is not None
+        assert args["env"] == "prod"
+
+    def test_the_default_env_is_returned_when_none_is_given(self, temp_dir):
+        detector = self._layer(temp_dir)
+
+        args = LayerContextBuilder.build_context_args(detector, "bronze")
+
+        assert args is not None
+        assert args["env"] == "base"
+
+    def test_every_path_key_is_still_present(self, temp_dir):
+        detector = self._layer(temp_dir)
+
+        args = LayerContextBuilder.build_context_args(detector, "bronze", "dev")
+
+        assert set(args) >= {
+            "global_settings",
+            "pipelines_config",
+            "nodes_config",
+            "input_config",
+            "output_config",
+            "layer",
+            "layer_path",
+            "env",
+        }

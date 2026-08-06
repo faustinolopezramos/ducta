@@ -95,6 +95,50 @@ def _install_mocks():
         if name not in sys.modules:
             sys.modules[name] = mod
 
+    _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame)
+
+
+def _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame):
+    """Point already-imported ducta modules at the fake Spark classes.
+
+    Installing fakes in ``sys.modules`` only affects code that imports *after*
+    this runs. The root ``tests/conftest.py`` eagerly imports ``ducta.core``,
+    which pulls in ``ducta.gate.output.dataframes`` — and pytest always loads the
+    root conftest before this one. So by the time we get here that module has
+    already executed its ``try: from pyspark.sql import DataFrame / except
+    ImportError: SparkDataFrame = type(...)`` fallback and is holding a *private
+    dummy class*.
+
+    The result was two different classes both called "SparkDataFrame": the dummy
+    the module checks against, and the fake this conftest hands to fixtures.
+    ``isinstance(fixture_mock, module_dummy)`` is False, so `is_spark_dataframe`
+    returned False for something the test had just built as a Spark DataFrame —
+    a test-harness artifact that looked exactly like a production bug.
+
+    Rebinding is confined to modules whose fallback actually fired: a class whose
+    ``__module__`` is the ducta module itself is by definition the locally
+    created dummy, never the real pyspark class. With real pyspark installed this
+    is a no-op, because the imports above succeeded and nothing is a dummy.
+    """
+    import importlib
+
+    targets = {
+        "ducta.gate.output.dataframes": {
+            "SparkDataFrame": SparkDataFrame,
+            "ConnectDataFrame": ConnectDataFrame,
+        },
+    }
+
+    for module_name, replacements in targets.items():
+        module = sys.modules.get(module_name)
+        if module is None:
+            continue  # not imported yet: it will pick up the fakes on import
+        for attr, fake in replacements.items():
+            current = getattr(module, attr, None)
+            if isinstance(current, type) and current.__module__ == module_name:
+                setattr(module, attr, fake)
+        importlib.invalidate_caches()
+
 
 _install_mocks()
 

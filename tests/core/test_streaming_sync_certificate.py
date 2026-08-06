@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ducta.core.executor import PipelineExecutor
+from ducta.core.executors.facade import PipelineExecutor
+from ducta.core.results import RunStatus
+from ducta.core.settings import CoreSettings
 from ducta.stream.constants import PipelineType
 
 
@@ -19,6 +21,9 @@ def _executor(pipeline_type: str, execution_id: str = "exec-1") -> PipelineExecu
     executor = PipelineExecutor.__new__(PipelineExecutor)
     executor.context = MagicMock()
     executor.context.global_settings = {"preflight_enabled": False}
+    # __new__ bypasses __init__, so resolve the settings the executor now
+    # expects to have been resolved once at construction time.
+    executor.settings = CoreSettings.from_context(executor.context)
 
     fake_batch = MagicMock()
     fake_batch._get_pipeline_config.return_value = {"type": pipeline_type}
@@ -39,7 +44,8 @@ class TestStreamingCertificateEmission:
 
         result = executor.run_pipeline("stream1", execution_mode="sync")
 
-        assert result == "exec-1"
+        assert result.streaming_execution_ids == ["exec-1"]
+        assert result.ok
         executor._emit_run_certificate.assert_called_once()
         call_kwargs = executor._emit_run_certificate.call_args.kwargs
         assert call_kwargs["status"] == "success"
@@ -49,7 +55,10 @@ class TestStreamingCertificateEmission:
 
         result = executor.run_pipeline("stream1", execution_mode="async")
 
-        assert result == "exec-1"
+        # Still running, so not a terminal outcome — and therefore not ok.
+        assert result.streaming_execution_ids == ["exec-1"]
+        assert result.status is RunStatus.RUNNING
+        assert not result.ok
         executor._emit_run_certificate.assert_not_called()
 
     def test_sync_mode_failure_is_reflected_in_certificate_status(self):

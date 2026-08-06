@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from ducta.core.executor import PipelineExecutor
+from ducta.core.executors.facade import PipelineExecutor
+from ducta.core.settings import CoreSettings
 
 
 def _executor() -> PipelineExecutor:
     executor = PipelineExecutor.__new__(PipelineExecutor)
     executor.context = MagicMock()
     executor.context.global_settings = {"preflight_enabled": True}
+    # __new__ bypasses __init__; settings are resolved once at construction.
+    executor.settings = CoreSettings.from_context(executor.context)
     return executor
 
 
@@ -25,7 +28,7 @@ class TestPreflightValidatorCrashIsLoggedVisibly:
             "ducta.core.preflight.validate_pipeline",
             side_effect=RuntimeError("validator bug"),
         ):
-            with patch("ducta.core.executor.logger") as mock_logger:
+            with patch("ducta.core.executors.facade.logger") as mock_logger:
                 executor._run_preflight("pipeline1")  # must not raise (fail-open)
                 mock_logger.warning.assert_called_once()
                 mock_logger.debug.assert_not_called()

@@ -74,7 +74,22 @@ class SQLSanitizer:
     ]
 
     # AST node types that may sit at the root of an accepted query.
-    ALLOWED_AST_TYPES: ClassVar[Set[str]] = {"Select", "CTE", "With"}
+    #
+    # The set operators are read-only combinations of SELECTs, but sqlglot puts
+    # them at the root (`Union`, not `Select`), so `SELECT a FROM t UNION SELECT
+    # b FROM u` — an ordinary analytics query — was rejected outright. Admitting
+    # them costs nothing: the lexical and keyword layers still see the whole
+    # statement, and `_check_ast_for_dangerous_operations` walks *every* Select
+    # in the tree, so a dangerous branch inside a UNION is still caught.
+    ALLOWED_AST_TYPES: ClassVar[Set[str]] = {
+        "Select",
+        "CTE",
+        "With",
+        "Union",
+        "Intersect",
+        "Except",
+        "Subquery",
+    }
 
     @classmethod
     def sanitize_query(cls, query: str) -> str:
@@ -232,7 +247,13 @@ class SQLSanitizer:
 
     @classmethod
     def _mask_string_literals(cls, query: str) -> str:
-        """Replaces the content of string literals with spaces, preserving the quotes."""
+        """Replaces the content of string literals with spaces, preserving the quotes.
+
+        Understands the SQL-standard doubled-quote escape (``'it''s'``). Treating
+        the second quote of the pair as a terminator left the rest of the literal
+        looking like bare SQL, so ``WHERE note = 'it''s a drop-in'`` tripped the
+        keyword denylist on the word inside the user's own data.
+        """
         result: List[str] = []
         in_string = False
         quote_char = None
@@ -249,9 +270,15 @@ class SQLSanitizer:
                     char_index += 1
                     result.append(" ")
                 elif char == quote_char:
-                    in_string = False
-                    quote_char = None
-                    result.append(char)
+                    if char_index + 1 < len(query) and query[char_index + 1] == quote_char:
+                        # Doubled quote: an escaped quote, still inside the literal.
+                        result.append(" ")
+                        result.append(" ")
+                        char_index += 1
+                    else:
+                        in_string = False
+                        quote_char = None
+                        result.append(char)
                 else:
                     result.append(" ")
             else:
@@ -368,20 +395,32 @@ class SQLSanitizer:
 
     @classmethod
     def _count_semicolons_outside_strings(cls, query: str) -> int:
-        """Count semicolons that appear outside string literals."""
+        """Count semicolons that appear outside string literals.
+
+        Handles both escape conventions: a backslash-escaped quote and the
+        SQL-standard doubled quote. Without the latter, ``'a'';'`` looked like a
+        closed literal followed by a bare statement separator, and a legitimate
+        query was rejected as "multiple SQL statements".
+        """
         in_string = False
         quote_char = None
         count = 0
-        for i, char in enumerate(query):
-            if char in ('"', "'") and not cls._is_quote_escaped(query, i):
+        index = 0
+        while index < len(query):
+            char = query[index]
+            if char in ('"', "'") and not cls._is_quote_escaped(query, index):
                 if not in_string:
                     in_string = True
                     quote_char = char
                 elif char == quote_char:
-                    in_string = False
-                    quote_char = None
+                    if index + 1 < len(query) and query[index + 1] == quote_char:
+                        index += 1  # doubled quote: consume the pair, stay inside
+                    else:
+                        in_string = False
+                        quote_char = None
             elif char == ";" and not in_string:
                 count += 1
+            index += 1
         return count
 
     @classmethod
@@ -482,7 +521,16 @@ class UnityCatalogDDL:
 
     @classmethod
     def vacuum(cls, quoted_table_name: str, hours: int) -> str:
-        return f"VACUUM {quoted_table_name} RETAIN {hours} HOURS"
+        # The only value in this class that is not an escaped identifier or
+        # string literal, so it needs its own guard: coerced to int rather than
+        # interpolated as whatever the caller happened to pass.
+        try:
+            retain_hours = int(hours)
+        except (TypeError, ValueError) as error:
+            raise ConfigurationError(
+                f"VACUUM retention must be a whole number of hours, got {hours!r}"
+            ) from error
+        return f"VACUUM {quoted_table_name} RETAIN {retain_hours} HOURS"
 
     @classmethod
     def replace_where_clause(cls, column: str, start_date: str, end_date: str) -> str:

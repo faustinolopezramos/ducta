@@ -83,26 +83,32 @@ def _identify_feature_for_module(module_name: str) -> Optional[str]:
     return module_to_feature.get(module_name)
 
 
-def main() -> None:
+def main() -> int:
     """
     Entry point for the ducta CLI wrapper.
     Intercepts missing module errors and shows friendly messages.
+
+    Returns the CLI's exit code. This is the process's exit status: the
+    ``ducta`` console script declared in pyproject.toml is invoked as
+    ``sys.exit(main())``. Calling the CLI and dropping what it returned made
+    that ``sys.exit(None)`` — so every failure exited 0, and no script wrapping
+    ``ducta`` could tell a broken run from a clean one.
     """
     try:
         from ducta.console.cli import main as Ducta_main
 
-        Ducta_main()
+        return Ducta_main()
     except ModuleNotFoundError as e:
         missing_module = str(e).split("'")[1] if "'" in str(e) else "unknown"
         feature = _identify_feature_for_module(missing_module)
         message = _get_missing_dependency_message(missing_module, feature or "all")
         print(message, file=sys.stderr)
 
-        sys.exit(1)
+        return 1
     except Exception:
         # Propagate all other errors normally
         raise
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

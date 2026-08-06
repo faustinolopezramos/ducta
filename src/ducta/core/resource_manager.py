@@ -223,13 +223,7 @@ class ResourceManager:
         resource_type: str,
         cleanup_fn: Optional[Callable] = None,
     ) -> str:
-        """Register a node-scoped resource and return an opaque resource identifier.
-
-        Appends and computes the index in one critical section (unlike calling
-        ``register()`` and then separately re-locking to read the list length),
-        so a concurrent registration for the same ``node_id`` in between can't
-        make the returned identifier point at the wrong slot.
-        """
+        """Register a node-scoped resource and return an opaque resource identifier."""
         managed = ManagedResource(resource, resource_type, cleanup_fn)
         with self._lock:
             bucket = self._resources.setdefault(node_id, [])
@@ -266,14 +260,6 @@ class ResourceManager:
     def cleanup_context(self, context_id: str) -> None:
         """
         Clean up all resources for a specific context.
-
-        The resource list is popped under the lock, then each (potentially
-        slow — DB connection close, Spark unpersist, arbitrary user
-        callback) cleanup runs *outside* it. Executor.py runs nodes
-        concurrently in a thread pool, all sharing this one process-wide
-        manager; holding the lock across every callback would serialize
-        registration and cleanup for every other concurrently-running node
-        behind whichever one's cleanup happens to be slow.
         """
         with self._lock:
             resources = self._resources.pop(context_id, None)
@@ -298,26 +284,26 @@ class ResourceManager:
     def cleanup_all(self) -> None:
         """Clean up all managed resources."""
         with self._lock:
-            total_resources = sum(len(r) for r in self._resources.values()) + len(
-                self._global_resources
-            )
-
-            if total_resources == 0:
-                return
-
-            logger.info(f"Cleaning up {total_resources} total resources")
-
-            for context_id in tuple(self._resources.keys()):
-                self.cleanup_context(context_id)
-
-            for managed in reversed(self._global_resources):
-                try:
-                    managed.cleanup()
-                except Exception as e:
-                    logger.error(f"Error during cleanup of global {managed.resource_type}: {e}")
-
+            context_ids = tuple(self._resources.keys())
+            global_resources = list(self._global_resources)
             self._global_resources.clear()
-            logger.info("All resources cleaned up")
+            total_resources = sum(len(r) for r in self._resources.values()) + len(global_resources)
+
+        if total_resources == 0:
+            return
+
+        logger.info(f"Cleaning up {total_resources} total resources")
+
+        for context_id in context_ids:
+            self.cleanup_context(context_id)
+
+        for managed in reversed(global_resources):
+            try:
+                managed.cleanup()
+            except Exception as e:
+                logger.error(f"Error during cleanup of global {managed.resource_type}: {e}")
+
+        logger.info("All resources cleaned up")
 
     def create_temp_file(
         self,

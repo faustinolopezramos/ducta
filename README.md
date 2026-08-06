@@ -21,10 +21,9 @@ tamper-evident record of every run come built in, so you can trust the results.
 > **Using Ducta vs. contributing to it.** If you just want to *use* Ducta,
 > install the package from PyPI — `pip install ducta` (see [Install](#install)) —
 > and you never touch this source tree. **This repository is organized for
-> contributors** working on Ducta itself: its layout, tooling, and the
-> [Development setup](#development-setup) below are built around that. The
-> feature sections in between explain what Ducta does — useful context whichever
-> side you're on.
+> contributors** working on Ducta itself: its layout and tooling are built
+> around that — see [Contributing](#contributing) below. The feature sections
+> in between explain what Ducta does — useful context whichever side you're on.
 
 ---
 
@@ -64,7 +63,7 @@ pip install "ducta[all]"          # everything above
 > `[all]`.
 
 > **Contributing / working from source?** Don't use `pip` — set up the dev
-> environment with Poetry (or Docker) instead. See [Development setup](#development-setup).
+> environment with Poetry (or Docker) instead. See [Contributing](#contributing).
 
 ---
 
@@ -204,75 +203,11 @@ logs stream live.
 
 ---
 
-## Development setup
+## Contributing
 
-This repository is where Ducta is built — the following gets you a working copy
-to develop or contribute against. Two ways in:
-
-### Native — Poetry is the source of truth
-
-Requires **Python 3.10–3.13** (a JRE is only needed if you work on the Spark paths).
-
-```bash
-git clone <repo-url> && cd ducta
-poetry install --extras all           # all runtime extras + dev tools
-poetry run ducta --help
-poetry run pytest                     # run the test suite (tests/)
-```
-
-> Use `--extras all`, **not** `--all-extras`: the latter also installs the
-> `databricks` extra, whose `databricks-connect` overwrites `pyspark` and breaks
-> local Spark (and therefore most of the test suite).
-
-`pyproject.toml` + `poetry.lock` define every dependency — there is **no
-hand-maintained `requirements.txt`**. (The docs build keeps a minimal
-`docs/requirements.txt`, and the Docker image exports a locked constraints file
-at build time; both are generated from the lock, never edited by hand.) Docs
-dependencies are an optional group: `poetry install --with docs`.
-
-### Docker — the "works on any OS" fallback
-
-If the native toolchain misbehaves on your OS (Spark/JRE, native wheels, Python
-version), develop against a container instead. It runs the **full app — React
-UI + API on one port** (the same thing `ducta ui` does):
-
-```bash
-docker compose up --build
-# UI:  http://localhost:8000/        ·        API docs: /docs
-```
-
-Run any CLI command in that same reproducible environment:
-
-```bash
-docker compose run --rm ducta config list-pipelines
-docker compose run --rm ducta --help
-```
-
-### Frontend
-
-The visual workspace lives in `src/ducta/ui` (React + Vite). The API serves its
-compiled output, so build it once and `ducta ui` picks it up (the Docker image
-does this for you):
-
-```bash
-cd src/ducta/ui && npm ci && npm run build
-```
-
-See `src/ducta/ui/README.md` for live UI development.
-
----
-
-## Documentation
-
-- [Getting started](docs/getting_started.rst)
-- [Installation](docs/installation.rst)
-- [Configuration reference](docs/configuration.rst)
-- [CLI usage](docs/cli_usage.rst)
-- [Databricks setup](docs/databricks_setup.rst)
-- [Best practices](docs/best_practices.rst)
-
-Building on top of Ducta or contributing? Each module has its own guide under
-`src/ducta/<module>/README.md`.
+Want to build or contribute to Ducta itself, rather than just using it? See
+[CONTRIBUTING.md](https://github.com/faustinolopezramos/ducta/blob/main/CONTRIBUTING.md)
+for the full development setup (Poetry, Docker, tests) and workflow.
 
 ---
 

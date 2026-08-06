@@ -31,13 +31,8 @@ from ducta.core.split_validator import SplitValidationError, validate_split_conf
 from ducta.core.utils import extract_pipeline_nodes, get_node_dependencies
 from ducta.gate.validators import ConfigValidator
 
-# validate_split_config() also takes a dataset_size, used only for a
-# heuristic "too few rows" warning — preflight runs before any node executes,
-# so no real row count is available; this sentinel is large enough that the
-# warning never spuriously fires from lacking that information.
 _PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL = 10_000
 
-# Kwargs the executor always passes to a (non-streaming) node function.
 _INJECTED_KWARGS = ("start_date", "end_date", "ml_context")
 
 
@@ -137,17 +132,17 @@ def _check_node_function(
     node_with_name = {**node_config, "name": node_name}
     try:
         func = loader.load(node_with_name)
-    except Exception as e:  # noqa: BLE001 — surface any import/security failure as a finding
+    except Exception as e:
         report.error(f"Node '{node_name}': cannot load function — {e}")
         return
 
     try:
         sig = inspect.signature(func)
     except (TypeError, ValueError):
-        return  # builtin/C function without an introspectable signature; skip
+        return
 
     if _accepts_var_keyword(sig):
-        return  # **kwargs absorbs everything the executor injects
+        return
 
     module = node_config.get("module")
     function = node_config.get("function")
@@ -161,7 +156,6 @@ def _check_node_function(
                     f"(the pipeline requires dates). Add '{kwarg}=None' or **kwargs to its signature."
                 )
 
-    # Inputs are passed positionally (unless a *args soaks them up).
     n_inputs = len(_input_keys(node_config))
     if n_inputs and not _accepts_var_positional(sig):
         slots = _positional_input_slots(sig)
@@ -193,7 +187,6 @@ def _check_io_keys(
                 f"Intermediate datasets consumed downstream must be declared under 'input'."
             )
 
-    streaming = _is_streaming_node(node_config)
     for key in _output_keys(node_config):
         if key not in output_config:
             report.error(
@@ -201,11 +194,10 @@ def _check_io_keys(
             )
             continue
 
-        if not streaming:
-            try:
-                validator.validate_output_key(key)
-            except Exception as e:  # noqa: BLE001 — ConfigurationError → finding
-                report.error(f"Node '{node_name}': invalid output key '{key}' — {e}")
+        try:
+            validator.validate_output_key(key)
+        except Exception as e:  # noqa: BLE001 — ConfigurationError → finding
+            report.error(f"Node '{node_name}': invalid output key '{key}' — {e}")
 
 
 def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
@@ -219,7 +211,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         report.error(f"Pipeline '{pipeline_name}' not found. Available: {available}")
         return report
 
-    # 1. Structure + DAG (reused validators; they raise, so adapt to findings).
     try:
         PipelineValidator.validate_pipeline_config(pipeline)
         pipeline_nodes = extract_pipeline_nodes(pipeline)
@@ -241,7 +232,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     except Exception as e:  # noqa: BLE001
         report.error(f"Dependency cycle: {e}")
 
-    # Dependencies must reference nodes that exist in this pipeline.
     for node_name in pipeline_nodes:
         for dep in get_node_dependencies(node_configs[node_name]):
             if dep not in node_configs:
@@ -250,8 +240,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
                     f"'{pipeline_name}'."
                 )
 
-    # 2. Node functions importable + signature-compatible (ingestion nodes have
-    #    their own declarative shape instead of a function).
     requires_dates = bool(pipeline.get("requires_dates", True))
     loader = _make_function_loader(context)
     for node_name in pipeline_nodes:
@@ -260,7 +248,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         else:
             _check_node_function(report, loader, node_name, node_configs[node_name], requires_dates)
 
-    # 3. + 4. I/O keys registered and well-formed.
     input_config = getattr(context, "input_config", {}) or {}
     output_config = getattr(context, "output_config", {}) or {}
     validator = ConfigValidator()
@@ -269,10 +256,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
             report, node_name, node_configs[node_name], input_config, output_config, validator
         )
 
-    # 5. ML split config — validate_split_config() was defined but never
-    #    wired into preflight, so a misconfigured split (unknown method, a
-    #    missing stratify_col/time_col/group_col) previously surfaced only
-    #    deep inside mlrun.split.split_dataframe at execution time.
     split_config = pipeline.get("split")
     if split_config:
         try:
@@ -280,7 +263,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         except SplitValidationError as e:
             report.error(f"Pipeline '{pipeline_name}': invalid split config — {e}")
 
-    # 6. Streaming-specific requirements (checkpoint, formats).
     streaming_nodes = [n for n in pipeline_nodes if _is_streaming_node(node_configs[n])]
     if streaming_nodes:
         try:
@@ -305,7 +287,7 @@ def validate_all_pipelines(context: Any) -> Dict[str, PreflightReport]:
 
 def _make_function_loader(context: Any) -> Any:
     """Build a FunctionLoader for import checks; degrade to a no-op if unavailable."""
-    from ducta.core.node_executor import FunctionLoader
+    from ducta.core.execution.loader import FunctionLoader
 
     is_ml_layer = bool(getattr(context, "is_ml_layer", False))
     return FunctionLoader(context, is_ml_layer=is_ml_layer)

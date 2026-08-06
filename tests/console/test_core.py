@@ -53,12 +53,21 @@ class TestExitCode:
 
 
 class TestDuctaError:
+    # `exit_code` is the plain int the engine's base class declares, so that
+    # `UnifiedCLI.run` can return it directly whether the error came from the
+    # console or from `ducta.core`. The constructor still takes the enum.
     def test_default_exit_code(self):
         err = DuctaError("boom")
-        assert err.exit_code == ExitCode.GENERAL_ERROR
+        assert err.exit_code == ExitCode.GENERAL_ERROR.value
 
     def test_validation_error_exit_code(self):
-        assert ValidationError("x").exit_code == ExitCode.VALIDATION_ERROR
+        assert ValidationError("x").exit_code == ExitCode.VALIDATION_ERROR.value
+
+    def test_console_errors_are_engine_errors(self):
+        # One `except` clause in the CLI has to cover both hierarchies.
+        from ducta.core.errors import DuctaError as EngineError
+
+        assert isinstance(ValidationError("x"), EngineError)
 
 
 class TestConfigCache:

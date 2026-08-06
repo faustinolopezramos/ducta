@@ -615,7 +615,7 @@ def _read_streaming_data(engine) -> dict:
     except Exception:
         pass
 
-    from ducta.core.executor import extract_pipeline_nodes
+    from ducta.core.utils import extract_pipeline_nodes
 
     try:
         pipeline_nodes = extract_pipeline_nodes(pipeline)

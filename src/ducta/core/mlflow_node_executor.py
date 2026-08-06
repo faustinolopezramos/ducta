@@ -24,7 +24,8 @@ from typing import Any, Dict, Optional
 from loguru import logger  # type: ignore
 
 from ducta.check import QualityOutputManager
-from ducta.core.node_executor import NodeExecutor
+from ducta.core.execution.runner import NodeExecutor
+from ducta.core.settings import CoreSettings
 from ducta.mlrun.mlflow import MLflowPipelineTracker, is_mlflow_available
 
 
@@ -41,6 +42,7 @@ class MLflowNodeExecutor(NodeExecutor):
         enable_mlflow: bool = True,
         mlops_context: Optional[Any] = None,
         quality_output_manager: Optional[QualityOutputManager] = None,
+        settings: Optional[CoreSettings] = None,
     ):
         """
         Initialize MLflow Node Executor.
@@ -52,13 +54,13 @@ class MLflowNodeExecutor(NodeExecutor):
             max_workers,
             mlops_context=mlops_context,
             quality_output_manager=quality_output_manager,
+            settings=settings,
         )
 
         self.enable_mlflow = enable_mlflow and is_mlflow_available()
         self.mlflow_tracker = mlflow_tracker
 
         if self.enable_mlflow and not self.mlflow_tracker:
-            # Auto-create tracker from context
             try:
                 self.mlflow_tracker = MLflowPipelineTracker.from_context(context)
                 logger.info("Created MLflow tracker from context")
@@ -77,13 +79,9 @@ class MLflowNodeExecutor(NodeExecutor):
         Execute single node con MLflow step tracking.
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
-            # Fallback to standard execution
             return super().execute_single_node(node_name, start_date, end_date, ml_info)
 
-        # Execute dentro de MLflow step context
         node_config = self._get_node_config(node_name)
-
-        # Prepare node parameters for MLflow
         node_params = {
             "start_date": start_date,
             "end_date": end_date,
@@ -92,16 +90,13 @@ class MLflowNodeExecutor(NodeExecutor):
             "function": node_config.get("function", "unknown"),
         }
 
-        # Add ML info
         if "model_version" in ml_info:
             node_params["model_version"] = ml_info["model_version"]
 
-        # Add hyperparams
         if "hyperparams" in ml_info:
             for key, value in ml_info["hyperparams"].items():
                 node_params[f"hyperparam_{key}"] = value
 
-        # Execute with MLflow tracking
         with self.mlflow_tracker.start_node_step(
             node_name=node_name,
             parameters=node_params,
@@ -110,17 +105,15 @@ class MLflowNodeExecutor(NodeExecutor):
                 f"Executing node '{node_name}' with MLflow tracking (run_id: {node_run_id})"
             )
 
-            # Inject MLflow context into ml_info
-            ml_info["mlflow_run_id"] = node_run_id
-            ml_info["mlflow_tracker"] = self.mlflow_tracker
+            node_ml_info = dict(ml_info)
+            node_ml_info["mlflow_run_id"] = node_run_id
+            node_ml_info["mlflow_tracker"] = self.mlflow_tracker
 
             try:
-                # Execute node (parent implementation)
                 start_time = time.perf_counter()
-                super().execute_single_node(node_name, start_date, end_date, ml_info)
+                super().execute_single_node(node_name, start_date, end_date, node_ml_info)
                 duration = time.perf_counter() - start_time
 
-                # Log success metrics
                 self.mlflow_tracker.log_node_metric(
                     "execution_time_seconds", duration, node_name=node_name
                 )
@@ -131,7 +124,6 @@ class MLflowNodeExecutor(NodeExecutor):
                 )
 
             except Exception as e:
-                # Log failure
                 self.mlflow_tracker.log_node_param(
                     "error_type", type(e).__name__, node_name=node_name
                 )
@@ -154,26 +146,21 @@ class MLflowNodeExecutor(NodeExecutor):
         Execute nodes in parallel con MLflow tracking.
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
-            # Fallback to standard execution
             return super().execute_nodes_parallel(
                 execution_order, node_configs, dag, start_date, end_date, ml_info
             )
 
-        # Log pipeline-level metrics
         self.mlflow_tracker.log_pipeline_metric("total_nodes", len(execution_order))
         self.mlflow_tracker.log_pipeline_metric("parallel_workers", self.max_workers)
 
-        # Execute with parent implementation (each node will use MLflow context)
         try:
             super().execute_nodes_parallel(
                 execution_order, node_configs, dag, start_date, end_date, ml_info
             )
 
-            # Log pipeline success
             self.mlflow_tracker.log_pipeline_metric("pipeline_success", 1.0)
 
         except Exception:
-            # Log pipeline failure
             self.mlflow_tracker.log_pipeline_metric("pipeline_success", 0.0)
             raise
 
@@ -192,7 +179,6 @@ def create_mlflow_executor(
         logger.warning("MLflow not available, falling back to standard executor")
         return NodeExecutor(context, input_loader, output_manager, max_workers)
 
-    # Create MLflow tracker
     tracker = None
     if mlflow_config:
         tracker = MLflowPipelineTracker(

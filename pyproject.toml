@@ -74,6 +74,18 @@ exclude = [
     "src/ducta/ui/*.html",
     "src/ducta/ui/README.md",
     "**/.DS_Store",
+    # Module READMEs are internal architecture docs for contributors (entry
+    # points, class names, module dependency diagrams) — not end-user content.
+    # They stay in the GitHub repo; they must not ship inside the installed
+    # package.
+    "src/ducta/core/README.md",
+    "src/ducta/mlrun/README.md",
+    "src/ducta/stream/README.md",
+    "src/ducta/gate/README.md",
+    "src/ducta/api/README.md",
+    "src/ducta/setting/README.md",
+    "src/ducta/check/README.md",
+    "src/ducta/console/README.md",
 ]
 
 [tool.poetry.urls]

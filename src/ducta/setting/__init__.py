@@ -39,6 +39,7 @@ from ducta.setting.layered_config import (
     LayeredExecutionResult,
     LayeredProjectDetector,
     detect_and_prepare_layered_execution,
+    layer_sys_path,
 )
 from ducta.setting.loaders import (
     BaseFormatLoader,
@@ -128,6 +129,7 @@ __all__ = [
     "LayerContextBuilder",
     "LayeredExecutionResult",
     "LayeredProjectDetector",
+    "layer_sys_path",
     # loaders
     "BaseFormatLoader",
     "ConfigLoader",

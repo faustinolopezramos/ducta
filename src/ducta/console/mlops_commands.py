@@ -63,13 +63,6 @@ def _build_registry(storage_path: str) -> ModelRegistry:
 
 def _resolve_promotion_policy() -> Optional[PromotionPolicy]:
     """Read mlops.promotion_policy from global settings, if configured.
-
-    Example (global_settings.toml):
-
-        [mlops.promotion_policy]
-        metric = "f1"
-        min_delta = 0.01
-        compare_to = "current_production"  # or "baseline"
     """
     gs = _discover_global_settings()
     policy_cfg = (gs.get("mlops") or {}).get("promotion_policy")
@@ -115,10 +108,6 @@ def model_promote(
     force: bool = False,
 ) -> int:
     """Promote a model version to a new stage.
-
-    Promotion to Production applies mlops.promotion_policy when configured:
-    the candidate must beat the gate or the promotion is rejected (use
-    --force to bypass; the bypass is audit-logged).
     """
     resolved_path = _resolve_storage_path(storage_path)
     try:

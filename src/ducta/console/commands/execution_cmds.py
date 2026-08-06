@@ -40,11 +40,6 @@ class ExecutionCommands:
     def handle_start(self, parsed_args) -> int:
         from ducta.setting import detect_and_prepare_layered_execution
 
-        # --reuse-upstream and --rerun-all are directly contradictory ("reuse
-        # what's already materialized" vs "force everything to re-run") —
-        # both silently threaded through to run_pipeline_chain with no
-        # validation, so whichever one happened to win downstream did so with
-        # no indication the user's own flags disagreed.
         if getattr(parsed_args, "reuse_upstream", False) and getattr(
             parsed_args, "rerun_all", False
         ):
@@ -76,9 +71,6 @@ class ExecutionCommands:
             ),
             interactive=getattr(parsed_args, "interactive", False)
             or (self.config.interactive if self.config else False),
-            # Tolerate the absence of a canonical environment.* root: handle_start
-            # supports flexible config forms (bundle / directory convention /
-            # quickstart) resolved later by ContextInitializer.
             require_config=False,
         )
         self.config_manager.change_to_config_directory()
@@ -151,16 +143,19 @@ class ExecutionCommands:
             from ducta.core import PipelineExecutor
             from ducta.setting.contexts import Context
 
+            # The environment travels in the args dict, so this and every other
+            # layered entry point resolve it in one place.
+            layer_env = layer_context_args.get("env") or self.config.env
             context = Context(
                 global_settings=layer_context_args["global_settings"],
                 pipelines_config=layer_context_args["pipelines_config"],
                 nodes_config=layer_context_args["nodes_config"],
                 input_config=layer_context_args["input_config"],
                 output_config=layer_context_args["output_config"],
-                env=self.config.env,
+                env=layer_env,
             )
             context._config_file_path = layer_context_args["global_settings"]
-            context.env = self.config.env
+            context.env = layer_env
             logger.info(f"Loaded context for layer: {layer_context_args.get('layer')}")
 
             executor = PipelineExecutor(context, Path(layer_context_args["layer_path"]))
@@ -172,15 +167,16 @@ class ExecutionCommands:
             if self.config.dry_run:
                 return self._dry_run_layered(executor, layer_context_args)
 
-            executor.run_pipeline_chain(
+            from ducta.console.execution import report_run_outcome
+
+            result = executor.run_pipeline_chain(
                 pipeline_name=self.config.pipeline,
                 node_name=self.config.node,
                 start_date=self.config.start_date,
                 end_date=self.config.end_date,
                 execution_mode=self.config.execution_mode,
             )
-            logger.info("Pipeline executed successfully")
-            return ExitCode.SUCCESS.value
+            return report_run_outcome(result, pipeline=self.config.pipeline)
 
         except Exception as e:
             logger.error(f"Pipeline execution failed: {e}")
@@ -372,7 +368,11 @@ class ExecutionCommands:
         if self.config.sweep:
             return self._execute_sweep(exec_obj, base_hyperparams)
 
-        exec_obj.run_pipeline_chain(
+        # Everything the CLI needs to report now arrives on the result. This
+        # used to reach through two levels of private attributes
+        # (exec_obj._batch_executor.node_executor.gate_blocked) and had to know
+        # which executor a given pipeline type happened to use.
+        result = exec_obj.run_pipeline_chain(
             pipeline_name=self.config.pipeline,
             node_name=self.config.node,
             start_date=self.config.start_date,
@@ -384,50 +384,12 @@ class ExecutionCommands:
             rerun_all=self.config.rerun_all,
         )
 
-        reused = getattr(exec_obj, "reused_pipelines", None)
-        if reused:
-            logger.info(
-                "Reused {} materialized upstream pipeline(s): {}",
-                len(reused),
-                ", ".join(reused),
-            )
+        # `skip_downstream` (the default gate behavior) lets the run return
+        # normally — no exception — so without this check a blocked gate looked
+        # identical to a clean run and the CLI reported exit 0.
+        from ducta.console.execution import report_run_outcome
 
-        skipped = getattr(exec_obj.batch_executor, "_skipped_atomic_node", None)
-        if skipped:
-            logger.warning(
-                "Node '{}' was skipped (missing dependencies): {}",
-                skipped["node"],
-                skipped["reason"],
-            )
-            return ExitCode.SUCCESS.value
-
-        # `skip_downstream` (the default gate behavior) lets run_pipeline_chain
-        # return normally — no exception — so without this check a blocked
-        # gate looked identical to a clean run and the CLI reported exit 0.
-        gate_blocked = getattr(exec_obj.batch_executor.node_executor, "gate_blocked", None)
-        if gate_blocked:
-            for node_name, info in gate_blocked.items():
-                logger.warning(
-                    "Node '{}' was blocked by its quality gate: {}",
-                    node_name,
-                    info.get("error", "blocked"),
-                )
-            return ExitCode.EXECUTION_ERROR.value
-
-        try:
-            from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
-
-            console = RichLoggerManager.get_console()
-            console.print()
-            print_process_separator(
-                "success", "EXECUTION COMPLETED", f"Pipeline: {self.config.pipeline}", console
-            )
-            console.print()
-        except Exception:
-            pass
-
-        logger.success("Ducta pipeline execution completed successfully")
-        return ExitCode.SUCCESS.value
+        return report_run_outcome(result, pipeline=self.config.pipeline)
 
     def _execute_sweep(self, exec_obj, base_hyperparams) -> int:
         from ducta.core.sweep import SweepError, expand_sweep, load_sweep_spec, new_sweep_id
@@ -455,7 +417,7 @@ class ExecutionCommands:
             hyperparams["sweep_index"] = index
             logger.info("Sweep run {}/{}: {}", index, len(combos), combo)
             try:
-                exec_obj.run_pipeline(
+                run = exec_obj.run_pipeline(
                     pipeline_name=self.config.pipeline,
                     node_name=self.config.node,
                     start_date=self.config.start_date,
@@ -463,6 +425,17 @@ class ExecutionCommands:
                     model_version=self.config.model_version,
                     hyperparams=hyperparams,
                 )
+                # A blocked quality gate does not raise, so counting only
+                # exceptions reported a sweep run that produced nothing as a
+                # success and skewed the comparison the sweep exists to make.
+                if run.gate_blocked:
+                    failures += 1
+                    logger.error(
+                        "Sweep run {}/{} was blocked by a quality gate: {}",
+                        index,
+                        len(combos),
+                        ", ".join(sorted(run.gate_blocked)),
+                    )
             except Exception as e:
                 failures += 1
                 logger.error("Sweep run {}/{} failed: {}", index, len(combos), e)

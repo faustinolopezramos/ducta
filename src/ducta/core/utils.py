@@ -19,11 +19,10 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import functools
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List
+from weakref import WeakKeyDictionary, WeakSet
 
 from loguru import logger  # type: ignore
-
-# ── JIT Compilation (Phase 3) ───────────────────────────────────────────────
 
 
 def jit(func: Callable = None, **kwargs):
@@ -33,14 +32,11 @@ def jit(func: Callable = None, **kwargs):
     """
 
     def decorator(f):
-        # Mark the function as JIT-enabled for the executor
         f._Ducta_jit = True
         f._Ducta_jit_options = kwargs
 
         @functools.wraps(f)
         def wrapper(*args, **inner_kwargs):
-            # The actual compilation usually happens in the executor
-            # but we preserve standard calling capability.
             return f(*args, **inner_kwargs)
 
         return wrapper
@@ -52,21 +48,12 @@ def jit(func: Callable = None, **kwargs):
 
 def is_jit_enabled(func: Callable) -> bool:
     """Check if a function is marked for JIT compilation."""
-    # Unwrap functools.wraps if present
     actual_func = getattr(func, "__wrapped__", func)
     return getattr(actual_func, "_Ducta_jit", False)
 
 
-Compiled = Tuple[Callable, Callable]
-# id(func) -> (original func, compiled func). Keeping the original alongside
-# the compiled version — rather than caching only `id(func): compiled` —
-# does two things: it holds a strong reference to `func`, so CPython can't
-# reuse its id() for an unrelated object while it's cached; and the identity
-# check below (`original is func`) is a defense-in-depth guard in case that
-# invariant is ever broken (e.g. a future change adds cache eviction),
-# so a collision falls through to recompiling instead of silently returning
-# a different function's compiled code.
-_jit_compile_cache: Dict[int, Compiled] = {}
+_jit_compile_cache: "WeakKeyDictionary[Callable, Callable]" = WeakKeyDictionary()
+_jit_fallback: "WeakSet[Callable]" = WeakSet()
 
 
 def compile_function(func: Callable) -> Callable:
@@ -77,11 +64,15 @@ def compile_function(func: Callable) -> Callable:
     if not is_jit_enabled(func):
         return func
 
-    cached_entry = _jit_compile_cache.get(id(func))
-    if cached_entry is not None:
-        original, compiled_cached = cached_entry
-        if original is func:
-            return compiled_cached
+    try:
+        if func in _jit_fallback:
+            return func
+    except TypeError:  # pragma: no cover - not weak-referenceable
+        pass
+
+    cached = _jit_compile_cache.get(func)
+    if cached is not None:
+        return cached
 
     try:
         import numba
@@ -89,7 +80,6 @@ def compile_function(func: Callable) -> Callable:
         actual_func = getattr(func, "__wrapped__", func)
         options = getattr(actual_func, "_Ducta_jit_options", {})
 
-        # Default options for data processing (nopython mode is fastest)
         numba_options = {"nopython": True, "cache": True, **options}
 
         logger.info(
@@ -105,11 +95,14 @@ def compile_function(func: Callable) -> Callable:
         )
         compiled = func
 
-    _jit_compile_cache[id(func)] = (func, compiled)
+    try:
+        if compiled is func:
+            _jit_fallback.add(func)
+        else:
+            _jit_compile_cache[func] = compiled
+    except TypeError:  # pragma: no cover - not weak-referenceable
+        pass
     return compiled
-
-
-# ── Dependency Helpers ──────────────────────────────────────────────────────
 
 
 def normalize_dependencies(dependencies: Any) -> List[Any]:

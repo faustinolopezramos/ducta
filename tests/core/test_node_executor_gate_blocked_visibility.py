@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ducta.core.node_executor import NodeExecutor, ThreadSafeExecutionState
+from ducta.core.execution.runner import NodeExecutor
+from ducta.core.execution.state import ThreadSafeExecutionState
 
 
 def _node_executor_with_fake_coordinator(execution_state) -> NodeExecutor:

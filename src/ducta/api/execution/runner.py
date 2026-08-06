@@ -30,6 +30,7 @@ from typing import Any, Dict, Iterable, Iterator, Optional
 from loguru import logger  # type: ignore
 
 from ducta.api.execution.output_capture import ProcessOutputCapture
+from ducta.core.errors import DuctaError
 
 _stdout_capture_lock = threading.Lock()
 
@@ -39,7 +40,7 @@ def _acquire_stdout_capture_lock(timeout: float) -> Iterator[None]:
     """Acquire `_stdout_capture_lock` with a timeout instead of blocking forever.
 
     `Future.cancel()`/a timeout can't actually kill a running thread (same
-    limitation already documented for `ducta.core.node_executor`), so a
+    limitation already documented for `ducta.core.execution`), so a
     hung execution keeps holding this process-global lock indefinitely. An
     unbounded `acquire()` here meant one hung execution silently wedged
     every future execution forever with no visible error. Failing fast with
@@ -436,24 +437,25 @@ def run_pipeline_sync(
                             f"Cannot build context for layer '{layer_name}': "
                             "one or more config files are missing (input.yaml / output.yaml?)"
                         )
+                    # Both import roots (the layer root, then its src/) now come
+                    # from one place. The layer root has to be ahead of the
+                    # workspace root so `import src.foo` resolves via this
+                    # layer's src package before Python can cache the workspace's
+                    # src as a namespace package and poison sys.modules['src'].
+                    _roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
                     LayerContextBuilder.inject_sys_path(detector, layer_name)
-                    # Insert layer root (e.g. bronze/) at the front of sys.path so
-                    # 'import src.intl_results' resolves via the layer's bronze/src/
-                    # (a proper package with __init__.py) before Python can cache
-                    # ws_root/src/ as a namespace package and pollute sys.modules['src'].
-                    _layer_cfg = detector.get_layer(layer_name)
-                    if _layer_cfg is not None:
-                        _layer_root = str((detector.project_root / _layer_cfg.path).resolve())
-                        if _layer_root not in sys.path:
-                            sys.path.insert(0, _layer_root)
-                            added_layer_root_to_sys_path = _layer_root
+                    if _roots:
+                        added_layer_root_to_sys_path = _roots[0]
+                    # The environment travels in the args dict, so this and every
+                    # other layered entry point resolve it in one place.
+                    layer_env = context_args.get("env") or env
                     ctx = _Context(
                         global_settings=context_args["global_settings"],
                         pipelines_config=context_args["pipelines_config"],
                         nodes_config=context_args["nodes_config"],
                         input_config=context_args["input_config"],
                         output_config=context_args["output_config"],
-                        env=env,
+                        env=layer_env,
                     )
                     # _config_file_path drives the node executor's module search-path
                     # derivation: parent dir (= layer root) + parent/src are added as
@@ -500,7 +502,7 @@ def run_pipeline_sync(
                 if timeout_handler:
                     timeout_handler.verify()
 
-                from ducta.core.executor import PipelineExecutor
+                from ducta.core.executors import PipelineExecutor
                 from ducta.stream.constants import PipelineType
 
                 engine = PipelineExecutor(ctx)
@@ -508,7 +510,9 @@ def run_pipeline_sync(
                 pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
                 manager.register_active_engine(execution_id, engine)
-                skip_info: Optional[Dict[str, Any]] = None
+                # Terminal outcomes that do not raise. ``None`` means a clean run;
+                # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
+                outcome: Optional[Dict[str, Any]] = None
                 try:
                     if sanity_only:
                         # Run node input sanity checks only — no pipeline execution.
@@ -541,7 +545,7 @@ def run_pipeline_sync(
                             rerun_all=rerun_all,
                         )
                     else:
-                        engine.run_pipeline_chain(
+                        run_result = engine.run_pipeline_chain(
                             pipeline_name=pipeline_name,
                             node_name=node_name,
                             start_date=start_date,
@@ -551,11 +555,25 @@ def run_pipeline_sync(
                             reuse_upstream=reuse_upstream,
                             rerun_all=rerun_all,
                         )
-                        # Only the batch path sets this (execute_single_node); read the
-                        # private lazy-init'd attr directly so we don't instantiate a
-                        # BatchExecutor for streaming/hybrid pipelines that never used one.
-                        batch_executor = getattr(engine, "_batch_executor", None)
-                        skip_info = getattr(batch_executor, "_skipped_atomic_node", None)
+                        # An atomic --node run whose inputs were not available is
+                        # reported on the result, not dug out of the batch
+                        # executor's private state. A blocked quality gate is the
+                        # other outcome that returns instead of raising — without
+                        # it, a run that rejected its data was recorded as a
+                        # success.
+                        if run_result.skipped:
+                            node, reason = next(iter(run_result.skipped.items()))
+                            outcome = {"status": "skipped", "node": node, "reason": reason}
+                        elif run_result.gate_blocked:
+                            node, info = next(iter(run_result.gate_blocked.items()))
+                            reason = (
+                                info.get("error", "blocked") if isinstance(info, dict) else info
+                            )
+                            outcome = {
+                                "status": "gate_blocked",
+                                "node": node,
+                                "reason": str(reason),
+                            }
                 finally:
                     # Link the Run Certificate this run emitted (the executor facade
                     # stamps its run_id on the context).
@@ -587,7 +605,12 @@ def run_pipeline_sync(
                     pass
 
                 logger.success("Ducta pipeline execution completed successfully")
-                return skip_info
+                return outcome
+            except DuctaError:
+                # Engine errors already carry the pipeline, the failed nodes and
+                # an http_status. Re-wrapping them in a RuntimeError threw all of
+                # that away and left the caller with a string to parse.
+                raise
             except Exception as exc:
                 raise RuntimeError(f"Pipeline '{pipeline_name}' execution failed: {exc}") from exc
             finally:

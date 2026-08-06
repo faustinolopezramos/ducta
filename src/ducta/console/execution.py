@@ -35,8 +35,57 @@ try:
 except ImportError:
     _RICH_AVAILABLE = False
 from ducta.core import PipelineExecutor
+from ducta.core.results import PipelineRunResult
 from ducta.setting.context_loader import ContextLoader
 from ducta.setting.contexts import Context
+
+
+def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = None) -> int:
+    """Log what a finished run actually did and return the matching exit code.
+
+    Not every unsuccessful outcome raises. A ``skip_downstream`` quality gate and
+    an atomic ``--node`` run with absent inputs both let ``run_pipeline`` return
+    normally, so a caller that only wraps the call in ``try/except`` reports exit
+    0 for a run that did not do its work.
+
+    This lived inline in one of the five call sites; the other four discarded the
+    result entirely. It is shared so that "what does this outcome mean" is
+    answered once.
+    """
+    name = pipeline or result.pipeline
+
+    if result.reused_pipelines:
+        logger.info(
+            "Reused {} materialized upstream pipeline(s): {}",
+            len(result.reused_pipelines),
+            ", ".join(result.reused_pipelines),
+        )
+
+    if result.skipped:
+        for node_name, reason in result.skipped.items():
+            logger.warning("Node '{}' was skipped (missing dependencies): {}", node_name, reason)
+        return ExitCode.SUCCESS.value
+
+    if result.gate_blocked:
+        for node_name, info in result.gate_blocked.items():
+            logger.warning(
+                "Node '{}' was blocked by its quality gate: {}",
+                node_name,
+                info.get("error", "blocked") if isinstance(info, dict) else info,
+            )
+        return ExitCode.EXECUTION_ERROR.value
+
+    if _RICH_AVAILABLE:
+        try:
+            console = RichLoggerManager.get_console()
+            console.print()
+            print_process_separator("success", "EXECUTION COMPLETED", f"Pipeline: {name}", console)
+            console.print()
+        except Exception:  # noqa: BLE001 — decoration must never change the outcome
+            pass
+
+    logger.success("Ducta pipeline execution completed successfully")
+    return ExitCode.SUCCESS.value
 
 
 class ContextInitializer:
@@ -101,7 +150,11 @@ class ContextInitializer:
         return FlexibleConfigResolver.resolve_dir(self.config_manager.base_path, env)
 
 
-def load_context(config_path: Optional[Union[str, Path]], validate: bool = True) -> Context:
+def load_context(
+    config_path: Optional[Union[str, Path]],
+    validate: bool = True,
+    env: Optional[str] = None,
+) -> Context:
     """Load a Context from *config_path*.
 
     Validates the resolved config against its pydantic schema by default —
@@ -111,6 +164,10 @@ def load_context(config_path: Optional[Union[str, Path]], validate: bool = True)
     that has its own reason to defer/skip it (e.g. a preflight command that
     wants to collect every validation error into one report instead of
     aborting on the first schema violation).
+
+    ``env`` selects the ``environments:`` override block. It used not to be
+    accepted at all, so the streaming fallback that reaches this function
+    dropped whatever ``--env`` the user asked for.
     """
     if config_path is None:
         raise ValidationError("Configuration path must be provided")
@@ -137,6 +194,7 @@ def load_context(config_path: Optional[Union[str, Path]], validate: bool = True)
             input_config=config_data["input_config"],
             output_config=config_data["output_config"],
             validate=validate,
+            env=env,
         )
     else:
         base = Path(config_path_str).parent
@@ -148,6 +206,7 @@ def load_context(config_path: Optional[Union[str, Path]], validate: bool = True)
             input_config=str(base / f"input{ext}"),
             output_config=str(base / f"output{ext}"),
             validate=validate,
+            env=env,
         )
 
     context._config_file_path = str(Path(config_path_str).resolve())
@@ -195,7 +254,7 @@ def _load_streaming_context(config: Optional[Union[str, Path]], env: str = "base
             logger.warning(
                 "Environment overlay failed ({}); falling back to direct config load: {}", env, e
             )
-    return load_context(_config_or_empty(config))
+    return load_context(_config_or_empty(config), env=env)
 
 
 def run_streaming_pipeline_cli(

@@ -61,7 +61,6 @@ class PipelineDependencyResolver:
                         f"Available pipelines: {sorted(pipeline_names)}"
                     )
 
-        # Reuse existing generic cycle detector (raises ValueError with full cycle path)
         graph: Dict[str, List[str]] = {
             name: deps_of(name, cfg) for name, cfg in pipelines_config.items()
         }
@@ -76,7 +75,6 @@ class PipelineDependencyResolver:
         """Return the ordered list of pipelines to execute to satisfy *target*."""
         deps_of = _deps_getter(depends_on_map)
 
-        # BFS backwards to collect all transitive ancestors
         ancestors: Set[str] = set()
         queue: deque = deque([target])
         while queue:
@@ -86,18 +84,32 @@ class PipelineDependencyResolver:
                     ancestors.add(dep)
                     queue.append(dep)
 
-        # Build subgraph: ancestors + target
-        subgraph_names = list(ancestors | {target})
+        config_order = {name: idx for idx, name in enumerate(pipelines_config)}
+        fallback_rank = len(config_order)
+        subgraph_names = sorted(
+            ancestors | {target},
+            key=lambda name: (config_order.get(name, fallback_rank), name),
+        )
+
+        subgraph_deps: Dict[str, List[str]] = {
+            name: [
+                dep
+                for dep in deps_of(name, pipelines_config.get(name, {}))
+                if dep in ancestors or dep == target
+            ]
+            for name in subgraph_names
+        }
+
+        detect_cycles_dfs(subgraph_deps)
+
         in_degree: Dict[str, int] = {name: 0 for name in subgraph_names}
         adj: Dict[str, List[str]] = {name: [] for name in subgraph_names}
 
         for name in subgraph_names:
-            for dep in deps_of(name, pipelines_config.get(name, {})):
-                if dep in adj:  # only deps within the subgraph
-                    adj[dep].append(name)
-                    in_degree[name] += 1
+            for dep in subgraph_deps[name]:
+                adj[dep].append(name)
+                in_degree[name] += 1
 
-        # Kahn's topological sort
         ready: deque = deque(n for n in subgraph_names if in_degree[n] == 0)
         ordered: List[str] = []
         while ready:
@@ -107,5 +119,13 @@ class PipelineDependencyResolver:
                 in_degree[downstream] -= 1
                 if in_degree[downstream] == 0:
                     ready.append(downstream)
+
+        if len(ordered) != len(subgraph_names):
+            unresolved = sorted(set(subgraph_names) - set(ordered))
+            raise ValueError(
+                f"Could not resolve a complete execution chain for pipeline "
+                f"'{target}': {len(unresolved)} pipeline(s) left unordered "
+                f"({unresolved}). This indicates a dependency cycle in 'depends_on'."
+            )
 
         return ordered

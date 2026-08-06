@@ -1,0 +1,407 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+
+NodeExecutor: the public entry point that wires the components together.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from loguru import logger  # type: ignore
+
+from ducta.check import QualityOutputConfig, QualityOutputManager, QualityReport
+from ducta.core.commands import Command
+from ducta.core.errors import NodeNotFoundError
+from ducta.core.execution.coordinator import ParallelCoordinator
+from ducta.core.execution.ingestion import IngestionExecutor
+from ducta.core.execution.loader import FunctionLoader
+from ducta.core.execution.ml_builder import MLContextBuilder
+from ducta.core.execution.output import OutputWriter
+from ducta.core.execution.quality import QualityCheckExecutor
+from ducta.core.execution.state import ThreadSafeExecutionState
+from ducta.core.execution_context import node_id_var
+from ducta.core.ledger import ledger_for
+from ducta.core.resource_manager import get_resource_manager
+from ducta.core.settings import (
+    DEFAULT_NODE_TIMEOUT_SECONDS,
+    MAX_TIMEOUT_SECONDS,
+    CoreSettings,
+    clamp_timeout,
+)
+
+
+class NodeExecutor:
+    """Thin orchestrator: initializes the 6 helper components and provides the public API."""
+
+    # Kept as aliases of the single definition in ducta.core.settings. They used
+    # to be independent literals here, duplicated with a comment explaining they
+    # were copied "to avoid a circular import" — which meant the node-level and
+    # pipeline-level clamps could silently drift apart.
+    DEFAULT_NODE_TIMEOUT = DEFAULT_NODE_TIMEOUT_SECONDS
+    MAX_NODE_TIMEOUT_SECONDS = MAX_TIMEOUT_SECONDS
+
+    def __init__(
+        self,
+        context,
+        input_loader,
+        output_manager,
+        max_workers: int = 4,
+        timeout: Optional[int] = None,
+        mlops_context: Optional[Any] = None,
+        quality_output_manager: Optional[QualityOutputManager] = None,
+        settings: Optional[CoreSettings] = None,
+    ):
+        self.context = context
+        self.settings = settings or CoreSettings.from_context(context)
+        self._ledger = ledger_for(context)
+        self.input_loader = input_loader
+        self.output_manager = output_manager
+        self.quality_output_manager = quality_output_manager
+        self.max_workers = max_workers
+        self.mlops_context = mlops_context
+        self.is_ml_layer = getattr(context, "is_ml_layer", False)
+        self.pipeline_name: Optional[str] = None
+        self.gate_blocked: Dict[str, Any] = {}
+        # An explicit `timeout=` argument still wins, but it goes through the
+        # same clamp as the configured value instead of bypassing it.
+        self.node_timeout = (
+            clamp_timeout("node_timeout_seconds", timeout)
+            if timeout
+            else self.settings.node_timeout_seconds
+        )
+        logger.debug("NodeExecutor initialized with timeout: {}s", self.node_timeout)
+
+        self._function_loader = FunctionLoader(
+            context, is_ml_layer=self.is_ml_layer, settings=self.settings
+        )
+        self._quality_executor = QualityCheckExecutor(
+            context, quality_output_manager, settings=self.settings
+        )
+        self._output_writer = OutputWriter(
+            output_manager, context, is_ml_layer=self.is_ml_layer, settings=self.settings
+        )
+        self._ml_builder = MLContextBuilder(context, mlops_context, self.is_ml_layer)
+        self._trace_lock = threading.Lock()
+        self._ingestion_executor = IngestionExecutor(
+            context=context,
+            output_writer=self._output_writer,
+            quality_executor=self._quality_executor,
+            settings=self.settings,
+        )
+        self._coordinator = ParallelCoordinator(
+            context=context,
+            max_workers=max_workers,
+            node_timeout=self.node_timeout,
+            is_ml_layer=self.is_ml_layer,
+            execute_callback=self.execute_single_node,
+            ml_builder=self._ml_builder,
+            settings=self.settings,
+        )
+
+    def set_mlops_context(self, mlops_context: Optional[Any]) -> None:
+        """Wire the real MLOps context into node functions' ``ml_context['mlops_context']``."""
+        self.mlops_context = mlops_context
+        self._ml_builder.mlops_context = mlops_context
+
+    def execute_single_node(
+        self,
+        node_name: str,
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Execute a single node with enhanced ML support and error handling."""
+        start_time = time.perf_counter()
+        node_status = "success"
+        node_error: Optional[str] = None
+        resource_manager = get_resource_manager()
+
+        node_id_var.set(node_name)
+
+        logger.info("[node_status] node_id={} status=running", node_name)
+
+        self._set_scheduler_pool(node_name)
+
+        with resource_manager.resource_context(f"node_{node_name}"):
+            try:
+                node_config = self._get_node_config(node_name)
+                node_type = node_config.get("type", "batch")
+                if node_type == "ingestion":
+                    self._ingestion_executor.execute(
+                        node_name,
+                        node_config,
+                        start_date,
+                        end_date,
+                        ml_info,
+                        pipeline_name=self.pipeline_name,
+                    )
+                    logger.info("[node_status] node_id={} status=success", node_name)
+                    return
+
+                function = self._function_loader.load(node_config)
+                input_dfs = self.input_loader.load_inputs(node_config)
+                input_param_names = self.input_loader.get_input_param_names(node_config)
+
+                sanity_report = self._quality_executor.run_sanity_checks(
+                    input_dfs,
+                    node_config,
+                    node_name,
+                    pipeline_type=ml_info.get("pipeline_type"),
+                    pipeline_name=self.pipeline_name,
+                )
+
+                self._quality_executor.persist_report(
+                    sanity_report,
+                    "sanity",
+                    "sanity_checks",
+                    node_name,
+                    node_config,
+                    ml_info,
+                    pipeline_name=self.pipeline_name,
+                )
+
+                for idx, df in enumerate(input_dfs):
+                    if df is not None:
+                        resource_type = resource_manager.detect_resource_type(df)
+                        resource_manager.register(
+                            resource=df,
+                            resource_type=resource_type,
+                            context_id=f"node_{node_name}",
+                            metadata={"index": idx, "stage": "input"},
+                        )
+
+                command = self._ml_builder.create_command(
+                    function,
+                    input_dfs,
+                    start_date,
+                    end_date,
+                    node_name,
+                    ml_info,
+                    node_config,
+                    input_param_names,
+                )
+
+                node_retries = int(node_config.get("retry", 0) or 0)
+                if node_retries > 0:
+                    from ducta.check import QualityChecksFailed
+                    from ducta.check.core import QualityGateBlocked
+                    from ducta.core.resilience import RetryPolicy
+
+                    result_df = RetryPolicy(
+                        max_retries=node_retries,
+                        delay=1,
+                        backoff_factor=2.0,
+                        non_retryable=(QualityGateBlocked, QualityChecksFailed),
+                    ).execute(command.execute)
+                else:
+                    result_df = command.execute()
+
+                dq_report = None
+                if result_df is not None:
+                    dq_report = self._quality_executor.run_dq_checks(
+                        result_df, node_config, node_name, pipeline_name=self.pipeline_name
+                    )
+
+                self._quality_executor.persist_report(
+                    dq_report,
+                    "dq",
+                    "data_quality",
+                    node_name,
+                    node_config,
+                    ml_info,
+                    pipeline_name=self.pipeline_name,
+                )
+
+                if result_df is not None:
+                    resource_type = resource_manager.detect_resource_type(result_df)
+                    resource_manager.register(
+                        resource=result_df,
+                        resource_type=resource_type,
+                        context_id=f"node_{node_name}",
+                        metadata={"stage": "output"},
+                    )
+
+                self._output_writer.save(
+                    result_df,
+                    node_config,
+                    node_name,
+                    start_date,
+                    end_date,
+                    ml_info,
+                )
+
+                logger.info("[node_status] node_id={} status=success", node_name)
+
+            except Exception as e:
+                from ducta.check.core import QualityGateBlocked
+
+                node_status = "gate_blocked" if isinstance(e, QualityGateBlocked) else "failed"
+                node_error = str(e)
+                logger.info("[node_status] node_id={} status={}", node_name, node_status)
+                try:
+                    from ducta.console.ux.error_analyzer import format_error_for_developer
+                    from ducta.console.ux.rich_logger import RichLoggerManager
+
+                    console = RichLoggerManager.get_console()
+                    format_error_for_developer(e, node_name, console)
+                except Exception:
+                    logger.error("Failed to execute node '{}': {}", node_name, e)
+                raise
+            finally:
+                duration = time.perf_counter() - start_time
+                logger.debug("Node '{}' executed in {:.2f}s", node_name, duration)
+                self._record_node_trace(node_name, node_status, duration, node_error)
+
+    def _record_node_trace(
+        self, node_name: str, status: str, duration: float, error: Optional[str]
+    ) -> None:
+        """Append this node's outcome to ``context._run_node_details`` for the certificate.
+
+        Thread-safe (nodes run in parallel). Best-effort: never raises. The trace
+        list is reset per run by the executor facade.
+        """
+        node_config = self.context.nodes_config.get(node_name, {}) or {}
+        raw_out = node_config.get("output", [])
+        outputs = list(raw_out.values()) if isinstance(raw_out, dict) else list(raw_out or [])
+        self._ledger.record_node(
+            name=node_name,
+            status=status,
+            duration_seconds=duration,
+            outputs=outputs,
+            error=error,
+            node_type=node_config.get("type", "batch"),
+        )
+
+    def execute_nodes_parallel(
+        self,
+        execution_order: List[str],
+        node_configs: Dict[str, Dict[str, Any]],
+        dag: Dict[str, Set[str]],
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """
+        Execute nodes in parallel while respecting dependencies with ML enhancements.
+        Orchestrates parallel execution by delegating to ParallelCoordinator.
+        """
+        execution_state = self._initialize_execution_state(execution_order, node_configs)
+        executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
+            original_exc: Optional[BaseException] = None
+            try:
+                self._coordinator.coordinate(
+                    executor=executor,
+                    execution_state=execution_state,
+                    dag=dag,
+                    node_configs=node_configs,
+                    start_date=start_date,
+                    end_date=end_date,
+                    ml_info=ml_info,
+                )
+            except Exception as e:
+                original_exc = e
+                logger.error("Pipeline execution failed: {}", e)
+                self._coordinator.cancel_all(execution_state.get_running_items_snapshot())
+                raise
+            finally:
+                try:
+                    self._coordinator.cleanup(
+                        execution_state=execution_state,
+                        ml_info=ml_info,
+                    )
+                except Exception as cleanup_exc:
+                    if original_exc is not None:
+                        logger.error(
+                            "cleanup() raised while an exception was already "
+                            "propagating ({}); keeping the original exception: {}",
+                            original_exc,
+                            cleanup_exc,
+                        )
+                    else:
+                        raise
+        finally:
+            executor.shutdown(wait=False)
+
+        self.gate_blocked = dict(execution_state.gate_blocked)
+
+    def _initialize_execution_state(
+        self,
+        execution_order: List[str],
+        node_configs: Dict[str, Dict[str, Any]],
+    ) -> ThreadSafeExecutionState:
+        """Initialize thread-safe execution state with queues and tracking structures."""
+        state = ThreadSafeExecutionState(execution_order, node_configs)
+        logger.debug("Initial ready nodes: {}", list(state.ready_queue))
+        return state
+
+    def _set_scheduler_pool(self, node_name: str) -> None:
+        """Bind the current worker thread to a per-node FAIR scheduler pool."""
+        spark = getattr(self.context, "spark", None)
+        if spark is None:
+            return
+        try:
+            spark.sparkContext.setLocalProperty("spark.scheduler.pool", f"node_{node_name}")
+        except Exception as e:
+            logger.debug("Could not set scheduler pool for node '{}': {}", node_name, e)
+
+    def _get_node_config(self, node_name: str) -> Dict[str, Any]:
+        """Get configuration for a specific node with enhanced error handling."""
+        node = self.context.nodes_config.get(node_name)
+        if not node:
+            raise NodeNotFoundError(node_name, list(self.context.nodes_config.keys()))
+        return node
+
+    def _run_sanity_checks_on_inputs(
+        self,
+        dfs: List[Any],
+        node_config: Dict[str, Any],
+        node_name: str,
+        pipeline_type: Optional[str] = None,
+    ) -> Optional[QualityReport]:
+        return self._quality_executor.run_sanity_checks(
+            dfs, node_config, node_name, pipeline_type, pipeline_name=self.pipeline_name
+        )
+
+    def _load_node_function(self, node: Dict[str, Any]) -> Callable:
+        return self._function_loader.load(node)
+
+    def _create_enhanced_command(
+        self,
+        function: Callable,
+        input_dfs: List[Any],
+        start_date: str,
+        end_date: str,
+        node_name: str,
+        ml_info: Dict[str, Any],
+        node_config: Dict[str, Any],
+        input_names: Optional[List[str]] = None,
+    ) -> Command:
+        return self._ml_builder.create_command(
+            function, input_dfs, start_date, end_date, node_name, ml_info, node_config, input_names
+        )
+
+    def _create_quality_output_config(
+        self, config_dict: Dict[str, Any]
+    ) -> Optional[QualityOutputConfig]:
+        return self._quality_executor._create_quality_output_config(config_dict)

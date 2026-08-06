@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from ducta.core.executor import PipelineExecutor
+from ducta.core.executors.facade import PipelineExecutor
 
 
 def _executor_with_context(context: MagicMock) -> PipelineExecutor:

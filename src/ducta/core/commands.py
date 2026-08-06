@@ -23,22 +23,33 @@ import json
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime
-from functools import lru_cache
 from inspect import Parameter, signature
 from typing import Any, Callable, Dict, List, Optional, Protocol
+from weakref import WeakKeyDictionary
 
 from loguru import logger  # type: ignore
 
+_ml_context_cache: "WeakKeyDictionary[Callable, bool]" = WeakKeyDictionary()
 
-@lru_cache(maxsize=256)
+
 def _accepts_ml_context(func: Callable) -> bool:
-    """Whether ``func`` accepts an ``ml_context`` kwarg (explicit or via **kwargs).
+    """Whether ``func`` accepts an ``ml_context`` kwarg (explicit or via **kwargs)."""
+    try:
+        cached = _ml_context_cache.get(func)
+    except TypeError:  # not weak-referenceable (e.g. some builtins)
+        cached = None
+    if cached is not None:
+        return cached
 
-    Cached: the result is fixed per function object, so introspecting it once per
-    function instead of on every node execution avoids repeated signature parsing.
-    """
     params = signature(func).parameters
-    return "ml_context" in params or any(p.kind == Parameter.VAR_KEYWORD for p in params.values())
+    accepts = "ml_context" in params or any(
+        p.kind == Parameter.VAR_KEYWORD for p in params.values()
+    )
+    try:
+        _ml_context_cache[func] = accepts
+    except TypeError:
+        pass
+    return accepts
 
 
 DEFAULT_VECTORIZED_MAX_ROWS = 5_000_000
@@ -100,18 +111,10 @@ class NodeCommand(Command):
         self.end_date = end_date
         self.node_name = node_name
         self.node_config = node_config or {}
-        # When set, inputs are bound to function parameters by name (keyword)
-        # instead of positionally. Aligned with ``input_dfs`` order.
         self.input_names = input_names
 
     def _bind_inputs(self, inputs: List[Any]) -> tuple:
-        """Bind loaded inputs to the function call.
-
-        Returns ``(args, kwargs)``. With named inputs (``input`` declared as a
-        ``{param: dataset_key}`` map) DataFrames are passed by keyword, so the
-        config order no longer has to match the function signature. Otherwise
-        they are passed positionally, preserving the original behavior.
-        """
+        """Bind loaded inputs to the function call."""
         if self.input_names:
             if len(self.input_names) != len(inputs):
                 raise ValueError(
@@ -134,7 +137,6 @@ class NodeCommand(Command):
             inputs = self.input_dfs
             if is_vectorized:
                 logger.debug(f"Vectorized execution mode enabled for node '{self.node_name}'")
-                # Convert Spark DataFrames to Pandas using Arrow (driver-side collect).
                 max_rows = node_config.get("execution_mode_max_rows", DEFAULT_VECTORIZED_MAX_ROWS)
                 inputs = _guarded_to_pandas(self.input_dfs, self.node_name, max_rows)
 
@@ -149,7 +151,6 @@ class NodeCommand(Command):
                 )
                 spark = getattr(self, "spark", None)
                 if not spark:
-                    # Fallback search in inputs
                     for df in self.input_dfs:
                         if hasattr(df, "sparkSession"):
                             spark = df.sparkSession
@@ -222,17 +223,9 @@ class MLNodeCommand(NodeCommand):
         self.execution_metadata["start_time"] = datetime.now().isoformat()
         start_time = time.time()
 
-        # Performance Phase 2: Handle vectorized execution mode (Zero-copy with Arrow)
         is_vectorized = self.node_config.get("execution_mode") == "vectorized"
 
         try:
-            # NOTE: merged hyperparameters are delivered to the node through
-            # ml_context["hyperparams"]. They are deliberately NOT pushed into
-            # spark.conf — model hyperparameters are not Spark settings, the
-            # "spark.<name>" namespace is reserved for engine configuration, and
-            # a hyperparameter colliding with a static Spark conf could raise at
-            # runtime. Genuine Spark overrides belong in pipeline.spark_config.
-
             logger.info(
                 f"Executing ML node '{self.node_name}' with model version: {self.model_version}"
             )
@@ -248,7 +241,6 @@ class MLNodeCommand(NodeCommand):
             if self.metrics:
                 logger.info(f"Expected metrics: {', '.join(self.metrics)}")
 
-            # Vectorization logic for inputs
             original_inputs = self.input_dfs
             if is_vectorized:
                 logger.debug(f"Vectorized ML execution mode enabled for node '{self.node_name}'")
@@ -257,18 +249,21 @@ class MLNodeCommand(NodeCommand):
                 )
                 self.input_dfs = _guarded_to_pandas(original_inputs, self.node_name, max_rows)
 
-            result = self._execute_with_ml_context()
+            try:
+                result = self._execute_with_ml_context()
 
-            # Vectorization logic for result
-            if is_vectorized and hasattr(result, "to_dict") and not hasattr(result, "sparkSession"):
-                logger.debug(
-                    f"Converting vectorized ML result back to Spark for node '{self.node_name}'"
-                )
-                if self.spark:
-                    result = self.spark.createDataFrame(result)
-
-            # Restore original inputs to avoid side-effects in subsequent retries/logs
-            self.input_dfs = original_inputs
+                if (
+                    is_vectorized
+                    and hasattr(result, "to_dict")
+                    and not hasattr(result, "sparkSession")
+                ):
+                    logger.debug(
+                        f"Converting vectorized ML result back to Spark for node '{self.node_name}'"
+                    )
+                    if self.spark:
+                        result = self.spark.createDataFrame(result)
+            finally:
+                self.input_dfs = original_inputs
 
             end_time = time.time()
             duration = end_time - start_time
@@ -298,11 +293,7 @@ class MLNodeCommand(NodeCommand):
             raise
 
     def _derive_node_seed(self) -> Optional[int]:
-        """Derive a deterministic per-node seed from the global seed.
-
-        Stable across runs and independent of thread scheduling, unlike the
-        process-global RNG state shared by concurrently executing nodes.
-        """
+        """Derive a deterministic per-node seed from the global seed."""
         if self.seed is None:
             return None
         digest = hashlib.sha256(f"{self.seed}:{self.node_name}".encode()).hexdigest()
@@ -312,8 +303,6 @@ class MLNodeCommand(NodeCommand):
         """Execute function with ML-enhanced context."""
         from ducta.core.ml_context import MLNodeContext
 
-        # MLNodeContext is a Mapping, so nodes using ml_context["split"] / .get(...)
-        # keep working; the typed attributes add discoverability for new nodes.
         ml_context = MLNodeContext(
             model_version=self.model_version,
             hyperparams=self.merged_hyperparams,

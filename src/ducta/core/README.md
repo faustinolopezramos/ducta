@@ -41,10 +41,10 @@ Once your pipeline is configured, something has to actually *run* it — in the 
 
 ### For Technical Users
 Ducta Core is the orchestration layer, implementing:
-*   **Specialized executors**: `BatchExecutor`, `StreamingExecutor`, `HybridExecutor`, and the `PipelineExecutor` orchestrator that delegates by pipeline `type` and manages chain-reuse, preflight, and certificates (`executor.py`).
-*   **Parallel node execution**: `NodeExecutor` + `ParallelCoordinator` drive a DAG-aware thread pool with a thread-safe execution state, per-node timeouts, quality-gate skip cascades, and structured per-node tracing (`node_executor.py`).
+*   **Specialized executors**: `BatchExecutor`, `StreamingExecutor`, `HybridExecutor`, and the `PipelineExecutor` orchestrator that delegates by pipeline `type` and manages chain-reuse, preflight, and certificates (`executors/`).
+*   **Parallel node execution**: `NodeExecutor` + `ParallelCoordinator` drive a DAG-aware thread pool with a thread-safe execution state, per-node timeouts, quality-gate skip cascades, and structured per-node tracing (`execution/`).
 *   **Dependency resolution**: explicit `dependencies` merged with dataset-inferred edges, cycle detection, and topological sorting (`dependency_resolver.py`, `dependency_inference.py`, `pipeline_dependency_resolver.py`).
-*   **Validation & preflight**: DAG/schema validation and a configuration preflight that fails fast with clear errors before any node runs (`pipeline_validator.py`, `ml_node_validator.py`, `split_validator.py`, `preflight.py`).
+*   **Validation & preflight**: DAG/schema validation and a configuration preflight that fails fast with clear errors before any node runs (`pipeline_validator.py`, `split_validator.py`, `preflight.py`).
 *   **MLOps integration**: auto-detection of ML workloads, MLflow tracking, and experiment/run lifecycle wiring (`mlops_integration.py`, `mlops_auto_config.py`, `mlflow_node_executor.py`, `ml_context.py`).
 *   **Security & integrity**: `SecureModuleImporter` (whitelist prefixes, path-traversal guards, bounded cache) and HMAC-signed, hash-verified `RunCertificate`s (`import_security.py`, `certificate.py`).
 *   **Resources & resilience**: managed resource lifecycle, retry policy, and hyperparameter sweep expansion (`resource_manager.py`, `resilience.py`, `sweep.py`).

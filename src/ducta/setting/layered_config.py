@@ -20,8 +20,9 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Optional, Set
+from typing import Dict, Iterator, List, NamedTuple, Optional, Set
 
 from loguru import logger
 
@@ -33,6 +34,7 @@ __all__ = [
     "LayeredExecutionResult",
     "LayeredProjectDetector",
     "detect_and_prepare_layered_execution",
+    "layer_sys_path",
 ]
 
 # Declarative layered-project manifest, probed in extension precedence order.
@@ -84,7 +86,6 @@ class LayerConfig:
         self.depends_on = config_dict.get("depends_on", [])
         self.global_settings = config_dict.get("global_settings", "global.yaml")
         self.config_path = config_dict.get("config_path", "config")
-        self.environments_path = config_dict.get("environments_path", "environments")
 
     def get_config_paths(self, base_path: Path) -> Dict[str, Path]:
         """Get absolute paths for all config files in this layer."""
@@ -171,7 +172,6 @@ class LayeredProjectDetector:
                     "path": layer_name,
                     "global_settings": "global.yaml",
                     "config_path": "config",
-                    "environments_path": "environments",
                     "description": f"Layer: {layer_name}",
                 }
                 self.layers[layer_name] = LayerConfig(layer_name, layer_config)
@@ -341,9 +341,16 @@ class LayerContextBuilder:
     ) -> Optional[Dict]:
         """Build context arguments for a specific layer.
 
+        ``env`` is returned in the dict rather than merely accepted: the caller
+        has to pass it on to ``Context(env=...)``, and when it was only a
+        parameter this method ignored, at least one caller
+        (``ducta config validate``) resolved an environment, handed it here, and
+        then built its Context without one — validating a layered project
+        against its base configuration whatever ``--env`` said.
+
         Returns:
-            Dictionary with keys: global_settings_path, pipelines_config, nodes_config,
-                                 input_config, output_config
+            Dictionary with keys: global_settings, pipelines_config, nodes_config,
+                                 input_config, output_config, layer, layer_path, env.
             Or None if layer not found or paths don't exist.
         """
         layer = detector.get_layer(layer_name)
@@ -375,19 +382,77 @@ class LayerContextBuilder:
             "output_config": str(config_paths["output_config"]),
             "layer": layer_name,
             "layer_path": str(config_paths["layer_path"]),
+            "env": env,
         }
 
     @staticmethod
-    def inject_sys_path(detector: LayeredProjectDetector, layer_name: str) -> None:
-        """Add layer-specific src/ to sys.path for module discovery."""
+    def layer_import_roots(detector: LayeredProjectDetector, layer_name: str) -> List[str]:
+        """The paths a layer's node functions are imported from, front of path first."""
         layer = detector.get_layer(layer_name)
         if not layer:
-            return
+            return []
 
-        layer_src = detector.project_root / layer.path / "src"
-        if layer_src.exists() and str(layer_src) not in sys.path:
-            sys.path.insert(0, str(layer_src))
-            logger.debug(f"Added {layer_src} to sys.path")
+        roots = []
+        layer_root = (detector.project_root / layer.path).resolve()
+        layer_src = layer_root / "src"
+        # The layer root first, so `import src.foo` resolves to *this* layer's
+        # `src` package before Python can cache the workspace root's `src` as a
+        # namespace package.
+        if layer_root.is_dir():
+            roots.append(str(layer_root))
+        if layer_src.is_dir():
+            roots.append(str(layer_src))
+        return roots
+
+    @staticmethod
+    def inject_sys_path(detector: LayeredProjectDetector, layer_name: str) -> None:
+        """Add a layer's import roots to ``sys.path``, permanently.
+
+        Prefer :func:`layer_sys_path` where the scope is known. This remains for
+        callers that run a single layer and then exit.
+        """
+        for root in reversed(LayerContextBuilder.layer_import_roots(detector, layer_name)):
+            if root not in sys.path:
+                sys.path.insert(0, root)
+                logger.debug("Added {} to sys.path", root)
+
+
+@contextmanager
+def layer_sys_path(detector: "LayeredProjectDetector", layer_name: str) -> Iterator[None]:
+    """Make a layer importable for the duration of the block, then undo it.
+
+    ``inject_sys_path`` only ever added. Every layer names its package ``src``,
+    so running more than one layer in a process (``--all-layers``, the API
+    serving two layered projects) left each layer's directory stacked on
+    ``sys.path`` with a stale ``sys.modules['src']`` pointing at whichever ran
+    first — after which the second layer silently imported the first layer's
+    node functions.
+
+    Restores ``sys.path`` and drops the modules that were imported from the
+    roots this block added, so the next layer resolves its own.
+    """
+    roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
+    added = [root for root in roots if root not in sys.path]
+    for root in reversed(added):
+        sys.path.insert(0, root)
+        logger.debug("Added {} to sys.path", root)
+
+    before = set(sys.modules)
+    try:
+        yield
+    finally:
+        for root in added:
+            try:
+                sys.path.remove(root)
+            except ValueError:  # pragma: no cover - someone else removed it
+                pass
+        for name in set(sys.modules) - before:
+            module_file = getattr(sys.modules.get(name), "__file__", None) or ""
+            if any(module_file.startswith(root) for root in added):
+                sys.modules.pop(name, None)
+            elif name == "src" or name.startswith("src."):
+                # Namespace packages have no __file__ to attribute.
+                sys.modules.pop(name, None)
 
 
 class LayeredExecutionResult(NamedTuple):

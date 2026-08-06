@@ -49,11 +49,27 @@ def resolve_signing_key(context: Any) -> Optional[bytes]:
     # Accept both the historical mixed-case name and the conventional all-caps
     # form — a very plausible typo/convention mismatch would otherwise silently
     # disable signing with zero warning.
+    from ducta.core.settings import CoreSettings
+
     key = os.environ.get(_SIGNING_KEY_ENV) or os.environ.get(_SIGNING_KEY_ENV.upper())
     if not key:
-        gs = context if isinstance(context, dict) else getattr(context, "global_settings", {})
-        gs = gs if isinstance(gs, dict) else {}
-        key = gs.get("certificate_signing_key")
+        # from_context accepts a Context or a bare settings dict, which is what
+        # resolve_signing_key_from_dir hands in when there is no live Context.
+        key = CoreSettings.from_context(context).certificate_signing_key
+        if key:
+            # A signing key in a config file is a secret in a file that is
+            # normally committed. It also weakens `key_id`: that identifier is a
+            # truncated SHA-256 of the key, harmless for a high-entropy secret
+            # but brute-forceable for the short human-chosen string a config
+            # file invites. Warn rather than refuse — the key still works, and
+            # failing the run over it would be worse than the exposure.
+            logger.warning(
+                "Run Certificate signing key read from 'global_settings.certificate_signing_key'. "
+                "Prefer the {} environment variable: a key in a config file is usually "
+                "committed to version control, and a short/low-entropy value can be recovered "
+                "from the public 'key_id' field of any certificate it signs.",
+                _SIGNING_KEY_ENV.upper(),
+            )
     if not key:
         return None
     return str(key).encode("utf-8")
@@ -137,7 +153,9 @@ def _quality_summary(context: Any) -> List[Dict[str, Any]]:
     (passed/score/errors/warnings per node+phase — populated for every run without
     opt-in). Falls back to persisted ``quality_output_paths`` for backward compat.
     """
-    results = _ctx_get(context, "_quality_results", None)
+    from ducta.core.ledger import ledger_for
+
+    results = ledger_for(context).quality_results
     if results:
         return list(results)
 
@@ -252,6 +270,10 @@ def build_certificate(
         logger.debug("Environment capture for certificate failed: {}", e)
         environment = {}
 
+    from ducta.core.ledger import ledger_for
+
+    ledger = ledger_for(context)
+
     cert = RunCertificate(
         run_id=run_id,
         pipeline=pipeline,
@@ -263,12 +285,9 @@ def build_certificate(
         ducta_version=ducta_version,
         config_fingerprint=_config_fingerprint(context),
         environment=environment,
-        nodes=sorted(
-            _ctx_get(context, "_run_node_details", []) or [],
-            key=lambda n: str(n.get("name", "")),
-        ),
-        inputs=dict(_ctx_get(context, "_input_fingerprints", {}) or {}),
-        outputs=dict(_ctx_get(context, "_output_fingerprints", {}) or {}),
+        nodes=sorted(ledger.node_details, key=lambda n: str(n.get("name", ""))),
+        inputs=ledger.input_fingerprints,
+        outputs=ledger.output_fingerprints,
         quality=_quality_summary(context),
         error=error,
     )
@@ -278,19 +297,16 @@ def build_certificate(
 
 def certificate_dir(context: Any, run_id: str) -> Path:
     """Resolve ``<run_certificate_dir>/<run_id>`` for this run (relative to cwd)."""
-    gs = _ctx_get(context, "global_settings", {}) or {}
-    base = (
-        gs.get("run_certificate_dir") if isinstance(gs, dict) else None
-    ) or DEFAULT_CERTIFICATE_DIR
-    return Path(base) / run_id
+    from ducta.core.settings import CoreSettings
+
+    return Path(CoreSettings.from_context(context).run_certificate_dir) / run_id
 
 
 def is_enabled(context: Any) -> bool:
     """Run certificates are on by default; disable with ``enable_run_certificate: false``."""
-    gs = _ctx_get(context, "global_settings", {}) or {}
-    if isinstance(gs, dict):
-        return bool(gs.get("enable_run_certificate", True))
-    return bool(getattr(gs, "enable_run_certificate", True))
+    from ducta.core.settings import CoreSettings
+
+    return CoreSettings.from_context(context).enable_run_certificate
 
 
 def write_certificate(cert: RunCertificate, run_dir: Path) -> Path:

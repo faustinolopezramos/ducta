@@ -204,10 +204,9 @@ class MLOpsExecutorIntegration:
         """Read fingerprint_policy from global settings (dict or object form)."""
         if not self.context:
             return "record"
-        gs = getattr(self.context, "global_settings", {}) or {}
-        if isinstance(gs, dict):
-            return gs.get("fingerprint_policy", "record")
-        return getattr(gs, "fingerprint_policy", "record")
+        from ducta.core.settings import CoreSettings
+
+        return CoreSettings.from_context(self.context).fingerprint_policy
 
     def _stash_previous_fingerprints(
         self, experiment_id: str, pipeline_name: str, current_run_id: str
@@ -236,10 +235,9 @@ class MLOpsExecutorIntegration:
             candidates.sort(key=lambda r: r.get("created_at") or "", reverse=True)
             previous = json.loads(candidates[0]["parameters"]["_input_fingerprints"])
 
-            if isinstance(self.context, dict):
-                self.context["_previous_input_fingerprints"] = previous
-            else:
-                setattr(self.context, "_previous_input_fingerprints", previous)
+            from ducta.core.ledger import ledger_for
+
+            ledger_for(self.context).previous_input_fingerprints = previous
             logger.debug(
                 f"Loaded input fingerprints from previous run {candidates[0]['run_id']} "
                 f"for fingerprint_policy enforcement"
@@ -406,12 +404,11 @@ class MLOpsExecutorIntegration:
             import json
 
             if self.context:
-                if isinstance(self.context, dict):
-                    in_fps = self.context.get("_input_fingerprints")
-                    out_fps = self.context.get("_output_fingerprints")
-                else:
-                    in_fps = getattr(self.context, "_input_fingerprints", None)
-                    out_fps = getattr(self.context, "_output_fingerprints", None)
+                from ducta.core.ledger import ledger_for
+
+                ledger = ledger_for(self.context)
+                in_fps = ledger.input_fingerprints
+                out_fps = ledger.output_fingerprints
 
                 if in_fps:
                     self.mlops_context.experiment_tracker.log_parameter(

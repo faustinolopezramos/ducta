@@ -31,7 +31,17 @@ _DEFAULT_PATH_KEYS: FrozenSet[str] = frozenset({"filepath"})
 # alongside a run certificate, or committed) is a much wider blast radius
 # than the environment variable itself. Reject any variable name that looks
 # like it holds a credential, whether or not it's actually set.
-_SENSITIVE_VAR_NAME_RE = re.compile(r"(KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL)", re.IGNORECASE)
+#
+# Matched per name component rather than as a substring: the old
+# `re.search(r"(KEY|SECRET|...)")` also rejected ${MONKEY_DIR}, ${TOKENIZER_PATH}
+# and ${KEYSTONE_ROOT}, which are not credentials by any reading.
+_SENSITIVE_NAME_PARTS = frozenset({"KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL"})
+_NAME_SEPARATORS = re.compile(r"[_\-.]+")
+
+
+def _is_sensitive_var_name(name: str) -> bool:
+    """Whether ``name`` looks like it holds a credential."""
+    return any(part.upper() in _SENSITIVE_NAME_PARTS for part in _NAME_SEPARATORS.split(name))
 
 
 class VariableInterpolator:
@@ -69,7 +79,7 @@ class VariableInterpolator:
                 break
 
             var_name = result[start + 2 : end]
-            if _SENSITIVE_VAR_NAME_RE.search(var_name):
+            if _is_sensitive_var_name(var_name):
                 raise ConfigLoadError(
                     f"Refusing to interpolate '${{{var_name}}}': variable names matching "
                     "KEY/SECRET/TOKEN/PASSWORD/CREDENTIAL are not allowed via ${VAR} "

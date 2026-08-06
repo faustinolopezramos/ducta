@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Set
 
 from loguru import logger  # type: ignore
 
+from ducta.core.errors import ConfigurationError, DependencyCycleError
+
 
 def detect_cycles_dfs(graph: Dict[str, List[str]]) -> None:
     """Detect cycles in a directed graph using 3-colour DFS."""
@@ -53,7 +55,10 @@ def detect_cycles_dfs(graph: Dict[str, List[str]]) -> None:
                 except ValueError:
                     segment = path
                 arrow = " \u2192 "
-                raise ValueError(f"Circular dependency detected in pipeline: {arrow.join(segment)}")
+                raise DependencyCycleError(
+                    f"Circular dependency detected in pipeline: {arrow.join(segment)}",
+                    cycle=list(segment),
+                )
 
 
 class DependencyResolver:
@@ -83,8 +88,10 @@ class DependencyResolver:
                 logger.debug("Processing dependency: {} -> {}", node_name, dep_name)
 
                 if dep_name not in pipeline_nodes:
-                    raise ValueError(
-                        f"Node '{node_name}' depends on '{dep_name}' which is not in the pipeline"
+                    raise ConfigurationError(
+                        f"Node '{node_name}' depends on '{dep_name}' which is not in the pipeline",
+                        node=node_name,
+                        dependency=dep_name,
                     )
 
                 dag[dep_name].add(node_name)

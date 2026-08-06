@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from ducta.check.core import CheckResult, CheckSeverity, QualityReport
+import pytest
+
+from ducta.check.core import CheckResult, CheckSeverity, QualityConfigError, QualityReport
 from ducta.check.gate import GateAction, GateBehavior, QualityGateEvaluator
 
 
@@ -90,3 +92,89 @@ class TestFromConfig:
         )
         # node's more lenient max_errors wins -> passes
         assert gate.action == GateAction.PASS
+
+
+class TestDefaultsAreIndependent:
+    """Out of the box a gate means one thing: any ERROR blocks.
+
+    `min_pass_rate` used to default to 1.0 while `max_warnings` defaulted to -1
+    (unlimited), and the pass rate counts every failed check regardless of
+    severity — so the two defaults contradicted each other, and a gate
+    configured with nothing but `enabled: true` blocked on the very warnings the
+    other knob declared tolerable.
+    """
+
+    def test_a_warning_alone_does_not_block_by_default(self):
+        report = _report(
+            [
+                CheckResult("a", passed=True),
+                CheckResult("b", passed=False, severity=CheckSeverity.WARNING),
+            ]
+        )
+
+        gate = QualityGateEvaluator.from_config(report, {"enabled": True})
+
+        assert gate is not None
+        assert gate.passed
+        assert gate.action is not GateAction.BLOCK
+
+    def test_an_error_still_blocks_by_default(self):
+        report = _report([CheckResult("a", passed=False, severity=CheckSeverity.ERROR)])
+
+        gate = QualityGateEvaluator.from_config(report, {"enabled": True})
+
+        assert gate is not None
+        assert not gate.passed
+        assert gate.action is GateAction.BLOCK
+
+    def test_min_pass_rate_still_blocks_when_asked_for(self):
+        report = _report(
+            [
+                CheckResult("a", passed=True),
+                CheckResult("b", passed=False, severity=CheckSeverity.WARNING),
+            ]
+        )
+
+        gate = QualityGateEvaluator.from_config(report, {"enabled": True, "min_pass_rate": 1.0})
+
+        assert gate is not None
+        assert not gate.passed
+
+
+class TestLegacyThresholdCoercion:
+    """`block_threshold`/`warn_threshold` are coerced with every other key.
+
+    They used to be read raw and handed to `float()` at the use site, outside
+    the try/except that turns a bad value into a QualityConfigError — so a
+    malformed one raised a bare TypeError from inside the evaluation instead.
+    """
+
+    def test_a_malformed_block_threshold_is_reported_as_a_config_error(self):
+        report = _report([CheckResult("a", passed=True)])
+
+        with pytest.raises(QualityConfigError):
+            QualityGateEvaluator.from_config(
+                report, {"enabled": True, "block_threshold": "not-a-number"}
+            )
+
+    def test_a_null_warn_threshold_is_reported_as_a_config_error(self):
+        report = _report([CheckResult("a", passed=True)])
+
+        with pytest.raises(QualityConfigError):
+            QualityGateEvaluator.from_config(report, {"enabled": True, "warn_threshold": []})
+
+    def test_an_absent_threshold_is_simply_inactive(self):
+        report = _report([CheckResult("a", passed=True)])
+
+        gate = QualityGateEvaluator.from_config(report, {"enabled": True})
+
+        assert gate is not None
+        assert gate.passed
+
+    def test_a_configured_block_threshold_still_applies(self):
+        report = _report([CheckResult("a", passed=False, severity=CheckSeverity.WARNING)])
+
+        gate = QualityGateEvaluator.from_config(report, {"enabled": True, "block_threshold": 0.9})
+
+        assert gate is not None
+        assert not gate.passed

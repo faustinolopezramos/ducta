@@ -38,7 +38,14 @@ class ExecutionStatus(str, Enum):
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    #: An atomic ``--node`` run whose inputs were not available. Nothing ran, and
+    #: nothing was supposed to.
     SKIPPED = "skipped"
+    #: At least one node's quality gate rejected its data. The run finished
+    #: without an error, but it did not do all of its work. Distinct from SKIPPED
+    #: (data absent) and from FAILED (something broke); mirrors
+    #: ``ducta.core.results.RunStatus.GATE_BLOCKED``.
+    GATE_BLOCKED = "gate_blocked"
 
 
 class ExecutionResponse(BaseModel):
