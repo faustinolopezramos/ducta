@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { STORAGE_KEYS } from "../utils/storage";
 
 export interface AuthStoreUser {
   id?: string;
@@ -78,15 +79,35 @@ export const useAuthStore = create<AuthState>()(
 
     }),
     {
-      name: "ducta-auth",        // localStorage key with version
-      version: 1,                // NEW: Schema version for migrations (C-3)
-      partialize: (state) => ({  // only persist token + user
-        token: state.token,
-        user: state.user,
-      }),
+      name: STORAGE_KEYS.AUTH,   // single source of truth for the key
+      version: 1,                // Schema version for migrations (C-3)
+      // The token is deliberately NOT persisted. The backend issues it as an
+      // httpOnly cookie precisely so page scripts cannot read it; keeping a
+      // second copy in localStorage handed that back to any script on the page
+      // and undid the protection. It lives in memory for the tab's lifetime and
+      // is re-obtained from the cookie via /auth/refresh on reload — see
+      // `restoreSession`.
+      partialize: (state) => ({ user: state.user }),
     }
   )
 );
+
+/**
+ * Re-establish the in-memory token after a reload, using the httpOnly cookie.
+ *
+ * Returns true when a session was recovered. Callers should treat false as
+ * "not logged in" rather than an error: it is the normal outcome when the
+ * cookie is absent or expired.
+ */
+export const restoreSession = async (): Promise<boolean> => {
+  if (useAuthStore.getState().token) return true;
+  try {
+    await useAuthStore.getState().refreshTokenAsync();
+    return Boolean(useAuthStore.getState().token);
+  } catch {
+    return false;
+  }
+};
 
 /**
  * Read the current token without subscribing to the store — safe to call outside React.

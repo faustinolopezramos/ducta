@@ -1,0 +1,44 @@
+
+/* ── Runs / versions tables ─────────────────────────────────────────────────
+   Cell presentation that used to be inline styles repeated per <td>. */
+
+.mlops-run-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  color: var(--primary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.mlops-run-link:hover { text-decoration: underline; }
+
+.mlops-run-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+.mlops-run-status {
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-xs);
+}
+
+.mlops-run-status--success { color: var(--success); }
+.mlops-run-status--danger { color: var(--danger); }
+.mlops-run-status--warning { color: var(--warning-strong); }
+
+.mlops-metrics-preview {
+  display: block;
+  max-width: 200px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mlops-row-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}

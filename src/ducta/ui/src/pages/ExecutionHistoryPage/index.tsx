@@ -11,7 +11,8 @@ import { CertificateModal } from "../../components/Execution/CertificateModal";
 import { QueueIndicator } from "./QueueIndicator";
 import { FilterBar } from "./FilterBar";
 import { LogsDrawer } from "./LogsDrawer";
-import { ExecutionRow } from "./ExecutionRow";
+import { DataTable } from "../../components/ui/DataTable";
+import { executionColumns, isActiveExecution, type ExecutionListItem } from "./executionColumns";
 
 // ─────────────────────────────────────────────
 // EXECUTION HISTORY PAGE — /workspace/executions
@@ -35,22 +36,11 @@ export function ExecutionHistoryPage() {
     new Set(executions.map((e) => e.pipeline_name).filter(Boolean))
   ).sort();
 
-  // Only active executions are cancellable / selectable.
-  const activeIds = executions
-    .filter((e) => e.status === "running" || e.status === "pending")
+  // Only active executions are cancellable; DataTable owns the checkbox state
+  // itself, so this is just the subset the bulk action applies to.
+  const checkedActive = executions
+    .filter((e) => isActiveExecution(e) && checkedIds.has(e.id))
     .map((e) => e.id);
-  const checkedActive = activeIds.filter((id) => checkedIds.has(id));
-  const allActiveChecked = activeIds.length > 0 && checkedActive.length === activeIds.length;
-
-  const toggleCheck = (id: string) =>
-    setCheckedIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-
-  const toggleCheckAll = () =>
-    setCheckedIds(allActiveChecked ? new Set() : new Set(activeIds));
 
   const handleBulkCancel = () => {
     if (checkedActive.length === 0) return;
@@ -67,18 +57,10 @@ export function ExecutionHistoryPage() {
         actions={<QueueIndicator />}
       />
 
-      {isLoading && (
-        <div style={{ ...styles.fontMono, fontSize: 13, color: colors.textMuted }}>Loading…</div>
-      )}
-
-      {error && (
-        <div style={{ ...styles.fontMono, fontSize: 13, color: colors.red }}>
-          Failed to load executions.
-        </div>
-      )}
-
-      {!isLoading && !error && (
-        <>
+      {/* Loading and error are rendered inside the table now — the filter bar
+          stays put and the rows become skeletons, instead of the whole view
+          being replaced by a centred "Loading…" and jumping when data lands. */}
+      <>
           <FilterBar
             filters={filters}
             onChange={setFilters}
@@ -122,71 +104,35 @@ export function ExecutionHistoryPage() {
             </div>
           )}
 
-          {executions.length === 0 ? (
-            <EmptyState
-              icon={hasFilters ? IconSearch : IconClockHour4}
-              title={hasFilters ? "No executions match these filters" : "No executions yet"}
-              description={
-                hasFilters
-                  ? "Try adjusting or clearing the filters above."
-                  : "Run a pipeline from the Pipeline page to see results here."
-              }
-            />
-          ) : (
-            <div style={{ overflowX: "auto", width: "100%" }}>
-              <table style={{ width: "100%", minWidth: 720, borderCollapse: "collapse", ...styles.fontSans }}>
-                <thead>
-                  <tr style={{ borderBottom: `2px solid ${colors.border}` }}>
-                    <th style={{ padding: "8px 12px", textAlign: "left", width: 32 }}>
-                      <input
-                        type="checkbox"
-                        checked={allActiveChecked}
-                        disabled={activeIds.length === 0}
-                        onChange={toggleCheckAll}
-                        aria-label="Select all active executions"
-                        title={activeIds.length === 0 ? "No active executions" : "Select all active"}
-                        style={{ cursor: activeIds.length === 0 ? "not-allowed" : "pointer" }}
-                      />
-                    </th>
-                    {["Status", "Pipeline", "Project", "Env", "Started", "Duration", "ID", ""].map((h) => (
-                      <th
-                        key={h}
-                        style={{
-                          padding: "8px 12px",
-                          textAlign: "left",
-                          ...styles.fontSans,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          color: colors.textMuted,
-                          textTransform: "uppercase",
-                          letterSpacing: "0.06em",
-                        }}
-                      >
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {executions.map((ex) => (
-                    <ExecutionRow
-                      key={ex.id}
-                      execution={ex}
-                      selected={selectedId === ex.id}
-                      onSelect={() => setSelectedId(selectedId === ex.id ? null : ex.id)}
-                      checked={checkedIds.has(ex.id)}
-                      onToggleCheck={() => toggleCheck(ex.id)}
-                      onShowCertificate={(projectId, runId) =>
-                        setCertModal({ projectId, runId })
-                      }
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
+          <DataTable<ExecutionListItem>
+            columns={executionColumns((projectId, runId) => setCertModal({ projectId, runId }))}
+            rows={executions}
+            rowKey={(ex) => ex.id}
+            minWidth={720}
+            stickyHeader
+            loading={isLoading}
+            error={error ? "Failed to load executions." : undefined}
+            onRowClick={(ex) => setSelectedId(selectedId === ex.id ? null : ex.id)}
+            isRowSelected={(ex) => selectedId === ex.id}
+            // Only a running or pending execution can be bulk-cancelled.
+            selection={{
+              selected: checkedIds,
+              onChange: setCheckedIds,
+              isSelectable: isActiveExecution,
+            }}
+            empty={
+              <EmptyState
+                icon={hasFilters ? IconSearch : IconClockHour4}
+                title={hasFilters ? "No executions match these filters" : "No executions yet"}
+                description={
+                  hasFilters
+                    ? "Try adjusting or clearing the filters above."
+                    : "Run a pipeline from the Pipeline page to see results here."
+                }
+              />
+            }
+          />
+      </>
 
       {selectedId && (
         <LogsDrawer executionId={selectedId} onClose={() => setSelectedId(null)} />

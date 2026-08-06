@@ -1,6 +1,10 @@
 import React from "react";
 import { colors } from "../../theme/tokens";
 import client from "../../api/client";
+// Both MLOps tabs import from this module, so it is where the shared stylesheet
+// gets pulled in. It existed but was never imported by anything, so none of its
+// rules had ever applied.
+import "./shared.css";
 
 /** Best-effort fallback: find the project that owns a pipeline by name.
  *  Older MLOps runs only record the pipeline's name; newer runs carry a

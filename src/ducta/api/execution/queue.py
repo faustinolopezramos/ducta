@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from queue import Empty, PriorityQueue
-from typing import Optional
 
 from loguru import logger
 
@@ -133,6 +132,9 @@ class ExecutionQueue:
             "total_completed": 0,
             "total_cancelled": 0,
         }
+        # Woken whenever the set of promotable executions may have changed
+        # (something enqueued, completed, or cancelled). Every waiter re-checks
+        # whether *it* was the one promoted.
         self._has_work: asyncio.Event = asyncio.Event()
 
     def enqueue(
@@ -156,50 +158,78 @@ class ExecutionQueue:
         )
         self._has_work.set()
 
-    async def dequeue(self) -> Optional[QueuedExecution]:
-        """
-        Wait for an execution slot to become available and return the next queued item.
+    def _promote_ready(self) -> None:
+        """Move as many waiting executions into ``_active`` as capacity allows.
 
-        Blocks until:
-        1. There is capacity (len(active) < max_concurrent), AND
-        2. There is an item in the queue
-
-        Returns None if queue is empty after timeout.
+        Pops in heap order, so the highest-priority waiter takes the free slot
+        regardless of which coroutine happens to be running. Cancelled entries
+        are drained here rather than occupying a slot.
         """
+        promoted = False
+        while len(self._active) < self.max_concurrent and not self._queue.empty():
+            try:
+                queued = self._queue.get_nowait()
+            except Empty:  # pragma: no cover - raced with shutdown()
+                break
+
+            if queued.execution_id in self._cancelled_ids:
+                self._cancelled_ids.discard(queued.execution_id)
+                self._waiting.pop(queued.execution_id, None)
+                logger.debug("Skipped cancelled execution {id}", id=queued.execution_id)
+                continue
+
+            self._active.add(queued.execution_id)
+            self._waiting.pop(queued.execution_id, None)
+            promoted = True
+            logger.info(
+                "Started execution {id} ({name}), active: {active}/{max}",
+                id=queued.execution_id,
+                name=queued.pipeline_name,
+                active=len(self._active),
+                max=self.max_concurrent,
+            )
+
+        if promoted:
+            self._has_work.set()
+
+    async def acquire_slot(self, execution_id: str) -> None:
+        """Block until *execution_id* holds one of the concurrency slots.
+
+        Replaces the previous ``dequeue()``, which returned the highest-priority
+        item and put *that* id into ``_active`` — while the caller went on to run
+        its own, different execution and later released its own id. The cap held
+        by accident, but ``_active`` named the wrong runs (which is what
+        ``get_stats`` reports), and the priority ordering did nothing: which
+        pipeline actually ran first was decided by asyncio task-creation order,
+        not by ``ExecutionPriority``.
+
+        Now a waiter returns only once *it* has been promoted, so the heap order
+        is the run order and ``_active`` is exactly the set of running ids.
+        """
+        if execution_id in self._active:
+            return
+
+        if execution_id not in self._waiting:
+            # Never enqueued (or already drained). Granting is the safe failure:
+            # blocking here would hang the run forever on a bookkeeping slip.
+            logger.warning(
+                "Execution {id} asked for a slot without being queued; granting it.",
+                id=execution_id,
+            )
+            self._active.add(execution_id)
+            return
+
         while True:
-            # Check if we have capacity
-            if len(self._active) < self.max_concurrent and not self._queue.empty():
-                try:
-                    queued = self._queue.get_nowait()
-                    # Skip items that were cancelled while waiting in the heap
-                    if queued.execution_id in self._cancelled_ids:
-                        self._cancelled_ids.discard(queued.execution_id)
-                        self._waiting.pop(queued.execution_id, None)
-                        logger.debug(
-                            "Skipped cancelled execution {id} from queue",
-                            id=queued.execution_id,
-                        )
-                        continue  # check queue again immediately, no sleep
-                    self._active.add(queued.execution_id)
-                    self._waiting.pop(queued.execution_id, None)
+            self._promote_ready()
+            if execution_id in self._active:
+                return
 
-                    logger.info(
-                        "Dequeued execution {id} ({name}), active: {active}/{max}",
-                        id=queued.execution_id,
-                        name=queued.pipeline_name,
-                        active=len(self._active),
-                        max=self.max_concurrent,
-                    )
-                    return queued
-                except Exception:
-                    pass
-
-            # No capacity or items — wait for notification without polling.
-            # Clear BEFORE re-checking so notifications arriving between the
-            # check above and this clear() are not lost.
+            # Clear BEFORE re-checking so a notification arriving in the window
+            # between the check above and the wait below is not lost.
             self._has_work.clear()
-            if len(self._active) < self.max_concurrent and not self._queue.empty():
-                continue  # notificación llegó en la ventana, reintentar
+            self._promote_ready()
+            if execution_id in self._active:
+                return
             await self._has_work.wait()
 
     def mark_complete(self, execution_id: str) -> bool:

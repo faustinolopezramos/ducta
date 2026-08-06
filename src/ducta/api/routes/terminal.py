@@ -31,6 +31,7 @@ from loguru import logger
 
 from ducta.api.config import Settings, get_settings
 from ducta.api.dependencies import WebSocketAuthError, resolve_websocket_user
+from ducta.api.middleware.origin import websocket_origin_allowed
 
 ws_router = APIRouter(tags=["Terminal"])
 
@@ -65,6 +66,14 @@ async def terminal_ws(websocket: WebSocket) -> None:
     # 1. Feature gate — fail closed.
     if not settings.terminal_enabled:
         await websocket.close(code=1008, reason="Terminal disabled")
+        return
+
+    # 1a. Origin — checked before anything else that could accept the socket.
+    # CORS never sees a WebSocket handshake, so without this a page on any site
+    # the user happens to be visiting can open this endpoint from their own
+    # browser. The loopback check further down does not help there: that page's
+    # connection *is* loopback.
+    if not await websocket_origin_allowed(websocket, settings):
         return
 
     # 1b. Rate limit the handshake — `BaseHTTPMiddleware` (RateLimitMiddleware)

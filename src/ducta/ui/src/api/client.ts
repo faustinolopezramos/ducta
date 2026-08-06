@@ -62,21 +62,42 @@ function requestInterceptor(config: InternalAxiosRequestConfig): InternalAxiosRe
   return config;
 }
 
+/** Clear the session and tell the app to send the user to /login. */
+function abandonSession(): void {
+  useAuthStore.getState().logout();
+  if (globalThis.location?.pathname !== "/login") {
+    globalThis.dispatchEvent(new Event("ducta:unauthorized"));
+  }
+}
+
+/**
+ * Recover a 401 by refreshing the token, or give up cleanly.
+ *
+ * Always either returns a response or throws. It used to be able to fall off
+ * the end and resolve with `undefined` — which happens routinely, because
+ * `getToken()` discards a token within 30s of expiry, so a refresh can succeed
+ * and still leave nothing usable. The interceptor then *resolved* with
+ * `undefined` instead of rejecting, and the caller's `response.data` threw a
+ * TypeError somewhere unrelated. Because that path always returned, the
+ * interceptor's own "401 with no valid refresh → logout" branch was unreachable.
+ */
 async function handle401Error(
   error: AxiosError,
   config: RetryableRequestConfig | undefined,
   retryConfig: RetryConfig,
   instance: AxiosInstance,
-): Promise<AxiosResponse | undefined> {
+): Promise<AxiosResponse> {
   if (isRefreshing) {
-    return new Promise<string | null>((resolve, reject) => {
+    const token = await new Promise<string | null>((resolve, reject) => {
       failedQueue.push({ resolve, reject });
-    }).then((token) => {
-      if (config && token) {
-        config.headers.set("Authorization", `Bearer ${token}`);
-        return instance(config);
-      }
     });
+    if (!config || !token) {
+      abandonSession();
+      throw error;
+    }
+    config.headers.set("Authorization", `Bearer ${token}`);
+    config._retryConfig = { ...retryConfig, skipRetry: true };
+    return instance(config);
   }
 
   isRefreshing = true;
@@ -85,13 +106,20 @@ async function handle401Error(
     await refreshTokenAsync();
     const newToken = getToken();
     processQueue(null, newToken);
-    if (config && newToken) {
-      config.headers.set("Authorization", `Bearer ${newToken}`);
-      config._retryConfig = { ...retryConfig, skipRetry: true };
-      return instance(config);
+
+    if (!config || !newToken) {
+      // Refresh "succeeded" but produced nothing we can retry with.
+      abandonSession();
+      throw error;
     }
+    config.headers.set("Authorization", `Bearer ${newToken}`);
+    config._retryConfig = { ...retryConfig, skipRetry: true };
+    return instance(config);
   } catch (refreshError) {
-    processQueue(refreshError, null);
+    if (refreshError !== error) {
+      processQueue(refreshError, null);
+      abandonSession();
+    }
     throw refreshError;
   } finally {
     isRefreshing = false;
@@ -128,7 +156,7 @@ function applySharedInterceptors(
 
   instance.interceptors.response.use(
     (response) => response,
-    async (error: AxiosError): Promise<AxiosResponse | undefined> => {
+    async (error: AxiosError): Promise<AxiosResponse> => {
       const config = error.config as RetryableRequestConfig | undefined;
       const retryConfig: RetryConfig = config?._retryConfig ?? {};
       const retryCount = retryConfig.retryCount ?? 0;
@@ -155,12 +183,11 @@ function applySharedInterceptors(
         if (transientResult !== null) return transientResult;
       }
 
-      // 401 with no valid refresh → logout
+      // A 401 that was not eligible for refresh (skipRetry — i.e. the retried
+      // request came back 401 again, or /auth/refresh itself did). The refresh
+      // path above handles its own failure; this is the terminal case.
       if (error.response?.status === 401) {
-        useAuthStore.getState().logout();
-        if (globalThis.location?.pathname !== "/login") {
-          globalThis.dispatchEvent(new Event("ducta:unauthorized"));
-        }
+        abandonSession();
       }
 
       throw error;

@@ -67,6 +67,20 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-xl: 0 20px 40px rgba(0, 0, 0, 0.12);
 
+  /* ── Breakpoints ─────────────────────────────────────────────────────────────
+   * Custom properties do NOT work inside @media, so these cannot be real
+   * tokens — this block is the shared reference, and rules are expected to use
+   * these exact numbers rather than inventing their own. The app had drifted to
+   * 560 / 767 / 768 / 900 / 1199 with 767 and 768 both in use, and nothing
+   * above 1199 at all, so a 1440–2560px monitor got wider columns instead of
+   * more information.
+   *
+   *   sm   640   phone → small tablet
+   *   md   900   tablet → laptop        (the existing 900 breakpoint)
+   *   lg  1280   laptop → desktop
+   *   xl  1600   wide desktop: raise density rather than stretch
+   * ──────────────────────────────────────────────────────────────────────────── */
+
   /* ── Motion ──────────────────────────────────────────────────────────────── */
   --dur-fast: 120ms;
   --dur-base: 200ms;

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Ducta">
+  <!-- Ducta mark: three lanes converging into one — a pipeline, in the brand
+       terracotta. Replaces an emoji served as a data URI, which read as a
+       placeholder next to the other tools this sits beside in a tab strip. -->
+  <rect width="32" height="32" rx="7" fill="#B04A2C"/>
+  <g fill="none" stroke="#F8F5F2" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8 9h5a6 6 0 0 1 6 6v2a6 6 0 0 0 6 6"/>
+    <path d="M8 16h5"/>
+    <path d="M8 23h5a6 6 0 0 0 6-6"/>
+  </g>
+</svg>

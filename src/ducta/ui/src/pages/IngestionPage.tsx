@@ -190,7 +190,13 @@ function ConnectionRow({
             variant="ghost"
             size="sm"
             leftIcon={<IconTrash size={14} />}
-            confirm={`Delete connection '${connection.name}'? Nodes referencing it will fail until it is recreated.`}
+            confirm={{
+              title: `Delete connection ${connection.name}?`,
+              description:
+                "Any ingestion node referencing it will fail until the connection is recreated with the same name.",
+              tone: "danger",
+              confirmLabel: "Delete connection",
+            }}
             onAction={() => del.mutateAsync(connection.name)}
             successMessage="Connection deleted"
             errorMessage="Could not delete connection"

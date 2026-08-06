@@ -22,6 +22,7 @@ import {
   IconAlertTriangle,
 } from "@tabler/icons-react";
 import { card, STAGE_COLOR, StageBadge, formatDate } from "./shared";
+import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 
 function PromoteModal({
   modelName,
@@ -246,17 +247,26 @@ function DeleteVersionButton({
   stage: string;
 }) {
   const del = useDeleteModelVersion();
-  const confirmMsg =
-    stage === "Production"
-      ? `'${modelName}' v${version} is in PRODUCTION. Delete anyway? This cannot be undone.`
-      : `Delete '${modelName}' v${version}? This cannot be undone.`;
+  const inProduction = stage === "Production";
+  // Deleting a serving version is the one action here that can take down
+  // something live, so it asks the user to type the version out. Everything
+  // else is a plain destructive confirm.
+  const confirmSpec = {
+    title: `Delete ${modelName} v${version}?`,
+    description: inProduction
+      ? `This version is currently in PRODUCTION. Anything serving it will start failing. This cannot be undone.`
+      : "This cannot be undone.",
+    tone: "danger" as const,
+    confirmLabel: "Delete version",
+    ...(inProduction ? { requireTyping: `v${version}` } : {}),
+  };
 
   return (
     <ActionButton
       variant="ghost"
       size="sm"
       leftIcon={<IconTrash size={13} />}
-      confirm={confirmMsg}
+      confirm={confirmSpec}
       onAction={() => del.mutateAsync({ name: modelName, version })}
       successMessage={`Deleted v${version}`}
       errorMessage="Could not delete this version"
@@ -264,6 +274,69 @@ function DeleteVersionButton({
       Delete
     </ActionButton>
   );
+}
+
+/** Column definitions for the per-model versions table. */
+function versionColumns(
+  modelName: string,
+  onPromote: (version: number) => void
+): DataTableColumn<ModelVersion>[] {
+  const stageOf = (v: ModelVersion) => v.metadata?.stage ?? "Staging";
+
+  return [
+    {
+      key: "version",
+      header: "Version",
+      sortable: true,
+      sortValue: (v) => Number(v.version),
+      mono: true,
+      cell: (v) => `v${v.version}`,
+    },
+    {
+      key: "stage",
+      header: "Stage",
+      sortable: true,
+      sortValue: stageOf,
+      cell: (v) => <StageBadge stage={stageOf(v)} />,
+    },
+    {
+      key: "created_at",
+      header: "Created",
+      sortable: true,
+      cell: (v) => formatDate(v.created_at),
+    },
+    {
+      key: "metrics",
+      header: "Metrics",
+      mono: true,
+      cell: (v) => {
+        const top = Object.entries(v.metadata?.metrics ?? {}).slice(0, 3);
+        return top.length
+          ? top.map(([k, val]) => `${k}: ${Number(val).toFixed(4)}`).join(" · ")
+          : "—";
+      },
+    },
+    {
+      key: "actions",
+      header: "",
+      headerLabel: "Version actions",
+      align: "right",
+      cell: (v) => (
+        <div className="mlops-row-actions">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onPromote(v.version)}
+            title={`Promote v${v.version}`}
+          >
+            <IconArrowUp size={13} />
+            Promote
+          </Button>
+          <DeleteVersionButton modelName={modelName} version={v.version} stage={stageOf(v)} />
+        </div>
+      ),
+    },
+  ];
 }
 
 function ModelCard({ model }: { model: ModelInfo }) {
@@ -307,73 +380,16 @@ function ModelCard({ model }: { model: ModelInfo }) {
         </div>
 
         {expanded && (
-          <div style={{ marginTop: 12 }}>
-            {isLoading ? (
-              <div style={{ fontSize: 13, color: colors.textMuted }}>Loading versions…</div>
-            ) : !versions?.length ? (
-              <div style={{ fontSize: 13, color: colors.textMuted }}>No versions found.</div>
-            ) : (
-              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-                <thead>
-                  <tr style={{ color: colors.textMuted }}>
-                    {["Version", "Stage", "Created", "Metrics", ""].map((h) => (
-                      <th key={h} style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>
-                        {h}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {versions.map((v: ModelVersion) => {
-                    const meta = v.metadata ?? {};
-                    const metrics = meta.metrics ?? {};
-                    const topMetrics = Object.entries(metrics).slice(0, 3);
-                    const stage = meta.stage ?? "Staging";
-                    return (
-                      <tr key={v.version} style={{ borderTop: `1px solid ${colors.border}` }}>
-                        <td
-                          style={{ padding: "6px 8px", color: colors.text, fontFamily: "var(--font-mono)" }}
-                        >
-                          v{v.version}
-                        </td>
-                        <td style={{ padding: "6px 8px" }}>
-                          <StageBadge stage={stage} />
-                        </td>
-                        <td style={{ padding: "6px 8px", color: colors.textMuted }}>
-                          {formatDate(v.created_at)}
-                        </td>
-                        <td
-                          style={{
-                            padding: "6px 8px",
-                            color: colors.textMuted,
-                            fontFamily: "var(--font-mono)",
-                            fontSize: 11,
-                          }}
-                        >
-                          {topMetrics.length
-                            ? topMetrics.map(([k, val]) => `${k}: ${Number(val).toFixed(4)}`).join(" · ")
-                            : "—"}
-                        </td>
-                        <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                          <div style={{ display: "flex", gap: 4, justifyContent: "flex-end" }}>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setPromoteTarget(v.version)}
-                              title={`Promote v${v.version}`}
-                            >
-                              <IconArrowUp size={13} />
-                              Promote
-                            </Button>
-                            <DeleteVersionButton modelName={model.name} version={v.version} stage={stage} />
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )}
+          <div style={{ marginTop: "var(--space-3)" }}>
+            <DataTable<ModelVersion>
+              density="compact"
+              columns={versionColumns(model.name, setPromoteTarget)}
+              rows={versions ?? []}
+              rowKey={(v) => String(v.version)}
+              loading={isLoading}
+              loadingRows={3}
+              empty={<span>No versions found.</span>}
+            />
           </div>
         )}
       </div>

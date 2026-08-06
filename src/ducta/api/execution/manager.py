@@ -412,7 +412,9 @@ class ExecutionManager:
         reuse_upstream: bool = False,
         rerun_all: bool = False,
     ) -> None:
-        await self._execution_queue.dequeue()
+        # Waits until *this* execution owns a slot, so ExecutionPriority decides
+        # the order rather than whichever task asyncio happened to start first.
+        await self._execution_queue.acquire_slot(execution_id)
 
         record = self._store.get(execution_id)
         # All writes to the shared `record` go through _execution_lock; cancel_execution

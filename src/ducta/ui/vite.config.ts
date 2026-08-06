@@ -6,8 +6,27 @@ import react from "@vitejs/plugin-react";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Where `npm run dev` forwards /api. Override with DUCTA_API_TARGET when the
+// backend runs somewhere else.
+const API_TARGET = process.env.DUCTA_API_TARGET ?? "http://127.0.0.1:8000";
+
 export default defineConfig({
   plugins: [react()],
+
+  // The README has always documented this ("Dev server (proxies /api to the
+  // backend)") but the config did not do it, so `npm run dev` served /api from
+  // Vite itself unless a developer set an absolute VITE_API_URL — which made
+  // dev cross-origin, the one reason the session needed a client-held token.
+  // Proxying makes dev same-origin, like the packaged UI that the API serves
+  // from ui/dist in production.
+  //
+  // `ws: true` is not optional here: the log stream and the web terminal are
+  // WebSockets, and without it they never reach the backend at all.
+  server: {
+    proxy: {
+      "/api": { target: API_TARGET, changeOrigin: true, ws: true },
+    },
+  },
 
   resolve: {
     alias: {

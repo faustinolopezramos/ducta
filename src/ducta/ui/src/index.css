@@ -1,3 +1,5 @@
+/* Typefaces first: ducta-theme.css names these families in --font-sans/--font-mono. */
+@import "./theme/fonts.css";
 @import "./theme/ducta-theme.css";
 @import "./theme/tokens.css";
 @import "./theme/layout.css";
@@ -7,6 +9,12 @@
 @import "./theme/pipeline-diagram.css";
 @import "./theme/pipeline-panels.css";
 @import "./theme/pipeline-overlays.css";
+/* These two were never imported, so the rules in them had simply never applied:
+   the pipeline error page rendered unstyled, and the pipeline view had no
+   responsive behaviour at all despite the media queries existing. Their classes
+   are used by live components — verified against the TSX before wiring. */
+@import "./theme/pipeline-error.css";
+@import "./theme/pipeline-responsive.css";
 
 #root {
   min-height: 100vh;

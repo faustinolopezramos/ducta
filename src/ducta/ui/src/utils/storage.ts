@@ -6,7 +6,14 @@
 
 import { getVersionedItem, setVersionedItem, clearVersionedItem, STORAGE_VERSION } from "./storageMigrations";
 
-const STORAGE_KEYS = {
+/**
+ * Every localStorage key the UI owns, in one place.
+ *
+ * `AUTH` is exported because the auth store's zustand `persist` config needs
+ * the same string; the two used to declare it independently with nothing
+ * keeping them in step.
+ */
+export const STORAGE_KEYS = {
   SOURCE: 'ducta:selected-source',
   AUTH: 'ducta-auth',
   RECENT_SOURCES: 'ducta:recent-sources',

@@ -91,10 +91,16 @@ def register_middleware(app: FastAPI) -> None:
         # Restrict scripts/styles to same-origin (the SPA is served from the API
         # itself). 'unsafe-inline' for styles keeps inline style attributes working;
         # scripts stay locked down to mitigate XSS-driven token theft.
+        # `font-src 'self'` is required, not cosmetic: the UI serves its own
+        # typefaces from /fonts. Without the directive they fall through to
+        # default-src — which was fine while the fonts came from Google's CDN
+        # only because that link was *also* blocked, so nobody noticed the app
+        # had silently been rendering in the system stack all along.
         _csp = (
             "default-src 'self'; "
             "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self'; "
             "img-src 'self' data: blob:; "
             "connect-src 'self' ws: wss:; "
             "frame-ancestors 'none'"

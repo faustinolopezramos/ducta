@@ -1,0 +1,58 @@
+/* Execution-history cell presentation. These were inline style objects repeated
+   on every <td>; as classes they are written against the token scales. */
+
+.exec-pipeline {
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+
+.exec-node,
+.exec-sweep,
+.exec-dry {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin-left: var(--space-1);
+}
+
+.exec-node { color: var(--text-muted); }
+
+.exec-sweep {
+  color: var(--primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
+
+.exec-dry { color: var(--warning-strong); }
+
+.exec-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.exec-action {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.exec-action:hover:not(:disabled) { border-color: var(--border-hover); }
+
+.exec-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.exec-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.exec-action--danger { color: var(--danger); }
+.exec-action--accent { color: var(--primary); }

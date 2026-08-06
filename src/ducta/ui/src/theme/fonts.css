@@ -1,0 +1,48 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * DUCTA — SELF-HOSTED TYPEFACES
+ *
+ * These used to come from the Google Fonts CDN via a <link> in index.html, which
+ * meant they never loaded in production at all: the CSP is
+ * `default-src 'self'; style-src 'self' 'unsafe-inline'` with no `font-src`, so
+ * the stylesheet was blocked by style-src and the .woff2 files would have been
+ * blocked by default-src. Development runs a wide-open CSP, so the typeface was
+ * correct exactly where it did not matter and silently fell back to the system
+ * stack for every real user.
+ *
+ * Serving them ourselves also removes two things an enterprise buyer checks: a
+ * hard dependency on an external CDN (Ducta is deployed on-prem, often on
+ * networks that cannot reach fonts.googleapis.com) and the transfer of client IP
+ * addresses to Google, which EU case law has treated as a GDPR violation.
+ *
+ * BOTH FILES ARE VARIABLE FONTS. The vendored ds-bundle shipped seven files
+ * named Inter-400…700 / JetBrainsMono-400…700, but every one of them is
+ * byte-identical to its siblings (verified by checksum) — one variable font per
+ * family, copied under several names, with an accompanying stylesheet declaring
+ * each copy at a fixed weight. Pinning a variable font to a single instance that
+ * way makes 600 and 700 render identically, so it is declared here the correct
+ * way instead: one face per family across a weight *range*. That is also why
+ * this costs 80 kB rather than the ~290 kB the duplicated set would have.
+ *
+ * Imported FIRST from index.css — before ducta-theme.css, which is where
+ * --font-sans and --font-mono name these families.
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  /* Variable axis. The app uses 400–700; the range is declared wider so a
+     future weight needs no change here. */
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/Inter-Variable.woff2') format('woff2-variations'),
+       url('/fonts/Inter-Variable.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-Variable.woff2') format('woff2-variations'),
+       url('/fonts/JetBrainsMono-Variable.woff2') format('woff2');
+}

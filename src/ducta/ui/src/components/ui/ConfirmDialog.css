@@ -1,0 +1,55 @@
+/* Confirmation dialog — written against the spacing and type scales in
+   theme/tokens.css rather than ad-hoc pixels, which is the convention new UI
+   should follow. */
+
+.confirm-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.confirm-dialog__description {
+  margin: 0;
+  font-size: var(--text-base);
+  line-height: var(--leading-relaxed);
+  color: var(--text-muted);
+}
+
+.confirm-dialog__typing {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.confirm-dialog__typing code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--primary-light);
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+}
+
+.confirm-dialog__input {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.confirm-dialog__input:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+
+.confirm-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}

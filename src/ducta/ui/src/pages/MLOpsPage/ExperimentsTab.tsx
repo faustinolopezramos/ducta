@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { colors } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { ActionButton } from "../../components/ui/ActionButton";
+import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
 import {
   useMlopsExperiments,
@@ -65,7 +66,12 @@ function RunActionsCell({ experimentId, run }: { experimentId: string; run: Expe
           variant="ghost"
           size="sm"
           leftIcon={<IconAlertTriangle size={13} />}
-          confirm={`Mark run '${run.name ?? run.run_id}' as failed? Use this only if it's stuck (crashed process).`}
+          confirm={{
+            title: `Mark ${run.name ?? run.run_id} as failed?`,
+            description:
+              "Use this only when the run is stuck because its process crashed. It edits the recorded outcome; it does not stop anything.",
+            confirmLabel: "Mark failed",
+          }}
           onAction={() =>
             closeRun.mutateAsync({ experimentId, runId: run.run_id, status: "FAILED" })
           }
@@ -79,7 +85,12 @@ function RunActionsCell({ experimentId, run }: { experimentId: string; run: Expe
         variant="ghost"
         size="sm"
         leftIcon={<IconTrash size={13} />}
-        confirm={`Delete run '${run.name ?? run.run_id}'? This cannot be undone.`}
+        confirm={{
+          title: `Delete run ${run.name ?? run.run_id}?`,
+          description: "Its metrics, parameters and artifacts go with it. This cannot be undone.",
+          tone: "danger",
+          confirmLabel: "Delete run",
+        }}
         onAction={() => deleteRun.mutateAsync({ experimentId, runId: run.run_id })}
         successMessage="Run deleted"
         errorMessage="Could not delete run"
@@ -95,6 +106,102 @@ function runMetricsPreview(run: ExperimentRun): string {
   const entries = Object.entries(lastMetricValues(run)).slice(0, 2);
   if (entries.length === 0) return "—";
   return entries.map(([k, v]) => `${k}: ${v.toFixed(4)}`).join(" · ");
+}
+
+/**
+ * Column definitions for the per-experiment runs table.
+ *
+ * Compare-selection stays a plain column rather than DataTable's `selection`
+ * prop: that one models a set of row ids, and this screen needs the whole run
+ * object to hand to the compare modal.
+ */
+function runColumns({
+  experimentId,
+  compareSelection,
+  onToggleCompare,
+  onOpenRun,
+}: {
+  experimentId: string;
+  compareSelection: Map<string, ExperimentRun>;
+  onToggleCompare: (run: ExperimentRun) => void;
+  onOpenRun: (run: ExperimentRun) => void;
+}): DataTableColumn<ExperimentRun>[] {
+  return [
+    {
+      key: "compare",
+      header: "",
+      headerLabel: "Select for comparison",
+      width: "32px",
+      cell: (run) => (
+        <input
+          type="checkbox"
+          checked={compareSelection.has(run.run_id)}
+          onChange={() => onToggleCompare(run)}
+          aria-label={`Select run ${run.name ?? run.run_id} for comparison`}
+          title="Select for comparison"
+          style={{ cursor: "pointer" }}
+        />
+      ),
+    },
+    {
+      key: "name",
+      header: "Run",
+      sortable: true,
+      sortValue: (run) => run.name ?? String(run.run_id ?? ""),
+      cell: (run) => (
+        <button
+          onClick={() => onOpenRun(run)}
+          title="Open run details"
+          className="mlops-run-link"
+        >
+          {run.name ?? String(run.run_id ?? "").slice(0, 8)}
+        </button>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortable: true,
+      cell: (run) => <RunStatusLabel status={run.status} />,
+    },
+    {
+      key: "created_at",
+      header: "Created",
+      sortable: true,
+      cell: (run) => formatDate(run.created_at),
+    },
+    {
+      key: "duration_seconds",
+      header: "Duration",
+      sortable: true,
+      align: "right",
+      mono: true,
+      cell: (run) =>
+        run.duration_seconds != null ? `${Number(run.duration_seconds).toFixed(1)}s` : "—",
+    },
+    {
+      key: "metrics",
+      header: "Metrics",
+      mono: true,
+      width: "200px",
+      cell: (run) => <span className="mlops-metrics-preview">{runMetricsPreview(run)}</span>,
+    },
+    {
+      key: "actions",
+      header: "",
+      headerLabel: "Run actions",
+      align: "right",
+      cell: (run) => <RunActionsCell experimentId={experimentId} run={run} />,
+    },
+  ];
+}
+
+/** Status word, coloured by outcome. Colour is never the only signal — the
+ *  word itself carries the meaning (WCAG 1.4.1). */
+function RunStatusLabel({ status }: Readonly<{ status?: string }>) {
+  const tone =
+    status === "COMPLETED" ? "success" : status === "FAILED" ? "danger" : "warning";
+  return <span className={`mlops-run-status mlops-run-status--${tone}`}>{status}</span>;
 }
 
 function ExperimentRow({
@@ -138,98 +245,21 @@ function ExperimentRow({
       </div>
 
       {expanded && (
-        <div style={{ marginTop: 12 }}>
-          {isLoading ? (
-            <div style={{ color: colors.textMuted, fontSize: 13 }}>Loading runs…</div>
-          ) : !detail?.runs?.length ? (
-            <div style={{ color: colors.textMuted, fontSize: 13 }}>No runs found.</div>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
-              <thead>
-                <tr style={{ color: colors.textMuted }}>
-                  {["", "Run", "Status", "Created", "Duration", "Metrics", ""].map((h, i) => (
-                    <th key={i} style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {detail.runs.map((run) => (
-                  <tr key={run.run_id} style={{ borderTop: `1px solid ${colors.border}` }}>
-                    <td style={{ padding: "6px 4px 6px 8px", width: 24 }}>
-                      <input
-                        type="checkbox"
-                        checked={compareSelection.has(run.run_id)}
-                        onChange={() => onToggleCompare(run)}
-                        aria-label={`Select run ${run.name ?? run.run_id} for comparison`}
-                        title="Select for comparison"
-                        style={{ cursor: "pointer" }}
-                      />
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      <button
-                        onClick={() => onOpenRun(run)}
-                        title="Open run details"
-                        style={{
-                          background: "none",
-                          border: "none",
-                          padding: 0,
-                          cursor: "pointer",
-                          color: colors.accent,
-                          fontSize: 12,
-                          fontFamily: "var(--font-mono)",
-                        }}
-                      >
-                        {run.name ?? String(run.run_id ?? "").slice(0, 8)}
-                      </button>
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      <span
-                        style={{
-                          color:
-                            run.status === "COMPLETED"
-                              ? "var(--success)"
-                              : run.status === "FAILED"
-                                ? "var(--danger)"
-                                : "var(--warning)",
-                          fontWeight: 600,
-                          fontSize: 11,
-                        }}
-                      >
-                        {run.status}
-                      </span>
-                    </td>
-                    <td style={{ padding: "6px 8px", color: colors.textMuted }}>
-                      {formatDate(run.created_at)}
-                    </td>
-                    <td style={{ padding: "6px 8px", color: colors.textMuted }}>
-                      {run.duration_seconds != null
-                        ? `${Number(run.duration_seconds).toFixed(1)}s`
-                        : "—"}
-                    </td>
-                    <td
-                      style={{
-                        padding: "6px 8px",
-                        color: colors.textMuted,
-                        fontFamily: "var(--font-mono)",
-                        fontSize: 11,
-                        whiteSpace: "nowrap",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        maxWidth: 200,
-                      }}
-                    >
-                      {runMetricsPreview(run)}
-                    </td>
-                    <td style={{ padding: "6px 8px" }}>
-                      <RunActionsCell experimentId={exp.experiment_id} run={run} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+        <div style={{ marginTop: "var(--space-3)" }}>
+          <DataTable<ExperimentRun>
+            density="compact"
+            columns={runColumns({
+              experimentId: exp.experiment_id,
+              compareSelection,
+              onToggleCompare,
+              onOpenRun,
+            })}
+            rows={detail?.runs ?? []}
+            rowKey={(run) => String(run.run_id)}
+            loading={isLoading}
+            loadingRows={3}
+            empty={<span>No runs found.</span>}
+          />
         </div>
       )}
     </div>

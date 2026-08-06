@@ -46,9 +46,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   other method in that class escapes its arguments; this one formatted `hours`
   straight into `RETAIN {hours} HOURS`. Now coerced to `int`, raising
   `ConfigurationError` otherwise.
+- **A web page could open the embedded terminal.** `CORSMiddleware` only sees
+  the ASGI `http` scope, and the same-origin policy does not apply to WebSockets
+  at all — a browser will open one cross-origin and no CORS header stops it. So
+  neither `/api/ws/terminal` nor `/api/ws/logs/{id}` checked `Origin`. With
+  `TERMINAL_ENABLED=true` and auth disabled (the default), the terminal's
+  remaining defence was a loopback check on the TCP peer — and a tab in the
+  user's own browser *is* a loopback peer, so any site they visited could
+  `new WebSocket(...)` its way to a shell. This is the same reasoning already
+  recorded above for CORS ("binding to loopback is no defence here: the browser
+  is on the loopback host"); it had not been carried across to this channel.
+  Both handshakes now validate `Origin` before `accept()`, accepting the CORS
+  allow-list, the app's own origin (the packaged UI is same-origin and
+  deliberately absent from `CORS_ORIGINS`), and requests with no `Origin` at all
+  (non-browser clients, which are not the threat).
+- **An empty `GIT_CLONE_ALLOWED_HOSTS` meant "clone from anywhere".** The clone
+  target comes from a caller-supplied `?source=`, so a networked deployment
+  would fetch whatever internal URL it was pointed at, with the server's own
+  network position (SSRF). The field's own description warned about this while
+  shipping the permissive value. Left unset, it now defaults to the public
+  forges (`github.com`, `gitlab.com`, `dev.azure.com`, `bitbucket.org`) outside
+  development; development keeps the open behaviour, where cloning from a LAN
+  mirror or a local bare repo is normal and the API binds to loopback.
 
 ### Changed
 
+- **The three table screens share one implementation.** Execution history,
+  experiments and the model registry each had a hand-rolled `<table>` with its
+  own inline styles: they disagreed on header weight, on padding, and on whether
+  the header even had a rule beneath it, and none could sort, keep the header in
+  view while scrolling, or show a loading state inside the table. A new
+  `DataTable` takes declared columns and owns sorting, selection, the scroll
+  container and the empty/loading/error states — so every column is now sortable
+  and the header stays put, which is new behaviour on all three.
+- **Destructive actions ask in the app's own dialog.** `window.confirm()`
+  prefixes the host ("127.0.0.1:8000 says…"), cannot be styled, gives a delete
+  and a rename the same weight, and after a few uses the browser offers to
+  suppress it — at which point the destructive action runs unconfirmed. The new
+  `ConfirmDialog` builds on the existing `Modal` (focus trap, Escape, focus
+  restore) and adds a danger tone plus typed confirmation, now required to
+  delete a model version that is serving production. The unsaved-changes guards
+  in the code editor moved across too.
+- **Loading shows the shape of what is coming.** The execution history replaced
+  a centred "Loading…" that swapped the whole view with skeleton rows inside the
+  table, so the filter bar stays put and nothing jumps when data lands.
+- **Execution priority now decides execution order.** `ExecutionPriority`
+  ranked the queue's heap, but `_run_execution` awaited `dequeue()` and threw
+  the result away, then ran its own execution — so the id that entered the
+  "active" set was whichever the heap surfaced, not the one that was running.
+  The concurrency cap held by coincidence; the ordering did not exist, and
+  `GET /executions/queue` reported active ids that were not the running ones.
+  `dequeue()` is replaced by `acquire_slot(execution_id)`, which returns only
+  once *that* execution owns a slot. A `prod` run now genuinely preempts a
+  queued `dev` one, and the active set is exactly what is running.
+- **The UI no longer keeps the access token in `localStorage`.** The backend
+  issues it as an `httpOnly` cookie precisely so page scripts cannot read it,
+  and the UI persisted a second copy that any script could. The token now lives
+  in memory for the tab's lifetime; after a reload `ProtectedRoute` exchanges
+  the cookie for a fresh one via `/auth/refresh` before deciding whether to
+  redirect. The persisted `user` is unchanged, so nothing flashes. There is no
+  known XSS vector in the UI today — this removes the value that one would
+  otherwise be worth.
 - **The CLI now exits with a meaningful status code.** Previously every
   invocation exited 0 (see *Fixed*), so this is a new observable contract rather
   than an adjustment to an old one. Scripts that only checked for a non-zero
@@ -111,6 +169,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DataTable`, `ConfirmDialog` and `Skeleton`** in `components/ui/`, with
+  Storybook stories and 31 tests. They are the first components written entirely
+  against the spacing and type scales in `theme/tokens.css` rather than ad-hoc
+  pixels — the scales existed but the screens used 271 raw px values against 115
+  token references, which is why no two tables matched.
+- **Real tests for the API client, the execution queue, and the WebSocket
+  handshakes** — three areas with no working coverage. `client.test.ts` had 20
+  tests and exercised `client.ts` in one of them; the other 19 built a literal
+  or reimplemented the interceptor inline and asserted on their own
+  reimplementation (one carried the comment *"The actual implementation is in
+  client.ts lines 31-47"*). They are replaced by ten that drive the real axios
+  instance through a swapped adapter, so the suite is seven tests smaller and
+  covers considerably more. `ExecutionQueue` had no tests at all, which is how
+  its priority ordering came to do nothing.
 - **Tests for five paths that had none**, each of which was hiding one of the
   defects above: `UnifiedCLI.run`'s exit codes, `PipelineExecutor.run_pipeline`
   driven end to end for a batch pipeline, `_execute_unified_hybrid_pipeline`,
@@ -128,6 +200,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The UI never actually loaded the typeface it was designed in.** Inter and
+  JetBrains Mono came from the Google Fonts CDN via a `<link>` in `index.html`,
+  and the production CSP is `default-src 'self'; style-src 'self'` with no
+  `font-src` — so the stylesheet was blocked, the font files would have been
+  too, and every real user saw the system stack. Development runs a wide-open
+  CSP, so it looked right exactly where it did not matter. Both faces are now
+  served from `/fonts`, which also removes a hard dependency on an external CDN
+  (Ducta is deployed on-prem, often on networks that cannot reach it) and the
+  transfer of client IPs to Google. They are variable fonts, so this is 80 kB
+  for the whole weight range: the vendored set shipped seven files whose
+  contents were byte-identical per family, declared at fixed weights, which
+  would have rendered 600 and 700 identically.
+- **Two stylesheets were never imported, so their rules had simply never
+  applied.** The pipeline error page rendered unstyled and the pipeline view had
+  no responsive behaviour at all, despite both files existing with the right
+  rules in them. The MLOps tabs' shared stylesheet was in the same state. Two
+  further theme files contained only orphaned section comments and were removed.
+- **A 401 whose refresh produced no usable token resolved with `undefined`.**
+  `getToken()` discards a token within 30s of expiry, so `/auth/refresh` could
+  succeed and still leave nothing to retry with — and the axios interceptor then
+  fell off the end of its 401 handler and *resolved* rather than rejecting. The
+  caller's `response.data` threw a `TypeError` somewhere unrelated to the actual
+  cause. Because that path always returned, the interceptor's own "401 with no
+  valid refresh → logout" branch below it was unreachable except for requests
+  already marked `skipRetry`. The handler now always returns a response or
+  throws, and the logout/redirect it shares with the terminal case runs.
+- **`npm run dev` did not proxy `/api`.** The README has documented "Dev server
+  (proxies /api to the backend)" all along, but `vite.config.ts` had no `server`
+  block, so requests went to Vite itself unless a developer set an absolute
+  `VITE_API_URL` — which then made dev cross-origin. Added, with `ws: true` so
+  the log-stream and terminal WebSockets reach the backend too. Dev is now
+  same-origin, like the packaged UI the API serves from `ui/dist`.
 - **Every `ducta` command exited 0, including failures.** The console script is
   declared as `ducta.console.wrapper:main` and invoked as `sys.exit(main())`,
   but `wrapper.main()` called the CLI and discarded what it returned — so the

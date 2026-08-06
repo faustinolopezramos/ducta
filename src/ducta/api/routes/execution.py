@@ -717,6 +717,13 @@ async def stream_logs_ws(
     exec_manager: ExecutionManager = Depends(_get_exec_manager_ws),
     settings: Settings = Depends(get_settings),
 ) -> None:
+    # CORS does not apply to WebSocket handshakes, so this is the only thing
+    # standing between a page on another site and this execution's log stream.
+    from ducta.api.middleware.origin import websocket_origin_allowed
+
+    if not await websocket_origin_allowed(websocket, settings):
+        return
+
     if settings.rate_limit_enabled:
         from ducta.api.middleware.rate_limit import (
             get_websocket_client_key,

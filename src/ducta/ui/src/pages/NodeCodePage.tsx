@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation, useBlocker } from "react-router-do
 import { IconArrowLeft, IconCode, IconLoader2 } from "@tabler/icons-react";
 import { colors, styles } from "../theme/tokens";
 import { Button } from "../components/ui/Button";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { useNode, useNodeCode, useServerProjects, useServerProjectPipelines, useWorkspaceFileContent, useExecutionStatus } from "../api/queries";
 import { useWriteWorkspaceFile, useRunNode, apiErrorMessage } from "../api/mutations";
 const CodeEditor = lazy(() => import("../components/CodeEditor").then(m => ({ default: m.CodeEditor })));
@@ -296,17 +297,14 @@ export function NodeCodePage() {
   const [isCodeDirty, setIsCodeDirty] = useState(false);
   const returnTo = location.state?.returnTo ?? "/workspace/pipelines";
 
-  // Block in-app navigation when there are unsaved changes
+  // Block in-app navigation when there are unsaved changes. `useBlocker` is
+  // already an async state machine, so it drives a real dialog directly — no
+  // effect, and no native confirm() that the browser may later suppress.
   const blocker = useBlocker(isCodeDirty);
-  useEffect(() => {
-    if (blocker.state === "blocked") {
-      if (window.confirm("You have unsaved changes. Leave without saving?")) {
-        blocker.proceed();
-      } else {
-        blocker.reset();
-      }
-    }
-  }, [blocker]);
+
+  // Switching files inside the editor is guarded the same way; the pending path
+  // waits here until the user answers.
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
 
   // Warn on browser close/refresh
   useEffect(() => {
@@ -325,7 +323,8 @@ export function NodeCodePage() {
 
   const handleSelectFile = useCallback((path: string) => {
     if (path === selectedPath) return;
-    if (isCodeDirty && !window.confirm("You have unsaved changes. Switch files anyway?")) {
+    if (isCodeDirty) {
+      setPendingPath(path);
       return;
     }
     setSelectedPath(path);
@@ -458,6 +457,29 @@ export function NodeCodePage() {
         {/* Execution bar — spans both columns */}
         <ExecutionBar nodeName={nodeName} />
       </div>
+
+      <ConfirmDialog
+        open={blocker.state === "blocked"}
+        title="Leave without saving?"
+        description="This file has unsaved changes. They will be lost."
+        confirmLabel="Discard changes"
+        tone="danger"
+        onConfirm={() => blocker.proceed?.()}
+        onCancel={() => blocker.reset?.()}
+      />
+
+      <ConfirmDialog
+        open={pendingPath !== null}
+        title="Switch files without saving?"
+        description="The current file has unsaved changes. They will be lost."
+        confirmLabel="Discard and switch"
+        tone="danger"
+        onConfirm={() => {
+          if (pendingPath) setSelectedPath(pendingPath);
+          setPendingPath(null);
+        }}
+        onCancel={() => setPendingPath(null)}
+      />
     </div>
   );
 }

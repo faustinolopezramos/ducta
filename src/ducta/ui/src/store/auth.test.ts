@@ -36,7 +36,11 @@ describe('useAuthStore (Auth Zustand Store)', () => {
       expect(result.current.user).toEqual(testUser);
     });
 
-    it('should persist token to localStorage', () => {
+    it('persists the user but not the token', () => {
+      // The token deliberately stays in memory: the backend issues it as an
+      // httpOnly cookie so page scripts cannot read it, and a persisted copy
+      // would hand it straight back to them. `restoreSession()` re-obtains it
+      // from the cookie after a reload.
       const { result } = renderHook(() => useAuthStore());
 
       act(() => {
@@ -46,11 +50,11 @@ describe('useAuthStore (Auth Zustand Store)', () => {
         });
       });
 
-      // Wait for localStorage write (Zustand persist middleware)
       const stored = localStorage.getItem('ducta-auth');
       expect(stored).toBeTruthy();
       const parsed = JSON.parse(stored!);
-      expect(parsed.state.token).toBe('token123');
+      expect(parsed.state.token).toBeUndefined();
+      expect(parsed.state.user).toEqual({ id: 'user1' });
     });
   });
 
@@ -75,7 +79,7 @@ describe('useAuthStore (Auth Zustand Store)', () => {
       expect(result.current.user).toBeNull();
     });
 
-    it('should clear localStorage on logout', () => {
+    it('should clear the persisted user on logout', () => {
       const { result } = renderHook(() => useAuthStore());
 
       act(() => {
@@ -91,7 +95,8 @@ describe('useAuthStore (Auth Zustand Store)', () => {
 
       const stored = localStorage.getItem('ducta-auth');
       const parsed = stored ? JSON.parse(stored) : null;
-      expect(parsed?.state.token).toBeNull();
+      expect(parsed?.state.user).toBeNull();
+      expect(result.current.token).toBeNull();
     });
   });
 
@@ -201,5 +206,43 @@ describe('useAuthStore (Auth Zustand Store)', () => {
       const parsed = JSON.parse(stored!);
       expect(parsed.version).toBe(1);
     });
+  });
+});
+
+describe('token persistence', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAuthStore.setState({ token: null, user: null });
+  });
+
+  it('never writes the access token to localStorage', () => {
+    // The backend issues the token as an httpOnly cookie precisely so page
+    // scripts cannot read it. Persisting a second copy here handed it back to
+    // any script on the page and undid that.
+    useAuthStore.getState().login({
+      token: 'super-secret-jwt',
+      user: { id: 'u1', username: 'ana' },
+    });
+
+    const dumped = JSON.stringify(localStorage);
+    expect(dumped).not.toContain('super-secret-jwt');
+  });
+
+  it('still persists the user so the UI can render before the refresh lands', () => {
+    useAuthStore.getState().login({
+      token: 'super-secret-jwt',
+      user: { id: 'u1', username: 'ana' },
+    });
+
+    expect(JSON.stringify(localStorage)).toContain('ana');
+  });
+
+  it('keeps the token available in memory for the session', () => {
+    useAuthStore.getState().login({
+      token: 'super-secret-jwt',
+      user: { id: 'u1' },
+    });
+
+    expect(useAuthStore.getState().token).toBe('super-secret-jwt');
   });
 });

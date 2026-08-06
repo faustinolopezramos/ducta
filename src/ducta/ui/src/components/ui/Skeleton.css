@@ -1,0 +1,49 @@
+/* Loading placeholders. Written against the token scales in theme/tokens.css. */
+
+.tui-skeleton {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--text) 7%, transparent) 25%,
+    color-mix(in srgb, var(--text) 12%, transparent) 37%,
+    color-mix(in srgb, var(--text) 7%, transparent) 63%
+  );
+  background-size: 400% 100%;
+  animation: tui-skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.tui-skeleton--text {
+  height: 1em;
+  border-radius: var(--radius-sm);
+  /* Sit on the text baseline rather than the line box, so a skeleton swapped
+     for real text does not shift the row. */
+  vertical-align: middle;
+}
+
+.tui-skeleton--block {
+  height: 100%;
+  border-radius: var(--radius-md);
+}
+
+.tui-skeleton--circle {
+  border-radius: var(--radius-full);
+  aspect-ratio: 1;
+}
+
+.tui-skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+@keyframes tui-skeleton-shimmer {
+  0% { background-position: 100% 50%; }
+  100% { background-position: 0 50%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tui-skeleton {
+    animation: none;
+    background: color-mix(in srgb, var(--text) 9%, transparent);
+  }
+}

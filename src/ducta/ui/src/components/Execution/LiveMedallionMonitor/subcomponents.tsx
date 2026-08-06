@@ -207,7 +207,7 @@ export const NodeCard = memo(function NodeCard({
   );
 });
 
-export const DataTable = memo(function DataTable({ node, nodeData }: { node: string; nodeData: any[] }) {
+export const RecordPreviewTable = memo(function RecordPreviewTable({ node, nodeData }: { node: string; nodeData: any[] }) {
   const rows = nodeData ?? [];
   const { icon, color } = useMemo(() => layerMeta(node), [node]);
 

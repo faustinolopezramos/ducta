@@ -12,7 +12,7 @@ import {
   pulseKeyframes,
   PulsingDot,
   NodeCard,
-  DataTable,
+  RecordPreviewTable,
 } from "./subcomponents";
 import { useStreamingMonitor } from "./useStreamingMonitor";
 
@@ -359,7 +359,7 @@ export function LiveMedallionMonitor({ executionId, onCancel, executionStatus }:
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
               {dataNodes.map((node) => (
-                <DataTable key={node} node={node} nodeData={data[node] as any[]} />
+                <RecordPreviewTable key={node} node={node} nodeData={data[node] as any[]} />
               ))}
             </div>
           )}

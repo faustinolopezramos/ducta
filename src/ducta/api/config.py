@@ -21,8 +21,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import List, Optional
+from typing import ClassVar, List, Optional
 
+from loguru import logger  # type: ignore
 from pydantic import Field, model_validator  # type: ignore
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
 
@@ -190,9 +191,10 @@ class Settings(BaseSettings):
         default_factory=list,
         description=(
             "Allow-list of hostnames permitted as Git clone sources (e.g. "
-            "['github.com', 'dev.azure.com']). Empty list = allow any host "
-            "(current default). Set this in any networked deployment to prevent "
-            "callers from making the server clone arbitrary internal URLs (SSRF)."
+            "['github.com', 'dev.azure.com']). Left empty, it defaults to the "
+            "well-known public forges outside development, and to 'any host' in "
+            "development — see `_default_git_clone_hosts`. Set it explicitly in "
+            "any networked deployment that clones from somewhere else."
         ),
     )
 
@@ -289,6 +291,41 @@ class Settings(BaseSettings):
                     "RATE_LIMIT_ENABLED=false explicitly to opt out.",
                     stacklevel=2,
                 )
+        return self
+
+    #: Forges assumed safe when no allow-list is configured outside development.
+    DEFAULT_GIT_CLONE_HOSTS: ClassVar[List[str]] = [
+        "github.com",
+        "www.github.com",
+        "gitlab.com",
+        "dev.azure.com",
+        "ssh.dev.azure.com",
+        "bitbucket.org",
+    ]
+
+    @model_validator(mode="after")
+    def _default_git_clone_hosts(self) -> "Settings":
+        """Close the clone allow-list by default outside development.
+
+        An empty list meant "any host", and the clone target comes straight from
+        a caller-supplied `?source=` — so a networked deployment would clone
+        whatever internal URL it was pointed at (SSRF), with the server's own
+        network position. The field documented that risk but shipped the
+        permissive value.
+
+        Development keeps the open behaviour: cloning from a LAN mirror or a
+        local bare repo is normal there, and the API binds to loopback.
+        """
+        if self.git_clone_allowed_hosts or self.is_development():
+            return self
+
+        self.git_clone_allowed_hosts = list(self.DEFAULT_GIT_CLONE_HOSTS)
+        logger.info(
+            "GIT_CLONE_ALLOWED_HOSTS is unset in environment={env}; defaulting to "
+            "{hosts}. Set it explicitly to clone from anywhere else.",
+            env=self.environment,
+            hosts=", ".join(self.DEFAULT_GIT_CLONE_HOSTS),
+        )
         return self
 
     def is_production(self) -> bool:

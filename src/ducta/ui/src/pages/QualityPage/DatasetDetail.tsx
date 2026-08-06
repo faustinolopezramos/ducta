@@ -93,7 +93,12 @@ function RunHistoryRow({
           variant="ghost"
           size="sm"
           leftIcon={<IconTrash size={13} />}
-          confirm={`Delete report '${runId}'?`}
+          confirm={{
+            title: `Delete report ${runId}?`,
+            description: "The quality results for this run are removed from history.",
+            tone: "danger",
+            confirmLabel: "Delete report",
+          }}
           onAction={async () => {
             await client.delete(
               `/quality/reports/${encodeURIComponent(dataset)}/${encodeURIComponent(runId)}`

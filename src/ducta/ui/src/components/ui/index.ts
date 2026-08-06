@@ -18,3 +18,6 @@ export * from "./PageHeader";
 export * from "./EmptyState";
 export * from "./SlidePanel";
 export * from "./ActionButton";
+export * from "./ConfirmDialog";
+export * from "./DataTable";
+export * from "./Skeleton";
