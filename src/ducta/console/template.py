@@ -19,7 +19,6 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
-import re
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -27,6 +26,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta.console.core import VALID_NAME_RE as _VALID_NAME_RE
 from ducta.console.core import ConfigFormat, DuctaError, ExitCode
 
 try:
@@ -47,8 +47,8 @@ _TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
 # `--sandbox-developers` entries become `config/sandbox_<dev>` directory
 # names — both were used unvalidated, so e.g. `--project-name ../../etc` or
 # `--sandbox-developers ../../tmp/evil` escaped the intended output directory
-# via mkdir(parents=True). Restrict both to a safe identifier charset.
-_VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# via mkdir(parents=True). Restrict both to a safe identifier charset
+# (shared with certify_cmds.py's --run-id validation — see console/core.py).
 
 
 class TemplateType(Enum):

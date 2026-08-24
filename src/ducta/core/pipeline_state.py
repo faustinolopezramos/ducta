@@ -595,15 +595,25 @@ class UnifiedPipelineState:
     def cleanup(self) -> None:
         """Clean up all resources and stop active streaming queries"""
         with self._lock:
-            for node_name, query in self._streaming_queries.items():
-                self._stop_query(node_name, query)
-
-            for node in self._nodes.values():
-                for res_type, resource in node.resources:
-                    self._release_resource(node, res_type, resource)
-
+            queries_to_stop = list(self._streaming_queries.items())
+            resources_to_release = [
+                (node, res_type, resource)
+                for node in self._nodes.values()
+                for res_type, resource in node.resources
+            ]
             self._reset_state()
             logger.debug("Pipeline state has been reset")
+
+        # Stopping queries can block (e.g. Spark waits for the current
+        # micro-batch) and unpersist()/close() can be slow I/O — done outside
+        # the lock, same pattern as stop_dependent_streaming_nodes, so
+        # another thread touching pipeline state isn't blocked for however
+        # long these take.
+        for node_name, query in queries_to_stop:
+            self._stop_query(node_name, query)
+
+        for node, res_type, resource in resources_to_release:
+            self._release_resource(node, res_type, resource)
 
     def _reset_state(self):
         """Reset all state containers."""

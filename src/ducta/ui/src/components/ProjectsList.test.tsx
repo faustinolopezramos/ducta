@@ -34,10 +34,11 @@ describe("ProjectsList deletion", () => {
     const deleteButton = screen.getAllByRole("button", { name: "Delete project" }).at(-1)!;
     expect(deleteButton).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "analytics" } });
+    const typingField = screen.getByLabelText(/type analytics to confirm/i);
+    fireEvent.change(typingField, { target: { value: "analytics" } });
     expect(deleteButton).toBeDisabled();
 
-    fireEvent.change(screen.getByLabelText("Project name"), { target: { value: "Analytics" } });
+    fireEvent.change(typingField, { target: { value: "Analytics" } });
     expect(deleteButton).toBeEnabled();
 
     fireEvent.click(deleteButton);

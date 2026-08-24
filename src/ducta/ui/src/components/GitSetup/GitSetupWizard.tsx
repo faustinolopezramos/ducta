@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../ui";
+import { Field } from "../ui/Field";
+import "../ui/Input.css"; // .input-field/.input-error, reused on the bare <input> below
 import { usePlatformInfo, useGitConfig } from "../../api/queries";
 import { useSetGitConfig } from "../../api/mutations";
 import { useGitConfigStore } from "../../store/gitConfig";
@@ -22,66 +24,6 @@ import { ICONS } from "../icons";
 // ─────────────────────────────────────────────
 
 const STEP_COUNT = 2; // Steps 1–2 (step 3 is the success screen)
-
-// ── Shared field component ────────────────────────────────────────────────────
-
-interface FieldProps {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  type?: string;
-  placeholder: string;
-  error?: string;
-  hint?: string;
-}
-
-function Field({ label, value, onChange, type = "text", placeholder, error, hint }: FieldProps) {
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <label
-        style={{
-          display: "block",
-          ...styles.fontSans,
-          fontSize: 11,
-          color: colors.textMuted,
-          textTransform: "uppercase",
-          letterSpacing: "0.06em",
-          marginBottom: 5,
-        }}
-      >
-        {label}
-      </label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        style={{
-          width: "100%",
-          padding: "8px 12px",
-          background: colors.bg,
-          border: `1px solid ${error ? colors.red : colors.border}`,
-          borderRadius: 6,
-          color: colors.text,
-          fontSize: 13,
-          ...styles.fontSans,
-          outline: "none",
-          boxSizing: "border-box",
-        }}
-      />
-      {error && (
-        <span style={{ ...styles.fontSans, fontSize: 11, color: colors.red, marginTop: 4, display: "block" }}>
-          {error}
-        </span>
-      )}
-      {hint && !error && (
-        <span style={{ ...styles.fontSans, fontSize: 11, color: colors.textMuted, marginTop: 4, display: "block" }}>
-          {hint}
-        </span>
-      )}
-    </div>
-  );
-}
 
 // ── Step 1: Platform info ─────────────────────────────────────────────────────
 
@@ -262,22 +204,31 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
         your commits are properly attributed.
       </p>
 
-      <Field
-        label="Author name"
-        value={name}
-        onChange={setName}
-        placeholder="Ada Lovelace"
-        error={errors.name}
-        hint="Written to the workspace .git/config — your global gitconfig is not modified."
-      />
-      <Field
-        label="Email address"
-        type="email"
-        value={email}
-        onChange={setEmail}
-        placeholder="ada@example.com"
-        error={errors.email}
-      />
+      <div style={{ marginBottom: 16 }}>
+        <Field
+          label="Author name"
+          error={errors.name}
+          help="Written to the workspace .git/config — your global gitconfig is not modified."
+        >
+          <input
+            className={`input-field ${errors.name ? "input-error" : ""}`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ada Lovelace"
+          />
+        </Field>
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <Field label="Email address" error={errors.email}>
+          <input
+            className={`input-field ${errors.email ? "input-error" : ""}`}
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="ada@example.com"
+          />
+        </Field>
+      </div>
 
       {errors.api && (
         <div

@@ -59,6 +59,37 @@ class TestConfigValidatorValidateOutputKey:
         assert result["schema"] == "my-schema"
 
 
+class TestConfigValidatorValidateNameComponent:
+    def test_valid_component_is_returned_unchanged(self):
+        cv = ConfigValidator()
+        assert cv.validate_name_component("my_model-v1") == "my_model-v1"
+
+    def test_empty_string_raises(self):
+        cv = ConfigValidator()
+        with pytest.raises(ConfigurationError, match="Empty component"):
+            cv.validate_name_component("")
+
+    def test_none_raises(self):
+        cv = ConfigValidator()
+        with pytest.raises(ConfigurationError, match="Empty component"):
+            cv.validate_name_component(None)
+
+    def test_path_traversal_rejected(self):
+        cv = ConfigValidator()
+        with pytest.raises(ConfigurationError, match="Invalid characters"):
+            cv.validate_name_component("../../etc")
+
+    def test_path_separator_rejected(self):
+        cv = ConfigValidator()
+        with pytest.raises(ConfigurationError, match="Invalid characters"):
+            cv.validate_name_component("a/b")
+
+    def test_field_name_appears_in_error_message(self):
+        cv = ConfigValidator()
+        with pytest.raises(ConfigurationError, match="model_version"):
+            cv.validate_name_component("../escape", "model_version")
+
+
 class TestConfigValidatorValidateDateFormat:
     def test_valid_date(self):
         assert ConfigValidator.validate_date_format("2024-01-15") is True

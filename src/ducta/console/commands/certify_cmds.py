@@ -24,7 +24,7 @@ from typing import Optional
 
 from loguru import logger
 
-from ducta.console.core import ExitCode
+from ducta.console.core import VALID_NAME_RE, ExitCode
 from ducta.core.certificate import (
     DEFAULT_CERTIFICATE_DIR,
     load_certificate,
@@ -90,6 +90,12 @@ def _resolve_run(parsed_args) -> Optional[Path]:
     run_id = getattr(parsed_args, "run_id", None)
     if not run_id:
         logger.error("--run-id is required")
+        return None
+    if not VALID_NAME_RE.match(run_id):
+        # run_id becomes a path component below (runs_dir / run_id / ...);
+        # without this, a value like "../../../../etc" could resolve
+        # outside runs_dir once matched against an existing certificate.json.
+        logger.error("Invalid --run-id '{}': must be alphanumeric, '_' or '-'", run_id)
         return None
 
     exact = _certificate_path(runs_dir, run_id)

@@ -30,6 +30,7 @@ import { UnauthorizedRedirect } from "./components/App/UnauthorizedRedirect";
 import { GitSetupGate } from "./components/App/GitSetupGate";
 import { ServerProjectsHydrator } from "./components/App/ServerProjectsHydrator";
 import { PageLoader, RootRedirect } from "./components/App/PageRedirects";
+import { ConnectWorkspaceForm } from "./components/Workspace/ConnectWorkspaceForm";
 
 // ── Lazy-loaded pages ────────────────────────────────────────────────────────
 const NodeCodePage         = lazy(() => import("./pages/NodeCodePage")        .then(m => ({ default: m.NodeCodePage })));
@@ -177,7 +178,7 @@ export default function App() {
         {
           element: <ProtectedRoute><Outlet /></ProtectedRoute>,
           children: [
-            { path: "setup", element: <div style={{ flex: 1, background: colors.bg }} />, handle: { breadcrumb: () => "Setup" } },
+            { path: "setup", element: <ConnectWorkspaceForm />, handle: { breadcrumb: () => "Setup" } },
             {
               element: <RequireWorkspace />,
               children: [
@@ -186,8 +187,8 @@ export default function App() {
                   handle: { breadcrumb: () => "Projects" },
                   element: <ProjectsListRoute />,
                 },
-                { path: "project/:projectId", handle: { breadcrumb: (d: any) => `Project: ${d?.params?.projectId}` }, element: <ProjectPage /> },
-                { path: "project/:projectId/pipeline/:pipelineId", handle: { breadcrumb: (d: any) => `Pipeline: ${d?.params?.pipelineId}` }, element: <PipelinePage /> },
+                { path: "project/:projectId", handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectPage /> },
+                { path: "project/:projectId/pipeline/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline" }, element: <PipelinePage /> },
                 {
                   path: "workspace",
                   element: <WorkspaceShellWrapper />,

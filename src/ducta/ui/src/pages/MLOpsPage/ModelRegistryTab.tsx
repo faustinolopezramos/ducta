@@ -21,8 +21,11 @@ import {
   IconRefresh,
   IconAlertTriangle,
 } from "@tabler/icons-react";
-import { card, STAGE_COLOR, StageBadge, formatDate } from "./shared";
+import { STAGE_COLOR, formatDate } from "./shared";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
+import { Badge } from "../../components/ui/Badge";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 function PromoteModal({
   modelName,
@@ -297,7 +300,7 @@ function versionColumns(
       header: "Stage",
       sortable: true,
       sortValue: stageOf,
-      cell: (v) => <StageBadge stage={stageOf(v)} />,
+      cell: (v) => <Badge color={STAGE_COLOR[stageOf(v)] ?? "var(--text-muted)"}>{stageOf(v)}</Badge>,
     },
     {
       key: "created_at",
@@ -346,7 +349,7 @@ function ModelCard({ model }: { model: ModelInfo }) {
 
   return (
     <>
-      <div style={card}>
+      <Panel>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
           <span
             onClick={() => setExpanded((v) => !v)}
@@ -359,7 +362,9 @@ function ModelCard({ model }: { model: ModelInfo }) {
             )}
           </span>
           <span style={{ fontWeight: 600, color: colors.text, flex: 1 }}>{model.name}</span>
-          <StageBadge stage={model.stage ?? "Staging"} />
+          <Badge color={STAGE_COLOR[model.stage ?? "Staging"] ?? "var(--text-muted)"}>
+            {model.stage ?? "Staging"}
+          </Badge>
           <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
             v{model.latest_version}
           </span>
@@ -392,7 +397,7 @@ function ModelCard({ model }: { model: ModelInfo }) {
             />
           </div>
         )}
-      </div>
+      </Panel>
 
       {promoteTarget != null && (
         <PromoteModal
@@ -446,7 +451,13 @@ export function ModelRegistryTab() {
         </div>
       </div>
 
-      {isLoading && <div style={{ color: colors.textMuted, fontSize: 13 }}>Loading model registry…</div>}
+      {isLoading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Skeleton variant="block" height="80px" />
+          <Skeleton variant="block" height="80px" />
+          <Skeleton variant="block" height="80px" />
+        </div>
+      )}
       {isError && (
         <div style={{ color: "var(--danger)", fontSize: 13 }}>
           Failed to load model registry. Check that MLOps is configured in the workspace.

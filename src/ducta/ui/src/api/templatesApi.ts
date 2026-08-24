@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import { sourceKey } from "./utils";
-import { toastStore } from "../hooks/useModalStack";
+import { defaultOnError } from "./mutations/errors";
 
 export interface TemplateInfo {
   type: string;
@@ -38,9 +38,6 @@ export const useGenerateFromTemplate = () => {
       qc.invalidateQueries({ queryKey: ["projects"] });
       qc.invalidateQueries({ queryKey: ["server-projects"] });
     },
-    onError: (err: unknown) => {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toastStore.getState().show(detail ?? "Failed to generate project", "error");
-    },
+    onError: defaultOnError,
   });
 };

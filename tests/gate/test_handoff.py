@@ -134,6 +134,34 @@ class TestHandoffStore:
         for i in range(n):
             assert store.get(str(i)) == i
 
+    def test_put_replaces_and_unpersists_previous(self):
+        """Regression: put() used to overwrite a key without unpersisting
+        the DataFrame it replaced — a pipeline writing to the same output
+        path more than once in a run leaked a persisted Spark block per
+        overwrite."""
+        store = _HandoffStore()
+        old_df = MagicMock()
+        new_df = MagicMock()
+        store.put("k1", old_df)
+        store.put("k1", new_df)
+        old_df.unpersist.assert_called_once()
+        new_df.unpersist.assert_not_called()
+        assert store.get("k1") is new_df
+
+    def test_put_replace_unpersist_exception_does_not_raise(self):
+        store = _HandoffStore()
+        old_df = MagicMock()
+        old_df.unpersist.side_effect = RuntimeError("fail")
+        store.put("k1", old_df)
+        store.put("k1", MagicMock())  # must not raise
+
+    def test_put_same_object_twice_does_not_unpersist(self):
+        store = _HandoffStore()
+        df = MagicMock()
+        store.put("k1", df)
+        store.put("k1", df)
+        df.unpersist.assert_not_called()
+
 
 # ── get_store ────────────────────────────────────────────────────────────────
 

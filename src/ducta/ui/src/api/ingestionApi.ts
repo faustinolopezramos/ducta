@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import { sourceKey } from "./utils";
-import { toastStore } from "../hooks/useModalStack";
+import { defaultOnError } from "./mutations/errors";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -49,11 +49,6 @@ export interface ConnectionUsageResult {
 const invalidate = (qc: ReturnType<typeof useQueryClient>) =>
   qc.invalidateQueries({ queryKey: ["ingestion", sourceKey()] });
 
-const onError = (fallback: string) => (err: unknown) => {
-  const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-  toastStore.getState().show(detail ?? fallback, "error");
-};
-
 // ─── Hooks ──────────────────────────────────────────────────────────────────────
 
 export const useConnections = () =>
@@ -66,7 +61,7 @@ export const useConnections = () =>
 export const useTestConnection = () =>
   useMutation<ConnectionTestResult, unknown, ConnectionTestVars>({
     mutationFn: (vars) => client.post("/ingestion/connections/test", vars).then((r) => r.data),
-    onError: onError("Connection test failed"),
+    onError: defaultOnError,
   });
 
 export const useCreateConnection = () => {
@@ -74,7 +69,7 @@ export const useCreateConnection = () => {
   return useMutation<ConnectionInfo, unknown, ConnectionCreateVars>({
     mutationFn: (vars) => client.post("/ingestion/connections", vars).then((r) => r.data),
     onSuccess: () => invalidate(qc),
-    onError: onError("Failed to save connection"),
+    onError: defaultOnError,
   });
 };
 
@@ -83,7 +78,7 @@ export const useDeleteConnection = () => {
   return useMutation<void, unknown, string>({
     mutationFn: (name) => client.delete(`/ingestion/connections/${encodeURIComponent(name)}`).then(() => undefined),
     onSuccess: () => invalidate(qc),
-    onError: onError("Failed to delete connection"),
+    onError: defaultOnError,
   });
 };
 

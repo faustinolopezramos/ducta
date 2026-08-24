@@ -51,7 +51,17 @@ class _HandoffStore:
 
     def put(self, key: str, dataframe: Any) -> None:
         with self._lock:
+            previous = self._frames.get(key)
             self._frames[key] = dataframe
+        # Outside the lock, same as clear() below — unpersist() can be a
+        # non-trivial Spark operation and shouldn't block other threads
+        # touching the store.
+        if previous is not None and previous is not dataframe:
+            try:
+                if hasattr(previous, "unpersist"):
+                    previous.unpersist()
+            except Exception as error:
+                logger.warning("Failed to unpersist replaced handoff frame: {}", error)
 
     def get(self, key: str) -> Optional[Any]:
         with self._lock:

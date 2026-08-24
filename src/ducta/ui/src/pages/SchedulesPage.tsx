@@ -9,10 +9,10 @@ import {
 } from "@tabler/icons-react";
 import { useSchedules, useCreateSchedule, useDeleteSchedule, useToggleSchedule } from "../api/schedulesApi";
 import { useEnvironments, useServerProjects, useServerProjectPipelines } from "../api/queries";
-import { Button, Modal, PageHeader } from "../components/ui";
+import { Button, Modal, PageHeader, EmptyState, Skeleton, ConfirmDialog } from "../components/ui";
 
 export function SchedulesPage() {
-  const { data, isLoading } = useSchedules();
+  const { data, isLoading, isError, refetch } = useSchedules();
   const createMutation = useCreateSchedule();
   const deleteMutation = useDeleteSchedule();
   const toggleMutation = useToggleSchedule();
@@ -67,18 +67,30 @@ export function SchedulesPage() {
       />
 
       {isLoading ? (
-        <div style={{ padding: "var(--space-6)", background: "var(--bg-surface)", borderRadius: 8 }}>Loading schedules...</div>
-      ) : !data?.schedules || data.schedules.length === 0 ? (
-        <div style={{ padding: "var(--space-8)", textAlign: "center", background: "var(--bg-surface)", borderRadius: 8 }}>
-          <IconCalendarEvent size={48} style={{ opacity: 0.4, marginBottom: 12 }} />
-          <h3 style={{ margin: "0 0 8px 0" }}>No automated schedules</h3>
-          <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>
-            Set up cron expressions to automatically run data pipelines at scheduled intervals.
-          </p>
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
-            <IconPlus size={16} /> Create First Schedule
-          </Button>
+        <div style={{ display: "grid", gap: "var(--space-4)", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}>
+          <Skeleton variant="block" height="180px" />
+          <Skeleton variant="block" height="180px" />
         </div>
+      ) : isError ? (
+        // A failed fetch must not read as "nothing is scheduled" — it used to
+        // fall straight into the empty state below.
+        <EmptyState
+          icon={IconCalendarEvent}
+          title="Couldn't load schedules"
+          description="Check that the API is reachable and try again."
+          action={<Button variant="ghost" onClick={() => refetch()}>Refresh</Button>}
+        />
+      ) : !data?.schedules || data.schedules.length === 0 ? (
+        <EmptyState
+          icon={IconCalendarEvent}
+          title="No automated schedules"
+          description="Set up cron expressions to automatically run data pipelines at scheduled intervals."
+          action={
+            <Button variant="primary" onClick={() => setShowCreateModal(true)}>
+              <IconPlus size={16} /> Create First Schedule
+            </Button>
+          }
+        />
       ) : (
         <div style={{ display: "grid", gap: "var(--space-4)", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}>
           {data.schedules.map((sched) => (
@@ -180,24 +192,30 @@ export function SchedulesPage() {
             <div className="projects-modal__actions" style={{ marginTop: 20 }}>
               <Button variant="ghost" onClick={() => setShowCreateModal(false)}>Cancel</Button>
               <Button variant="primary" onClick={handleCreate} loading={createMutation.isPending} disabled={!projectId || !pipelineName || !cron}>
-                {createMutation.isPending ? "Creating..." : "Schedule Pipeline"}
+                {createMutation.isPending ? "Creating…" : "Schedule Pipeline"}
               </Button>
             </div>
           </div>
         </Modal>
       )}
 
-      {scheduleToDelete && (
-        <Modal title="Delete schedule" onClose={() => setScheduleToDelete(null)}>
-          <div className="projects-modal__form">
-            <p className="projects-modal__desc">This schedule will stop running automatically. Existing execution history is preserved.</p>
-            <div className="projects-modal__actions">
-              <Button variant="ghost" onClick={() => setScheduleToDelete(null)}>Cancel</Button>
-              <Button variant="danger" loading={deleteMutation.isPending} onClick={() => deleteMutation.mutate(scheduleToDelete, { onSuccess: () => setScheduleToDelete(null) })}>Delete schedule</Button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <ConfirmDialog
+        open={!!scheduleToDelete}
+        title={
+          scheduleToDelete
+            ? `Delete schedule for ${data?.schedules?.find((s) => s.id === scheduleToDelete)?.pipeline_name ?? scheduleToDelete}?`
+            : "Delete schedule?"
+        }
+        description="This schedule will stop running automatically. Existing execution history is preserved."
+        tone="danger"
+        confirmLabel="Delete schedule"
+        pending={deleteMutation.isPending}
+        onConfirm={() =>
+          scheduleToDelete &&
+          deleteMutation.mutate(scheduleToDelete, { onSuccess: () => setScheduleToDelete(null) })
+        }
+        onCancel={() => setScheduleToDelete(null)}
+      />
     </div>
   );
 }

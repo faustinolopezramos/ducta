@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import { sourceKey } from "./utils";
 import { toastStore } from "../hooks/useModalStack";
+import { defaultOnError } from "./mutations/errors";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -136,11 +137,7 @@ export const usePromoteModel = () => {
       queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models", name] });
       toastStore.getState().show(`Model '${name}' promoted successfully`, "success");
     },
-    onError: (error) => {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
-      const msg = err?.response?.data?.message ?? err?.message ?? "Promotion failed";
-      toastStore.getState().error(`Operation failed: ${msg}`);
-    },
+    onError: defaultOnError,
   });
 };
 
@@ -158,6 +155,7 @@ export const useCloseMlopsRun = () => {
     onSuccess: (_data, { experimentId }) => {
       queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "experiments", experimentId] });
     },
+    onError: defaultOnError,
   });
 };
 
@@ -169,6 +167,7 @@ export const useDeleteMlopsRun = () => {
     onSuccess: (_data, { experimentId }) => {
       queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "experiments", experimentId] });
     },
+    onError: defaultOnError,
   });
 };
 
@@ -181,6 +180,7 @@ export const useDeleteModelVersion = () => {
       queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models"] });
       queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models", name] });
     },
+    onError: defaultOnError,
   });
 };
 
@@ -199,10 +199,6 @@ export const useRunMlopsGc = () => {
         : `GC complete: ${removed} versions removed`;
       toastStore.getState().show(msg, "success");
     },
-    onError: (error) => {
-      const err = error as { response?: { data?: { message?: string } }; message?: string };
-      const msg = err?.response?.data?.message ?? err?.message ?? "GC failed";
-      toastStore.getState().error(`Operation failed: ${msg}`);
-    },
+    onError: defaultOnError,
   });
 };

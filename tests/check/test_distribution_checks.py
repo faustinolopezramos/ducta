@@ -47,6 +47,79 @@ class TestDriftDetectionZeroColumnsEvaluated:
         assert result.passed is True
 
 
+class TestDriftDetectionMinCategoriesIsNotTopk:
+    """Regression: min_categories used to be passed straight through as
+    value_counts()'s topk, so a column with e.g. 50 real categories only
+    ever got compared on its top `min_categories` most frequent ones —
+    biasing Jensen-Shannon toward frequent categories and hiding drift in
+    the long tail. min_categories is now a minimum-category-count gate;
+    the fetch width is a separate (wider) topk_categories."""
+
+    def test_fetch_uses_a_wide_default_topk_not_min_categories(self):
+        check = DriftDetectionCheck()
+        config = SimpleNamespace(
+            columns=["c"],
+            use_scipy=False,
+            min_categories=5,
+            _baseline={"c": {"value_counts": {"a": 1}}},
+        )
+        adapter = MagicMock()
+        adapter.value_counts.return_value = {"a": 1}
+
+        check.run(df=None, config=config, adapter=adapter)
+
+        # Old buggy behavior called value_counts("c", topk=5) — the
+        # min_categories value itself, capping the comparison at 5 rows.
+        adapter.value_counts.assert_called_once_with("c", topk=100)
+
+    def test_explicit_topk_categories_config_controls_fetch_width(self):
+        check = DriftDetectionCheck()
+        config = SimpleNamespace(
+            columns=["c"],
+            use_scipy=False,
+            min_categories=1,
+            topk_categories=250,
+            _baseline={"c": {"value_counts": {"a": 1}}},
+        )
+        adapter = MagicMock()
+        adapter.value_counts.return_value = {"a": 1}
+
+        check.run(df=None, config=config, adapter=adapter)
+
+        adapter.value_counts.assert_called_once_with("c", topk=250)
+
+    def test_column_with_fewer_than_min_categories_is_skipped(self):
+        check = DriftDetectionCheck()
+        config = SimpleNamespace(
+            columns=["sparse_col"],
+            use_scipy=False,
+            min_categories=5,
+            _baseline={"sparse_col": {"value_counts": {"a": 10, "b": 5}}},
+        )
+        adapter = MagicMock()
+        # Only 2 categories actually exist — below min_categories=5.
+        adapter.value_counts.return_value = {"a": 10, "b": 5}
+
+        result = check.run(df=None, config=config, adapter=adapter)
+
+        assert result.details["_columns_evaluated"] == 0
+
+    def test_column_meeting_min_categories_is_evaluated(self):
+        check = DriftDetectionCheck()
+        config = SimpleNamespace(
+            columns=["c"],
+            use_scipy=False,
+            min_categories=2,
+            _baseline={"c": {"value_counts": {"a": 1, "b": 1}}},
+        )
+        adapter = MagicMock()
+        adapter.value_counts.return_value = {"a": 1, "b": 1}
+
+        result = check.run(df=None, config=config, adapter=adapter)
+
+        assert result.details["_columns_evaluated"] == 1
+
+
 class TestStatisticalCheckZeroColumnsEvaluated:
     def test_no_columns_meet_min_samples_is_not_a_clean_pass(self):
         check = StatisticalCheck()

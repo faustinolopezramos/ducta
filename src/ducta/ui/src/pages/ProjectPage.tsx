@@ -8,6 +8,8 @@ import { useProjectDependencies, useServerProjectPipelines } from "../api/querie
 import { computeLineage, lensEdgeClass } from "../utils/lineage";
 import { useBuilderStore } from "../store/builderStore";
 import { Button } from "../components/ui/Button";
+import { EmptyState } from "../components/ui/EmptyState";
+import { Skeleton } from "../components/ui/Skeleton";
 import { DagCanvas } from "../components/Pipeline/DagCanvas";
 import {
   IconChevronRight,
@@ -79,13 +81,23 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
   };
 
   if (isLoading) {
-    return <p style={{ padding: 24, fontSize: 13, color: "var(--text-muted)" }}>Loading project map…</p>;
+    return (
+      <div style={{ padding: 24 }}>
+        <Skeleton variant="block" height="200px" />
+      </div>
+    );
   }
   if (isError) {
-    return <p style={{ padding: 24, fontSize: 13, color: "var(--danger)" }}>Could not load the project map.</p>;
+    return (
+      <EmptyState
+        icon={IconSitemap}
+        title="Couldn't load the project map"
+        description="Check that the API is reachable and try again."
+      />
+    );
   }
   if (items.length === 0) {
-    return <p style={{ padding: 24, fontSize: 13, color: "var(--text-muted)" }}>No pipelines in this project yet.</p>;
+    return <EmptyState icon={IconSitemap} title="No pipelines in this project yet" />;
   }
 
   const hasCrossEdges = labels.size > 0 || items.some((i) => i.dependsOn.length > 0);

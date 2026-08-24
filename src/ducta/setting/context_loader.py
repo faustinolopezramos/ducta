@@ -86,10 +86,19 @@ class ContextLoader:
 
         ctx.config_paths = config_paths
 
-        # Quality extensions loading remains in loader for lifecycle reasons
+        # Quality extensions loading remains in loader for lifecycle reasons.
+        # load_quality_extensions() imports arbitrary Python modules named in
+        # config, same trust boundary as PythonConfigLoader — must not run
+        # when allow_python_config=False (see ConfigLoaderFactory below).
         global_settings = ctx.global_settings
         extensions = (global_settings.get("quality") or {}).get("extensions") or []
-        if extensions:
+        if extensions and not self.allow_python_config:
+            logger.warning(
+                "Skipping {} quality extension(s): allow_python_config is False, "
+                "which forbids importing arbitrary Python modules from config.",
+                len(extensions),
+            )
+        elif extensions:
             try:
                 from ducta.check.core import load_quality_extensions
 

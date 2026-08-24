@@ -1,10 +1,13 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { colors } from "../theme/tokens";
 import { PageHeader } from "../components/ui/PageHeader";
+import { PageContainer } from "../components/ui/PageContainer";
 import { Button } from "../components/ui/Button";
 import { ActionButton } from "../components/ui/ActionButton";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Panel } from "../components/ui/Panel";
+import { Skeleton } from "../components/ui/Skeleton";
 import {
   useConnections,
   useDeleteConnection,
@@ -26,17 +29,10 @@ import {
   IconPencil,
   IconTopologyStar3,
   IconDatabaseImport,
+  IconAlertTriangle,
   IconCircleCheck,
   IconCircleX,
 } from "@tabler/icons-react";
-
-const card: React.CSSProperties = {
-  background: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 8,
-  padding: "16px 20px",
-  marginBottom: 16,
-};
 
 interface TestState {
   ok: boolean;
@@ -75,7 +71,11 @@ function ConnectionUsagePanel({ name }: { name: string }) {
   const usage = useConnectionUsage(name, true);
 
   if (usage.isLoading) {
-    return <p style={{ fontSize: 11, color: colors.textMuted, margin: "6px 0 0" }}>Loading executions…</p>;
+    return (
+      <div style={{ marginTop: 6 }}>
+        <Skeleton variant="text" width="70%" />
+      </div>
+    );
   }
   if (!usage.data || usage.data.pipelines.length === 0) {
     return (
@@ -211,7 +211,7 @@ function ConnectionRow({
 }
 
 export default function IngestionPage() {
-  const { data, isLoading } = useConnections();
+  const { data, isLoading, isError, refetch } = useConnections();
   const connections = data?.connections ?? [];
   const [modal, setModal] = useState<
     | { kind: "create" }
@@ -225,7 +225,7 @@ export default function IngestionPage() {
     setTestStates((s) => ({ ...s, [name]: { ok, at: Date.now() } }));
 
   return (
-    <div style={{ padding: 24, maxWidth: 900, margin: "0 auto" }}>
+    <PageContainer maxWidth={900}>
       <PageHeader
         title="Ingestion"
         description="Database connections and declarative ingestion nodes"
@@ -241,7 +241,7 @@ export default function IngestionPage() {
         }
       />
 
-      <div style={card}>
+      <Panel>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
           <IconPlugConnected size={16} color={colors.accent} />
           <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text }}>
@@ -249,9 +249,29 @@ export default function IngestionPage() {
           </h2>
         </div>
 
-        {isLoading && <p style={{ fontSize: 12, color: colors.textMuted }}>Loading…</p>}
+        {isLoading && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Skeleton variant="block" height="48px" />
+            <Skeleton variant="block" height="48px" />
+          </div>
+        )}
 
-        {!isLoading && connections.length === 0 && (
+        {/* A failed fetch must not read as "you have nothing configured yet" —
+            it used to fall straight through to the empty state below. */}
+        {!isLoading && isError && (
+          <EmptyState
+            icon={IconAlertTriangle}
+            title="Couldn't load connections"
+            description="Check that the API is reachable and try again."
+            action={
+              <Button variant="ghost" size="sm" onClick={() => refetch()}>
+                Refresh
+              </Button>
+            }
+          />
+        )}
+
+        {!isLoading && !isError && connections.length === 0 && (
           <EmptyState
             icon={IconDatabaseImport}
             title="No connections yet"
@@ -274,7 +294,7 @@ export default function IngestionPage() {
             onUseInPipeline={() => setModal({ kind: "use", connection: c })}
           />
         ))}
-      </div>
+      </Panel>
 
       {modal?.kind === "create" && (
         <ConnectionModal
@@ -296,6 +316,6 @@ export default function IngestionPage() {
       {modal?.kind === "use" && (
         <UseInPipelineModal connectionName={modal.connection.name} onClose={() => setModal(null)} />
       )}
-    </div>
+    </PageContainer>
   );
 }

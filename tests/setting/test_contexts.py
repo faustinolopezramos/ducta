@@ -176,6 +176,33 @@ class TestMLConfigMixin:
         assert result["project_name"] == "test_project"
         assert result["model_name"] == "base_model"
 
+    @patch("ducta.setting.contexts.load_hyperparams_config")
+    def test_resolve_hyperparams_config_skips_non_ml_pipeline(self, mock_load):
+        """A global hyperparams_config_path must not be resolved for a batch
+        pipeline — only type=="ml" pipelines may fall back to the path-only
+        (no pipeline_key) branch. Regression for a spurious "pipeline_key is
+        required" error logged on every non-ML pipeline run."""
+        mixin = MLConfigMixin()
+        mixin.ml_info = {}
+        mixin.pipelines_config = {"bronze.ingestion": {"type": "batch"}}
+        mixin.global_settings = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
+
+        result = mixin._resolve_hyperparams_config("bronze.ingestion")
+
+        assert result is None
+        mock_load.assert_not_called()
+
+    @patch("ducta.setting.contexts.load_hyperparams_config")
+    def test_resolve_hyperparams_config_still_resolves_ml_pipeline(self, mock_load):
+        mixin = MLConfigMixin()
+        mixin.ml_info = {}
+        mixin.pipelines_config = {"ml.student_performance": {"type": "ml"}}
+        mixin.global_settings = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
+
+        mixin._resolve_hyperparams_config("ml.student_performance")
+
+        mock_load.assert_called_once_with("config/ml/hyperparams.yml")
+
 
 class TestContextInit:
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")

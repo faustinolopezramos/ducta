@@ -1,7 +1,9 @@
 import { colors } from "../../theme/tokens";
 import { useQualityChecks } from "../../api/qualityApi";
 import { IconListCheck } from "@tabler/icons-react";
-import { card, sectionTitle } from "./shared";
+import { sectionTitle } from "./shared";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 // ─────────────────────────────────────────────
 // REGISTERED CHECKS (compact reference)
@@ -10,9 +12,9 @@ import { card, sectionTitle } from "./shared";
 export function ChecksCard() {
   const { data: checks, isLoading } = useQualityChecks();
   return (
-    <div style={card}>
+    <Panel>
       {sectionTitle(<IconListCheck size={16} color={colors.accent} />, "Registered checks")}
-      {isLoading && <p style={{ fontSize: 12, color: colors.textMuted }}>Loading…</p>}
+      {isLoading && <Skeleton variant="text" width="60%" />}
       {checks && (
         <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
           {checks.map((c) => (
@@ -34,6 +36,6 @@ export function ChecksCard() {
           ))}
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

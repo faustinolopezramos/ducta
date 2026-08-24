@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import { sourceKey } from "./utils";
-import { toastStore } from "../hooks/useModalStack";
+import { defaultOnError } from "./mutations/errors";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -125,11 +125,7 @@ export const useRunQualityChecks = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["quality", sourceKey()] });
     },
-    onError: (err: unknown) => {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toastStore.getState().show(detail ?? "Failed to run quality checks", "error");
-    },
+    onError: defaultOnError,
   });
 };
 
@@ -137,11 +133,7 @@ export const useValidateQualityConfig = () =>
   useMutation({
     mutationFn: (vars: ValidateConfigVars) =>
       client.post<ValidateConfigResult>("/quality/validate-config", vars).then((r) => r.data),
-    onError: (err: unknown) => {
-      const detail =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toastStore.getState().show(detail ?? "Failed to validate config", "error");
-    },
+    onError: defaultOnError,
   });
 
 export const useDeleteQualityReport = () => {

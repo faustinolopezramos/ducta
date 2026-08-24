@@ -1,6 +1,7 @@
-import React, { useState } from "react";
+import React, { useId, useState } from "react";
 import { useWorkspaceFiles } from "../../api/queries";
 import { colors } from "../../theme/tokens";
+import { Skeleton } from "../ui/Skeleton";
 import {
   IconFolder,
   IconFile,
@@ -30,16 +31,25 @@ export function FilePickerField({
   onChange,
   placeholder,
   extensions,
+  label,
+  id,
 }: {
   value: string;
   onChange: (path: string) => void;
   placeholder?: string;
   /** When set, only files with one of these extensions are selectable. */
   extensions?: string[];
+  /** Accessible name for the path input — visually-labelled callers should
+   *  pass the same text as their <label>/<span> via `id` instead (see below). */
+  label?: string;
+  /** Associates an external <label htmlFor={id}> with the internal input. */
+  id?: string;
 }) {
   const [browsing, setBrowsing] = useState(false);
   const [dir, setDir] = useState("");
   const { data, isLoading } = useWorkspaceFiles(browsing ? dir : "");
+  const generatedId = useId();
+  const inputId = id ?? generatedId;
 
   const matchesExt = (name: string) =>
     !extensions || extensions.some((ext) => name.toLowerCase().endsWith(ext));
@@ -50,6 +60,8 @@ export function FilePickerField({
     <div>
       <div style={{ display: "flex", gap: 6 }}>
         <input
+          id={inputId}
+          aria-label={id ? undefined : label}
           style={inputStyle}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -128,9 +140,9 @@ export function FilePickerField({
           </div>
 
           {isLoading && (
-            <p style={{ margin: 0, padding: "8px 10px", fontSize: 11, color: colors.textMuted }}>
-              Loading…
-            </p>
+            <div style={{ padding: "8px 10px" }}>
+              <Skeleton variant="text" width="50%" />
+            </div>
           )}
           {!isLoading && (data?.entries ?? []).length === 0 && (
             <p style={{ margin: 0, padding: "8px 10px", fontSize: 11, color: colors.textMuted }}>

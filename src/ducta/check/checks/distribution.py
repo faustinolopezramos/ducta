@@ -80,6 +80,22 @@ class DriftDetectionCheck(BaseQualityCheck):
             )
             use_scipy = config.use_scipy if hasattr(config, "use_scipy") else True
             min_categories = config.min_categories if hasattr(config, "min_categories") else 5
+            # How many categories to actually fetch per column for the
+            # Jensen-Shannon comparison — independent of min_categories,
+            # which is a *minimum* category-count gate, not a cap on how
+            # many categories get compared. Reusing min_categories as both
+            # meant a column with e.g. 50 real categories only ever got
+            # compared on its top `min_categories` most frequent ones,
+            # biasing drift detection toward frequent categories and hiding
+            # drift in the long tail.
+            topk_categories = (
+                config.topk_categories if hasattr(config, "topk_categories") else 100
+            )
+            # value_counts() is itself topk-limited, so fetch at least
+            # min_categories rows — otherwise "fewer than min_categories
+            # rows came back" could mean "the fetch was capped low", not
+            # "the column really has fewer than min_categories categories."
+            fetch_topk = max(topk_categories, min_categories)
 
             if use_scipy and not _scipy_available():
                 return self._create_result(
@@ -104,7 +120,15 @@ class DriftDetectionCheck(BaseQualityCheck):
 
             for column in columns:
                 try:
-                    current_counts = adapter.value_counts(column, topk=min_categories)
+                    current_counts = adapter.value_counts(column, topk=fetch_topk)
+                    if len(current_counts) < min_categories:
+                        logger.debug(
+                            f"Skipping drift check for column '{column}': only "
+                            f"{len(current_counts)} categor{'y' if len(current_counts) == 1 else 'ies'} "
+                            f"found, need at least {min_categories}"
+                        )
+                        continue
+
                     baseline_counts = baseline.get(column, {}).get("value_counts", {})
 
                     if not baseline_counts:

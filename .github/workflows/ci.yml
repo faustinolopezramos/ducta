@@ -111,6 +111,35 @@ jobs:
           print("smoke OK", ducta.__version__)
           PY
 
+  ui:
+    name: UI (typecheck, tests, quality)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: src/ducta/ui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: src/ducta/ui/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Type-check
+        run: npx tsc -b
+      - name: Run tests
+        run: npm run test:run
+      - name: UI quality gate (contrast + token hygiene)
+        run: npm run ui:quality
+      # Newly adopted (93 errors / 37 warnings baseline, mostly
+      # eslint-plugin-jsx-a11y and the newer eslint-plugin-react-hooks
+      # rules) — advisory until that backlog is worked down, same pattern
+      # as `ruff format`/`mypy` in the lint job above. Flip to a hard
+      # failure once the baseline reaches zero.
+      - name: ESLint (advisory — correctness + a11y)
+        run: npm run lint || true
+
   docs:
     name: Docs build
     runs-on: ubuntu-latest

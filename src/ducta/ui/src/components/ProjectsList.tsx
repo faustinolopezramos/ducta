@@ -4,7 +4,7 @@ import { IconPackage, IconPlus, IconTrash, IconDotsVertical } from "@tabler/icon
 import { useCreateServerProject, useDeleteServerProject, useServerProjectPipelines } from "../api/queries";
 import { useTemplates, useGenerateFromTemplate } from "../api/templatesApi";
 import { toastStore } from "../hooks/useModalStack";
-import { Button, Modal } from "./ui";
+import { Button, Modal, ConfirmDialog } from "./ui";
 import { EmptyState } from "./ui/EmptyState";
 import type { ProjectItem } from "../store/reducer";
 
@@ -84,7 +84,6 @@ export function ProjectsList({
 }: ProjectsListProps) {
   const navigate = useNavigate();
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [deleteName, setDeleteName] = useState("");
   const [showTemplate, setShowTemplate] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [templateType, setTemplateType] = useState("medallion_basic");
@@ -98,7 +97,7 @@ export function ProjectsList({
   const projectToDelete = projects.find((project) => project.id === confirmDelete);
 
   const handleDelete = () => {
-    if (!projectToDelete || deleteName !== projectToDelete.name) return;
+    if (!projectToDelete) return;
     deleteProject.mutate(
       { projectId: projectToDelete.id, force: true },
       {
@@ -106,16 +105,10 @@ export function ProjectsList({
           onDeleteProject(projectToDelete.id);
           toastStore.getState().show(`Project "${projectToDelete.name}" deleted`, "success");
           setConfirmDelete(null);
-          setDeleteName("");
         },
         onError: () => toastStore.getState().show("Unable to delete the project. Check its permissions and try again.", "error"),
       },
     );
-  };
-
-  const openDelete = (id: string) => {
-    setDeleteName("");
-    setConfirmDelete(id);
   };
 
   const handleCreateEmpty = () => {
@@ -188,7 +181,7 @@ export function ProjectsList({
               key={project.id}
               project={project}
               onNavigate={() => navigate(`/project/${project.id}`)}
-              onDelete={() => openDelete(project.id)}
+              onDelete={() => setConfirmDelete(project.id)}
             />
           ))}
         </div>
@@ -246,24 +239,17 @@ export function ProjectsList({
         </Modal>
       )}
 
-      {confirmDelete && (
-        <Modal title="Delete project" onClose={() => setConfirmDelete(null)}>
-          <div className="projects-modal__form projects-modal--danger">
-            <div className="projects-modal__icon">
-              <IconTrash size={24} stroke={1.5} />
-            </div>
-            <p className="projects-modal__desc">
-              This permanently deletes <strong>{projectToDelete?.name}</strong> and all its pipelines. Type the project name to confirm.
-            </p>
-            <label className="projects-modal__label" htmlFor="delete-project-confirmation">Project name</label>
-            <input id="delete-project-confirmation" className="projects-modal__input" value={deleteName} onChange={(e) => setDeleteName(e.target.value)} autoComplete="off" />
-            <div className="projects-modal__actions">
-              <Button variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Button>
-              <Button variant="danger" onClick={handleDelete} loading={deleteProject.isPending} disabled={deleteName !== projectToDelete?.name}>Delete project</Button>
-            </div>
-          </div>
-        </Modal>
-      )}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title={`Delete ${projectToDelete?.name}?`}
+        description="This permanently deletes the project and all its pipelines."
+        tone="danger"
+        requireTyping={projectToDelete?.name}
+        confirmLabel="Delete project"
+        pending={deleteProject.isPending}
+        onConfirm={handleDelete}
+        onCancel={() => setConfirmDelete(null)}
+      />
     </div>
   );
 }

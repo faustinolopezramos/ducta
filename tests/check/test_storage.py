@@ -3,10 +3,12 @@ ContextAwareStorageBackend.append_history locking."""
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
+import types
 
-from ducta.check.storage import ContextAwareStorageBackend, FileStorageBackend
+from ducta.check.storage import ContextAwareStorageBackend, FileStorageBackend, _exclusive_lock
 
 
 class TestFileStorageBackendPipelineScoping:
@@ -90,3 +92,43 @@ class TestAppendHistoryNonJsonLocking:
 
         history = backend.load_history("ds") or []
         assert len(history) == 20
+
+
+class TestExclusiveLockWindowsFallback:
+    def test_uses_msvcrt_when_fcntl_unavailable(self, tmp_path, monkeypatch):
+        """Regression: when fcntl isn't available (Windows), the old code
+        just yielded without taking any lock at all ("concurrent writes may
+        corrupt files"). It must now fall back to msvcrt.locking()."""
+        calls = []
+        fake_msvcrt = types.SimpleNamespace(
+            LK_LOCK=1,
+            LK_UNLCK=0,
+            locking=lambda fd, mode, nbytes: calls.append((fd, mode, nbytes)),
+        )
+
+        monkeypatch.setitem(sys.modules, "fcntl", None)
+        monkeypatch.setitem(sys.modules, "msvcrt", fake_msvcrt)
+
+        path = tmp_path / "locked.txt"
+        path.write_text("hello")
+        with open(path, "r+") as f:
+            fd = f.fileno()
+            with _exclusive_lock(f):
+                pass
+
+        assert calls == [(fd, 1, 1), (fd, 0, 1)]
+
+    def test_yields_without_locking_when_neither_fcntl_nor_msvcrt_exist(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setitem(sys.modules, "fcntl", None)
+        monkeypatch.setitem(sys.modules, "msvcrt", None)
+
+        path = tmp_path / "locked.txt"
+        path.write_text("hello")
+        entered = False
+        with open(path, "r+") as f:
+            with _exclusive_lock(f):
+                entered = True
+
+        assert entered is True

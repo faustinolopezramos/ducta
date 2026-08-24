@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import { sourceKey } from "./utils";
 import { toastStore } from "../hooks/useModalStack";
+import { defaultOnError } from "./mutations/errors";
 
 export interface PipelineSchedule {
   id: string;
@@ -46,10 +47,7 @@ export const useCreateSchedule = () => {
       qc.invalidateQueries({ queryKey: ["schedules", sourceKey()] });
       toastStore.getState().show("Schedule created successfully", "success");
     },
-    onError: (err: unknown) => {
-      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      toastStore.getState().show(detail ?? "Failed to create schedule", "error");
-    },
+    onError: defaultOnError,
   });
 };
 
@@ -61,6 +59,7 @@ export const useDeleteSchedule = () => {
       qc.invalidateQueries({ queryKey: ["schedules", sourceKey()] });
       toastStore.getState().show("Schedule removed", "info");
     },
+    onError: defaultOnError,
   });
 };
 
@@ -72,5 +71,6 @@ export const useToggleSchedule = () => {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["schedules", sourceKey()] });
     },
+    onError: defaultOnError,
   });
 };

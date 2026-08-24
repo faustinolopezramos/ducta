@@ -2,8 +2,12 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { colors } from "../../theme/tokens";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { PageContainer } from "../../components/ui/PageContainer";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
+import { Field } from "../../components/ui/Field";
 import { useQualitySummary } from "../../api/qualityApi";
 import { RunChecksModal } from "../../components/Quality/RunChecksModal";
 import { ValidateConfigModal } from "../../components/Quality/ValidateConfigModal";
@@ -13,7 +17,7 @@ import {
   IconShieldCheck,
   IconDatabase,
 } from "@tabler/icons-react";
-import { card, input, sectionTitle } from "./shared";
+import { input, sectionTitle } from "./shared";
 import { DatasetCard } from "./DatasetCard";
 import { DatasetDetail } from "./DatasetDetail";
 import { ScoreSection } from "./ScoreSection";
@@ -35,7 +39,7 @@ export default function QualityPage() {
   const datasets = summary.data ?? [];
 
   return (
-    <div style={{ padding: 24, maxWidth: 960, margin: "0 auto" }}>
+    <PageContainer maxWidth={960}>
       <PageHeader
         title="Data Quality"
         description="Dataset health at a glance — drill into reports, run checks, validate node configs"
@@ -67,11 +71,30 @@ export default function QualityPage() {
 
       {/* ── Dataset overview ── */}
       {summary.isLoading && (
-        <p style={{ fontSize: 12, color: colors.textMuted }}>Loading datasets…</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))", gap: 12, marginBottom: 16 }}>
+          <Skeleton variant="block" height="88px" />
+          <Skeleton variant="block" height="88px" />
+          <Skeleton variant="block" height="88px" />
+        </div>
       )}
 
-      {!summary.isLoading && datasets.length === 0 && (
-        <div style={card}>
+      {!summary.isLoading && summary.isError && (
+        <Panel>
+          <EmptyState
+            icon={IconDatabase}
+            title="Couldn't load quality reports"
+            description="Check that the API is reachable and try again."
+            action={
+              <Button variant="ghost" size="sm" onClick={() => summary.refetch()}>
+                Refresh
+              </Button>
+            }
+          />
+        </Panel>
+      )}
+
+      {!summary.isLoading && !summary.isError && datasets.length === 0 && (
+        <Panel>
           <EmptyState
             icon={IconDatabase}
             title="No quality reports yet"
@@ -82,7 +105,7 @@ export default function QualityPage() {
               </Button>
             }
           />
-        </div>
+        </Panel>
       )}
 
       {datasets.length > 0 && (
@@ -113,18 +136,22 @@ export default function QualityPage() {
 
       {/* ── Manual composite-score lookup (fallback when not linked from a run) ── */}
       {!scoreRunId && (
-        <div style={card}>
+        <Panel>
           {sectionTitle(<IconGauge size={16} color={colors.accent} />, "Pipeline quality score")}
           <p style={{ margin: "0 0 10px", fontSize: 12, color: colors.textMuted }}>
             Open a score from Execution History (Quality action on a run), or look one up by run id.
           </p>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input
-              style={input}
-              value={manualRunId}
-              onChange={(e) => setManualRunId(e.target.value)}
-              placeholder="run id"
-            />
+          <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+            <div style={{ flex: 1 }}>
+              <Field label="Run ID">
+                <input
+                  style={input}
+                  value={manualRunId}
+                  onChange={(e) => setManualRunId(e.target.value)}
+                  placeholder="e.g. 3f9a2c81"
+                />
+              </Field>
+            </div>
             <Button
               variant="secondary"
               size="sm"
@@ -134,7 +161,7 @@ export default function QualityPage() {
               Load
             </Button>
           </div>
-        </div>
+        </Panel>
       )}
 
       <ChecksCard />
@@ -149,6 +176,6 @@ export default function QualityPage() {
         />
       )}
       {showValidateModal && <ValidateConfigModal onClose={() => setShowValidateModal(false)} />}
-    </div>
+    </PageContainer>
   );
 }

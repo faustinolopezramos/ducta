@@ -1,6 +1,7 @@
 import React from "react";
 import { Sidebar } from "../Sidebar/Sidebar";
 import { Header } from "./Header";
+import { Breadcrumbs } from "./Breadcrumbs";
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -12,6 +13,7 @@ export function MainLayout({ children }: MainLayoutProps) {
       <Sidebar />
       <div className="ducta-main-container">
         <Header />
+        <Breadcrumbs />
         <main className="ducta-content">
           {children}
         </main>

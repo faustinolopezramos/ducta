@@ -165,7 +165,7 @@ class IngestionService:
         config.setdefault("sources", {})[spec.name] = entry
 
         self._save_sources(config)
-        self._write_credentials(spec.source_type, spec.username, spec.password)
+        self._write_credentials(spec.name, spec.username, spec.password)
         self._ensure_gitignore()
 
         logger.info("Ingestion connection '{}' saved to {}", spec.name, self.config_path)
@@ -194,8 +194,13 @@ class IngestionService:
         with open(self.config_path, "w", encoding="utf-8") as f:
             yaml.dump(config, f, default_flow_style=False, sort_keys=False)
 
-    def _write_credentials(self, source_type: str, username: str, password: str) -> None:
-        prefix = source_type.upper()
+    def _write_credentials(self, connection_name: str, username: str, password: str) -> None:
+        # Keyed per-connection (not per source_type): two connections of the
+        # same database engine (e.g. two Postgres sources) must not share
+        # one .env entry and silently overwrite each other's credentials.
+        # connection_name is already validated against _NAME_RE by
+        # ConnectionSpec.validate(), so it's safe to use as an env key.
+        prefix = connection_name.upper()
         lines = self.env_path.read_text().splitlines() if self.env_path.exists() else []
         # Drop any existing keys for this prefix so updates replace rather than duplicate.
         keep = [

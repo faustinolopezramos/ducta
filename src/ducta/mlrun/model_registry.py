@@ -298,9 +298,20 @@ class ModelRegistry:
         dependencies: Optional[List[str]] = None,
         experiment_run_id: Optional[str] = None,
         audit_info: Optional[Dict[str, Optional[str]]] = None,
+        trust_artifact_source: bool = False,
     ) -> ModelVersion:
         """
         Register a new model or version with validation and locking.
+
+        `trust_artifact_source` gates whether pickle/joblib-based frameworks
+        (sklearn, pickle, joblib, custom, and the pickle fallback path of
+        xgboost/lightgbm) are actually deserialized during validation.
+        Loading a pickle means executing it, so this defaults to False —
+        artifacts from a source you haven't vetted only get a lightweight
+        existence/size/extension check. Set it to True only when
+        `artifact_path` is known to come from a trusted origin (the same
+        trust boundary `PickleReader.allow_untrusted_pickle` enforces in
+        `ducta.gate.readers`).
         """
         # Ensure registry structure exists before registering model
         self._ensure_registry_structure()
@@ -332,7 +343,9 @@ class ModelRegistry:
             # the expensive model-load check (e.g. for large PyTorch models).
             if self.validate_artifacts:
                 ArtifactValidator.validate_artifact(
-                    artifact_path=str(artifact_file), framework=framework
+                    artifact_path=str(artifact_file),
+                    framework=framework,
+                    trust_artifact_source=trust_artifact_source,
                 )
             logger.debug(f"Artifact validation passed: {artifact_file}")
 

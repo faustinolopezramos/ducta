@@ -421,13 +421,23 @@ class ArtifactValidator:
         "custom": ["pkl", "bin"],
     }
 
+    # Frameworks whose loader is pickle/joblib-based, i.e. "validating" them
+    # means executing arbitrary code embedded in the artifact. These are only
+    # actually deserialized when the caller passes trust_artifact_source=True
+    # — the same trust boundary PickleReader.allow_untrusted_pickle enforces
+    # in ducta.gate.readers.
+    _PICKLE_BASED_FRAMEWORKS = {"sklearn", "scikit-learn", "pickle", "joblib", "custom"}
+
     @staticmethod
     def validate_artifact(
         artifact_path: str,
         framework: str,
+        trust_artifact_source: bool = False,
     ) -> None:
         """
-        Validate that artifact exists and can be loaded.
+        Validate that artifact exists and, when the framework's loader is
+        pickle-based, only actually deserialize it if trust_artifact_source
+        is True.
         """
         artifact_path_obj = Path(artifact_path)
 
@@ -448,22 +458,55 @@ class ArtifactValidator:
 
         # 3. Try to load based on framework
         try:
-            ArtifactValidator._validate_loadable(artifact_path_obj, framework)
+            ArtifactValidator._validate_loadable(
+                artifact_path_obj, framework, trust_artifact_source
+            )
         except Exception as e:
             raise ValidationError(f"Cannot load artifact with framework '{framework}': {e}")
 
     @staticmethod
-    def _validate_loadable(artifact_path: Path, framework: str) -> None:
+    def _lightweight_validate(artifact_path: Path, framework: str) -> None:
+        """
+        Non-deserializing check used for pickle-based frameworks when
+        trust_artifact_source is False: existence was already confirmed by
+        the caller, so this only checks size and extension.
+        """
+        size_bytes = artifact_path.stat().st_size
+        if size_bytes == 0:
+            raise ValidationError(f"Artifact at {artifact_path} is empty")
+
+        allowed_extensions = ArtifactValidator.SUPPORTED_FRAMEWORKS.get(framework.lower(), [])
+        suffix = artifact_path.suffix.lstrip(".").lower()
+        if allowed_extensions and suffix not in allowed_extensions:
+            logger.warning(
+                f"Artifact extension '.{suffix}' is unusual for framework '{framework}' "
+                f"(expected one of {allowed_extensions})."
+            )
+
+    @staticmethod
+    def _validate_loadable(
+        artifact_path: Path, framework: str, trust_artifact_source: bool = False
+    ) -> None:
         """
         Attempt to load artifact to verify it's not corrupted.
         Dispatches to framework-specific loader helpers to keep complexity low.
         """
         framework_key = framework.lower()
+
+        if framework_key in ArtifactValidator._PICKLE_BASED_FRAMEWORKS and not trust_artifact_source:
+            logger.warning(
+                f"Skipping deserialization of '{framework}' artifact at {artifact_path}: "
+                "loading a pickle/joblib artifact executes it, so this requires "
+                "trust_artifact_source=True. Falling back to a lightweight check."
+            )
+            ArtifactValidator._lightweight_validate(artifact_path, framework)
+            return
+
         loaders = {
             "sklearn": ArtifactValidator._load_pickle,
             "scikit-learn": ArtifactValidator._load_pickle,
-            "xgboost": ArtifactValidator._load_xgboost,
-            "lightgbm": ArtifactValidator._load_lightgbm,
+            "xgboost": lambda p: ArtifactValidator._load_xgboost(p, trust_artifact_source),
+            "lightgbm": lambda p: ArtifactValidator._load_lightgbm(p, trust_artifact_source),
             "pytorch": ArtifactValidator._load_pytorch,
             "tensorflow": ArtifactValidator._load_tensorflow,
             "onnx": ArtifactValidator._load_onnx,
@@ -495,20 +538,27 @@ class ArtifactValidator:
             pickle.load(f)
 
     @staticmethod
-    def _load_xgboost(artifact_path: Path) -> None:
+    def _load_xgboost(artifact_path: Path, trust_artifact_source: bool = False) -> None:
         try:
             import xgboost as xgb  # type: ignore
         except ImportError as e:
             logger.warning("xgboost runtime not installed, cannot validate xgboost artifacts")
             raise ImportError("xgboost library is required to validate xgboost artifacts") from e
-        # Try JSON booster first, otherwise fallback to pickle
+        # Try JSON booster first (native format, safe); otherwise the only
+        # remaining option is the pickle fallback, which requires trust.
         if str(artifact_path).endswith(".json"):
             xgb.Booster(model_file=str(artifact_path))
-        else:
+        elif trust_artifact_source:
             ArtifactValidator._load_pickle(artifact_path)
+        else:
+            logger.warning(
+                f"Skipping pickle-based validation of xgboost artifact at {artifact_path}: "
+                "requires trust_artifact_source=True."
+            )
+            ArtifactValidator._lightweight_validate(artifact_path, "xgboost")
 
     @staticmethod
-    def _load_lightgbm(artifact_path: Path) -> None:
+    def _load_lightgbm(artifact_path: Path, trust_artifact_source: bool = False) -> None:
         try:
             import lightgbm as lgb  # type: ignore
         except ImportError as e:
@@ -516,8 +566,14 @@ class ArtifactValidator:
             raise ImportError("lightgbm library is required to validate lightgbm artifacts") from e
         if str(artifact_path).endswith(".txt"):
             lgb.Booster(model_file=str(artifact_path))
-        else:
+        elif trust_artifact_source:
             ArtifactValidator._load_pickle(artifact_path)
+        else:
+            logger.warning(
+                f"Skipping pickle-based validation of lightgbm artifact at {artifact_path}: "
+                "requires trust_artifact_source=True."
+            )
+            ArtifactValidator._lightweight_validate(artifact_path, "lightgbm")
 
     @staticmethod
     def _load_pytorch(artifact_path: Path) -> None:
@@ -526,7 +582,10 @@ class ArtifactValidator:
         except ImportError as e:
             logger.warning("pytorch runtime not installed, cannot validate pytorch artifacts")
             raise ImportError("pytorch library is required to validate pytorch artifacts") from e
-        state = torch.load(artifact_path, map_location="cpu")
+        # weights_only=True restricts unpickling to tensors/primitives, which
+        # closes the arbitrary-code-execution path pickle otherwise allows —
+        # applied unconditionally, independent of trust_artifact_source.
+        state = torch.load(artifact_path, map_location="cpu", weights_only=True)
         if not isinstance(state, dict):
             raise ValueError(f"Expected dict, got {type(state)}")
 

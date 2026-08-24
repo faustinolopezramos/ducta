@@ -14,7 +14,9 @@ import {
 } from "../../api/qualityApi";
 import { CheckResultsList, RawJson, type QualityReportData } from "../../components/Quality/report";
 import { IconDatabase, IconRefresh, IconTrash, IconX } from "@tabler/icons-react";
-import { card, label } from "./shared";
+import { label } from "./shared";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 // ─────────────────────────────────────────────
 // DATASET DETAIL (run history + report)
@@ -123,7 +125,7 @@ export function DatasetDetail({ dataset, onClose }: { dataset: string; onClose: 
   const report = useQualityReport(dataset, runId);
 
   return (
-    <div style={card}>
+    <Panel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconDatabase size={16} color={colors.accent} />
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
@@ -150,7 +152,7 @@ export function DatasetDetail({ dataset, onClose }: { dataset: string; onClose: 
         </div>
       )}
 
-      {report.isLoading && <p style={{ fontSize: 12, color: colors.textMuted }}>Loading report…</p>}
+      {report.isLoading && <Skeleton variant="text" width="40%" />}
 
       {report.data && (report.data as QualityReportData).results && (
         <div>
@@ -179,6 +181,6 @@ export function DatasetDetail({ dataset, onClose }: { dataset: string; onClose: 
           size="sm"
         />
       )}
-    </div>
+    </Panel>
   );
 }

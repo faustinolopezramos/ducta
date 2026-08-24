@@ -5,6 +5,8 @@ import { Button } from "../../components/ui/Button";
 import { ActionButton } from "../../components/ui/ActionButton";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
 import {
   useMlopsExperiments,
   useMlopsExperiment,
@@ -27,7 +29,7 @@ import {
   IconAlertTriangle,
   IconArrowsDiff,
 } from "@tabler/icons-react";
-import { card, formatDate, findProjectForPipeline } from "./shared";
+import { formatDate, findProjectForPipeline } from "./shared";
 
 function RunActionsCell({ experimentId, run }: { experimentId: string; run: ExperimentRun }) {
   const navigate = useNavigate();
@@ -219,7 +221,7 @@ function ExperimentRow({
   const { data: detail, isLoading } = useMlopsExperiment(expanded ? exp.experiment_id : "");
 
   return (
-    <div style={card}>
+    <Panel>
       <div
         onClick={() => setExpanded((v) => !v)}
         style={{
@@ -262,7 +264,7 @@ function ExperimentRow({
           />
         </div>
       )}
-    </div>
+    </Panel>
   );
 }
 
@@ -314,7 +316,13 @@ export function ExperimentsTab() {
         </div>
       </div>
 
-      {isLoading && <div style={{ color: colors.textMuted, fontSize: 13 }}>Loading experiments…</div>}
+      {isLoading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <Skeleton variant="block" height="64px" />
+          <Skeleton variant="block" height="64px" />
+          <Skeleton variant="block" height="64px" />
+        </div>
+      )}
       {isError && (
         <div style={{ color: "var(--danger)", fontSize: 13 }}>
           Failed to load experiments. Check that MLOps is configured in the workspace.

@@ -21,6 +21,7 @@ Business rule quality checks.
 """
 
 import ast
+import re
 from typing import Any, Dict, Optional
 
 from loguru import logger
@@ -146,11 +147,50 @@ class BusinessRulesCheck(BaseQualityCheck):
                 "Use rule_type='python' for Pandas/Polars engines."
             )
 
+        BusinessRulesCheck._validate_sql_rule(rule)
+
         try:
             violations = adapter.filter_where(f"NOT ({rule})")
             return violations
         except Exception as e:
             raise ValueError(f"SQL rule execution failed for rule '{rule}': {e}")
+
+    @staticmethod
+    def _validate_sql_rule(rule: str) -> None:
+        """Reject a SQL WHERE-clause rule containing anything beyond a plain
+        predicate — subqueries to other tables, stacked statements, comments,
+        dangerous keywords — before it's interpolated into a spark.sql() call.
+
+        `rule` is only a WHERE-clause fragment, not a full statement, so it
+        can't be handed to SQLSanitizer.sanitize_query() directly (that
+        requires a SELECT/WITH at the root) — wrapping it in a throwaway
+        `SELECT 1 WHERE ...` lets it reuse that sanitizer's lexical, AST and
+        keyword-denylist layers unchanged.
+        """
+        from ducta.gate.exceptions import ConfigurationError
+        from ducta.gate.sql import SQLSanitizer
+
+        try:
+            SQLSanitizer.sanitize_query(f"SELECT 1 WHERE {rule}")
+        except ConfigurationError as e:
+            raise ValueError(f"SQL rule '{rule}' failed security validation: {e}") from e
+
+        # SQLSanitizer allows subqueries (ALLOWED_AST_TYPES includes
+        # Subquery/Union) because it's meant for general read-only queries —
+        # but a business rule is only supposed to be a predicate over the
+        # current row, so a nested SELECT here means reading from some other
+        # table in the catalog, exactly the "read data outside this check's
+        # scope" risk this validation exists to close. Masking string
+        # literals first avoids false positives on legitimate data values
+        # like `status = 'selected'`.
+        masked_rule = SQLSanitizer._mask_string_literals(rule)
+        if re.search(r"\bselect\b", masked_rule, re.IGNORECASE) or re.search(
+            r"\bunion\b", masked_rule, re.IGNORECASE
+        ):
+            raise ValueError(
+                f"SQL rule '{rule}' is not allowed: subqueries/SELECT are not "
+                "permitted inside a business rule predicate"
+            )
 
     _SAFE_BUILTINS: Dict[str, Any] = {
         name: getattr(__import__("builtins"), name)
@@ -199,6 +239,7 @@ class BusinessRulesCheck(BaseQualityCheck):
             raise ValueError(f"Python rule execution failed for rule '{rule}': {e}")
 
     _MAX_AST_NODES = 200
+    _MAX_NUMERIC_LITERAL = 1_000_000
 
     @staticmethod
     def _validate_lambda_expression(expression: str) -> None:
@@ -291,6 +332,26 @@ class BusinessRulesCheck(BaseQualityCheck):
             # Block forbidden names
             if isinstance(node, ast.Name) and node.id in _FORBIDDEN_NAMES:
                 raise ValueError(f"Forbidden identifier in lambda: {node.id!r}")
+
+            # The AST node cap above bounds *shape*, not *cost*: an
+            # expression as short as `2**100000000` has only a handful of
+            # nodes but can burn CPU/memory disproportionately once eval'd.
+            # `**` isn't needed for business-rule predicates, so block it
+            # outright rather than try to bound "safe" exponents.
+            if isinstance(node, ast.Pow):
+                raise ValueError("The '**' (power) operator is not allowed in lambda expressions")
+
+            # Cap numeric literal magnitude too — guards against huge
+            # literals feeding other costly operations (e.g. giant
+            # multiplications or repeated string construction) that don't
+            # go through Pow.
+            if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+                if abs(node.value) > BusinessRulesCheck._MAX_NUMERIC_LITERAL:
+                    raise ValueError(
+                        f"Numeric literal {node.value!r} exceeds the maximum allowed "
+                        f"magnitude ({BusinessRulesCheck._MAX_NUMERIC_LITERAL}) in "
+                        "lambda expressions"
+                    )
 
             # Block attribute access except for the allowed whitelist
             if isinstance(node, ast.Attribute):

@@ -1,10 +1,4 @@
-import React from "react";
-import { colors } from "../../theme/tokens";
 import client from "../../api/client";
-// Both MLOps tabs import from this module, so it is where the shared stylesheet
-// gets pulled in. It existed but was never imported by anything, so none of its
-// rules had ever applied.
-import "./shared.css";
 
 /** Best-effort fallback: find the project that owns a pipeline by name.
  *  Older MLOps runs only record the pipeline's name; newer runs carry a
@@ -26,41 +20,13 @@ export async function findProjectForPipeline(pipelineName: string): Promise<stri
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
-export const card: React.CSSProperties = {
-  background: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 8,
-  padding: "16px 20px",
-  marginBottom: 12,
-};
-
+/** Colors for model lifecycle stages — not an execution Status, so this
+ * feeds `Badge`'s `color` prop rather than `StatusBadge`. */
 export const STAGE_COLOR: Record<string, string> = {
   Staging: "var(--warning)",
   Production: "var(--success)",
   Archived: "var(--text-muted)",
 };
-
-export function StageBadge({ stage }: { stage: string }) {
-  const color = STAGE_COLOR[stage] ?? "var(--text-muted)";
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: "2px 8px",
-        borderRadius: 4,
-        fontSize: 11,
-        fontWeight: 600,
-        background: `${color}20`,
-        color,
-        textTransform: "uppercase",
-        letterSpacing: "0.04em",
-      }}
-    >
-      {stage}
-    </span>
-  );
-}
 
 export function formatDate(iso?: string | null) {
   if (!iso) return "—";

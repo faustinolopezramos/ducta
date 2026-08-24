@@ -131,9 +131,9 @@ class MLConfigMixin:
         try:
             VariableInterpolator.interpolate_structure(ml_info_data, self.global_settings)
         except ConfigLoadError as exc:
+            # Expected for e.g. sensitive-looking variable names the
+            # interpolator refuses to resolve — not a bug, safe to skip.
             logger.debug("ML info interpolation skipped: {}", exc)
-        except Exception as exc:
-            logger.debug("ML info interpolation skipped (unexpected): {}", exc)
 
         ml_info_data["hyperparams"] = {
             **self.default_hyperparams,
@@ -219,8 +219,13 @@ class MLConfigMixin:
         if isinstance(hp_info, str) and hp_path:
             return load_hyperparams_config(str(hp_path), pipeline_key=hp_info)
 
-        # Fall back to hyperparams_config_path without a key (single-pipeline file)
-        if hp_path:
+        # Fall back to hyperparams_config_path without a key (single-pipeline file).
+        # Gated on type=="ml": hyperparams_config_path is a *global* setting, so
+        # without this a batch/streaming pipeline sharing the environment with
+        # ML pipelines would also hit this branch on every run and log a
+        # spurious "pipeline_key is required" error for a file it never asked
+        # to resolve.
+        if hp_path and pipeline.get("type") == "ml":
             return load_hyperparams_config(str(hp_path))
 
         return None

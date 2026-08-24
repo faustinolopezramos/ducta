@@ -4,7 +4,7 @@
  */
 import { useState } from "react";
 import { IconShieldCheck, IconShieldX } from "@tabler/icons-react";
-import { Modal, Button } from "../ui";
+import { Modal, Button, Skeleton } from "../ui";
 import {
   useCertificate,
   useVerifyCertificate,
@@ -34,7 +34,13 @@ export function CertificateModal({
   return (
     <Modal open title={`Run Certificate — ${runId.slice(0, 12)}`} onClose={onClose}>
       <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)" }}>
-        {isLoading && <p>Loading certificate…</p>}
+        {isLoading && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton variant="text" width="60%" />
+            <Skeleton variant="text" width="40%" />
+            <Skeleton variant="text" width="50%" />
+          </div>
+        )}
         {error != null && (
           <p style={{ color: "var(--danger)" }}>Could not load certificate.</p>
         )}

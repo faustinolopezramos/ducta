@@ -272,6 +272,11 @@ class TwoLevelCache(Generic[K, V]):
     Two-level cache with fast L1 (memory) and slower L2 (storage).
     """
 
+    # How long a thread waiting on someone else's in-flight L2 load polls
+    # before re-checking, and the overall ceiling before giving up.
+    _IN_FLIGHT_POLL_INTERVAL: float = 5.0
+    _IN_FLIGHT_MAX_WAIT: float = 60.0
+
     def __init__(
         self,
         l1_size: int = 100,
@@ -321,9 +326,25 @@ class TwoLevelCache(Generic[K, V]):
                 in_flight_event = None  # sentinel: this thread is the loader
 
         if in_flight_event is not None:
-            # Another thread is loading; wait and then re-check L1
-            in_flight_event.wait(timeout=5.0)
-            # After the loader thread completes, the value should be in L1
+            # Another thread is loading. Poll in bounded increments rather
+            # than giving up after a single wait() timeout: wait() returning
+            # False only means the loader hasn't finished *yet* — checking
+            # L1 immediately after a timeout could hand back a stale `default`
+            # for a load that was seconds away from succeeding.
+            waited = 0.0
+            while waited < self._IN_FLIGHT_MAX_WAIT:
+                signaled = in_flight_event.wait(timeout=self._IN_FLIGHT_POLL_INTERVAL)
+                waited += self._IN_FLIGHT_POLL_INTERVAL
+                if signaled:
+                    break
+            else:
+                logger.warning(
+                    "Timed out after {}s waiting for in-flight L2 load of key {!r}",
+                    self._IN_FLIGHT_MAX_WAIT,
+                    key,
+                )
+            # After the loader thread completes (or we gave up waiting), the
+            # value is in L1 if and only if the load actually succeeded.
             return self._l1.get(key, default)
 
         # This thread is the loader

@@ -59,6 +59,32 @@ class TestStrictMode:
         assert imp.validate_module_path("some_module.sub") is True
 
 
+class TestAllowedPrefixesValidation:
+    """Regression: `"".startswith("")` is always True, so an empty prefix in
+    allowed_prefixes made validate_module_path() accept *any* module path
+    even in strict_mode — silently defeating the whitelist."""
+
+    def test_empty_string_prefix_is_filtered_out(self):
+        imp = SecureModuleImporter(allowed_prefixes=["", "ducta."], strict_mode=True)
+        assert imp.validate_module_path("ducta.something") is True
+        with pytest.raises(ModuleImportError, match="whitelist"):
+            imp.validate_module_path("random_third_party")
+
+    def test_whitespace_only_prefix_is_filtered_out(self):
+        imp = SecureModuleImporter(allowed_prefixes=["   ", "ducta."], strict_mode=True)
+        with pytest.raises(ModuleImportError, match="whitelist"):
+            imp.validate_module_path("random_third_party")
+
+    def test_all_invalid_prefixes_falls_back_to_defaults(self):
+        imp = SecureModuleImporter(allowed_prefixes=["", None, "  "], strict_mode=True)
+        assert imp.allowed_prefixes == SecureModuleImporter.DEFAULT_ALLOWED_PREFIXES
+        assert imp.validate_module_path("ducta.something") is True
+
+    def test_valid_prefixes_are_unaffected(self):
+        imp = SecureModuleImporter(allowed_prefixes=["nodes.", "custom."], strict_mode=True)
+        assert imp.allowed_prefixes == ["nodes.", "custom."]
+
+
 class TestGetFunctionFromModule:
     def setup_method(self):
         # Exercises function-loading behavior (not whitelist enforcement, which

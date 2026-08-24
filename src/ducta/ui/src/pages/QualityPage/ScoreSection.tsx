@@ -4,7 +4,9 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useQualityScore } from "../../api/qualityApi";
 import { IconGauge, IconX } from "@tabler/icons-react";
-import { card, label } from "./shared";
+import { label } from "./shared";
+import { Panel } from "../../components/ui/Panel";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 // ─────────────────────────────────────────────
 // COMPOSITE SCORE (linked from Execution History via ?run_id=)
@@ -23,7 +25,7 @@ export function ScoreSection({ runId, onClear }: { runId: string; onClear: () =>
   const score = useQualityScore(runId);
 
   return (
-    <div style={{ ...card, borderColor: colors.accent }}>
+    <Panel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconGauge size={16} color={colors.accent} />
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
@@ -37,7 +39,7 @@ export function ScoreSection({ runId, onClear }: { runId: string; onClear: () =>
         </Button>
       </div>
 
-      {score.isLoading && <p style={{ fontSize: 12, color: colors.textMuted }}>Loading…</p>}
+      {score.isLoading && <Skeleton variant="text" width="50%" />}
 
       {!score.isLoading && score.isError && (
         <EmptyState
@@ -77,6 +79,6 @@ export function ScoreSection({ runId, onClear }: { runId: string; onClear: () =>
           )}
         </div>
       )}
-    </div>
+    </Panel>
   );
 }

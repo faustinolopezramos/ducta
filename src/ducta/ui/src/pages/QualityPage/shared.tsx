@@ -5,14 +5,6 @@ import { colors } from "../../theme/tokens";
 // SHARED STYLES
 // ─────────────────────────────────────────────
 
-export const card: React.CSSProperties = {
-  background: colors.surface,
-  border: `1px solid ${colors.border}`,
-  borderRadius: 8,
-  padding: "16px 20px",
-  marginBottom: 16,
-};
-
 export const label: React.CSSProperties = {
   display: "block",
   fontSize: 11,

@@ -248,8 +248,12 @@ class BaseExecutor:
                     )
                     if model is not None:
                         ml_info["model"] = model
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(
+                        "Could not resolve model from registry for pipeline '{}': {}",
+                        pipeline_name,
+                        e,
+                    )
 
             ml_info.update(
                 {

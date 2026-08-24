@@ -1,5 +1,6 @@
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../ui";
+import { Skeleton } from "../ui/Skeleton";
 import { ICONS } from "../icons";
 import { useRepository } from "../../api/queries";
 import { useRepositoryPush, useRepositoryPull, apiErrorMessage } from "../../api/mutations";
@@ -124,8 +125,9 @@ export function RepositoryStatus() {
       {/* Body */}
       <div style={{ padding: "14px 16px" }}>
         {isLoading && (
-          <div style={{ ...styles.fontSans, fontSize: 12, color: colors.textMuted }}>
-            Loading…
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            <Skeleton variant="text" width="70%" />
+            <Skeleton variant="text" width="50%" />
           </div>
         )}
         {isError && (

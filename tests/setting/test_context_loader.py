@@ -189,3 +189,41 @@ class TestContextLoader:
             env="dev",
         )
         assert ctx is not None
+
+    @patch("ducta.check.core.load_quality_extensions")
+    @patch("ducta.setting.contexts.ConfigLoaderFactory")
+    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
+    def test_load_from_paths_with_extensions_and_python_disallowed_skips_loading(
+        self, mock_get_session, mock_ctx_loader_cls, mock_load_extensions
+    ):
+        """Regression: allow_python_config=False must also block the
+        quality.extensions import path, not just PythonConfigLoader —
+        load_quality_extensions() does importlib.import_module() on
+        config-supplied module names, the same code-execution trust
+        boundary allow_python_config exists to close."""
+        mock_get_session.return_value = MagicMock()
+
+        settings_with_quality = {
+            "input_path": "/in",
+            "output_path": "/out",
+            "mode": "local",
+            "quality": {"extensions": ["my_checks"]},
+        }
+
+        mock_loader = MagicMock()
+        mock_loader.load_config.side_effect = _config_by_path(global_settings=settings_with_quality)
+        mock_ctx_loader_cls.return_value = mock_loader
+
+        loader = ContextLoader(allow_python_config=False)
+        ctx = loader.load_from_paths(
+            {
+                "global_settings_path": "/path/global.yaml",
+                "pipelines_config_path": "/path/pipelines.yaml",
+                "nodes_config_path": "/path/nodes.yaml",
+                "input_config_path": "/path/input.yaml",
+                "output_config_path": "/path/output.yaml",
+            },
+            env="dev",
+        )
+        assert ctx is not None
+        mock_load_extensions.assert_not_called()

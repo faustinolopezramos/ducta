@@ -49,8 +49,28 @@ def _exclusive_lock(f: Any) -> Generator[None, None, None]:
         finally:
             fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except ImportError:
-        # fcntl not available on Windows; concurrent writes may corrupt files
-        yield
+        try:
+            import msvcrt
+        except ImportError:
+            # Neither fcntl (POSIX) nor msvcrt (Windows) is available;
+            # concurrent writes may corrupt files.
+            yield
+            return
+
+        # msvcrt.locking() locks a byte range starting at the *current* file
+        # position, so pin it to a fixed 1-byte region at offset 0 — the
+        # LK_LOCK and matching LK_UNLCK calls must agree on both the start
+        # offset and length, and callers seek around inside `f` while the
+        # lock is held.
+        original_pos = f.tell()
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            f.seek(original_pos)
+            yield
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _write_json_atomic(path: Path, data: Any) -> None:
@@ -178,6 +198,20 @@ class StorageBackend(ABC):
     ) -> List[str]:
         return []
 
+    def list_reports_by_recency(
+        self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME
+    ) -> List[str]:
+        """Like list_reports(), but ordered most-recent-first.
+
+        run_id is an opaque identifier (a random UUID fragment, not a
+        timestamp), so callers that want "the latest report" must not sort
+        list_reports()'s output lexicographically. Concrete backends that
+        persist to a local filesystem override this with a real
+        mtime-based sort; this default falls back to list_reports()'s own
+        (unspecified) order for backends that can't determine recency.
+        """
+        return self.list_reports(dataset_name, pipeline_name)
+
     def delete_report(
         self, run_id: str, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME
     ) -> bool:
@@ -281,6 +315,19 @@ class FileStorageBackend(StorageBackend):
     ) -> List[str]:
         try:
             return [f.stem for f in self._reports_dir(dataset_name, pipeline_name).glob("*.json")]
+        except Exception:
+            return []
+
+    def list_reports_by_recency(
+        self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME
+    ) -> List[str]:
+        try:
+            files = sorted(
+                self._reports_dir(dataset_name, pipeline_name).glob("*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            return [f.stem for f in files]
         except Exception:
             return []
 
@@ -570,6 +617,29 @@ class ContextAwareStorageBackend(StorageBackend):
             return sorted(f.stem for f in reports_dir.glob(f"*.{self.format}"))
         except Exception as e:
             logger.debug(f"Failed to list reports for '{dataset_name}': {e}")
+            return []
+
+    def list_reports_by_recency(
+        self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME
+    ) -> List[str]:
+        """Like list_reports(), but ordered most-recent-first by file mtime.
+
+        Not supported for cloud storage paths — mtime isn't reliably
+        meaningful there, same limitation as list_reports() itself — so
+        this falls back to list_reports()'s own order in that case.
+        """
+        if self._is_cloud_path(str(self._root)):
+            return self.list_reports(dataset_name, pipeline_name)
+        try:
+            reports_dir = self._reports_dir(dataset_name, pipeline_name)
+            files = sorted(
+                reports_dir.glob(f"*.{self.format}"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            return [f.stem for f in files]
+        except Exception as e:
+            logger.debug(f"Failed to list reports by recency for '{dataset_name}': {e}")
             return []
 
     def delete_report(

@@ -11,8 +11,14 @@ import {
 } from "../../api/qualityApi";
 import { FilePickerField } from "./FilePickerField";
 import { CheckResultsList, RawJson, type QualityReportData } from "./report";
+import { Field } from "../ui/Field";
+import "../ui/Input.css";
 import { IconPlayerPlay, IconPlus, IconTrash } from "@tabler/icons-react";
 
+// Used both as a section heading (Checks) and, further down, as the visual
+// style for the per-row check-builder cells — those are spreadsheet-like
+// rows without a per-cell label by design (the column position is the
+// label), so they intentionally stay outside `Field`.
 const label: React.CSSProperties = {
   display: "block",
   fontSize: 11,
@@ -191,8 +197,9 @@ export function RunChecksModal({
     <Modal title="Run quality checks" onClose={onClose} width={640}>
       <div style={{ display: "grid", gap: 14 }}>
         <div>
-          <span style={label}>Data file</span>
+          <label style={label} htmlFor="run-checks-data-file">Data file</label>
           <FilePickerField
+            id="run-checks-data-file"
             value={inputPath}
             onChange={handleInputPath}
             placeholder="data/bronze/sales.parquet"
@@ -202,16 +209,17 @@ export function RunChecksModal({
 
         <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
           <div style={{ width: 140 }}>
-            <span style={label}>Format</span>
-            <select
-              style={input}
-              value={format}
-              onChange={(e) => setFormat(e.target.value as NonNullable<RunChecksVars["format"]>)}
-            >
-              <option value="parquet">parquet</option>
-              <option value="csv">csv</option>
-              <option value="json">json</option>
-            </select>
+            <Field label="Format">
+              <select
+                className="input-field"
+                value={format}
+                onChange={(e) => setFormat(e.target.value as NonNullable<RunChecksVars["format"]>)}
+              >
+                <option value="parquet">parquet</option>
+                <option value="csv">csv</option>
+                <option value="json">json</option>
+              </select>
+            </Field>
           </div>
           <label
             style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: colors.text, paddingBottom: 7 }}
@@ -358,6 +366,7 @@ export function RunChecksModal({
 
           {source === "config" && (
             <FilePickerField
+              label="Checks config file"
               value={configPath}
               onChange={setConfigPath}
               placeholder="config/quality.toml"
@@ -367,6 +376,7 @@ export function RunChecksModal({
 
           {source === "json" && (
             <textarea
+              aria-label="Checks JSON"
               style={{ ...input, minHeight: 100, resize: "vertical" }}
               value={checksJson}
               onChange={(e) => setChecksJson(e.target.value)}

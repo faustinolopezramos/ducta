@@ -34,6 +34,22 @@ DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 class ConfigValidator:
     """Validates configuration objects."""
 
+    @staticmethod
+    def validate_name_component(value: str, field_name: str = "component") -> str:
+        """Validate a single path/name component (schema, table, artifact
+        name, version, ...): non-empty and alphanumeric/underscore/hyphen
+        only — rejects `..`, `/`, and anything else that could escape a
+        directory built from it.
+        """
+        if not value or not isinstance(value, str) or not value.strip():
+            raise ConfigurationError(f"Empty component in '{field_name}'")
+        if not VALID_NAME_PATTERN.match(value):
+            raise ConfigurationError(
+                f"Invalid characters in '{field_name}': '{value}'. "
+                "Use only alphanumeric, underscores, and hyphens."
+            )
+        return value
+
     def validate_output_key(self, output_key: str) -> Dict[str, str]:
         """Parse and validate output key format."""
         if not output_key or not isinstance(output_key, str):
@@ -53,12 +69,7 @@ class ConfigValidator:
         result = {"schema": parts[0], "sub_folder": parts[1], "table_name": parts[2]}
 
         for key, value in result.items():
-            if not value.strip():
-                raise ConfigurationError(f"Empty component in output key: {key}")
-            if not VALID_NAME_PATTERN.match(value):
-                raise ConfigurationError(
-                    f"Invalid characters in '{key}': '{value}'. Use only alphanumeric, underscores, and hyphens."
-                )
+            self.validate_name_component(value, key)
 
         logger.debug("Output key parsed: {} -> {}", output_key, result)
         return result

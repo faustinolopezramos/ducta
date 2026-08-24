@@ -71,7 +71,7 @@ class SecureModuleImporter:
         """
         Initialize secure module importer.
         """
-        self.allowed_prefixes = allowed_prefixes or self.DEFAULT_ALLOWED_PREFIXES
+        self.allowed_prefixes = self._validate_allowed_prefixes(allowed_prefixes)
         self.strict_mode = strict_mode
         self._module_cache: dict = {}
 
@@ -81,6 +81,38 @@ class SecureModuleImporter:
                 validated = self._validate_search_path(path)
                 if validated:
                     self.additional_search_paths.append(validated)
+
+    def _validate_allowed_prefixes(self, allowed_prefixes: Optional[List[str]]) -> List[str]:
+        """Filter out entries that would defeat the whitelist entirely.
+
+        `"".startswith(prefix)` is only ever True when `prefix` is itself
+        empty — but `module_path.startswith("")` is always True, so an
+        empty (or whitespace-only) prefix silently allowed *any* module
+        path to pass validate_module_path(), even in strict_mode. Same
+        defensive-filtering style as _validate_search_path above.
+        """
+        if not allowed_prefixes:
+            return self.DEFAULT_ALLOWED_PREFIXES
+
+        validated = []
+        for prefix in allowed_prefixes:
+            if not isinstance(prefix, str) or not prefix.strip():
+                logger.warning(
+                    "Ignoring invalid allowed_prefixes entry {!r}: empty prefixes would "
+                    "match every module path, defeating the import whitelist.",
+                    prefix,
+                )
+                continue
+            validated.append(prefix)
+
+        if not validated:
+            logger.warning(
+                "allowed_prefixes contained no valid entries after filtering; "
+                "falling back to DEFAULT_ALLOWED_PREFIXES."
+            )
+            return self.DEFAULT_ALLOWED_PREFIXES
+
+        return validated
 
     def _validate_search_path(self, path: Path) -> Optional[Path]:
         """

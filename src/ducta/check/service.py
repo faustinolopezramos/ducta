@@ -130,7 +130,14 @@ class QualityService:
                 "message": f"No quality reports found for dataset '{dataset}' in '{workspace}'",
             }
 
-        target_run_id = run_id or sorted(run_ids)[-1]
+        if run_id:
+            target_run_id = run_id
+        else:
+            recent = storage.list_reports_by_recency(dataset, effective_pipeline)
+            # list_reports_by_recency should never come back empty when
+            # run_ids isn't, but fall back to the (arbitrary-order) alpha
+            # sort rather than crash if a backend's mtime lookup fails.
+            target_run_id = recent[0] if recent else sorted(run_ids)[-1]
         report = storage.load_report(target_run_id, dataset, effective_pipeline)
         if report is None:
             raise FileNotFoundError(f"Report '{target_run_id}' not found for dataset '{dataset}'")
@@ -193,16 +200,18 @@ class QualityService:
                 entry_pipeline, dataset = pipeline_name, entry
             else:
                 entry_pipeline, _, dataset = entry.partition("/")
-            run_ids = sorted(storage.list_reports(dataset, entry_pipeline))
+            # Ordered most-recent-first by file mtime, not lexicographically —
+            # run_id is a random UUID fragment, not a sortable timestamp.
+            run_ids = storage.list_reports_by_recency(dataset, entry_pipeline)
             latest: Optional[Dict[str, Any]] = None
             if run_ids:
-                latest = storage.load_report(run_ids[-1], dataset, entry_pipeline)
+                latest = storage.load_report(run_ids[0], dataset, entry_pipeline)
             trend = storage.load_score_trend(dataset, trend_n, entry_pipeline) or []
             summary.append(
                 {
                     "dataset": entry,
                     "run_count": len(run_ids),
-                    "latest_run_id": run_ids[-1] if run_ids else None,
+                    "latest_run_id": run_ids[0] if run_ids else None,
                     "latest_score": (latest or {}).get("score"),
                     "passed": (latest or {}).get("passed"),
                     "created_at": (latest or {}).get("created_at"),

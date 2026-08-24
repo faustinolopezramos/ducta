@@ -43,16 +43,10 @@ export function usePipelinePageState() {
   const isDirty = useBuilderStore((s) => s.isDirty);
   const { show: showToast } = useToastStack();
 
+  // Rendered as a <ConfirmDialog> by the consuming page (PipelinePage) rather
+  // than window.confirm() here — a hook has no JSX of its own to render one,
+  // and window.confirm can't be styled and blocks the whole tab.
   const blocker = useBlocker(isDirty);
-  useEffect(() => {
-    if (blocker.state === "blocked") {
-      if (window.confirm("You have unsaved pipeline changes. Leave without saving?")) {
-        blocker.proceed();
-      } else {
-        blocker.reset();
-      }
-    }
-  }, [blocker]);
 
   useEffect(() => {
     if (!isDirty) return;
@@ -305,5 +299,6 @@ export function usePipelinePageState() {
     currentProject, currentPipeline, pipelineNodes, dagItems,
     parentsMap, lineage, navMaps, lineageLists, isExecuting,
     handleRunNode, handleExecute, handleValidate, handleCancel, clearSelection,
+    blocker,
   };
 }

@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import ClassVar, List, Optional
 
 from loguru import logger  # type: ignore
@@ -291,6 +292,19 @@ class Settings(BaseSettings):
                     "RATE_LIMIT_ENABLED=false explicitly to opt out.",
                     stacklevel=2,
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _expand_runs_dir(self) -> "Settings":
+        """Expand `~` in runs_dir so consumers get a usable absolute path.
+
+        `Path("~/.ducta/runs")` does NOT resolve `~` on its own — left
+        unexpanded, it's treated as a relative path whose first component is
+        literally named "~", creating a `./~/.ducta/runs/...` directory under
+        whatever the process cwd happens to be instead of under $HOME.
+        """
+        if self.runs_dir and self.runs_dir.strip():
+            self.runs_dir = str(Path(self.runs_dir.strip()).expanduser())
         return self
 
     #: Forges assumed safe when no allow-list is configured outside development.

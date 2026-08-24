@@ -3,6 +3,7 @@
 // ─────────────────────────────────────────────
 
 import Logger from './logger';
+import { toastStore } from '../hooks/useModalStack';
 
 /**
  * Structured error logging system
@@ -43,6 +44,9 @@ export function initializeErrorHandling() {
   if (_errorHandlingInitialized) return;
   _errorHandlingInitialized = true;
 
+  // Previously log-only: a genuine bug (not an API error, those are handled
+  // by the axios interceptor) failed silently from the user's point of view
+  // — nothing told them the action they just took didn't work.
   globalThis.addEventListener('error', (event: ErrorEvent) => {
     Logger.error('Unhandled error', undefined, {
       message: event.message,
@@ -51,6 +55,7 @@ export function initializeErrorHandling() {
       colno: event.colno,
       stack: event.error?.stack,
     });
+    toastStore.getState().error('Something went wrong. Check the console for details.');
   });
 
   globalThis.addEventListener('unhandledrejection', (event: PromiseRejectionEvent) => {
@@ -58,5 +63,6 @@ export function initializeErrorHandling() {
       reason: event.reason?.message || event.reason,
       stack: event.reason?.stack,
     });
+    toastStore.getState().error('Something went wrong. Check the console for details.');
   });
 }

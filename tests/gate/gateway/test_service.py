@@ -103,8 +103,48 @@ class TestIngestionService:
         env_path = temp_dir / ".env"
         assert env_path.exists()
         content = env_path.read_text()
-        assert "POSTGRESQL_USER=admin" in content
-        assert "POSTGRESQL_PASSWORD=s3cret" in content
+        # Keyed by connection name, not by database type — see
+        # TestWriteCredentials for the regression this guards against.
+        assert "NEW_DB_USER=admin" in content
+        assert "NEW_DB_PASSWORD=s3cret" in content
+
+    def test_create_connection_same_type_different_names_keep_separate_credentials(
+        self, temp_dir
+    ):
+        """Regression: two connections of the same source_type must not
+        overwrite each other's credentials in .env."""
+        config_dir = temp_dir / "config"
+        config_dir.mkdir()
+        svc = IngestionService(str(temp_dir))
+
+        svc.create_connection(
+            ConnectionSpec(
+                name="prod_postgres",
+                source_type="postgresql",
+                host="prod.example.com",
+                port=5432,
+                database="prod_db",
+                username="prod_admin",
+                password="prod_secret",
+            )
+        )
+        svc.create_connection(
+            ConnectionSpec(
+                name="staging_postgres",
+                source_type="postgresql",
+                host="staging.example.com",
+                port=5432,
+                database="staging_db",
+                username="staging_admin",
+                password="staging_secret",
+            )
+        )
+
+        content = (temp_dir / ".env").read_text()
+        assert "PROD_POSTGRES_USER=prod_admin" in content
+        assert "PROD_POSTGRES_PASSWORD=prod_secret" in content
+        assert "STAGING_POSTGRES_USER=staging_admin" in content
+        assert "STAGING_POSTGRES_PASSWORD=staging_secret" in content
 
     def test_create_connection_duplicate(self, temp_dir):
         config_dir = temp_dir / "config"
@@ -164,23 +204,40 @@ class TestWriteCredentials:
         config_dir = temp_dir / "config"
         config_dir.mkdir()
         svc = IngestionService(str(temp_dir))
-        svc._write_credentials("mysql", "admin", "secret")
+        svc._write_credentials("my_mysql_conn", "admin", "secret")
         env_path = temp_dir / ".env"
         assert env_path.exists()
         content = env_path.read_text()
-        assert "MYSQL_USER=admin" in content
-        assert "MYSQL_PASSWORD=secret" in content
+        assert "MY_MYSQL_CONN_USER=admin" in content
+        assert "MY_MYSQL_CONN_PASSWORD=secret" in content
 
     def test_write_credentials_updates_existing(self, temp_dir):
         config_dir = temp_dir / "config"
         config_dir.mkdir()
-        (temp_dir / ".env").write_text("EXISTING_KEY=val\nMYSQL_USER=old\nMYSQL_PASSWORD=oldpass\n")
+        (temp_dir / ".env").write_text(
+            "EXISTING_KEY=val\nMY_MYSQL_CONN_USER=old\nMY_MYSQL_CONN_PASSWORD=oldpass\n"
+        )
         svc = IngestionService(str(temp_dir))
-        svc._write_credentials("mysql", "newuser", "newpass")
+        svc._write_credentials("my_mysql_conn", "newuser", "newpass")
         content = (temp_dir / ".env").read_text()
         assert "EXISTING_KEY=val" in content
-        assert "MYSQL_USER=newuser" in content
-        assert "MYSQL_PASSWORD=newpass" in content
+        assert "MY_MYSQL_CONN_USER=newuser" in content
+        assert "MY_MYSQL_CONN_PASSWORD=newpass" in content
+
+    def test_write_credentials_keyed_by_connection_name_not_source_type(self, temp_dir):
+        """Regression: credentials used to be keyed by source_type.upper(),
+        so two connections of the same DB engine silently overwrote each
+        other's username/password."""
+        config_dir = temp_dir / "config"
+        config_dir.mkdir()
+        svc = IngestionService(str(temp_dir))
+        svc._write_credentials("conn_a", "user_a", "pass_a")
+        svc._write_credentials("conn_b", "user_b", "pass_b")
+        content = (temp_dir / ".env").read_text()
+        assert "CONN_A_USER=user_a" in content
+        assert "CONN_A_PASSWORD=pass_a" in content
+        assert "CONN_B_USER=user_b" in content
+        assert "CONN_B_PASSWORD=pass_b" in content
 
     def test_ensure_gitignore_creates(self, temp_dir):
         config_dir = temp_dir / "config"

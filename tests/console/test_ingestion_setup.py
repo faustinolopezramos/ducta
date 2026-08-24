@@ -87,3 +87,35 @@ class TestIngestionSetupWarnsBeforeOverwrite:
 
         assert result == ExitCode.SUCCESS.value
         mock_service.create_connection.assert_called_once()
+
+
+class TestIngestionSetupNextStepsMessage:
+    """Regression: the "Next Steps" output told the user to manually edit
+    .env with "the actual password" — but _write_credentials already wrote
+    the real password captured via getpass. The instruction was misleading
+    at best (it implies the password isn't there yet) and could lead a user
+    to believe the file lacks the real secret when it doesn't."""
+
+    def test_does_not_ask_the_user_to_manually_add_the_password(self, capsys):
+        mock_service = MagicMock()
+        from ducta.gate.gateway import IngestionServiceError
+
+        mock_service.get_connection.side_effect = IngestionServiceError("not found")
+        mock_service.test_spec.return_value = True
+        mock_service.env_path = "/project/.env"
+
+        inputs = iter(["2", "new_db", "localhost", "", "mydb", "myuser"])
+
+        with patch(
+            "ducta.console.commands.ingestion_setup.IngestionService",
+            return_value=mock_service,
+        ):
+            with patch("builtins.input", side_effect=lambda *_: next(inputs)):
+                with patch("getpass.getpass", return_value="mypassword"):
+                    IngestionSetupCommands._setup(Namespace())
+
+        out = capsys.readouterr().out
+        assert "your_actual_password" not in out
+        assert "nano .env" not in out
+        assert "/project/.env" in out
+        assert "already saved" in out

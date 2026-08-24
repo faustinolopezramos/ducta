@@ -700,6 +700,7 @@ class Transaction:
 
         self.operations: List[Operation] = []
         self.executed = False
+        self.state = TransactionState.PENDING
         self._staging_dir: Optional[Path] = None
 
     def write_json(self, data: Dict[str, Any], path: str, mode: str = "overwrite") -> "Transaction":
@@ -754,6 +755,8 @@ class Transaction:
                     logger.debug("Transaction has no operations, skipping")
                     return False
 
+                self.state = TransactionState.ACTIVE
+
                 for i, operation in enumerate(self.operations):
                     try:
                         self._execute_operation(operation)
@@ -763,10 +766,15 @@ class Transaction:
                         )
 
                 self.executed = True
+                self.state = TransactionState.COMMITTED
                 logger.info(f"Transaction committed with {len(self.operations)} operations")
                 return True
 
         except Exception as e:
+            # Operations before the failing one may already have been applied
+            # (this is a partial failure, not a no-op) — FAILED, not PENDING,
+            # so SafeTransaction.rollback() knows there may be state to undo.
+            self.state = TransactionState.FAILED
             logger.error(f"Transaction failed: {e}")
             raise
 
@@ -804,11 +812,18 @@ class SafeTransaction(Transaction):
     Enhanced transaction with automatic rollback capability.
     """
 
-    # Sentinel recorded in `_original_values` for write_dataframe/write_json
-    # operations whose path did not exist before the transaction — distinct
-    # from "we don't know" (any other snapshot failure), so rollback can
-    # delete the newly-created path instead of silently doing nothing.
+    # Sentinel recorded in `_original_values` for write_dataframe/write_json/
+    # write_artifact operations whose path did not exist before the
+    # transaction — distinct from "we don't know" (any other snapshot
+    # failure), so rollback can delete the newly-created path instead of
+    # silently doing nothing.
     _NOT_EXISTED = object()
+
+    # Sentinel recorded when a pre-existing artifact could not be backed up
+    # (e.g. read_artifact raised). This must NOT be conflated with
+    # _NOT_EXISTED: the artifact did exist, we just don't have a copy of it,
+    # so rollback must refuse to touch it rather than delete real data.
+    _SNAPSHOT_FAILED = object()
 
     def __init__(
         self,
@@ -845,14 +860,26 @@ class SafeTransaction(Transaction):
                 elif operation.operation_type == "write_artifact":
                     # Improved v2.2: Backup existing artifacts for full rollback support
                     if self.storage.exists(operation.path):
-                        # Use staging dir to backup original artifact
-                        backup_name = hashlib.md5(operation.path.encode()).hexdigest()
-                        backup_path = self._staging_dir / backup_name
-                        self.storage.read_artifact(operation.path, str(backup_path))
-                        self._original_values[operation.path] = {
-                            "_existed": True,
-                            "_backup_path": str(backup_path),
-                        }
+                        try:
+                            # Use staging dir to backup original artifact
+                            backup_name = hashlib.md5(operation.path.encode()).hexdigest()
+                            backup_path = self._staging_dir / backup_name
+                            self.storage.read_artifact(operation.path, str(backup_path))
+                            self._original_values[operation.path] = {
+                                "_existed": True,
+                                "_backup_path": str(backup_path),
+                            }
+                        except Exception as e:
+                            # It existed but we couldn't back it up — record
+                            # this explicitly so rollback refuses to delete
+                            # it (see _rollback_single_operation).
+                            self._original_values[operation.path] = self._SNAPSHOT_FAILED
+                            logger.error(
+                                f"Could not back up existing artifact at {operation.path}, "
+                                f"rollback will not be able to restore it: {e}"
+                            )
+                    else:
+                        self._original_values[operation.path] = self._NOT_EXISTED
             except Exception as e:
                 logger.debug(f"Could not snapshot {operation.path}: {e}")
 
@@ -908,7 +935,16 @@ class SafeTransaction(Transaction):
                     return True
             elif operation.operation_type == "write_artifact":
                 orig = self._original_values.get(operation.path)
-                if orig is None:
+                if orig is self._SNAPSHOT_FAILED:
+                    # We know an artifact existed here but never captured a
+                    # usable backup — restoring or deleting would be a guess.
+                    logger.error(
+                        f"Refusing to rollback {operation.path}: the pre-transaction "
+                        "artifact could not be backed up during snapshot, so its "
+                        "original state is unknown."
+                    )
+                    return False
+                if orig is None or orig is self._NOT_EXISTED:
                     # Created during transaction, delete it
                     if self.storage.exists(operation.path):
                         self.storage.delete(operation.path)
@@ -928,9 +964,14 @@ class SafeTransaction(Transaction):
         Attempt to rollback to original state.
 
         Restores DataFrame, JSON and Artifact writes to their pre-transaction values.
+
+        Can be called both after a successful commit (state COMMITTED) and
+        after an execution that failed partway through (state FAILED) —
+        `_snapshot_operations` runs before `super().execute()`, so the
+        pre-transaction state is already captured in either case.
         """
-        if not self.executed:
-            logger.warning("Cannot rollback non-executed transaction")
+        if self.state not in (TransactionState.COMMITTED, TransactionState.FAILED):
+            logger.warning(f"Cannot rollback transaction in state '{self.state.value}'")
             return False
 
         logger.warning("Attempting to rollback transaction")
@@ -943,6 +984,8 @@ class SafeTransaction(Transaction):
                 self._staging_dir = None
             except Exception as e:
                 logger.warning(f"Failed to cleanup staging dir after rollback: {e}")
+
+        self.state = TransactionState.ROLLED_BACK
 
         if rollback_count > 0:
             logger.info(f"Rolled back {rollback_count} operations")

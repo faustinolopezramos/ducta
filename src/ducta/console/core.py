@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import os
+import re
 import stat
 import sys
 import threading
@@ -180,6 +181,14 @@ class CLIConfig:
     rerun_all: bool = False
 
 
+#: Safe identifier charset shared by every CLI-supplied name that ends up as
+#: a filesystem path component (project names, sandbox developer names, run
+#: ids, ...) — reused instead of re-declared per module so a fix applied
+#: once (see template.py's project_name/sandbox_developers validation)
+#: covers every caller, not just the one it was first written for.
+VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
 class SecurityValidator:
     SENSITIVE_DIRS: Tuple[Path, ...]
 
@@ -225,7 +234,7 @@ class SecurityValidator:
             # Prevents path traversal attacks using absolute paths
             SecurityValidator._check_relative_to_base(resolved_base, resolved_target)
             SecurityValidator._check_sensitive_dirs(resolved_target)
-            SecurityValidator._check_hidden_parts(resolved_target)
+            SecurityValidator._check_hidden_parts(resolved_base, resolved_target)
             SecurityValidator._check_file_permissions(resolved_target, permissive=permissive)
 
             return resolved_target
@@ -252,9 +261,18 @@ class SecurityValidator:
                 pass
 
     @staticmethod
-    def _check_hidden_parts(resolved_target: Path) -> None:
-        """Reject paths that contain hidden directory or file components."""
-        for part in resolved_target.parts:
+    def _check_hidden_parts(resolved_base: Path, resolved_target: Path) -> None:
+        """Reject paths whose *target-relative-to-base* components are hidden.
+
+        Iterating resolved_target.parts (the full absolute path) rejected
+        anything under a dotdir ancestor of base_path itself (e.g.
+        ~/.config/ducta_projects/proj) even when nothing under proj was
+        hidden — _check_relative_to_base above already proved the relation
+        is valid, so only the part actually under the caller's control
+        should be checked here.
+        """
+        relative_parts = resolved_target.relative_to(resolved_base).parts
+        for part in relative_parts:
             if part.startswith(".") and part not in (".", ".."):
                 raise SecurityError(f"Access to hidden path denied: {resolved_target}")
 

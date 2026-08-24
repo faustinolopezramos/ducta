@@ -313,9 +313,33 @@ class ConnectionManager:
         # Load credentials from environment or .env file
         self._load_env_file()
 
-        env_prefix = source_type.upper()
-        username = os.getenv(f"{env_prefix}_USER")
-        password = os.getenv(f"{env_prefix}_PASSWORD")
+        # Preferred: per-connection prefix (IngestionService writes this).
+        # Two connections of the same source_type must not share one .env
+        # entry — falling back to the type-based prefix only keeps older
+        # .env files (written before credentials were keyed by connection
+        # name) working without requiring every deployment to re-run setup.
+        name_prefix = source_name.upper()
+        username = os.getenv(f"{name_prefix}_USER")
+        password = os.getenv(f"{name_prefix}_PASSWORD")
+
+        env_prefix = name_prefix
+        if not username or not password:
+            type_prefix = source_type.upper()
+            type_username = os.getenv(f"{type_prefix}_USER")
+            type_password = os.getenv(f"{type_prefix}_PASSWORD")
+            if type_username and type_password:
+                logger.warning(
+                    "Source '{}' has no '{}_USER'/'{}_PASSWORD' in .env; falling back to "
+                    "the deprecated type-based '{}_USER'/'{}_PASSWORD'. Re-run "
+                    "'ducta init ingestion setup' to migrate this connection's credentials.",
+                    source_name,
+                    name_prefix,
+                    name_prefix,
+                    type_prefix,
+                    type_prefix,
+                )
+                username, password = type_username, type_password
+                env_prefix = type_prefix
 
         if not username or not password:
             raise ValueError(

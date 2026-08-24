@@ -167,7 +167,6 @@ class IngestionSetupCommands:
             print("=" * 70 + "\n")
 
             service.create_connection(spec, overwrite=True)
-            env_prefix = source_type.upper()
             logger.info(f"✓ Configuration saved: {service.config_path}")
             logger.info(f"✓ Credentials saved: {service.env_path}")
 
@@ -177,9 +176,9 @@ class IngestionSetupCommands:
             print("=" * 70 + "\n")
 
             print("📋 Next Steps:\n")
-            print("1. Update your .env file with the actual password:")
-            print("   nano .env")
-            print(f"   {env_prefix}_PASSWORD=your_actual_password\n")
+            print("1. Your credentials are already saved — nothing to edit:")
+            print(f"   {service.env_path}")
+            print("   (keep this file out of version control; it's already gitignored)\n")
 
             print("2. In your code, use the connection:")
             print("   from ducta.gate.gateway import ConnectionManager")

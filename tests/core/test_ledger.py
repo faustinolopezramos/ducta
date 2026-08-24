@@ -166,6 +166,29 @@ class TestLedgerFor:
 
         assert ledger_for(context) is ledger
 
+    def test_concurrent_first_calls_all_get_the_same_instance(self):
+        """Regression: ledger_for()'s getattr/setattr check-then-act had no
+        lock of its own, so N threads racing to call it on a fresh context
+        before any of them had cached one could each construct and setattr
+        a *different* RunLedger — every caller thinking it holds "the"
+        ledger while some of them silently write to one nobody else sees."""
+        context = _ctx()
+        barrier = threading.Barrier(16)
+        results: list = [None] * 16
+
+        def call(i: int):
+            barrier.wait(timeout=2.0)
+            results[i] = ledger_for(context)
+
+        threads = [threading.Thread(target=call, args=(i,)) for i in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=2.0)
+
+        assert all(r is results[0] for r in results)
+        assert context.run_ledger is results[0]
+
     def test_a_read_only_context_still_gets_a_working_ledger(self):
         class Locked:
             __slots__ = ()

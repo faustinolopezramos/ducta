@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, memo, type ReactNode } from "react";
 import { colors } from "../../../theme/tokens";
-import { Button } from "../../ui";
+import { Button, Skeleton } from "../../ui";
 import { layerMeta, formatCell, formatUptime, formatRate } from "./helpers";
 
 export const StatCard = memo(function StatCard({
@@ -56,8 +56,10 @@ export const UptimeTicker = memo(function UptimeTicker({
 export const SkeletonCard = memo(function SkeletonCard() {
   return (
     <div style={{ padding: "14px 16px", background: colors.bg, borderRadius: "8px", border: `1px solid ${colors.border}` }}>
-      <div style={{ height: "10px", width: "60%", borderRadius: "4px", background: colors.border, marginBottom: "10px" }} />
-      <div style={{ height: "22px", width: "40%", borderRadius: "4px", background: colors.border }} />
+      <div style={{ marginBottom: "10px" }}>
+        <Skeleton variant="text" width="60%" />
+      </div>
+      <Skeleton variant="text" width="40%" height="22px" />
     </div>
   );
 });

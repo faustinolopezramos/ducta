@@ -1,7 +1,9 @@
-import React, { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { StatusBadge } from "../ui/StatusBadge";
+import { Field } from "../ui/Field";
+import "../ui/Input.css"; // .input-field
 import { colors } from "../../theme/tokens";
 import { useNodes, useWorkspaceConfigs } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
@@ -9,7 +11,9 @@ import { useValidateQualityConfig } from "../../api/qualityApi";
 import { FilePickerField } from "./FilePickerField";
 import { IconShieldCheck, IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 
-const label: React.CSSProperties = {
+// Section headings for lists (Errors/Warnings), not form-field labels — kept
+// distinct from `Field` on purpose.
+const label: CSSProperties = {
   display: "block",
   fontSize: 11,
   fontWeight: 600,
@@ -17,18 +21,6 @@ const label: React.CSSProperties = {
   textTransform: "uppercase",
   letterSpacing: "0.04em",
   marginBottom: 4,
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 8px",
-  borderRadius: 6,
-  border: `1px solid ${colors.border}`,
-  background: colors.bg,
-  color: colors.text,
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  outline: "none",
 };
 
 /**
@@ -73,10 +65,9 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Validate node quality config" onClose={onClose} width={560}>
       <div style={{ display: "grid", gap: 14 }}>
-        <div>
-          <span style={label}>Node</span>
+        <Field label="Node">
           <select
-            style={input}
+            className="input-field"
             value={nodeName}
             onChange={(e) => setNodeName(e.target.value)}
             disabled={nodesLoading}
@@ -88,7 +79,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
-        </div>
+        </Field>
 
         <div style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
           {configPath
@@ -118,8 +109,9 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
         {advanced && (
           <div style={{ display: "grid", gap: 10 }}>
             <div>
-              <span style={label}>Nodes config file</span>
+              <label style={label} htmlFor="validate-config-nodes-path">Nodes config file</label>
               <FilePickerField
+                id="validate-config-nodes-path"
                 value={manualConfigPath}
                 onChange={setManualConfigPath}
                 placeholder={resolvedConfigPath || "config/nodes.yaml"}
@@ -127,8 +119,9 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
               />
             </div>
             <div>
-              <span style={label}>Global settings file (profile resolution)</span>
+              <label style={label} htmlFor="validate-config-global-path">Global settings file (profile resolution)</label>
               <FilePickerField
+                id="validate-config-global-path"
                 value={manualGlobalPath}
                 onChange={setManualGlobalPath}
                 placeholder={resolvedGlobalPath || "config/global.toml"}

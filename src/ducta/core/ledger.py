@@ -198,6 +198,15 @@ class RunLedger:
             logger.debug("Could not record {}: {}", what, e)
 
 
+#: Serializes ledger *creation* across every context — not the ledger's own
+#: per-instance lock, which only protects that one instance's collections.
+#: Without this, two threads racing to call ledger_for() on the same
+#: context before either had cached one could each construct and setattr
+#: their own RunLedger, so the isolation each instance's lock promises
+#: never actually applied to both callers.
+_ledger_creation_lock = threading.Lock()
+
+
 def ledger_for(context: Any) -> RunLedger:
     """Return the run's ledger, creating (and caching) one if absent.
 
@@ -207,12 +216,21 @@ def ledger_for(context: Any) -> RunLedger:
     existing = getattr(context, "run_ledger", None)
     if isinstance(existing, RunLedger):
         return existing
-    ledger = RunLedger(context)
-    try:
-        setattr(context, "run_ledger", ledger)
-    except Exception:  # noqa: BLE001 — a read-only context still gets a working ledger
-        pass
-    return ledger
+
+    with _ledger_creation_lock:
+        # Re-check: another thread may have created and cached one while
+        # this one waited for the lock (double-checked locking, same
+        # pattern as storage/base.py's get_storage_backend()).
+        existing = getattr(context, "run_ledger", None)
+        if isinstance(existing, RunLedger):
+            return existing
+
+        ledger = RunLedger(context)
+        try:
+            setattr(context, "run_ledger", ledger)
+        except Exception:  # noqa: BLE001 — a read-only context still gets a working ledger
+            pass
+        return ledger
 
 
 __all__ = ["RunLedger", "ledger_for"]

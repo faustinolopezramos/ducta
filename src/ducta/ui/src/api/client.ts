@@ -2,6 +2,8 @@ import axios, { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestCo
 import { getToken, useAuthStore } from "../store/auth";
 import { StorageService } from "../utils/storage";
 import { normalizeSourceInput } from "../utils/sourcePath";
+import { toastStore } from "../hooks/useModalStack";
+import { apiErrorMessage } from "./mutations/errors";
 
 // ─────────────────────────────────────────────
 // API CLIENT — Axios instances with shared interceptors
@@ -66,6 +68,7 @@ function requestInterceptor(config: InternalAxiosRequestConfig): InternalAxiosRe
 function abandonSession(): void {
   useAuthStore.getState().logout();
   if (globalThis.location?.pathname !== "/login") {
+    toastStore.getState().error("Your session has expired. Please log in again.");
     globalThis.dispatchEvent(new Event("ducta:unauthorized"));
   }
 }
@@ -188,6 +191,12 @@ function applySharedInterceptors(
       // path above handles its own failure; this is the terminal case.
       if (error.response?.status === 401) {
         abandonSession();
+      } else if (config?.method?.toLowerCase() === "get") {
+        // Terminal (not retried) failure of a read. Mutations get a
+        // user-facing message from their own onError (api/mutations/errors.ts);
+        // most queries don't define one, so without this a failed GET was
+        // console-only — the user just saw stale or missing data with no clue why.
+        toastStore.getState().error(apiErrorMessage(error, "Failed to load data"));
       }
 
       throw error;

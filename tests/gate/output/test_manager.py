@@ -137,3 +137,43 @@ class TestDataOutputManager:
         dom = DataOutputManager(dict_context)
         result = dom.output_mtime("sch.sub.tbl")
         assert result is not None
+
+
+class TestSaveModelArtifacts:
+    """Regression: artifact["name"] and model_version became path
+    components without going through the same VALID_NAME_PATTERN check
+    validate_output_key already applies to output keys."""
+
+    def test_rejects_path_traversal_in_artifact_name(self, dict_context, temp_dir):
+        registry_dir = temp_dir / "registry"
+        registry_dir.mkdir()
+        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dom = DataOutputManager(dict_context)
+
+        node = {"name": "my_node", "model_artifacts": [{"name": "../../escaped"}]}
+        dom._save_model_artifacts(node, "v1")
+
+        assert not (temp_dir / "escaped").exists()
+        assert list(registry_dir.iterdir()) == []
+
+    def test_rejects_path_traversal_in_model_version(self, dict_context, temp_dir):
+        registry_dir = temp_dir / "registry"
+        registry_dir.mkdir()
+        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dom = DataOutputManager(dict_context)
+
+        node = {"name": "my_node", "model_artifacts": [{"name": "valid_name"}]}
+        dom._save_model_artifacts(node, "../../escaped")
+
+        assert not (temp_dir / "escaped").exists()
+
+    def test_accepts_valid_artifact_name_and_version(self, dict_context, temp_dir):
+        registry_dir = temp_dir / "registry"
+        registry_dir.mkdir()
+        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dom = DataOutputManager(dict_context)
+
+        node = {"name": "my_node", "model_artifacts": [{"name": "my_model"}]}
+        dom._save_model_artifacts(node, "v1")
+
+        assert (registry_dir / "my_model" / "v1" / "metadata.json").exists()

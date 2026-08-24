@@ -314,6 +314,12 @@ class DataOutputManager(BaseIO):
                 continue
 
             try:
+                # artifact["name"] and model_version become path components
+                # below — reject anything that could escape registry_str
+                # (e.g. "../../etc") before they're used to build a path.
+                self.config_validator.validate_name_component(artifact["name"], "artifact name")
+                self.config_validator.validate_name_component(model_version, "model_version")
+
                 artifact_path = Path(registry_str) / artifact["name"] / model_version
                 artifact_path.mkdir(parents=True, exist_ok=True)
 

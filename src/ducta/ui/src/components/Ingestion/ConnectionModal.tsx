@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
+import { Field } from "../ui/Field";
+import "../ui/Input.css"; // .input-field, reused on the bare <input>/<select> below
 import { colors } from "../../theme/tokens";
 import { toastStore } from "../../hooks/useModalStack";
 import {
@@ -19,28 +21,6 @@ export const DEFAULT_PORTS: Record<string, number> = {
   sqlserver: 1433,
   oracle: 1521,
   snowflake: 443,
-};
-
-const label: React.CSSProperties = {
-  display: "block",
-  fontSize: 11,
-  fontWeight: 600,
-  color: colors.textMuted,
-  textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  marginBottom: 4,
-};
-
-const input: React.CSSProperties = {
-  width: "100%",
-  padding: "6px 8px",
-  borderRadius: 6,
-  border: `1px solid ${colors.border}`,
-  background: colors.bg,
-  color: colors.text,
-  fontFamily: "var(--font-mono)",
-  fontSize: 12,
-  outline: "none",
 };
 
 const emptyForm: ConnectionCreateVars = {
@@ -113,9 +93,12 @@ export function ConnectionModal({
       }
     );
 
+  const [attemptedSave, setAttemptedSave] = useState(false);
+
   const doSave = () => {
     if (!form.name || !form.database || !form.username || !form.password) {
-      toastStore.getState().show("Name, database, username and password are required", "error");
+      setAttemptedSave(true);
+      toastStore.getState().show("Fill in the required fields, highlighted below.", "error");
       return;
     }
     create.mutate(form, {
@@ -201,48 +184,59 @@ export function ConnectionModal({
         </div>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div>
-          <span style={label}>Name</span>
+        <Field label="Name" required error={attemptedSave && !form.name ? "Required" : undefined}>
           <input
-            style={{ ...input, opacity: editing ? 0.6 : 1 }}
+            className="input-field"
+            style={{ opacity: editing ? 0.6 : 1 }}
             value={form.name}
             onChange={(e) => set("name", e.target.value)}
             placeholder="sales_db"
             disabled={editing}
           />
-        </div>
-        <div>
-          <span style={label}>Type</span>
-          <select style={input} value={form.type} onChange={(e) => onTypeChange(e.target.value)}>
+        </Field>
+        <Field label="Type">
+          <select className="input-field" value={form.type} onChange={(e) => onTypeChange(e.target.value)}>
             {DB_TYPES.map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
-        </div>
-        <div>
-          <span style={label}>Host</span>
-          <input style={input} value={form.host} onChange={(e) => set("host", e.target.value)} />
-        </div>
-        <div>
-          <span style={label}>Port</span>
-          <input style={input} type="number" value={form.port} onChange={(e) => set("port", Number(e.target.value))} />
-        </div>
-        <div>
-          <span style={label}>Database</span>
-          <input style={input} value={form.database} onChange={(e) => set("database", e.target.value)} />
-        </div>
-        <div>
-          <span style={label}>Username</span>
-          <input style={input} value={form.username} onChange={(e) => set("username", e.target.value)} />
-        </div>
-        <div>
-          <span style={label}>{editing ? "Password (re-enter to save)" : "Password"}</span>
-          <input style={input} type="password" value={form.password} onChange={(e) => set("password", e.target.value)} />
-        </div>
-        <div>
-          <span style={label}>Description (optional)</span>
-          <input style={input} value={form.description ?? ""} onChange={(e) => set("description", e.target.value)} />
-        </div>
+        </Field>
+        <Field label="Host">
+          <input className="input-field" value={form.host} onChange={(e) => set("host", e.target.value)} />
+        </Field>
+        <Field label="Port">
+          <input
+            className="input-field"
+            type="number"
+            value={form.port}
+            onChange={(e) => set("port", Number(e.target.value))}
+          />
+        </Field>
+        <Field label="Database" required error={attemptedSave && !form.database ? "Required" : undefined}>
+          <input className="input-field" value={form.database} onChange={(e) => set("database", e.target.value)} />
+        </Field>
+        <Field label="Username" required error={attemptedSave && !form.username ? "Required" : undefined}>
+          <input className="input-field" value={form.username} onChange={(e) => set("username", e.target.value)} />
+        </Field>
+        <Field
+          label={editing ? "Password (re-enter to save)" : "Password"}
+          required
+          error={attemptedSave && !form.password ? "Required" : undefined}
+        >
+          <input
+            className="input-field"
+            type="password"
+            value={form.password}
+            onChange={(e) => set("password", e.target.value)}
+          />
+        </Field>
+        <Field label="Description (optional)">
+          <input
+            className="input-field"
+            value={form.description ?? ""}
+            onChange={(e) => set("description", e.target.value)}
+          />
+        </Field>
       </div>
       <p style={{ fontSize: 11, color: colors.textMuted, marginTop: 12 }}>
         Credentials are written to the workspace <code>.env</code> (force-added to{" "}

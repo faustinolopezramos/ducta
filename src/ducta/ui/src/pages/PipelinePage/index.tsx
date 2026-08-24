@@ -10,6 +10,7 @@ import { InlineLogs } from "../../components/Execution/InlineLogs";
 import { LiveMedallionMonitor } from "../../components/Execution/LiveMedallionMonitor";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { IconChevronRight, IconFolderOff, IconSitemap, IconCircleDotted, IconCircleX, IconCircleCheck, IconAlertTriangle } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
@@ -33,6 +34,7 @@ export function PipelinePage() {
     currentProject, currentPipeline, pipelineNodes, dagItems,
     parentsMap, lineage, navMaps, lineageLists, isExecuting,
     handleRunNode, handleExecute, handleValidate, handleCancel, clearSelection,
+    blocker,
   } = usePipelinePageState();
 
   const { flowRef, centerOnNode, resetViewport } = useCanvasPanZoom(clearSelection);
@@ -235,6 +237,16 @@ export function PipelinePage() {
           </Suspense>
         );
       })()}
+
+      <ConfirmDialog
+        open={blocker.state === "blocked"}
+        title="Leave without saving?"
+        description="You have unsaved pipeline changes that will be lost."
+        tone="danger"
+        confirmLabel="Leave"
+        onConfirm={() => blocker.state === "blocked" && blocker.proceed()}
+        onCancel={() => blocker.state === "blocked" && blocker.reset()}
+      />
     </div>
   );
 }

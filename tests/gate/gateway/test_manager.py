@@ -291,3 +291,53 @@ class TestConnectionMissingCredentials:
         with patch.dict("os.environ", {}, clear=True):
             with pytest.raises(ValueError, match="Missing credentials"):
                 cm.get("db")
+
+
+class TestConnectionCredentialsKeyedByName:
+    """Regression: _create_connector used to key credentials off
+    source_type.upper() only, so two connections of the same DB engine
+    would silently read each other's credentials from .env."""
+
+    def test_prefers_connection_name_prefixed_credentials(self, temp_dir):
+        from ducta.gate.gateway.manager import ConnectionManager
+
+        cfg = temp_dir / "sources.yaml"
+        cfg.write_text(
+            "sources:\n  db:\n    type: postgresql\n    host: localhost\n    port: 5432\n    database: mydb\n"
+        )
+        cm = ConnectionManager(cfg)
+        with patch.dict(
+            "os.environ",
+            {
+                "DB_USER": "name-scoped-user",
+                "DB_PASSWORD": "name-scoped-pass",
+                # Deliberately different, to prove the name-scoped pair wins.
+                "POSTGRESQL_USER": "type-scoped-user",
+                "POSTGRESQL_PASSWORD": "type-scoped-pass",
+            },
+            clear=True,
+        ):
+            connector = cm._create_connector("db")
+
+        assert connector.username == "name-scoped-user"
+        assert connector.password == "name-scoped-pass"
+
+    def test_falls_back_to_type_prefixed_credentials_with_warning(self, temp_dir, caplog):
+        from ducta.gate.gateway.manager import ConnectionManager
+
+        cfg = temp_dir / "sources.yaml"
+        cfg.write_text(
+            "sources:\n  db:\n    type: postgresql\n    host: localhost\n    port: 5432\n    database: mydb\n"
+        )
+        cm = ConnectionManager(cfg)
+        # Only the deprecated type-based pair is set — as an existing .env
+        # written before this fix would have.
+        with patch.dict(
+            "os.environ",
+            {"POSTGRESQL_USER": "legacy-user", "POSTGRESQL_PASSWORD": "legacy-pass"},
+            clear=True,
+        ):
+            connector = cm._create_connector("db")
+
+        assert connector.username == "legacy-user"
+        assert connector.password == "legacy-pass"

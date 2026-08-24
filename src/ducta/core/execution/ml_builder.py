@@ -116,7 +116,18 @@ class MLContextBuilder:
         """Prepare node-specific ML information."""
         node_config = self.context.nodes_config.get(node_name, {}) or {}
         if not self.is_ml_node(node_config, ml_info):
-            return ml_info
+            # Copy (including the nested hyperparams dict) even on this
+            # early-return path: every non-ML node in a run receives the
+            # same `ml_info` object from the caller, and nodes execute in
+            # parallel on a ThreadPoolExecutor. Returning the original by
+            # reference let one node's in-place mutation of `hyperparams`
+            # (or of ml_info itself) leak into every other concurrently
+            # running node — the ML branch below already copies for this
+            # reason, this just makes the non-ML branch consistent with it.
+            copied = dict(ml_info)
+            if isinstance(ml_info.get("hyperparams"), dict):
+                copied["hyperparams"] = dict(ml_info["hyperparams"])
+            return copied
 
         node_ml_config = self.context.get_node_ml_config(node_name)
         enhanced_ml_info = ml_info.copy()
