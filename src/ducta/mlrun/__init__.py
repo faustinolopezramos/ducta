@@ -21,19 +21,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Base abstractions
-# ---------------------------------------------------------------------------
-from ducta.mlrun.base import BaseMLOpsComponent, ComponentState, ComponentStats
-
-# ---------------------------------------------------------------------------
 # Baseline / drift detection
 # ---------------------------------------------------------------------------
 from ducta.mlrun.baseline import compare_to_baseline, trivial_baseline_metrics
-
-# ---------------------------------------------------------------------------
-# Model cache
-# ---------------------------------------------------------------------------
-from ducta.mlrun.cache import CachedStorage, CacheEntry, CacheStats, LRUCache, TwoLevelCache
 
 # ---------------------------------------------------------------------------
 # Concurrency / locking
@@ -61,20 +51,11 @@ from ducta.mlrun.config import MLOpsConfig, MLOpsContext
 from ducta.mlrun.environment import EnvironmentSnapshot
 
 # ---------------------------------------------------------------------------
-# Error analysis
-# ---------------------------------------------------------------------------
-from ducta.mlrun.error_analysis import segment_metrics, worst_records
-
-# ---------------------------------------------------------------------------
-# Event / metrics bus
-# ---------------------------------------------------------------------------
-from ducta.mlrun.events import Event, EventEmitter, EventType, MetricsCollector
-
-# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 from ducta.mlrun.exceptions import (
     ArtifactNotFoundError,
+    ArtifactValidationError,
     BackendNotConfiguredError,
     ConcurrencyError,
     ConfigurationError,
@@ -88,6 +69,7 @@ from ducta.mlrun.exceptions import (
     ModelNotFoundError,
     ModelRegistrationError,
     ModelVersionConflictError,
+    ProtectedVersionError,
     PromotionGateError,
     ResilienceError,
     ResourceLimitError,
@@ -115,11 +97,6 @@ from ducta.mlrun.fingerprint import DataFingerprint
 # Garbage collection
 # ---------------------------------------------------------------------------
 from ducta.mlrun.gc import ModelGarbageCollector
-
-# ---------------------------------------------------------------------------
-# Health checking
-# ---------------------------------------------------------------------------
-from ducta.mlrun.health import HealthCheck, HealthMonitor, HealthReport, HealthStatus
 
 # ---------------------------------------------------------------------------
 # Hyperparameter search
@@ -158,7 +135,7 @@ from ducta.mlrun.model_registry import (
 # ---------------------------------------------------------------------------
 # Model persistence
 # ---------------------------------------------------------------------------
-from ducta.mlrun.persistence import persist_model
+from ducta.mlrun.persistence import infer_schema, persist_model
 
 # ---------------------------------------------------------------------------
 # Resilience / Retry
@@ -168,7 +145,7 @@ from ducta.mlrun.resilience import CircuitBreaker, ResourceLimits, RetryConfig
 # ---------------------------------------------------------------------------
 # Dataset splitting
 # ---------------------------------------------------------------------------
-from ducta.mlrun.split import SplitError, split_dataframe
+from ducta.mlrun.split import SplitError, kfold_splits, split_dataframe
 
 # ---------------------------------------------------------------------------
 # Storage
@@ -192,6 +169,7 @@ from ducta.mlrun.validators import (
 __all__ = [
     # exceptions
     "ArtifactNotFoundError",
+    "ArtifactValidationError",
     "BackendNotConfiguredError",
     "ConfigurationError",
     "ConcurrencyError",
@@ -205,6 +183,7 @@ __all__ = [
     "ModelNotFoundError",
     "ModelRegistrationError",
     "ModelVersionConflictError",
+    "ProtectedVersionError",
     "PromotionGateError",
     "ResilienceError",
     "ResourceLimitError",
@@ -238,10 +217,6 @@ __all__ = [
     "Metric",
     "Run",
     "RunStatus",
-    # base abstractions
-    "BaseMLOpsComponent",
-    "ComponentState",
-    "ComponentStats",
     # mlflow
     "MLflowConfig",
     "MLflowHelper",
@@ -262,10 +237,8 @@ __all__ = [
     "trivial_baseline_metrics",
     # dataset split
     "SplitError",
+    "kfold_splits",
     "split_dataframe",
-    # error analysis
-    "segment_metrics",
-    "worst_records",
     # validators
     "validate_artifact_type",
     "validate_experiment_name",
@@ -287,24 +260,9 @@ __all__ = [
     "transactional_operation",
     # gc
     "ModelGarbageCollector",
-    # health
-    "HealthCheck",
-    "HealthMonitor",
-    "HealthReport",
-    "HealthStatus",
-    # events
-    "Event",
-    "EventEmitter",
-    "EventType",
-    "MetricsCollector",
-    # cache
-    "CacheEntry",
-    "CacheStats",
-    "CachedStorage",
-    "LRUCache",
-    "TwoLevelCache",
     # environment
     "EnvironmentSnapshot",
     # persistence
+    "infer_schema",
     "persist_model",
 ]

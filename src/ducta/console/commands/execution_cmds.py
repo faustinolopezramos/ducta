@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import json
 import traceback
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -84,6 +84,25 @@ class ExecutionCommands:
             return self._handle_dry_run(context_init)
         return self._execute_pipeline(context_init)
 
+    @staticmethod
+    def _resolve_sweep_parallel(parsed_args) -> int:
+        """Cap --sweep-parallel at the number of available CPU cores.
+        """
+        import os
+
+        requested = max(1, int(getattr(parsed_args, "sweep_parallel", 1) or 1))
+        cpu_count = os.cpu_count() or 1
+        if requested > cpu_count:
+            logger.warning(
+                "--sweep-parallel {} exceeds the {} logical core(s) available; "
+                "workers would contend for CPU. Capping at {}.",
+                requested,
+                cpu_count,
+                cpu_count,
+            )
+            return cpu_count
+        return requested
+
     def _parse_config(self, parsed_args) -> CLIConfig:
         return CLIConfig(
             env=getattr(parsed_args, "env", ""),
@@ -112,6 +131,12 @@ class ExecutionCommands:
             model_version=getattr(parsed_args, "model_version", None),
             hyperparams=getattr(parsed_args, "hyperparams", None),
             sweep=getattr(parsed_args, "sweep", None),
+            search=getattr(parsed_args, "search", False),
+            search_metric=getattr(parsed_args, "search_metric", None),
+            search_trials=getattr(parsed_args, "search_trials", None),
+            sweep_reuse_upstream=not getattr(parsed_args, "no_sweep_reuse", False),
+            sweep_parallel=self._resolve_sweep_parallel(parsed_args),
+            max_sweep_size=int(getattr(parsed_args, "max_sweep_size", None) or 50),
             execution_mode=getattr(parsed_args, "mode", None) or "async",
             output_path=(
                 Path(parsed_args.output_path) if getattr(parsed_args, "output_path", None) else None
@@ -365,13 +390,12 @@ class ExecutionCommands:
                 logger.error("Invalid hyperparams JSON: {}", e)
                 return ExitCode.VALIDATION_ERROR.value
 
+        if self.config.search:
+            return self._execute_search(exec_obj, base_hyperparams)
+
         if self.config.sweep:
             return self._execute_sweep(exec_obj, base_hyperparams)
 
-        # Everything the CLI needs to report now arrives on the result. This
-        # used to reach through two levels of private attributes
-        # (exec_obj._batch_executor.node_executor.gate_blocked) and had to know
-        # which executor a given pipeline type happened to use.
         result = exec_obj.run_pipeline_chain(
             pipeline_name=self.config.pipeline,
             node_name=self.config.node,
@@ -384,9 +408,6 @@ class ExecutionCommands:
             rerun_all=self.config.rerun_all,
         )
 
-        # `skip_downstream` (the default gate behavior) lets the run return
-        # normally — no exception — so without this check a blocked gate looked
-        # identical to a clean run and the CLI reported exit 0.
         from ducta.console.execution import report_run_outcome
 
         return report_run_outcome(result, pipeline=self.config.pipeline)
@@ -396,7 +417,7 @@ class ExecutionCommands:
 
         try:
             spec = load_sweep_spec(self.config.sweep)
-            combos = expand_sweep(spec)
+            combos = expand_sweep(spec, max_runs=self.config.max_sweep_size)
         except SweepError as e:
             logger.error("Invalid sweep spec: {}", e)
             return ExitCode.VALIDATION_ERROR.value
@@ -410,6 +431,45 @@ class ExecutionCommands:
             len(combos),
         )
 
+        if self.config.sweep_parallel > 1:
+            self._warn_if_parallel_spark(exec_obj, self.config.sweep_parallel)
+            trials = []
+            for index, combo in enumerate(combos, start=1):
+                hyperparams = {**(base_hyperparams or {}), **combo}
+                hyperparams["sweep_id"] = sweep_id
+                hyperparams["sweep_index"] = index
+                trials.append({"index": index, "params": combo, "hyperparams": hyperparams})
+
+            if self.config.sweep_reuse_upstream:
+                logger.info(
+                    "--sweep-parallel does not use --no-sweep-reuse's chain-level "
+                    "upstream reuse (reuse_upstream on run_pipeline_chain) — trial 1 "
+                    "still materializes a shared prefix that trials 2..N can read "
+                    "missing inputs from, but nothing here skips re-running a node."
+                )
+            outcomes = self._run_trials_parallel(
+                exec_obj, trials, sweep_id, self.config.sweep_parallel
+            )
+            if outcomes is not None:
+                failures = 0
+                for outcome in outcomes:
+                    if outcome["failed"]:
+                        failures += 1
+                        logger.error(
+                            "Sweep run {}/{} failed: {}",
+                            outcome["index"],
+                            len(combos),
+                            outcome["reason"],
+                        )
+                    else:
+                        logger.info(
+                            "Sweep run {}/{} done: {}",
+                            outcome["index"],
+                            len(combos),
+                            outcome["metrics"] or "no metrics logged",
+                        )
+                return self._report_sweep_result(sweep_id, len(combos), failures)
+
         failures = 0
         for index, combo in enumerate(combos, start=1):
             hyperparams = {**(base_hyperparams or {}), **combo}
@@ -417,17 +477,7 @@ class ExecutionCommands:
             hyperparams["sweep_index"] = index
             logger.info("Sweep run {}/{}: {}", index, len(combos), combo)
             try:
-                run = exec_obj.run_pipeline(
-                    pipeline_name=self.config.pipeline,
-                    node_name=self.config.node,
-                    start_date=self.config.start_date,
-                    end_date=self.config.end_date,
-                    model_version=self.config.model_version,
-                    hyperparams=hyperparams,
-                )
-                # A blocked quality gate does not raise, so counting only
-                # exceptions reported a sweep run that produced nothing as a
-                # success and skewed the comparison the sweep exists to make.
+                run = self._run_trial(exec_obj, hyperparams, trial_index=index)
                 if run.gate_blocked:
                     failures += 1
                     logger.error(
@@ -440,12 +490,17 @@ class ExecutionCommands:
                 failures += 1
                 logger.error("Sweep run {}/{} failed: {}", index, len(combos), e)
 
-        succeeded = len(combos) - failures
+        return self._report_sweep_result(sweep_id, len(combos), failures)
+
+    @staticmethod
+    def _report_sweep_result(sweep_id: str, total: int, failures: int) -> int:
+        """Final sweep summary and exit code, shared by the sequential and
+        parallel paths so both report identically."""
         logger.info(
             "Sweep {} finished: {}/{} run(s) succeeded. Compare runs in the experiment tracker filtering by tag sweep_id={}",
             sweep_id,
-            succeeded,
-            len(combos),
+            total - failures,
+            total,
             sweep_id,
         )
         if failures:
@@ -453,6 +508,371 @@ class ExecutionCommands:
             return ExitCode.GENERAL_ERROR.value
         logger.success("Ducta sweep execution completed successfully")
         return ExitCode.SUCCESS.value
+
+    def _parallel_worker_args(self, exec_obj) -> Dict[str, Any]:
+        """Everything a worker process needs to rebuild this run's Context."""
+        base_output_path = None
+        try:
+            gs = getattr(exec_obj.context, "global_settings", {}) or {}
+            base_output_path = gs.get("output_path") or getattr(
+                exec_obj.context, "output_path", None
+            )
+        except Exception as e:
+            logger.debug("Could not resolve output_path for trial isolation: {}", e)
+        return {
+            "env": self.config.env,
+            "pipeline": self.config.pipeline,
+            "base_output_path": str(base_output_path) if base_output_path else None,
+            "base_path": self.config.base_path,
+            "layer_name": self.config.layer_name,
+            "use_case_name": self.config.use_case_name,
+            "config_type": self.config.config_type,
+            "node": self.config.node,
+            "start_date": self.config.start_date,
+            "end_date": self.config.end_date,
+            "model_version": self.config.model_version,
+        }
+
+    def _run_trials_parallel(self, exec_obj, trials, search_id: str, workers: int):
+        """Run pre-generated trials concurrently, one process each.
+        """
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+
+        from ducta.core.sweep_worker import (
+            build_payloads,
+            run_trial_in_process,
+            shared_prefix_path,
+        )
+
+        mp_context = multiprocessing.get_context("spawn")
+
+        worker_args = self._parallel_worker_args(exec_obj)
+        if not worker_args["base_output_path"]:
+            logger.warning(
+                "Cannot resolve output_path, so parallel trials cannot be given "
+                "isolated output directories and would clobber each other's node "
+                "outputs. Falling back to sequential execution."
+            )
+            return None
+
+        if not trials:
+            return []
+
+        first_trial, *rest_trials = trials
+        shared_path = shared_prefix_path(worker_args["base_output_path"], search_id)
+
+        logger.info(
+            "Running trial {} first (sequentially) into the shared prefix {} — "
+            "the rest run in parallel afterward.",
+            first_trial["index"],
+            shared_path,
+        )
+        first_payload = build_payloads([first_trial], search_id=search_id, **worker_args)[0]
+        first_payload["output_path"] = shared_path
+        first_outcome = run_trial_in_process(first_payload)
+        outcomes = [first_outcome]
+
+        read_fallback_paths: List[str] = []
+        if first_outcome.get("failed"):
+            logger.warning(
+                "Trial {} failed ({}); the rest will run without the read fallback "
+                "(each trial resolves its inputs entirely on its own).",
+                first_trial["index"],
+                first_outcome.get("reason"),
+            )
+        else:
+            read_fallback_paths = [shared_path]
+
+        if not rest_trials:
+            return sorted(outcomes, key=lambda o: o.get("index") or 0)
+
+        payloads = build_payloads(
+            rest_trials,
+            search_id=search_id,
+            read_fallback_paths=read_fallback_paths,
+            **worker_args,
+        )
+        logger.info(
+            "Running {} more trial(s) across {} worker process(es); each writes to "
+            "its own directory under {}/_trials/{}",
+            len(payloads),
+            workers,
+            worker_args["base_output_path"],
+            search_id,
+        )
+
+        with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as pool:
+            futures = {
+                pool.submit(run_trial_in_process, payload): payload for payload in payloads
+            }
+            for future in as_completed(futures):
+                payload = futures[future]
+                try:
+                    outcomes.append(future.result())
+                except Exception as e:  # noqa: BLE001 — a dead worker is one failed trial
+                    outcomes.append(
+                        {
+                            "index": payload["trial_index"],
+                            "params": payload["params"],
+                            "metrics": {},
+                            "gate_blocked": [],
+                            "failed": True,
+                            "reason": f"worker process died: {type(e).__name__}: {e}",
+                        }
+                    )
+        return sorted(outcomes, key=lambda o: o.get("index") or 0)
+
+    def _run_trial(self, exec_obj, hyperparams: Dict[str, Any], trial_index: int):
+        """Execute one sweep/search trial.
+        """
+        if not self.config.sweep_reuse_upstream:
+            return exec_obj.run_pipeline(
+                pipeline_name=self.config.pipeline,
+                node_name=self.config.node,
+                start_date=self.config.start_date,
+                end_date=self.config.end_date,
+                model_version=self.config.model_version,
+                hyperparams=hyperparams,
+            )
+
+        return exec_obj.run_pipeline_chain(
+            pipeline_name=self.config.pipeline,
+            node_name=self.config.node,
+            start_date=self.config.start_date,
+            end_date=self.config.end_date,
+            model_version=self.config.model_version,
+            hyperparams=hyperparams,
+            # Trial 1 has nothing to reuse yet and must build the prefix.
+            reuse_upstream=trial_index > 1,
+            rerun_all=False,
+        )
+
+    def _execute_search(self, exec_obj, base_hyperparams) -> int:
+        """Drive a real search strategy from the pipeline's hyperparams_config.
+        """
+        from ducta.core.sweep import new_search_id, run_search
+        from ducta.mlrun.hyperparams import HyperparamConfigError
+        from ducta.mlrun.search import SearchError, build_search_strategy, resolve_objective
+
+        hp_config = self._resolve_hyperparams_config(exec_obj)
+        if hp_config is None:
+            logger.error(
+                "--search needs a hyperparams_config for pipeline '{}'. Declare one "
+                "(hyperparams_config in the pipeline config, or hyperparams_config_path "
+                "in global_settings) with an algorithm, a search_space and an "
+                "objective.metric. Use --sweep FILE for a plain grid instead.",
+                self.config.pipeline,
+            )
+            return ExitCode.VALIDATION_ERROR.value
+
+        try:
+            metric, direction = resolve_objective(hp_config)
+            if self.config.search_metric:
+                metric = self.config.search_metric
+            strategy = build_search_strategy(
+                hp_config,
+                n_trials=self.config.search_trials,
+                seed=self._resolve_seed(exec_obj),
+
+                study_name=hp_config.study_name,
+            )
+        except (SearchError, HyperparamConfigError) as e:
+            logger.error("Invalid search configuration: {}", e)
+            return ExitCode.VALIDATION_ERROR.value
+
+        self._warn_if_sweep_without_validation_split(exec_obj)
+        if metric.startswith("test_"):
+            logger.warning(
+                "Search objective is '{}': selecting hyperparameters on a test metric "
+                "invalidates it as an unbiased estimate. Point objective.metric at a "
+                "validation metric (e.g. val_{}).",
+                metric,
+                metric[len("test_") :],
+            )
+
+        search_id = new_search_id()
+        logger.info(
+            "Starting {} search {} on pipeline '{}': up to {} trial(s), optimizing {} ({})",
+            hp_config.algorithm,
+            search_id,
+            self.config.pipeline,
+            strategy.n_trials,
+            metric,
+            direction,
+        )
+
+        parallel = self.config.sweep_parallel
+        if parallel > 1 and hp_config.algorithm == "bayesian":
+            logger.warning(
+                "Bayesian search chooses each trial from the results of the previous "
+                "ones, so it cannot be run in parallel without discarding exactly the "
+                "feedback that makes it Bayesian. Running sequentially; use "
+                "algorithm='random' with --sweep-parallel to trade sample efficiency "
+                "for wall-clock."
+            )
+            parallel = 1
+
+        if parallel > 1:
+            self._warn_if_parallel_spark(exec_obj, parallel)
+            outcome = self._run_search_parallel(
+                exec_obj, strategy, metric, base_hyperparams, search_id, parallel
+            )
+        else:
+
+            def run_trial(params, index):
+                hyperparams = {**(base_hyperparams or {}), **params}
+                hyperparams["sweep_id"] = search_id
+                hyperparams["sweep_index"] = index
+                logger.info("Trial {}/{}: {}", index, strategy.n_trials, params)
+                return self._run_trial(exec_obj, hyperparams, trial_index=index)
+
+            outcome = run_search(strategy, metric, run_trial, search_id=search_id)
+
+        for trial in outcome.trials:
+            if trial.failed:
+                logger.error("Trial {} failed: {}", trial.index, trial.reason)
+
+        logger.info(
+            "Search {} finished: {}/{} trial(s) scored. Compare runs in the experiment "
+            "tracker filtering by tag sweep_id={}",
+            search_id,
+            outcome.succeeded,
+            len(outcome.trials),
+            search_id,
+        )
+        if outcome.best_params is not None:
+            logger.success(
+                "Best {}={:.6f} with {}", metric, outcome.best_score, outcome.best_params
+            )
+        else:
+            logger.error(
+                "No trial produced a usable '{}' value — nothing to select. Check that the "
+                "training node logs that metric to the experiment tracker.",
+                metric,
+            )
+            return ExitCode.GENERAL_ERROR.value
+
+        if outcome.failures:
+            logger.error("Search completed with {} failed trial(s)", outcome.failures)
+            return ExitCode.GENERAL_ERROR.value
+        logger.success("Ducta search execution completed successfully")
+        return ExitCode.SUCCESS.value
+
+    def _run_search_parallel(
+        self, exec_obj, strategy, metric: str, base_hyperparams, search_id: str, workers: int
+    ):
+        """Run a grid/random search with concurrent trials.
+        """
+        from ducta.core.sweep import SearchOutcome, TrialOutcome, run_search
+
+        proposals = []
+        while (params := strategy.ask()) is not None:
+            proposals.append(params)
+
+        trials = []
+        for index, params in enumerate(proposals, start=1):
+            hyperparams = {**(base_hyperparams or {}), **params}
+            hyperparams["sweep_id"] = search_id
+            hyperparams["sweep_index"] = index
+            trials.append({"index": index, "params": params, "hyperparams": hyperparams})
+
+        results = self._run_trials_parallel(exec_obj, trials, search_id, workers)
+        if results is None:
+            queued = iter(proposals)
+
+            class _Replay:
+                direction = strategy.direction
+                n_trials = strategy.n_trials
+
+                def ask(self_inner):
+                    return next(queued, None)
+
+                def tell(self_inner, params, score):
+                    strategy.tell(params, score)
+
+                @property
+                def best(self_inner):
+                    return strategy.best
+
+            def run_trial(params, index):
+                hyperparams = {**(base_hyperparams or {}), **params}
+                hyperparams["sweep_id"] = search_id
+                hyperparams["sweep_index"] = index
+                logger.info("Trial {}/{}: {}", index, strategy.n_trials, params)
+                return self._run_trial(exec_obj, hyperparams, trial_index=index)
+
+            return run_search(_Replay(), metric, run_trial, search_id=search_id)
+
+        outcome = SearchOutcome(
+            search_id=search_id, metric=metric, direction=strategy.direction
+        )
+        for result in results:
+            params = result["params"]
+            metrics = result["metrics"] or {}
+            score = None
+            failed = bool(result["failed"])
+            reason = result["reason"]
+
+            if not failed:
+                if metric in metrics:
+                    score = float(metrics[metric])
+                else:
+                    failed = True
+                    reason = (
+                        f"run logged no '{metric}' metric "
+                        f"(logged: {', '.join(sorted(metrics)) or 'none'})"
+                    )
+
+            strategy.tell(params, score)
+            outcome.trials.append(
+                TrialOutcome(
+                    index=result["index"],
+                    params=params,
+                    score=score,
+                    failed=failed,
+                    reason=reason,
+                )
+            )
+
+        best = strategy.best
+        if best is not None:
+            outcome.best_params, outcome.best_score = best
+        return outcome
+
+    def _resolve_hyperparams_config(self, exec_obj):
+        """Fetch the pipeline's HyperparamConfig via the Context, if any."""
+        try:
+            context = exec_obj.context
+            if hasattr(context, "get_pipeline_ml_info"):
+                ml_info = context.get_pipeline_ml_info(self.config.pipeline) or {}
+                return ml_info.get("hyperparams_config")
+        except Exception as e:
+            logger.debug("Could not resolve hyperparams_config: {}", e)
+        return None
+
+    def _resolve_seed(self, exec_obj):
+        """Global random seed, so a random/Bayesian search is reproducible."""
+        try:
+            gs = getattr(exec_obj.context, "global_settings", {}) or {}
+            seed = gs.get("random_seed")
+            return int(seed) if seed is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _warn_if_parallel_spark(exec_obj, parallel: int) -> None:
+        """Warn when Spark-backed pipelines run sweep/search trials in parallel.
+        """
+        spark = getattr(exec_obj.context, "spark", None)
+        if spark is not None:
+            logger.warning(
+                "Pipeline uses Spark and sweep_parallel={} was requested: each worker "
+                "process opens its own SparkSession/JVM, multiplying driver memory and "
+                "startup cost. Consider --sweep-parallel=1 for Spark-backed pipelines, "
+                "or reduce it.",
+                parallel,
+            )
 
     def _warn_if_sweep_without_validation_split(self, exec_obj) -> None:
         try:

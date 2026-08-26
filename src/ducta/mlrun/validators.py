@@ -41,11 +41,6 @@ MAX_NAME_LENGTH = 255
 
 class ValidationError(MLOpsException, ValueError):
     """Base validation error.
-
-    Inherits both MLOpsException (so code catching MLOpsException to handle
-    "any Ducta error" uniformly doesn't miss validation failures — previously
-    this only extended ValueError) and ValueError (kept for backward
-    compatibility with any existing ``except ValueError`` call sites).
     """
 
     error_code = ErrorCode.VALIDATION_FAILED
@@ -173,6 +168,28 @@ class MetricValidator:
             pass
 
         return float(value)
+
+    @staticmethod
+    def validate_metrics(
+        metrics: Optional[Dict[str, Any]], max_items: int = 1000
+    ) -> Optional[Dict[str, float]]:
+        """Validate a whole metrics dict, value by value.
+        """
+        if metrics is None:
+            return None
+
+        if not isinstance(metrics, dict):
+            raise ValidationError(f"Metrics must be dict or None, got {type(metrics).__name__}")
+
+        if len(metrics) > max_items:
+            raise ValidationError(f"Too many metrics ({len(metrics)} > {max_items})")
+
+        validated: Dict[str, float] = {}
+        for key, value in metrics.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ValidationError(f"Metric name must be a non-empty string, got {key!r}")
+            validated[key] = MetricValidator.validate_metric_value(key, value)
+        return validated
 
     @staticmethod
     def validate_step(step: Any) -> int:
@@ -371,6 +388,11 @@ def validate_metric_value(key: str, value: Any) -> float:
     return MetricValidator.validate_metric_value(key, value)
 
 
+def validate_metrics(metrics: Optional[Dict[str, Any]]) -> Optional[Dict[str, float]]:
+    """Validate a metrics dict (every value numeric and not NaN)"""
+    return MetricValidator.validate_metrics(metrics)
+
+
 def validate_parameters(params: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     """Validate parameters"""
     return ParameterValidator.validate_parameters(params)
@@ -441,15 +463,13 @@ class ArtifactValidator:
         """
         artifact_path_obj = Path(artifact_path)
 
-        # 1. Check existence
         if not artifact_path_obj.exists():
             raise ValidationError(f"Artifact not found at {artifact_path}")
 
-        if not artifact_path_obj.is_file():
-            raise ValidationError(f"Artifact path is not a file: {artifact_path}")
+        if not artifact_path_obj.is_file() and not artifact_path_obj.is_dir():
+            raise ValidationError(f"Artifact path must be a file or directory: {artifact_path}")
 
-        # 2. Check file size (warn if very large)
-        size_bytes = artifact_path_obj.stat().st_size
+        size_bytes = artifact_path_obj.stat().st_size if artifact_path_obj.is_file() else 0
         if size_bytes > 1_000_000_000:  # 1GB
             logger.warning(
                 f"Artifact is very large: {size_bytes / 1e9:.2f}GB. "
@@ -582,9 +602,6 @@ class ArtifactValidator:
         except ImportError as e:
             logger.warning("pytorch runtime not installed, cannot validate pytorch artifacts")
             raise ImportError("pytorch library is required to validate pytorch artifacts") from e
-        # weights_only=True restricts unpickling to tensors/primitives, which
-        # closes the arbitrary-code-execution path pickle otherwise allows —
-        # applied unconditionally, independent of trust_artifact_source.
         state = torch.load(artifact_path, map_location="cpu", weights_only=True)
         if not isinstance(state, dict):
             raise ValueError(f"Expected dict, got {type(state)}")
@@ -604,7 +621,6 @@ class ArtifactValidator:
         elif path_str.endswith((".pb", ".pbtxt")):
             tf.saved_model.load(artifact_path)
         else:
-            # Attempt to load as Keras model if extension is unknown
             tf.keras.models.load_model(artifact_path)
 
     @staticmethod
@@ -629,7 +645,6 @@ class ArtifactValidator:
         try:
             import joblib  # type: ignore
         except ImportError:
-            # If joblib not installed, raise previous exception as generic failure
             raise ValueError("Cannot load as pickle and joblib not available")
 
         try:

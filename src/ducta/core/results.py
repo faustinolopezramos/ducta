@@ -16,27 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-The outcome of one pipeline run, as a type instead of a guess.
-
-``run_pipeline`` used to be typed ``Union[None, str, Dict[str, Any]]``: ``None``
-for batch, an execution id ``str`` for streaming, and a result ``dict`` for
-hybrid. Callers had to sniff which one they got, and everything that a run
-produces beyond the happy path had no place to live — so it ended up reachable
-only by reaching through private attributes across two objects:
-
-    exec_obj._batch_executor.node_executor.gate_blocked
-
-That shape cost real defects. A hybrid pipeline reporting ``{"status":
-"failed"}`` was returned like any other value, so the chain runner's
-``try/except`` never fired and downstream pipelines ran on data their failed
-ancestor never produced. A ``skip_downstream`` quality gate deliberately lets a
-run finish without raising, so it was indistinguishable from a clean run unless
-the caller knew to go poking.
-
-One object carries all of it. ``bool(result)`` is true only for a run that
-actually succeeded, so ``if not result:`` is a correct check rather than a
-coincidence.
 """
 
 from __future__ import annotations
@@ -48,20 +27,12 @@ from typing import Any, Dict, List, Optional
 
 class RunStatus(str, Enum):
     """Terminal state of a pipeline run.
-
-    ``str``-valued so existing comparisons against the plain strings keep
-    working and JSON serialization needs no encoder.
     """
 
     SUCCESS = "success"
     FAILED = "failed"
-    #: An atomic single-node run (``--node``) whose inputs were not available.
-    #: Not a failure: nothing ran, and nothing was supposed to.
     SKIPPED = "skipped"
-    #: At least one node's quality gate blocked with ``skip_downstream``. The
-    #: run completed without raising, but it did not do all of its work.
     GATE_BLOCKED = "gate_blocked"
-    #: Async streaming: the pipeline started and is still running.
     RUNNING = "running"
 
 
@@ -115,35 +86,25 @@ class NodeOutcome:
 @dataclass
 class PipelineRunResult:
     """Everything one ``run_pipeline`` call produced.
-
-    Returned by every pipeline type. The fields that do not apply to a given
-    type stay empty rather than changing the return type.
     """
 
     pipeline: str
     status: RunStatus = RunStatus.SUCCESS
     run_id: Optional[str] = None
     nodes: List[NodeOutcome] = field(default_factory=list)
-    #: Streaming execution ids started by this run (streaming and hybrid).
     streaming_execution_ids: List[str] = field(default_factory=list)
-    #: node name -> gate block detail, for gates that blocked with skip_downstream.
     gate_blocked: Dict[str, Any] = field(default_factory=dict)
-    #: node name -> human-readable reason.
     skipped: Dict[str, str] = field(default_factory=dict)
-    #: Ancestor pipelines skipped because their outputs were already materialized.
     reused_pipelines: List[str] = field(default_factory=list)
     certificate_path: Optional[str] = None
     errors: List[str] = field(default_factory=list)
+    mlops_run_id: Optional[str] = None
+    metrics: Dict[str, float] = field(default_factory=dict)
 
-    # ── Predicates ───────────────────────────────────────────────────────────
 
     @property
     def ok(self) -> bool:
         """True only for a run that completed all of its work.
-
-        A gate block is deliberately *not* ok: the run finished without raising,
-        but nodes were skipped, and treating that as success is exactly the bug
-        this type exists to prevent.
         """
         return self.status is RunStatus.SUCCESS
 
@@ -168,7 +129,6 @@ class PipelineRunResult:
                 return f"node '{node.name}': {node.error}"
         return None
 
-    # ── Construction helpers ─────────────────────────────────────────────────
 
     def add_error(self, message: str) -> "PipelineRunResult":
         """Record an error and mark the run failed."""
@@ -199,7 +159,6 @@ class PipelineRunResult:
             self.status = RunStatus.SKIPPED
         return self
 
-    # ── Serialization ────────────────────────────────────────────────────────
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-ready view, for the API and for structured logging."""

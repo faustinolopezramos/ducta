@@ -101,20 +101,16 @@ def with_mlops_resilience(
 
     def decorator(func):
         config = retry_config or DEFAULT_RETRY_CONFIG
-        # Pre-compute the retry-decorated function once at decoration time,
-        # not on every call (A-02: avoids rebuilding closure on each invocation).
         _decorated = with_retry(config)(func)
 
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             try:
-                # Invoke the pre-built retry wrapper
                 return _decorated(*args, **kwargs)
             except Exception as e:
                 mapped = _map_mlops_exception(e, error_mapping, operation_name)
                 if mapped:
                     raise mapped from e
-                # Re-raise for further handling
                 raise
 
         return wrapper
@@ -169,12 +165,6 @@ def should_retry(
 ) -> bool:
     """
     Determine if an exception should trigger a retry based on configured exception types.
-
-    Storage backends wrap the underlying I/O error in a higher-level exception
-    (e.g. ``StorageBackendError(cause=OSError(...))``) before it reaches this
-    function. A wrapper is rarely an instance of ``retryable_exceptions`` itself,
-    so we also classify by its ``cause`` — otherwise transient I/O errors would
-    never be retried once wrapped.
     """
 
     def _classify(exc: Exception) -> Optional[bool]:
@@ -231,37 +221,66 @@ def _handle_retry_exception(
     time.sleep(delay)
 
 
+def retry_call(
+    config: Optional[RetryConfig],
+    operation_name: str,
+    func: Callable[..., Any],
+    *args: Any,
+    on_retry: Optional[Callable[[Exception, int], None]] = None,
+    **kwargs: Any,
+) -> Any:
+    """
+    Execute ``func(*args, **kwargs)`` with retry, resolving ``config`` at call
+    time.
+    """
+    if config is None:
+        config = DEFAULT_RETRY_CONFIG
+
+    last_exception: Exception
+
+    for attempt in range(config.max_attempts):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            last_exception = e
+            _handle_retry_exception(e, attempt, operation_name, config, on_retry)
+
+    raise RetryExhaustedError(operation_name, config.max_attempts, last_exception)
+
+
 def with_retry(
     config: Optional[RetryConfig] = None,
     operation_name: Optional[str] = None,
     on_retry: Optional[Callable[[Exception, int], None]] = None,
 ) -> Callable[[F], F]:
     """
-    Decorator to add retry logic to a function.
+    Decorator to add retry logic to a function, with ``config`` fixed at
+    decoration time. For retry behavior that must vary per instance (not per
+    function), call ``retry_call`` directly instead.
     """
-    if config is None:
-        config = DEFAULT_RETRY_CONFIG
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             name = operation_name or func.__name__
-            # Declared outside loop; guaranteed to be assigned before use because
-            # range(config.max_attempts) always executes at least one iteration
-            # (max_attempts >= 1 enforced by __post_init__).
-            last_exception: Exception
+            return retry_call(config, name, func, *args, on_retry=on_retry, **kwargs)
 
-            for attempt in range(config.max_attempts):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_exception = e
-                    _handle_retry_exception(e, attempt, name, config, on_retry)
+        return wrapper  # type: ignore
 
-            # Safety net — _handle_retry_exception raises on last attempt,
-            # so this line is only reached when max_attempts == 0 (impossible
-            # after validation), but kept for type-checker satisfaction.
-            raise RetryExhaustedError(name, config.max_attempts, last_exception)
+    return decorator
+
+
+def with_instance_retry(operation_name: str) -> Callable[[F], F]:
+    """
+    Decorator for a bound method whose retry behavior must come from the
+    instance, not from a config baked in at class-definition time.
+    """
+
+    def decorator(func: F) -> F:
+        @functools.wraps(func)
+        def wrapper(self, *args, **kwargs):
+            config = getattr(self, "_retry_config", None) or DEFAULT_RETRY_CONFIG
+            return retry_call(config, operation_name, func, self, *args, **kwargs)
 
         return wrapper  # type: ignore
 
@@ -387,9 +406,6 @@ class CircuitBreaker:
             if self._state == CircuitState.HALF_OPEN:
                 self._half_open_calls += 1
                 if self._half_open_calls > self.config.half_open_max_calls:
-                    # B-03: reset _last_failure_time so the timeout restarts from now,
-                    # otherwise _maybe_transition_from_open() re-enters HALF_OPEN
-                    # immediately on the very next check().
                     self._state = CircuitState.OPEN
                     self._last_failure_time = time.time()
                     raise CircuitBreakerOpenError(self.name, self.config.timeout)

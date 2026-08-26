@@ -19,9 +19,11 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from ducta.mlrun.hyperparams import SweepLimitError, expand_sweep_grid
@@ -64,3 +66,94 @@ def new_sweep_id() -> str:
     """Readable, unique sweep identifier."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"sweep-{stamp}-{uuid4().hex[:6]}"
+
+
+@dataclass
+class TrialOutcome:
+    """What one search trial produced."""
+
+    index: int
+    params: Dict[str, Any]
+    score: Optional[float]
+    failed: bool = False
+    reason: Optional[str] = None
+
+
+@dataclass
+class SearchOutcome:
+    """Aggregate result of a driven hyperparameter search."""
+
+    search_id: str
+    metric: str
+    direction: str
+    trials: List[TrialOutcome] = dataclass_field(default_factory=list)
+    best_params: Optional[Dict[str, Any]] = None
+    best_score: Optional[float] = None
+
+    @property
+    def failures(self) -> int:
+        return sum(1 for t in self.trials if t.failed)
+
+    @property
+    def succeeded(self) -> int:
+        return len(self.trials) - self.failures
+
+
+def new_search_id() -> str:
+    """Readable, unique search identifier."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"search-{stamp}-{uuid4().hex[:6]}"
+
+
+def run_search(
+    strategy: Any,
+    metric: str,
+    run_trial: Callable[[Dict[str, Any], int], Any],
+    search_id: Optional[str] = None,
+) -> SearchOutcome:
+    """Drive ``strategy`` to completion, executing each trial via ``run_trial``.
+    """
+    search_id = search_id or new_search_id()
+    outcome = SearchOutcome(
+        search_id=search_id, metric=metric, direction=getattr(strategy, "direction", "maximize")
+    )
+
+    index = 0
+    while True:
+        params = strategy.ask()
+        if params is None:
+            break
+        index += 1
+
+        score: Optional[float] = None
+        failed = False
+        reason: Optional[str] = None
+        try:
+            result = run_trial(params, index)
+            gate_blocked = getattr(result, "gate_blocked", None) or {}
+            if gate_blocked:
+                failed = True
+                reason = f"blocked by quality gate: {', '.join(sorted(gate_blocked))}"
+            else:
+                metrics = getattr(result, "metrics", None) or {}
+                if metric in metrics:
+                    score = float(metrics[metric])
+                else:
+                    failed = True
+                    reason = (
+                        f"run logged no '{metric}' metric "
+                        f"(logged: {', '.join(sorted(metrics)) or 'none'})"
+                    )
+        except Exception as e:  # noqa: BLE001 — one bad trial must not end the search
+            failed = True
+            reason = str(e)
+
+        strategy.tell(params, score)
+        outcome.trials.append(
+            TrialOutcome(index=index, params=params, score=score, failed=failed, reason=reason)
+        )
+
+    best = getattr(strategy, "best", None)
+    if best is not None:
+        outcome.best_params, outcome.best_score = best
+    return outcome

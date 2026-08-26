@@ -144,10 +144,6 @@ class LogLevel(str, Enum):
 
 class ChainReuseConfig(BaseModel):
     """Configuration for reusing already-materialized upstream pipelines.
-
-    When a target pipeline declares ``depends_on``, Ducta runs the full ancestor
-    chain first. With ``reuse_materialized`` enabled, an ancestor is skipped when
-    all of its outputs are already present on disk, avoiding redundant recompute.
     """
 
     reuse_materialized: bool = Field(
@@ -591,6 +587,18 @@ class NodeSchema(BaseModel):
             "Valid values: feature_engineering, training, evaluation, serving."
         ),
     )
+    run_in_process: bool = Field(
+        default=False,
+        description=(
+            "Run this node in its own process instead of on the shared thread pool. "
+            "Worth it only for nodes whose work is pure-Python compute, which holds "
+            "the GIL and makes concurrent sibling nodes take turns; nodes dominated "
+            "by I/O or by numpy/pandas/sklearn (which release the GIL) gain nothing "
+            "and pay the subprocess startup cost. Note that in-memory handoff does "
+            "not span processes: a node running this way reads and writes through "
+            "storage."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_module_function_path(self) -> "NodeSchema":
@@ -612,22 +620,6 @@ class NodeSchema(BaseModel):
 
 class SplitConfig(BaseModel):
     """Declarative train/test split for ML pipelines.
-
-    CRITICAL: This split config is passed to training nodes via ml_context['split'].
-    The node MUST respect this split and apply it consistently.
-
-    Data Leakage Prevention:
-    - Train set and test set must have NO temporal, entity, or feature overlap
-    - NEVER compute global statistics (mean/scale/frequencies) before splitting
-    - Split FIRST, then fit preprocessing on train only
-    - Validate that test set has no rows from train temporal period (temporal split)
-    - For group splits, ensure no entity appears in both train and test
-
-    Split Methods:
-    - random: Shuffles rows, maintains distribution. Risk: temporal signals leak if data is time-ordered.
-    - stratified: Ensures class distribution in both splits. Use for imbalanced classification.
-    - temporal: Time-forward split; train={t <= t_split}, test={t > t_split}. Prevents look-ahead bias.
-    - group: Splits by entity (group_col), no entity in both train and test. Use for user/item data.
     """
 
     method: Literal["random", "stratified", "temporal", "group"] = Field(

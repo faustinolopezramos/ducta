@@ -92,7 +92,6 @@ class MLOpsExecutorIntegration:
             return None
 
         try:
-            # Ensure all tag values are strings and handle None
             tags = tags or {}
             processed_tags = {str(k): str(v) for k, v in tags.items() if v is not None}
             processed_tags.update(
@@ -277,19 +276,17 @@ class MLOpsExecutorIntegration:
 
                 if self.context and hasattr(self.context, "nodes_config"):
                     node_cfg = self.context.nodes_config.get(node_name, {})
-                    ml_stage = node_cfg.get("ml", {}).get("stage", "")
+                    ml_stage = MLOpsAutoConfigurator.resolve_ml_stage(node_cfg)
                     log_strategy = MLOpsAutoConfigurator.get_logging_strategy(ml_stage)
             except Exception as e:
                 logger.debug(f"Could not load logging strategy: {e}")
 
-            # Log node status as parameter
             self.mlops_context.experiment_tracker.log_parameter(
                 run_id,
                 f"node_{node_name}_status",
                 status,
             )
 
-            # Log duration as metric (always log duration regardless of stage strategy)
             self.mlops_context.experiment_tracker.log_metric(
                 run_id,
                 f"node_{node_name}_duration_seconds",
@@ -297,7 +294,6 @@ class MLOpsExecutorIntegration:
                 step=0,
             )
 
-            # Log custom metrics
             if metrics and log_strategy.get("log_metrics", True):
                 for metric_name, value in metrics.items():
                     if isinstance(value, (int, float)):
@@ -308,7 +304,6 @@ class MLOpsExecutorIntegration:
                             step=0,
                         )
 
-            # Log error if present
             if error:
                 self.mlops_context.experiment_tracker.log_parameter(
                     run_id,
@@ -381,13 +376,14 @@ class MLOpsExecutorIntegration:
         run_id: str,
         status: RunStatus = RunStatus.COMPLETED,
         summary: Optional[Dict[str, Any]] = None,
-    ) -> None:
+    ) -> Dict[str, float]:
         """
         End pipeline run.
         """
         if not self.is_available() or not run_id:
-            return
+            return {}
 
+        final_metrics: Dict[str, float] = {}
         try:
             # Log summary if provided
             if summary:
@@ -419,8 +415,17 @@ class MLOpsExecutorIntegration:
                         run_id, "_output_fingerprints", json.dumps(out_fps, default=str)
                     )
 
+            tracker = self.mlops_context.experiment_tracker
+            try:
+                for metric_name in list(tracker.get_run(run_id).metrics.keys()):
+                    latest = tracker.get_latest_metric(run_id, metric_name)
+                    if latest is not None:
+                        final_metrics[metric_name] = float(latest.value)
+            except Exception as e:
+                logger.debug(f"Could not snapshot final metrics for run {run_id}: {e}")
+
             # End the run
-            self.mlops_context.experiment_tracker.end_run(run_id, status)
+            tracker.end_run(run_id, status)
 
             logger.info(f"Ended MLOps run {run_id} with status {status.value}")
 
@@ -431,6 +436,8 @@ class MLOpsExecutorIntegration:
 
         except Exception as e:
             logger.error(f"Failed to end run: {e}")
+
+        return final_metrics
 
     def register_model_from_run(
         self,

@@ -40,6 +40,15 @@ class TestExpandSweep:
         with pytest.raises(SweepError):
             expand_sweep(spec, max_runs=50)
 
+    def test_explicit_max_runs_above_default_is_honored(self):
+        # Regression: both the CLI and the API used to call expand_sweep(spec)
+        # with no max_runs=, so a caller-side limit configured above the
+        # library default of 50 never had any effect — the grid was truncated
+        # during expansion before the caller's own check could apply.
+        spec = {"a": list(range(10)), "b": list(range(10))}  # 100 combos
+        combos = expand_sweep(spec, max_runs=100)
+        assert len(combos) == 100
+
 
 class TestLoadSweepSpec:
     def test_missing_file_raises(self, tmp_path):

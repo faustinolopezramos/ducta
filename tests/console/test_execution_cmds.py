@@ -10,7 +10,7 @@ blocked and its descendants skipped.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from ducta.console.commands.execution_cmds import ExecutionCommands
 from ducta.console.core import CLIConfig, ExitCode
@@ -160,3 +160,211 @@ class TestGateBlockedReportsNonZeroExit:
         result = _cmd_with_fake_executor(exec_obj)
 
         assert result == ExitCode.SUCCESS.value
+
+
+class TestSweepParallelCap:
+    """Regression: --sweep-parallel had no ceiling and no relationship to
+    available cores — requesting more workers than cores silently
+    oversubscribed the machine instead of being capped with a warning."""
+
+    def test_default_without_flag_is_unchanged(self):
+        parsed_args = SimpleNamespace(sweep_parallel=None)
+        assert ExecutionCommands._resolve_sweep_parallel(parsed_args) == 1
+
+    def test_requested_within_core_count_is_unchanged(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 8)
+        parsed_args = SimpleNamespace(sweep_parallel=4)
+        assert ExecutionCommands._resolve_sweep_parallel(parsed_args) == 4
+
+    def test_requested_above_core_count_is_capped_with_warning(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 4)
+        parsed_args = SimpleNamespace(sweep_parallel=16)
+
+        with patch("ducta.console.commands.execution_cmds.logger") as mock_logger:
+            result = ExecutionCommands._resolve_sweep_parallel(parsed_args)
+            mock_logger.warning.assert_called_once()
+
+        assert result == 4
+
+    def test_zero_or_negative_floors_at_one(self, monkeypatch):
+        monkeypatch.setattr("os.cpu_count", lambda: 4)
+        parsed_args = SimpleNamespace(sweep_parallel=0)
+        assert ExecutionCommands._resolve_sweep_parallel(parsed_args) == 1
+
+
+class TestWarnIfParallelSpark:
+    def test_warns_when_context_has_spark(self):
+        exec_obj = SimpleNamespace(context=SimpleNamespace(spark=MagicMock()))
+
+        with patch("ducta.console.commands.execution_cmds.logger") as mock_logger:
+            ExecutionCommands._warn_if_parallel_spark(exec_obj, 2)
+            mock_logger.warning.assert_called_once()
+
+    def test_no_warning_without_spark(self):
+        exec_obj = SimpleNamespace(context=SimpleNamespace(spark=None))
+
+        with patch("ducta.console.commands.execution_cmds.logger") as mock_logger:
+            ExecutionCommands._warn_if_parallel_spark(exec_obj, 2)
+            mock_logger.warning.assert_not_called()
+
+    def test_no_warning_when_context_has_no_spark_attribute(self):
+        exec_obj = SimpleNamespace(context=SimpleNamespace())
+
+        with patch("ducta.console.commands.execution_cmds.logger") as mock_logger:
+            ExecutionCommands._warn_if_parallel_spark(exec_obj, 2)
+            mock_logger.warning.assert_not_called()
+
+
+class TestMaxSweepSize:
+    """Regression: --sweep and the API both called expand_sweep(spec) without
+    max_runs=, so expand_sweep_grid truncated at its own internal default of
+    50 during expansion — configuring max_sweep_size above 50 had no effect."""
+
+    def test_parse_config_defaults_to_50(self):
+        cmd = ExecutionCommands()
+        parsed_args = SimpleNamespace(env="dev", pipeline="p", max_sweep_size=None)
+        config = cmd._parse_config(parsed_args)
+        assert config.max_sweep_size == 50
+
+    def test_parse_config_honors_explicit_flag(self):
+        cmd = ExecutionCommands()
+        parsed_args = SimpleNamespace(env="dev", pipeline="p", max_sweep_size=200)
+        config = cmd._parse_config(parsed_args)
+        assert config.max_sweep_size == 200
+
+
+class TestRunTrialsParallelSharedPrefix:
+    """Trial 1 runs first, sequentially, into a shared prefix directory —
+    only afterward do trials 2..N run in parallel, each given that directory
+    as a read fallback (if trial 1 succeeded)."""
+
+    def _cmd(self, tmp_path):
+        cmd = ExecutionCommands()
+        cmd.config = CLIConfig(env="dev", pipeline="p", sweep_parallel=2)
+        exec_obj = SimpleNamespace(
+            context=SimpleNamespace(
+                global_settings={"output_path": str(tmp_path)}, output_path=str(tmp_path)
+            )
+        )
+        return cmd, exec_obj
+
+    def test_single_trial_materializes_shared_prefix_without_touching_the_pool(
+        self, tmp_path, monkeypatch
+    ):
+        # A single-trial sweep never has a "rest" to parallelize — it must
+        # return right after the sequential trial 1, never constructing a
+        # ProcessPoolExecutor at all.
+        cmd, exec_obj = self._cmd(tmp_path)
+
+        calls = []
+
+        def fake_run_trial_in_process(payload):
+            calls.append(dict(payload))
+            return {
+                "index": payload["trial_index"],
+                "params": payload["params"],
+                "metrics": {"val_f1": 0.9},
+                "gate_blocked": [],
+                "failed": False,
+                "reason": None,
+            }
+
+        monkeypatch.setattr(
+            "ducta.core.sweep_worker.run_trial_in_process", fake_run_trial_in_process
+        )
+
+        def _pool_should_not_be_used(*a, **k):
+            raise AssertionError("ProcessPoolExecutor must not be constructed for one trial")
+
+        monkeypatch.setattr(
+            "concurrent.futures.ProcessPoolExecutor", _pool_should_not_be_used
+        )
+
+        trials = [{"index": 1, "params": {"depth": 3}, "hyperparams": {"depth": 3}}]
+        outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)
+
+        assert len(calls) == 1
+        from ducta.core.sweep_worker import shared_prefix_path
+
+        assert calls[0]["output_path"] == shared_prefix_path(str(tmp_path), "search-1")
+        assert outcomes == [
+            {
+                "index": 1,
+                "params": {"depth": 3},
+                "metrics": {"val_f1": 0.9},
+                "gate_blocked": [],
+                "failed": False,
+                "reason": None,
+            }
+        ]
+
+    def test_failed_trial_one_disables_fallback_for_the_rest(self, tmp_path, monkeypatch):
+        cmd, exec_obj = self._cmd(tmp_path)
+
+        seen_fallback_paths = []
+
+        def fake_build_payloads(trials, *, read_fallback_paths=None, **kwargs):
+            seen_fallback_paths.append(list(read_fallback_paths or []))
+            return [
+                {"trial_index": t["index"], "params": t.get("params") or {}, "output_path": None}
+                for t in trials
+            ]
+
+        def fake_run_trial_in_process(payload):
+            if payload["trial_index"] == 1:
+                return {
+                    "index": 1,
+                    "params": {},
+                    "metrics": {},
+                    "gate_blocked": [],
+                    "failed": True,
+                    "reason": "boom",
+                }
+            return {
+                "index": payload["trial_index"],
+                "params": {},
+                "metrics": {},
+                "gate_blocked": [],
+                "failed": False,
+                "reason": None,
+            }
+
+        monkeypatch.setattr("ducta.core.sweep_worker.build_payloads", fake_build_payloads)
+        monkeypatch.setattr(
+            "ducta.core.sweep_worker.run_trial_in_process", fake_run_trial_in_process
+        )
+
+        class _FakeFuture:
+            def __init__(self, value):
+                self._value = value
+
+            def result(self):
+                return self._value
+
+        class _FakePool:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def submit(self, fn, payload):
+                return _FakeFuture(fn(payload))
+
+        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _FakePool)
+        monkeypatch.setattr(
+            "concurrent.futures.as_completed", lambda futures: list(futures.keys())
+        )
+
+        trials = [{"index": i, "params": {}, "hyperparams": {}} for i in range(1, 4)]
+        outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)
+
+        # Only the call for trials 2..3 goes through fake_build_payloads
+        # (trial 1's payload is built via a direct single-trial call too —
+        # both calls are recorded, the second must carry an empty fallback).
+        assert seen_fallback_paths[-1] == []
+        assert len(outcomes) == 3
+        assert outcomes[0]["failed"] is True

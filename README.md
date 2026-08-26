@@ -1,112 +1,168 @@
 <div align="center">
 
-# Ducta
+# DUCTA
 
-**Build, run, and trust data pipelines — batch, streaming, and machine learning — from simple configuration.**
+### Build data pipelines you can trust.
+
+An open-source Python framework for building **reproducible**, **quality-controlled**
+and **auditable** data pipelines across local Spark and Databricks.
 
 [![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](CHANGELOG.md)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/faustinolopezramos/ducta/blob/main/LICENSE)
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md)
 
 </div>
 
-Ducta lets you describe a data pipeline in a few config files, write your
-transformations as ordinary Python functions, and run them with one command —
-locally or on the cloud. Data-quality checks, experiment tracking, and a
-tamper-evident record of every run come built in, so you can trust the results.
-
-> **Status:** Alpha (`0.1.0`). Things may change between releases — see the
-> [CHANGELOG](CHANGELOG.md).
-
-> **Using Ducta vs. contributing to it.** If you just want to *use* Ducta,
-> install the package from PyPI — `pip install ducta` (see [Install](#install)) —
-> and you never touch this source tree. **This repository is organized for
-> contributors** working on Ducta itself: its layout and tooling are built
-> around that — see [Contributing](#contributing) below. The feature sections
-> in between explain what Ducta does — useful context whichever side you're on.
-
 ---
 
-## Why Ducta
+## 60-second demo
 
-- **One tool for every pipeline** — batch, streaming, and machine learning, the same way.
-- **You write plain Python** — Ducta runs your functions in the right order and handles the data plumbing.
-- **Runs anywhere** — your laptop (local Spark) or a cluster (Apache Spark / Databricks), no code changes.
-- **Quality you can enforce** — automatic checks on your data that can warn or stop a run before bad data spreads.
-- **Reproducible & auditable** — every run leaves a signed certificate of what ran, on which data, and with what result.
-- **Work how you like** — a command line, a REST API, or a visual web app.
+<!--
+  TODO — the demo asset does not exist yet. Record the three commands below as
+  docs/img/ducta-demo.gif, commit it, then delete these comment markers to show it.
+  The URL must stay absolute: this README is also the PyPI long description,
+  where relative image paths do not resolve.
 
----
+<div align="center">
+  <img src="https://raw.githubusercontent.com/faustinolopezramos/ducta/main/docs/img/ducta-demo.gif"
+       alt="Scaffold a project, run a pipeline, verify its certificate — in 60 seconds"
+       width="760">
+</div>
+-->
 
-## Install
-
-Requires **Python 3.10–3.13**. Once a release is published, the intended
-end-user install is:
+Install, run, and prove a pipeline — three commands:
 
 ```bash
-pip install "ducta[spark]"        # running pipelines (start here)
+pip install "ducta[spark]"
+
+# 1. Scaffold a project (Medallion layout: bronze → silver → gold)
+ducta template --template medallion_basic --project-name my_project && cd my_project
+
+# 2. Run the pipeline it ships with
+ducta start --env dev --pipeline etl
+
+# 3. Prove what just happened
+ducta certify verify --run-id <run-id>
+```
+
+---
+
+## Why Ducta?
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+### BUILD
+
+Define pipelines with configuration and ordinary Python.
+
+Your transformations are plain functions taking DataFrames. Ducta resolves the
+dependency graph, runs the nodes in the right order, and handles the I/O — the
+same project runs on local Spark or Databricks with no code change.
+
+</td>
+<td width="33%" valign="top">
+
+### QUALITY
+
+Validate data automatically before bad data moves downstream.
+
+Declare checks next to the step that produces the data — row counts, null
+rates, ranges, duplicates, schema, freshness, drift. A quality gate decides
+whether a failure warns or halts the run.
+
+</td>
+<td width="33%" valign="top">
+
+### PROVE
+
+Every execution produces verifiable evidence of what ran, against which data,
+and with what result.
+
+Each run emits a hash-chained **run certificate**: inputs and outputs
+fingerprinted, every node's outcome, every quality verdict — tamper-evident,
+and optionally HMAC-signed.
+
+</td>
+</tr>
+</table>
+
+---
+
+## Quick Start
+
+**Requires Python 3.10–3.13.** From nothing to a verified run in under five minutes.
+
+### 1. Install and run
+
+The three commands from the demo above, with what to expect from each:
+
+```bash
+pip install "ducta[spark]"
+
+ducta template --template medallion_basic --project-name my_project && cd my_project
+ducta start --env dev --pipeline etl
+```
+
+That is it. The scaffold ships **sample data and a working `etl` pipeline**
+(Extract → Transform → Load, CSV → Parquet → CSV), so the run reads real rows,
+applies quality checks, writes output, and emits a run certificate — before you
+have written a line of code.
+
+> **Budget about 4 minutes, and it is nearly all `pip`.** Ducta itself is small;
+> `pyspark` is a ~300 MB download that pulls in a JVM runtime. Once installed,
+> scaffolding is instant and the sample pipeline runs in seconds.
+
+Look around before changing anything:
+
+```bash
+ducta config list-pipelines                          # → etl
+ducta certify list                                   # the run you just did
+ducta certify verify --run-id <run-id>               # prove it
+```
+
+<details>
+<summary><b>Do I really need Spark?</b> — and other extras</summary>
+
+**To *execute* a pipeline, yes.** Every file reader and writer is Spark-backed
+(`ducta.gate`), so a run that touches data needs a session.
+
+**To install, scaffold, or inspect one, no.** The session is created lazily on
+first genuine access, so on a bare `pip install ducta` these all work:
+`ducta template`, `ducta config list-pipelines`, `ducta start --validate-only`,
+and `ducta certify list/show/verify`. Useful in CI, where you may want to
+validate configuration or check certificates without paying for a JVM.
+
+```bash
 pip install "ducta[mlops]"        # + experiment tracking & model registry
 pip install "ducta[api]"          # + web app / REST API
 pip install "ducta[all]"          # everything above
 ```
 
-> **Spark is required to run a pipeline.** Bare `pip install ducta` gives you the
-> library and the CLI, but every execution context builds a Spark session, so
-> commands that load a project (`ducta start`, `ducta config list-pipelines`, …)
-> need the `spark` extra. Install `ducta[spark]` unless you only want to import
-> Ducta as a library.
+**`databricks` is a separate, mutually exclusive extra.** Use
+`pip install "ducta[databricks]"` *instead of* `[spark]`, never alongside it:
+`databricks-connect` ships its own `pyspark` package and overwrites the real
+one, after which local execution fails. That is why it is not part of `[all]`.
+You do not need to think about this until you actually target Databricks.
 
-> **`databricks` is a separate, mutually exclusive extra.** Use
-> `pip install "ducta[databricks]"` *instead of* `[spark]`, never alongside it:
-> `databricks-connect` ships its own `pyspark` package and overwrites the real
-> one, after which local execution fails. For that reason it is not part of
-> `[all]`.
+</details>
 
-> **Contributing / working from source?** Don't use `pip` — set up the dev
-> environment with Poetry (or Docker) instead. See [Contributing](#contributing).
+### 2. Now add a transformation of your own
 
----
-
-## Get started in 5 minutes
-
-Scaffold a ready-to-run project and execute your first pipeline:
-
-```bash
-# 1. Create a project (Medallion layout: bronze → silver → gold)
-ducta template --template medallion_basic --project-name my_project --format yaml
-cd my_project
-
-# 2. See what pipelines it comes with
-ducta config list-pipelines
-
-# 3. Run one for a date range
-ducta start --env dev --pipeline <pipeline-name> \
-  --start-date 2026-01-01 --end-date 2026-01-31
-```
-
-Other starting points: `--template ml_ready`, `streaming_core`, or `hybrid`.
-Run `ducta --help` to see every command.
-
----
-
-## Anatomy of a pipeline
-
-A Ducta project is **your transformation code** plus a few **config files** that
-wire everything together. Here is a complete, minimal pipeline.
-
-**1. Your transformation** — a normal Python function. Ducta passes in the input
-data (a Spark DataFrame) and the run's date range, and you return the result.
+A normal Python function. Ducta passes the input DataFrame and the run's date
+range; you return the result.
 
 ```python
 # nodes.py
 def clean_sales(sales, start_date, end_date):
-    return sales.dropna()          # any DataFrame transformation
+    return sales.dropna()
 ```
 
-**2. Where the data comes from and goes** (`config/input.yaml`, `config/output.yaml`):
+### 3. Wire it up
 
 ```yaml
-# input.yaml
+# config/input.yaml — where data comes from
 raw_sales:
   format: "csv"
   filepath: "${input_path}/sales.csv"
@@ -114,47 +170,14 @@ raw_sales:
 ```
 
 ```yaml
-# output.yaml
+# config/output.yaml — where it goes
 core.analytics.sales_clean:
   format: "parquet"
   write_mode: "overwrite"
 ```
 
-**3. The step and the pipeline** (`config/nodes.yaml`, `config/pipelines.yaml`):
-
 ```yaml
-# nodes.yaml — one entry per transformation
-clean_sales:
-  module: "nodes"                 # your nodes.py
-  function: "clean_sales"
-  input: ["raw_sales"]            # passed to your function, in order
-  output: ["core.analytics.sales_clean"]
-
-# pipelines.yaml — order your steps into a pipeline
-sales_daily:
-  type: batch
-  nodes: ["clean_sales"]
-```
-
-**4. Run it:**
-
-```bash
-ducta start --env dev --pipeline sales_daily \
-  --start-date 2026-01-01 --end-date 2026-01-31
-```
-
-Ducta reads `raw_sales`, runs `clean_sales`, checks the output, writes
-`sales_clean`, and records a run certificate — all from that config.
-
----
-
-## Enforce data quality
-
-Add checks to any step. A **quality gate** decides whether a failure just warns
-or actually stops the run.
-
-```yaml
-# nodes.yaml
+# config/nodes.yaml — one entry per transformation, with its checks
 clean_sales:
   module: "nodes"
   function: "clean_sales"
@@ -162,55 +185,246 @@ clean_sales:
   output: ["core.analytics.sales_clean"]
   data_quality:
     checks:
-      row_count: { min: 1000 }              # expect at least 1,000 rows
-      null_rate: { column: "id", max: 0.0 } # no missing ids
-      duplicates: { columns: ["id"] }       # ids must be unique
+      row_count: { min: 1000 }               # expect at least 1,000 rows
+      null_rate: { column: "id", max: 0.0 }  # no missing ids
+      duplicates: { columns: ["id"] }        # ids must be unique
     quality_gate:
       max_errors: 0                          # any error blocks downstream steps
 ```
 
-Built-in checks include row counts, null rates, ranges, duplicates, schema,
-freshness, and drift — and you can add your own.
-
----
-
-## Use the web app
-
-Prefer a visual workspace? Launch the built-in server and open it in your browser:
-
-```bash
-ducta server start --port 8000
-# Web app & API docs:  http://localhost:8000
+```yaml
+# config/pipelines.yaml — order the steps
+sales_daily:
+  type: batch
+  nodes: ["clean_sales"]
 ```
 
-From there you can browse pipelines, edit configuration, launch runs, and watch
-logs stream live.
+### 4. Run it
+
+```bash
+ducta start --env dev --pipeline sales_daily \
+  --start-date 2026-01-01 --end-date 2026-01-31
+```
+
+Ducta reads `raw_sales`, runs `clean_sales`, validates the output, writes
+`sales_clean`, and records a run certificate — all from that configuration.
+
+### 5. Prefer a visual workspace?
+
+```bash
+ducta server start --port 8000     # web app & API docs at http://localhost:8000
+```
+
+Browse pipelines, edit configuration, launch runs, and watch logs stream live.
 
 ---
 
-## Command cheatsheet
+## See it in action
 
-| Command | What it does |
-|---------|--------------|
-| `ducta template --template medallion_basic --project-name NAME` | Scaffold a new project |
-| `ducta config list-pipelines` | List the pipelines in a project |
-| `ducta start --env dev --pipeline NAME` | Run a batch / ML pipeline |
-| `ducta stream run --pipeline NAME` | Start a streaming pipeline |
-| `ducta quality run --input data.parquet --config checks.yaml` | Check a data file's quality |
-| `ducta server start --port 8000` | Launch the web app + API |
-| `ducta certify verify --run-id RUN_ID` | Verify a run certificate (from `.ducta/runs/`) |
-| `ducta --help` | Full command reference |
+**What you declared** — four config files and one Python function:
+
+```mermaid
+flowchart LR
+    A["raw_sales<br/><i>csv</i>"] --> B["clean_sales<br/><i>nodes.clean_sales</i>"]
+    B --> C{"quality gate<br/>row_count · null_rate · duplicates"}
+    C -->|pass| D["sales_clean<br/><i>parquet</i>"]
+    C -->|fail| E["run halted<br/>downstream skipped"]
+```
+
+**What Ducta produced** — `.ducta/runs/<run-id>/certificate.json`:
+
+```jsonc
+{
+  "schema_version": "1.0",
+  "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
+  "pipeline": "sales_daily",
+  "environment_name": "dev",
+  "status": "success",
+  "started_at": "2026-01-01T09:00:00+00:00",
+  "ended_at": "2026-01-01T09:01:12+00:00",
+  "duration_seconds": 72.418,
+  "ducta_version": "0.1.0",
+  "config_fingerprint": "sha256:6c1f…",     // the config this ran with
+  "environment": {                           // where it ran
+    "python_version": "3.12.4", "os_info": "Linux 6.8.0",
+    "git_commit": "b7f0e91", "git_branch": "main", "git_dirty": false,
+    "pip_packages": { … }, "env_hash": "sha256:0d5a…"
+  },
+  "nodes": [
+    { "name": "clean_sales", "type": "batch", "status": "success",
+      "duration_seconds": 41.09, "outputs": ["core.analytics.sales_clean"],
+      "error": null }
+  ],
+  "inputs": {                                // which bytes went in
+    "raw_sales": { "filepath": "data/sales.csv", "file_size_bytes": 48213904,
+                   "row_count": 1204331, "schema_hash": "sha256:9ab0…",
+                   "fingerprint": "sha256:31de…" }
+  },
+  "outputs": {                               // which bytes came out
+    "core.analytics.sales_clean": { "row_count": 1198677,
+                                    "fingerprint": "sha256:7c42…" }
+  },
+  "quality": [                               // every verdict, not just failures
+    { "node": "clean_sales", "phase": "data_quality", "passed": true,
+      "score": 1.0, "errors": 0, "warnings": 0, "checks": 3 }
+  ],
+  "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
+  "signature": "hmac-sha256:44c9…"           // optional, when a key is configured
+}
+```
+
+**Verify it later** — anyone, on any machine, without rerunning the pipeline:
+
+```bash
+ducta certify list                                    # every run recorded here
+ducta certify show   --run-id 9f3c1a70               # a prefix is enough
+ducta certify verify --run-id 9f3c1a70               # tamper check
+ducta certify verify --run-id 9f3c1a70 --reproduce \
+  --start-date 2026-01-01 --end-date 2026-01-31       # re-run, compare every output
+```
+
+The hash covers every other field, so any edit to the file is detectable. Set
+`DUCTA_CERTIFICATE_KEY` and the certificate is HMAC-signed too, which adds
+attribution on top of tamper-evidence. `--reproduce` goes further than
+tamper-evidence: it re-runs the pipeline and confirms each output fingerprint
+still matches what the certificate claims.
+
+---
+
+## Why not X?
+
+Ducta is not trying to replace your scheduler or your warehouse. It occupies
+the space between them: **the execution of one pipeline, and the evidence that
+it ran correctly.** An honest comparison:
+
+| Instead of Ducta, use… | …when | Ducta's difference |
+|---|---|---|
+| **Airflow / Dagster / Prefect** | You need scheduling, backfills, retries, a multi-team DAG estate, alerting, SLAs. | Ducta has **no scheduler** and does not want one. It is the thing your Airflow task *calls* — see the [Airflow tutorial](https://github.com/faustinolopezramos/ducta/blob/main/docs/tutorials/airflow_integration.rst). Dagster overlaps most (assets, checks); it is far more mature and far larger. |
+| **dbt** | Your transformations are SQL inside a warehouse. | dbt is excellent and Ducta does not compete with it in-warehouse. Ducta is for Spark/Python work — non-SQL transforms, ML steps, streaming — where dbt does not reach. |
+| **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
+| **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
+| **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.1.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+
+**Where Ducta is genuinely different:** the run certificate. Most tools can
+tell you a job succeeded. Ducta gives you a portable, hash-chained file
+attesting *which config, which input bytes, which output bytes, and which
+quality verdicts* — verifiable months later by someone who was not there.
+
+---
+
+## Architecture
+
+Ducta is a layered set of modules; each has its own README with a deeper tour.
+
+```mermaid
+flowchart TD
+    subgraph Interfaces
+        CLI["<b>console</b><br/>the ducta CLI"]
+        API["<b>api</b><br/>FastAPI REST + WebSocket"]
+        UI["<b>ui</b><br/>web app"]
+    end
+
+    subgraph Engine
+        CORE["<b>core</b><br/>DAG resolution · parallel execution<br/>run certificates"]
+    end
+
+    subgraph Capabilities
+        CHECK["<b>check</b><br/>quality checks & gates"]
+        STREAM["<b>stream</b><br/>Structured Streaming"]
+        MLRUN["<b>mlrun</b><br/>tracking · registry · fingerprints"]
+        GATE["<b>gate</b><br/>I/O: Spark · Pandas · Polars · JDBC"]
+    end
+
+    SET["<b>setting</b><br/>YAML/TOML/JSON → typed Context"]
+
+    UI --> API
+    CLI --> CORE
+    API --> CORE
+    CORE --> CHECK & STREAM & MLRUN & GATE
+    CHECK & STREAM & MLRUN & GATE --> SET
+    CORE --> SET
+```
+
+| Module | Responsibility | Deeper tour |
+|---|---|---|
+| [`setting`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/setting/README.md) | Loads, interpolates and validates every config source into one typed, environment-aware `Context`. | Foundation |
+| [`gate`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/gate/README.md) | Unified, secure read/write across Spark, Pandas and Polars, plus a sanitized JDBC gateway. | Physical I/O |
+| [`check`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/check/README.md) | Engine-agnostic checks before and after each node; quality gates that block, warn or skip. | Data quality |
+| [`mlrun`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/mlrun/README.md) | Experiment tracking, versioned model registry, data fingerprinting, hyperparameter search, reproducible splits. | MLOps |
+| [`stream`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/stream/README.md) | Declarative Spark Structured Streaming: readers, sinks, query supervision, checkpoints. | Streaming |
+| [`core`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md) | Turns a `Context` into running work — dependency graph, parallel nodes, gates, run certificate. | Execution engine |
+| [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
+| [`api`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/api/README.md) | REST + WebSocket over the engine; serves the bundled web app. | Service |
+
+**Two design decisions worth knowing:**
+
+- **Configuration is data, not code.** Everything the engine needs arrives as a
+  validated `Context`. That is what makes the same project run unchanged on a
+  laptop and on Databricks — and what makes `config_fingerprint` meaningful.
+- **Evidence is collected during execution, not reconstructed after.** A
+  thread-safe `RunLedger` accumulates node outcomes, quality verdicts and I/O
+  fingerprints as the run happens, and the certificate is sealed from it.
+
+---
+
+## Roadmap
+
+Direction, not commitments — Ducta is alpha and priorities move. The
+[CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) is the record of what actually shipped.
+
+**Now (in flight toward `0.2.0`)**
+
+- Hyperparameter search driven by the engine — random and Bayesian strategies,
+  `n_trials`, per-trial process isolation so every trial is tracked as its own run.
+- Security hardening across the API surface: CORS and WebSocket origin
+  validation, SQL sanitization on every path, Git clone host allow-lists.
+- Consolidating the web app on a shared component layer (sortable tables,
+  consistent loading and error states).
+
+**Next**
+
+- **`pip install ducta && ducta demo`** — a zero-configuration first run with no
+  Spark and no scaffolding, printing each stage as it happens and ending at a
+  certificate path. The blocker is narrow and known: `pandas` is already a core
+  dependency, the quality engine is already engine-agnostic, and certificates
+  already write without a session — but every file reader and writer in
+  `ducta.gate` is Spark-backed, so a pipeline cannot read a CSV without a JVM.
+  A pandas-backed reader/writer family, registered through the existing
+  `register_reader` / `register_writer` hooks, is what stands between today and
+  a sub-30-second first run.
+- Declaring the configuration schema and the public Python API stable — the
+  gate to leaving alpha.
+- Broader Databricks coverage: Unity Catalog paths exercised end to end.
+- Certificate ergonomics: diffing two runs, and verifying a whole directory of
+  certificates in CI.
+
+**Exploring**
+
+- A published catalog of run certificates, so evidence is queryable across runs
+  rather than one file at a time.
+- More quality checks contributed as plugins via `register_check`.
+
+Have an opinion on the order? [Open an issue](https://github.com/faustinolopezramos/ducta/issues).
 
 ---
 
 ## Contributing
 
-Want to build or contribute to Ducta itself, rather than just using it? See
-[CONTRIBUTING.md](https://github.com/faustinolopezramos/ducta/blob/main/CONTRIBUTING.md)
-for the full development setup (Poetry, Docker, tests) and workflow.
+**Using Ducta and contributing to it are different paths.** To *use* it,
+`pip install ducta` — you never touch this source tree. **This repository is
+organized for contributors** working on Ducta itself, and its layout and
+tooling reflect that.
+
+If you are working from source, do not use `pip` — set up the dev environment
+with Poetry (or Docker). [CONTRIBUTING.md](https://github.com/faustinolopezramos/ducta/blob/main/CONTRIBUTING.md) has the full setup,
+the test workflow, and the conventions.
+
+Good first contributions: a new quality check via `register_check`, a project
+template, or a docs tutorial. Issues and pull requests are welcome.
 
 ---
 
 ## License
 
-[Apache License 2.0](LICENSE). Copyright © Faustino Lopez Ramos.
+[Apache License 2.0](https://github.com/faustinolopezramos/ducta/blob/main/LICENSE). Copyright © Faustino Lopez Ramos.

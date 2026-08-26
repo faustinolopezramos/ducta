@@ -41,7 +41,7 @@ from ducta.mlrun.resilience import (
     CircuitBreaker,
     CircuitBreakerConfig,
     RetryConfig,
-    with_retry,
+    with_instance_retry,
 )
 from ducta.mlrun.validators import PathValidator
 
@@ -129,12 +129,6 @@ class StorageBackend(ABC):
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
         """Write DataFrame to storage.
-
-        ``mode``: ``"overwrite"`` replaces existing data; ``"ignore"`` is a
-        no-op if the target already exists; ``"append"`` adds rows to
-        existing data (Databricks: passed straight to Spark's
-        ``DataFrameWriter.mode()``; Local: read-concat-rewrite). Any other
-        value fails if the target already exists.
         """
         pass
 
@@ -148,10 +142,6 @@ class StorageBackend(ABC):
         self, data: Dict[str, Any], path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
         """Write JSON object to storage.
-
-        ``mode``: only ``"overwrite"`` vs. anything else (fails if the
-        target already exists) is supported — JSON objects have no natural
-        "append" semantics the way DataFrame rows do.
         """
         pass
 
@@ -159,6 +149,17 @@ class StorageBackend(ABC):
     def read_json(self, path: str) -> Dict[str, Any]:
         """Read JSON object from storage."""
         pass
+
+    def append_lines(self, lines: List[str], path: str) -> StorageMetadata:
+        """Append pre-serialized JSON lines to a file, creating it if absent.
+        """
+        try:
+            existing = self.read_json(path)
+            current_lines = existing.get("lines", []) if isinstance(existing, dict) else []
+        except FileNotFoundError:
+            current_lines = []
+        current_lines.extend(lines)
+        return self.write_json({"lines": current_lines}, path, mode="overwrite")
 
     @abstractmethod
     def write_artifact(
@@ -219,11 +220,6 @@ def _atomic_copy_artifact(src: Path, dest: Path) -> None:
     or directory at ``dest`` — unlike a direct ``shutil.copy2``/``copytree``,
     which writes straight onto the live path and can leave a truncated file or
     half-populated directory visible to a concurrent reader.
-
-    Files use ``os.replace`` (atomic rename on the same filesystem). POSIX
-    ``rename`` cannot atomically replace a non-empty directory, so for
-    directories the previous ``dest`` (if any) is renamed aside, the staged
-    copy is renamed into place, and only then is the old copy removed.
     """
     tmp = dest.parent / f".{dest.name}.tmp-{uuid4().hex}"
     try:
@@ -239,8 +235,6 @@ def _atomic_copy_artifact(src: Path, dest: Path) -> None:
             try:
                 os.rename(tmp, dest)
             except Exception:
-                # Best-effort: restore the previous directory if the final
-                # rename failed, so a failed write doesn't leave `dest` gone.
                 if backup is not None:
                     os.rename(backup, dest)
                     backup = None
@@ -300,9 +294,6 @@ class LocalStorageBackend(StorageBackend):
         try:
             return PathValidator.validate_path(path, self.base_path)
         except MLOpsException:
-            # Preserve the original exception type (e.g. ValidationError) so
-            # code catching MLOpsException uniformly still sees it — wrapping
-            # it in a bare ValueError here would discard that type info.
             raise
         except Exception as e:
             logger.error(f"Invalid path '{path}': {e}")
@@ -377,19 +368,11 @@ class LocalStorageBackend(StorageBackend):
             logger.warning(f"Could not validate disk space: {e}")
             # Don't fail if we can't check disk space
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="write_dataframe")
+    @with_instance_retry(operation_name="write_dataframe")
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
         """Write DataFrame to Parquet file with disk space validation.
-
-        ``mode`` accepts the same values as ``DatabricksStorageBackend``
-        (which passes them straight to Spark's ``DataFrameWriter.mode()``):
-        ``"overwrite"`` replaces any existing file; ``"ignore"`` is a no-op
-        if the file already exists; ``"append"`` concatenates onto the
-        existing file's rows (creating it if absent); any other value
-        (including Spark's ``"error"``/``"errorifexists"``) fails if the
-        file already exists — matching this backend's original behavior.
         """
         self._check_circuit_breaker()
 
@@ -435,7 +418,7 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_dataframe", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="read_dataframe")
+    @with_instance_retry(operation_name="read_dataframe")
     def read_dataframe(self, path: str) -> pd.DataFrame:
         """Read DataFrame from Parquet file."""
         self._check_circuit_breaker()
@@ -458,7 +441,7 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("read_dataframe", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="write_json")
+    @with_instance_retry(operation_name="write_json")
     def write_json(
         self, data: Dict[str, Any], path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
@@ -497,7 +480,7 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_json", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="read_json")
+    @with_instance_retry(operation_name="read_json")
     def read_json(self, path: str) -> Dict[str, Any]:
         """Read JSON object from file."""
         self._check_circuit_breaker()
@@ -521,7 +504,37 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("read_json", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="write_artifact")
+    @with_instance_retry(operation_name="append_lines")
+    def append_lines(self, lines: List[str], path: str) -> StorageMetadata:
+        """Append pre-serialized JSON lines to a .jsonl file (open("a"))."""
+        self._check_circuit_breaker()
+
+        try:
+            full_path = self._get_full_path(path)
+            full_path.parent.mkdir(parents=True, exist_ok=True)
+
+            if not full_path.suffix:
+                full_path = full_path.with_suffix(".jsonl")
+
+            text = "".join(line if line.endswith("\n") else line + "\n" for line in lines)
+            estimated_bytes = len(text.encode("utf-8"))
+            self._validate_disk_space(estimated_bytes)
+
+            with open(full_path, "a", encoding="utf-8") as f:
+                f.write(text)
+
+            self._stats["writes"] += 1
+            metadata = self._create_metadata(full_path, "jsonl")
+
+            self._record_success()
+            logger.debug(f"Appended {len(lines)} line(s) to {full_path}")
+            return metadata
+
+        except Exception as e:
+            self._record_failure(e)
+            raise StorageBackendError("append_lines", path, e) from e
+
+    @with_instance_retry(operation_name="write_artifact")
     def write_artifact(
         self, artifact_path: str, destination: str, mode: str = "overwrite"
     ) -> StorageMetadata:
@@ -554,17 +567,12 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_artifact", destination, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="read_artifact")
+    @with_instance_retry(operation_name="read_artifact")
     def read_artifact(self, path: str, local_destination: str) -> None:
         """Download artifact to local path."""
         self._check_circuit_breaker()
 
         try:
-            # local_destination is a caller-chosen download target outside
-            # this backend's storage sandbox (unlike `destination` in
-            # write_artifact), so it isn't containment-checked against a
-            # root — but it should still reject the obviously-malformed
-            # values that no legitimate caller would pass.
             if not str(local_destination).strip():
                 raise ValueError("local_destination cannot be empty")
             if "\x00" in str(local_destination):
@@ -620,7 +628,7 @@ class LocalStorageBackend(StorageBackend):
             logger.warning(f"Error listing paths with prefix '{prefix}': {e}")
             return []
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="delete")
+    @with_instance_retry(operation_name="delete")
     def delete(self, path: str) -> None:
         """Delete path (file or directory)."""
         self._check_circuit_breaker()
@@ -665,6 +673,7 @@ class DatabricksStorageBackend(StorageBackend):
         volume_name: str = "mlops_artifacts",
         enable_circuit_breaker: bool = True,
         local_cache: Optional[str] = None,
+        retry_config: Optional[RetryConfig] = None,
         **kwargs,
     ):
         """
@@ -673,6 +682,7 @@ class DatabricksStorageBackend(StorageBackend):
         self.catalog = catalog
         self.schema = schema
         self.volume_name = volume_name
+        self._retry_config = retry_config or STORAGE_RETRY_CONFIG
 
         self._spark: Optional[Any] = None
         if local_cache:
@@ -714,7 +724,6 @@ class DatabricksStorageBackend(StorageBackend):
         Initialize Spark session using databricks-connect or runtime.
         """
         try:
-            # Try databricks-connect first (local development)
             from databricks.connect import DatabricksSession  # type: ignore
 
             self._spark = DatabricksSession.builder.getOrCreate()
@@ -726,7 +735,6 @@ class DatabricksStorageBackend(StorageBackend):
             logger.debug(f"databricks-connect not available: {e}")
 
         try:
-            # Fallback to regular SparkSession (Databricks Runtime)
             from pyspark.sql import SparkSession  # type: ignore
 
             self._spark = SparkSession.builder.getOrCreate()
@@ -771,7 +779,6 @@ class DatabricksStorageBackend(StorageBackend):
         Note: /Volumes is a Databricks Unity Catalog path convention,
         not a local filesystem path. This format is required by Databricks.
         """
-        # Use forward slashes as required by Databricks Unity Catalog
         return f"/Volumes/{self.catalog}/{self.schema}/{self.volume_name}/{path}"
 
     def _get_table_name(self, path: str) -> str:
@@ -805,7 +812,7 @@ class DatabricksStorageBackend(StorageBackend):
         except Exception:
             return None
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_write_dataframe")
+    @with_instance_retry(operation_name="databricks_write_dataframe")
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
@@ -861,7 +868,7 @@ class DatabricksStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_dataframe", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_read_dataframe")
+    @with_instance_retry(operation_name="databricks_read_dataframe")
     def read_dataframe(self, path: str) -> pd.DataFrame:
         """
         Read DataFrame from Unity Catalog table.
@@ -902,7 +909,7 @@ class DatabricksStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("read_dataframe", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_write_json")
+    @with_instance_retry(operation_name="databricks_write_json")
     def write_json(
         self, data: Dict[str, Any], path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
@@ -961,7 +968,7 @@ class DatabricksStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_json", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_read_json")
+    @with_instance_retry(operation_name="databricks_read_json")
     def read_json(self, path: str) -> Dict[str, Any]:
         """
         Read JSON from Unity Catalog volume.
@@ -1008,7 +1015,7 @@ class DatabricksStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("read_json", path, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_write_artifact")
+    @with_instance_retry(operation_name="databricks_write_artifact")
     def write_artifact(
         self, artifact_path: str, destination: str, mode: str = "overwrite"
     ) -> StorageMetadata:
@@ -1085,7 +1092,7 @@ class DatabricksStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("write_artifact", destination, e) from e
 
-    @with_retry(config=STORAGE_RETRY_CONFIG, operation_name="databricks_read_artifact")
+    @with_instance_retry(operation_name="databricks_read_artifact")
     def read_artifact(self, path: str, local_destination: str) -> None:
         """
         Download artifact from Unity Catalog volume.
@@ -1248,6 +1255,5 @@ class DatabricksStorageBackend(StorageBackend):
         return synced
 
 
-# Default registration of built-in backends
 StorageBackendRegistry.register("local", LocalStorageBackend)
 StorageBackendRegistry.register("databricks", DatabricksStorageBackend)

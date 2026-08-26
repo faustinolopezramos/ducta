@@ -85,8 +85,6 @@ def _on_db_done(t: "asyncio.Task[Any]", label: str) -> None:
 
 def _spawn_db_task(coro: Any, label: str) -> None:
     """Schedule a DB-store coroutine on the running loop, logging failures.
-
-    No-ops (closing the coroutine) when there is no running loop.
     """
     try:
         loop = asyncio.get_running_loop()
@@ -124,8 +122,6 @@ class ExecutionManager:
         self._log_manager = get_buffered_log_manager(
             default_buffer_size=settings.execution_log_buffer_size,
         )
-        # File-based run store (meta.json + logs.jsonl per run). Keeps the optional
-        # SQLite store disposable; None when disabled via empty runs_dir.
         self._file_log_store = build_file_log_store(settings.runs_dir)
         self._isolation_manager = get_module_isolation_manager()
         self._execution_queue = ExecutionQueue(max_concurrent=settings.max_concurrent_executions)
@@ -153,7 +149,6 @@ class ExecutionManager:
             pass
         return None
 
-    # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def startup(self) -> None:
         if self._sink_id is not None:
@@ -179,8 +174,6 @@ class ExecutionManager:
             serialize=False,
         )
 
-        # Mirror every appended log line to the file-based run store. This single
-        # observer captures all log paths (loguru sink, process output, node status).
         if self._file_log_store is not None:
             self._log_manager.set_entry_observer(self._file_log_store.append)
 
@@ -229,10 +222,6 @@ class ExecutionManager:
                     stale_removed = self._store.prune_stale(self._retention_seconds)
                     evicted_removed = self._store.evict_old()
 
-                # A record pruned/evicted from the metadata store had nothing
-                # else pruning its log buffer — it stayed in
-                # BufferedLogManager._buffers forever, an unbounded aggregate
-                # leak across every execution the server had ever run.
                 for removed_id in (*stale_removed, *evicted_removed):
                     self._log_manager.delete_buffer(removed_id)
 
@@ -337,7 +326,6 @@ class ExecutionManager:
                 self._execution_tasks.pop(execution_id, None)
             self._timeout_manager.cancel_handler(execution_id)
             self._execution_queue.mark_complete(execution_id)
-            # Module cleanup happens in run_pipeline_sync under the execution-body lock.
             delete_resilience_context(execution_id)
             delete_error_log(execution_id)
             self._log_events.pop(execution_id, None)
@@ -365,16 +353,17 @@ class ExecutionManager:
         plus the sweep metadata inside their hyperparameters, mirroring the CLI
         (``ducta start --sweep``).
         """
-        from ducta.core.sweep import expand_sweep, new_sweep_id
+        from ducta.core.sweep import SweepError, expand_sweep, new_sweep_id
 
-        combos = expand_sweep(sweep)
+        # max_runs must be passed into the expansion itself, not checked against
+        # len(combos) afterwards: expand_sweep_grid truncates internally at its
+        # own default of 50 during expansion, so a max_sweep_size configured
+        # above 50 never had any effect under the old post-hoc check.
         max_sweep_size = get_settings().max_sweep_size
-        if len(combos) > max_sweep_size:
-            raise ValueError(
-                f"Sweep expands to {len(combos)} combinations, which exceeds the "
-                f"configured limit of {max_sweep_size} (max_sweep_size). Narrow "
-                "the sweep or raise MAX_SWEEP_SIZE."
-            )
+        try:
+            combos = expand_sweep(sweep, max_runs=max_sweep_size)
+        except SweepError as e:
+            raise ValueError(str(e)) from e
         sweep_id = new_sweep_id()
         executions: List[ExecutionResponse] = []
         for index, combo in enumerate(combos, start=1):
@@ -412,13 +401,10 @@ class ExecutionManager:
         reuse_upstream: bool = False,
         rerun_all: bool = False,
     ) -> None:
-        # Waits until *this* execution owns a slot, so ExecutionPriority decides
-        # the order rather than whichever task asyncio happened to start first.
         await self._execution_queue.acquire_slot(execution_id)
 
         record = self._store.get(execution_id)
-        # All writes to the shared `record` go through _execution_lock; cancel_execution
-        # mutates the same fields under the same lock from the event-loop thread.
+
         with self._execution_lock:
             record.status = ExecutionStatus.RUNNING
         self.emit_execution_status(record)
@@ -448,9 +434,6 @@ class ExecutionManager:
             )
             exit_code = 0
             with self._execution_lock:
-                # A run can finish without raising and still not have done its
-                # work: absent inputs (skipped) or a quality gate that rejected
-                # the data (gate_blocked). Both used to land on SUCCESS.
                 if not outcome:
                     record.status = ExecutionStatus.SUCCESS
                 elif outcome.get("status") == "gate_blocked":
@@ -501,15 +484,11 @@ class ExecutionManager:
                         record.finished_at - record.started_at
                     ).total_seconds()
 
-            # Push the terminal status before flushing so the UI updates in real time.
             self.emit_execution_status(record)
 
             if self._file_log_store is not None:
                 self._file_log_store.finish_run(record)
 
-            # Persist the categorized error log (errors.json) so failures survive
-            # the in-memory registry cleanup and server restarts. No-op when the
-            # log is empty or file persistence is disabled.
             flush_error_log(execution_id)
 
             if self._db_store is not None:
@@ -517,7 +496,6 @@ class ExecutionManager:
                 _spawn_db_task(self._db_store.update(record), "update")
             execution_id_var.reset(token)
 
-    # ── Public query API ─────────────────────────────────────────────────────
 
     def _get_owned(self, execution_id: str, user_id: Optional[str]) -> ExecutionResponse:
         """Fetch an execution, enforcing ownership when *user_id* is provided."""
@@ -533,11 +511,6 @@ class ExecutionManager:
         self, execution_id: str, user_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Return the categorized error summary for an execution, or None.
-
-        Enforces the same ownership as `get_execution` (raises
-        ExecutionNotFoundError when the execution does not exist or is not
-        owned by *user_id*). Reads from the live in-memory log first, then from
-        the persisted errors.json written when the run finished.
         """
         self._get_owned(execution_id, user_id)
         return load_error_log_summary(execution_id)
@@ -705,12 +678,6 @@ class ExecutionManager:
 
     def emit_execution_status(self, record: ExecutionResponse) -> None:
         """Push an execution-level status update through the live log channel.
-
-        Lets the UI react in real time (via the existing WebSocket) instead of
-        polling GET /executions/{id}; the HTTP poll remains only as a fallback.
-        When the run failed, a compact `error_details` summary (category, node,
-        traceback tail) is attached so the UI can surface the diagnosis without
-        another round trip — full details come from GET /executions/{id}/errors.
         """
         extra: Dict[str, Any] = {
             "type": "execution_status",
@@ -752,10 +719,6 @@ class ExecutionManager:
 
     def _record_top_level_error(self, execution_id: str, exception: Exception) -> None:
         """Record a whole-pipeline failure into the execution's error log.
-
-        Node-level failures are recorded by `record_node_error` as they happen;
-        this catches failures outside any node (config load, orchestration,
-        timeouts) so the error log always explains a FAILED status.
         """
         try:
             from ducta.api.execution.error_recovery import ErrorContext
@@ -793,9 +756,6 @@ class ExecutionManager:
         self._get_owned(execution_id, user_id)
 
         event = self._log_events.get(execution_id)
-        # Absolute log sequence cursor: only the new tail is copied per poll
-        # (instead of the whole 50k-entry buffer) and the cursor stays correct
-        # after circular eviction.
         pos = 0
 
         while True:
@@ -806,8 +766,6 @@ class ExecutionManager:
 
             record = self._store.peek(execution_id)
             if record is None:
-                # Record was pruned/evicted while streaming; stop instead of
-                # spinning forever (the terminal check below can never fire).
                 break
             if record.status in _TERMINAL_STATUSES:
                 final_batch, pos = self._log_manager.get_logs_from(execution_id, pos)
@@ -817,26 +775,18 @@ class ExecutionManager:
 
             if event is not None:
                 event.clear()
-                # Re-check after clear() to avoid missing logs that arrived
-                # between the read above and this clear() (without intermediate awaits).
                 batch, pos = self._log_manager.get_logs_from(execution_id, pos)
                 if batch:
                     yield batch
                     continue
 
-                # Wait for new logs with a small timeout to allow batching
                 try:
                     await asyncio.wait_for(event.wait(), timeout=0.1)
                 except asyncio.TimeoutError:
-                    # Timeout reached, continue to check if there are any logs to yield
                     continue
             else:
-                # The event was already cleaned up by _cleanup_task;
-                # the next iteration will detect the terminal status.
                 await asyncio.sleep(0.1)
 
-
-# ── Singleton factory ────────────────────────────────────────────────────────
 
 
 @lru_cache(maxsize=1)

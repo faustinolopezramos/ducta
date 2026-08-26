@@ -318,10 +318,6 @@ class ModelVersionConflictError(MLOpsException):
 
 class ProtectedVersionError(MLOpsException):
     """Raised when deleting a model version currently in Production without force=True.
-
-    Closes the race between garbage collection (which snapshots versions before
-    deciding what to delete) and a concurrent promotion: the live stage is
-    re-checked under the registry lock immediately before deletion.
     """
 
     error_code = ErrorCode.MODEL_VERSION_PROTECTED
@@ -520,6 +516,35 @@ class ArtifactNotFoundError(MLOpsException):
             suggestions=[
                 "Check if the artifact path is correct",
                 "Verify the artifact was uploaded successfully",
+            ],
+            **kwargs,
+        )
+
+
+class ArtifactValidationError(MLOpsException):
+    """Raised when an artifact exists but is not valid/loadable for its declared
+    framework (corrupt, empty, wrong extension, unsupported shape). Distinct from
+    ``ArtifactNotFoundError``, which means nothing exists at the given path."""
+
+    error_code = ErrorCode.ARTIFACT_INVALID
+
+    def __init__(self, artifact_path: str, framework: str, reason: str, **kwargs):
+        self.artifact_path = artifact_path
+        self.framework = framework
+        self.reason = reason
+        super().__init__(
+            message=(
+                f"Artifact at '{artifact_path}' is not a valid '{framework}' artifact: {reason}"
+            ),
+            context=ErrorContext(
+                operation="validate_artifact",
+                component="model_registry",
+                resource_type="artifact",
+                resource_id=artifact_path,
+            ),
+            suggestions=[
+                "Verify the artifact was saved with the declared framework",
+                "Check the artifact is not corrupt or truncated",
             ],
             **kwargs,
         )

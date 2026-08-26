@@ -33,6 +33,46 @@ class TestHyperparamConfig:
         assert cfg.cv_folds == 3
 
 
+class TestStoragePrunerStudyName:
+    """storage=/pruner=/study_name= are all opt-in — omitted, they leave the
+    pre-existing behavior (in-memory study, Optuna's own default pruner,
+    fresh study every run) completely unchanged."""
+
+    def test_defaults_are_none(self):
+        cfg = HyperparamConfig(algorithm="grid")
+        assert cfg.storage is None
+        assert cfg.pruner is None
+        assert cfg.study_name is None
+
+    def test_from_dict_reads_all_three(self):
+        cfg = HyperparamConfig.from_dict(
+            {
+                "algorithm": "bayesian",
+                "search_space": {"lr": [0.1, 0.2]},
+                "storage": "sqlite:///study.db",
+                "pruner": "median",
+                "study_name": "my-study",
+            }
+        )
+        assert cfg.storage == "sqlite:///study.db"
+        assert cfg.pruner == "median"
+        assert cfg.study_name == "my-study"
+
+    def test_unknown_pruner_raises(self):
+        with pytest.raises(HyperparamConfigError, match="Unknown pruner"):
+            HyperparamConfig(algorithm="bayesian", search_space={"lr": [0.1, 0.2]}, pruner="nope")
+
+    def test_explicit_none_pruner_is_a_distinct_valid_value(self):
+        # "none" (string) means "guarantee no pruning" and is distinct from
+        # not declaring pruner at all (None) — see search.OptunaSearch._build_pruner.
+        cfg = HyperparamConfig(algorithm="grid", pruner="none")
+        assert cfg.pruner == "none"
+
+    def test_pruner_case_insensitive(self):
+        cfg = HyperparamConfig(algorithm="grid", pruner="MEDIAN")
+        assert cfg.pruner == "median"
+
+
 class TestExpandSweepGrid:
     def test_cartesian(self):
         combos = expand_sweep_grid({"lr": [0.1, 0.2], "n": [10]})

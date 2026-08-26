@@ -5,7 +5,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from ducta.mlrun.split import SplitError, split_dataframe
+from ducta.mlrun.split import SplitError, cross_validate, kfold_splits, split_dataframe
 
 
 @pytest.fixture
@@ -63,6 +63,68 @@ class TestGroup:
                 d, {"method": "group", "group_col": "grp", "test_size": 0.05}, default_seed=1
             )
 
+    def test_result_identical_to_row_wise_hash(self):
+        # Regression test for the unique()-first vectorization of
+        # _stable_fraction: build a reference split via the original per-row
+        # hash and confirm the vectorized path produces the identical
+        # train/test assignment on a dataset with heavy group repetition.
+        from ducta.mlrun.split import _stable_fraction
+
+        d = pd.DataFrame({"x": range(1000), "grp": [f"g{i % 20}" for i in range(1000)]})
+        seed = 3
+        reference_fractions = d["grp"].map(lambda v: _stable_fraction(v, seed))
+        reference_test_mask = reference_fractions > (1 - 0.3)
+
+        train, test = split_dataframe(
+            d, {"method": "group", "group_col": "grp", "test_size": 0.3}, default_seed=seed
+        )
+
+        assert set(test.index) == set(d.index[reference_test_mask])
+        assert set(train.index) == set(d.index[~reference_test_mask])
+
+    def test_kfold_result_identical_to_row_wise_hash(self):
+        from ducta.mlrun.split import _stable_fraction
+
+        d = pd.DataFrame({"x": range(500), "grp": [f"g{i % 15}" for i in range(500)]})
+        seed = 5
+        reference_fractions = d["grp"].map(lambda v: _stable_fraction(v, seed))
+        reference_fold_ids = (reference_fractions * 4).astype(int).clip(upper=3)
+
+        folds = kfold_splits(d, {"method": "group", "group_col": "grp"}, n_splits=4, default_seed=seed)
+
+        for fold_index, (train_part, val_part) in enumerate(folds):
+            expected_val_mask = reference_fold_ids == fold_index
+            assert set(val_part.index) == set(d.index[expected_val_mask])
+            assert set(train_part.index) == set(d.index[~expected_val_mask])
+
+
+class TestSplitApplied:
+    def test_split_dataframe_marks_flag_on_dict_context(self, df):
+        ctx = {}
+        split_dataframe(df, {"method": "random", "test_size": 0.2}, default_seed=1, ml_context=ctx)
+        assert ctx["split_applied"] is True
+
+    def test_split_dataframe_without_ml_context_does_not_raise(self, df):
+        train, test = split_dataframe(df, {"method": "random", "test_size": 0.2}, default_seed=1)
+        assert len(train) + len(test) == 100
+
+    def test_split_dataframe_marks_flag_on_mlnodecontext(self, df):
+        from ducta.core.ml_context import MLNodeContext
+
+        ctx = MLNodeContext()
+        assert ctx.split_applied is False
+        split_dataframe(df, {"method": "random", "test_size": 0.2}, default_seed=1, ml_context=ctx)
+        assert ctx.split_applied is True
+
+    def test_kfold_splits_marks_flag(self, df):
+        ctx = {}
+        kfold_splits(df, {"method": "random"}, n_splits=4, default_seed=1, ml_context=ctx)
+        assert ctx["split_applied"] is True
+
+    def test_kfold_splits_without_ml_context_does_not_raise(self, df):
+        folds = kfold_splits(df, {"method": "random"}, n_splits=4, default_seed=1)
+        assert len(folds) == 4
+
 
 class TestStratified:
     def test_singleton_class_raises(self):
@@ -96,3 +158,96 @@ class TestErrors:
             split_dataframe(
                 df, {"method": "temporal", "time_col": "ts", "test_size": 0.5, "val_size": -0.2}
             )
+
+
+class TestCrossValidate:
+    """cv_folds was accepted by HyperparamConfig and resolved onto
+    ml_context.cv_folds, and kfold_splits could already build folds — but
+    nothing in the engine ever tied them together, so model selection always
+    rested on a single hold-out."""
+
+    @staticmethod
+    def _fit(train_df, val_df):
+        # A deterministic "model": the mean of x on the training fold.
+        return train_df["x"].mean()
+
+    @staticmethod
+    def _score(model, val_df, _val_df_again):
+        # Score = negative mean absolute deviation from the "model" (higher
+        # is better), so folds naturally produce varying scores.
+        return -((val_df["x"] - model).abs().mean())
+
+    def test_returns_mean_std_across_folds(self, df):
+        result = cross_validate(
+            self._fit,
+            self._score,
+            ml_context={"split": {"method": "random"}, "cv_folds": 4, "node_seed": 1},
+            df=df,
+        )
+        assert set(result.keys()) == {"score_mean", "score_std", "score_folds"}
+        assert len(result["score_folds"]) == 4
+        assert result["score_mean"] == pytest.approx(
+            sum(result["score_folds"]) / len(result["score_folds"])
+        )
+        assert result["score_std"] >= 0
+
+    def test_uses_ml_context_split_and_cv_folds(self, df, monkeypatch):
+        calls = {}
+
+        def fake_kfold_splits(df_arg, split_config, n_splits, default_seed):
+            calls["split_config"] = split_config
+            calls["n_splits"] = n_splits
+            calls["default_seed"] = default_seed
+            return [(df_arg.iloc[:5], df_arg.iloc[5:10])]
+
+        monkeypatch.setattr("ducta.mlrun.split.kfold_splits", fake_kfold_splits)
+
+        cross_validate(
+            self._fit,
+            self._score,
+            ml_context={"split": {"method": "temporal", "time_col": "ts"}, "cv_folds": 7, "node_seed": 99},
+            df=df,
+        )
+
+        assert calls["split_config"] == {"method": "temporal", "time_col": "ts"}
+        assert calls["n_splits"] == 7
+        assert calls["default_seed"] == 99
+
+    def test_works_with_mlnodecontext_object(self, df):
+        from ducta.core.ml_context import MLNodeContext
+
+        ctx = MLNodeContext(split={"method": "random"}, cv_folds=3, node_seed=1)
+        result = cross_validate(self._fit, self._score, ml_context=ctx, df=df)
+        assert len(result["score_folds"]) == 3
+
+    def test_logs_metrics_when_mlops_context_present(self, df):
+        from unittest.mock import MagicMock
+
+        tracker = MagicMock()
+        mlops_context = MagicMock(experiment_tracker=tracker)
+        ctx = {
+            "split": {"method": "random"},
+            "cv_folds": 3,
+            "node_seed": 1,
+            "mlops_context": mlops_context,
+            "mlops_run_id": "run-1",
+        }
+
+        result = cross_validate(self._fit, self._score, ml_context=ctx, df=df, metric_name="f1")
+
+        tracker.log_metric.assert_any_call("run-1", "f1_mean", result["f1_mean"])
+        tracker.log_metric.assert_any_call("run-1", "f1_std", result["f1_std"])
+
+    def test_no_mlops_context_does_not_raise(self, df):
+        result = cross_validate(
+            self._fit, self._score, ml_context={"split": {"method": "random"}, "cv_folds": 3}, df=df
+        )
+        assert "score_mean" in result
+
+    def test_missing_df_raises_split_error(self):
+        with pytest.raises(SplitError, match="requires df"):
+            cross_validate(self._fit, self._score, ml_context={}, df=None)
+
+    def test_default_cv_folds_is_five_when_unset(self, df):
+        result = cross_validate(self._fit, self._score, ml_context={}, df=df)
+        assert len(result["score_folds"]) == 5

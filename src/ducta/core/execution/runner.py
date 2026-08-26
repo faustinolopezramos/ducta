@@ -16,8 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-NodeExecutor: the public entry point that wires the components together.
 """
 
 from __future__ import annotations
@@ -53,10 +51,6 @@ from ducta.core.settings import (
 class NodeExecutor:
     """Thin orchestrator: initializes the 6 helper components and provides the public API."""
 
-    # Kept as aliases of the single definition in ducta.core.settings. They used
-    # to be independent literals here, duplicated with a comment explaining they
-    # were copied "to avoid a circular import" — which meant the node-level and
-    # pipeline-level clamps could silently drift apart.
     DEFAULT_NODE_TIMEOUT = DEFAULT_NODE_TIMEOUT_SECONDS
     MAX_NODE_TIMEOUT_SECONDS = MAX_TIMEOUT_SECONDS
 
@@ -82,8 +76,6 @@ class NodeExecutor:
         self.is_ml_layer = getattr(context, "is_ml_layer", False)
         self.pipeline_name: Optional[str] = None
         self.gate_blocked: Dict[str, Any] = {}
-        # An explicit `timeout=` argument still wins, but it goes through the
-        # same clamp as the configured value instead of bypassing it.
         self.node_timeout = (
             clamp_timeout("node_timeout_seconds", timeout)
             if timeout
@@ -102,6 +94,7 @@ class NodeExecutor:
         )
         self._ml_builder = MLContextBuilder(context, mlops_context, self.is_ml_layer)
         self._trace_lock = threading.Lock()
+        self._proc_pool: Optional[Any] = None
         self._ingestion_executor = IngestionExecutor(
             context=context,
             output_writer=self._output_writer,
@@ -145,6 +138,12 @@ class NodeExecutor:
         with resource_manager.resource_context(f"node_{node_name}"):
             try:
                 node_config = self._get_node_config(node_name)
+
+                if self._should_run_in_process(node_config):
+                    self._run_node_in_subprocess(node_name, node_config, start_date, end_date, ml_info)
+                    logger.info("[node_status] node_id={} status=success", node_name)
+                    return
+
                 node_type = node_config.get("type", "batch")
                 if node_type == "ingestion":
                     self._ingestion_executor.execute(
@@ -216,6 +215,8 @@ class NodeExecutor:
                 else:
                     result_df = command.execute()
 
+                self._warn_if_split_not_applied(command, node_name)
+
                 dq_report = None
                 if result_df is not None:
                     dq_report = self._quality_executor.run_dq_checks(
@@ -272,13 +273,105 @@ class NodeExecutor:
                 logger.debug("Node '{}' executed in {:.2f}s", node_name, duration)
                 self._record_node_trace(node_name, node_status, duration, node_error)
 
+    @staticmethod
+    def _warn_if_split_not_applied(command: Any, node_name: str) -> None:
+        """Warn when a node declared a `split` but never called split_dataframe/kfold_splits.
+        """
+        split_config = getattr(command, "split", None)
+        if not split_config:
+            return
+        split_was_applied = getattr(command, "split_was_applied", None)
+        if split_was_applied is not None and not split_was_applied():
+            logger.warning(
+                "Node '{}' declared a 'split' but never called split_dataframe/"
+                "kfold_splits — the run certificate records the configured split, "
+                "but nothing enforces the node actually applied it.",
+                node_name,
+            )
+
+    def _should_run_in_process(self, node_config: Dict[str, Any]) -> bool:
+        """Whether this node opts into process isolation for CPU-bound work.
+        """
+        if not node_config.get("run_in_process", False):
+            return False
+        if not self.settings.env:
+            logger.warning(
+                "Node asked for run_in_process but the active environment could not be "
+                "resolved, so a worker cannot rebuild the Context. Running inline."
+            )
+            return False
+        return True
+
+    def _process_pool(self):
+        """Lazily-created process pool, shared by every cpu_bound node in the run.
+        """
+        if self._proc_pool is None:
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            self._proc_pool = ProcessPoolExecutor(
+                max_workers=self.max_workers,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+        return self._proc_pool
+
+    def shutdown(self) -> None:
+        """Release the process pool, if one was created.
+        """
+        pool = getattr(self, "_proc_pool", None)
+        if pool is not None:
+            try:
+                pool.shutdown(wait=True)
+            except Exception as e:  # noqa: BLE001 — cleanup is best-effort
+                logger.debug("Could not shut down the node process pool: {}", e)
+            self._proc_pool = None
+
+    def _run_node_in_subprocess(
+        self,
+        node_name: str,
+        node_config: Dict[str, Any],
+        start_date: str,
+        end_date: str,
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Run one node in a worker process; re-raise its failure here."""
+        from ducta.check.core import QualityGateBlocked
+        from ducta.core.node_worker import (
+            OUTCOME_GATE_BLOCKED,
+            OUTCOME_MISSING_DEPENDENCY,
+            OUTCOME_SUCCESS,
+            build_node_payload,
+            run_node_in_process,
+        )
+        from ducta.gate.exceptions import MissingDependencyError
+
+        payload = build_node_payload(
+            node_name,
+            env=self.settings.env,
+            ml_info=ml_info,
+            pipeline_name=self.pipeline_name,
+            start_date=start_date,
+            end_date=end_date,
+            base_path=str(getattr(self.context, "base_path", "") or "") or None,
+            output_path=str(getattr(self.context, "output_path", "") or "") or None,
+        )
+
+        logger.debug("Running node '{}' in a worker process (run_in_process)", node_name)
+        outcome = self._process_pool().submit(run_node_in_process, payload).result()
+        status = outcome.get("status")
+        if status == OUTCOME_SUCCESS:
+            return
+        error = outcome.get("error") or "worker reported no detail"
+        if status == OUTCOME_GATE_BLOCKED:
+            raise QualityGateBlocked(error)
+        if status == OUTCOME_MISSING_DEPENDENCY:
+            raise MissingDependencyError(error)
+        raise RuntimeError(f"Node '{node_name}' failed in worker process: {error}")
+
     def _record_node_trace(
         self, node_name: str, status: str, duration: float, error: Optional[str]
     ) -> None:
         """Append this node's outcome to ``context._run_node_details`` for the certificate.
-
-        Thread-safe (nodes run in parallel). Best-effort: never raises. The trace
-        list is reset per run by the executor facade.
         """
         node_config = self.context.nodes_config.get(node_name, {}) or {}
         raw_out = node_config.get("output", [])
@@ -342,6 +435,9 @@ class NodeExecutor:
                         raise
         finally:
             executor.shutdown(wait=False)
+            # Worker processes outlive the thread pool unless closed; a run
+            # that used run_in_process would otherwise leak them.
+            self.shutdown()
 
         self.gate_blocked = dict(execution_state.gate_blocked)
 

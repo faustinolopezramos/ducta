@@ -29,33 +29,21 @@ from ducta.mlrun.hyperparams import HyperparamConfig
 class MLNodeContext(Mapping):
     """Typed, discoverable context delivered to ML nodes as ``ml_context``."""
 
-    # Model / experiment identity
     model_version: Optional[str] = None
     hyperparams: Dict[str, Any] = field(default_factory=dict)
-
-    # Structured hyperparameter config (HyperparamConfig or None)
     hyperparams_config: Optional[HyperparamConfig] = None
-
-    # Reproducibility
     seed: Optional[int] = None
     node_seed: Optional[int] = None
     split: Optional[Dict[str, Any]] = None
-
-    # Configuration snapshots
+    cv_folds: Optional[int] = None
     node_config: Dict[str, Any] = field(default_factory=dict)
     pipeline_config: Dict[str, Any] = field(default_factory=dict)
     execution_metadata: Dict[str, Any] = field(default_factory=dict)
-
-    # MLOps tracking handles
     mlops_context: Any = None
     mlops_run_id: Optional[str] = None
-
-    # Engine handle (present only when Spark is available)
     spark: Any = None
+    split_applied: bool = False
 
-    # ------------------------------------------------------------------
-    # Mapping interface — keeps dict-style access working for existing nodes.
-    # ------------------------------------------------------------------
     def _keys(self) -> List[str]:
         return [f.name for f in fields(self)]
 

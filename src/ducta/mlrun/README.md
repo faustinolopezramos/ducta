@@ -47,7 +47,7 @@ Ducta Mlrun is the ML lifecycle layer, implementing:
 *   **Concurrency & resilience**: a portable `FileLock` (atomic `O_CREAT|O_EXCL`, stale-lock detection) with a `LockManager`, plus `RetryConfig`/`CircuitBreaker`/`ResourceLimits` (`concurrency.py`, `resilience.py`).
 *   **MLflow bridge**: optional `MLflowPipelineTracker` / `MLflowNodeContext` that mirror runs to an MLflow tracking server when enabled (`mlflow.py`).
 *   **Reproducibility**: `DataFingerprint` (fast/full lineage hashing), `split_dataframe` (random/stratified/temporal/group), `HyperparamConfig` search specs, and baseline/drift comparison (`fingerprint.py`, `split.py`, `hyperparams.py`, `baseline.py`).
-*   **Health & GC**: component health checks and artifact garbage collection (`health.py`, `gc.py`).
+*   **GC**: keep-newest-N / retention-days artifact garbage collection (`gc.py`).
 
 ---
 
@@ -113,8 +113,8 @@ ctx = MLOpsContext.from_config(MLOpsConfig(backend_type="local", storage_path=".
 from ducta.mlrun import RunStatus
 
 tracker = ctx.experiment_tracker
-exp_id = tracker.create_experiment("sales_forecast")
-run = tracker.start_run(experiment_id=exp_id, params={"learning_rate": 0.05})
+exp = tracker.create_experiment("sales_forecast")
+run = tracker.start_run(experiment_id=exp.experiment_id, parameters={"learning_rate": 0.05})
 tracker.log_metric(run.run_id, "rmse", 12.4)
 tracker.end_run(run.run_id, status=RunStatus.COMPLETED)
 ```

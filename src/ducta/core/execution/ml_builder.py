@@ -16,8 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Assembling the ML command and per-node ML metadata.
 """
 
 from __future__ import annotations
@@ -36,9 +34,12 @@ class MLContextBuilder:
         self.is_ml_layer = is_ml_layer
 
     def is_ml_node(self, node_config: Dict[str, Any], ml_info: Dict[str, Any]) -> bool:
-        """Decide whether a node must receive the ML context."""
+        """Decide whether a node must receive the ML context.
+        """
+        from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
+
         return (
-            node_config.get("ml_stage") is not None
+            bool(MLOpsAutoConfigurator.resolve_ml_stage(node_config))
             or self.is_ml_layer
             or ml_info.get("pipeline_type") == "ml"
             or ml_info.get("split") is not None
@@ -104,6 +105,7 @@ class MLContextBuilder:
             "mlops_run_id": ml_info.get("mlops_run_id"),
             "seed": ml_info.get("seed"),
             "split": ml_info.get("split"),
+            "cv_folds": ml_info.get("cv_folds"),
             "input_names": input_names,
         }
 
@@ -116,14 +118,6 @@ class MLContextBuilder:
         """Prepare node-specific ML information."""
         node_config = self.context.nodes_config.get(node_name, {}) or {}
         if not self.is_ml_node(node_config, ml_info):
-            # Copy (including the nested hyperparams dict) even on this
-            # early-return path: every non-ML node in a run receives the
-            # same `ml_info` object from the caller, and nodes execute in
-            # parallel on a ThreadPoolExecutor. Returning the original by
-            # reference let one node's in-place mutation of `hyperparams`
-            # (or of ml_info itself) leak into every other concurrently
-            # running node — the ML branch below already copies for this
-            # reason, this just makes the non-ML branch consistent with it.
             copied = dict(ml_info)
             if isinstance(ml_info.get("hyperparams"), dict):
                 copied["hyperparams"] = dict(ml_info["hyperparams"])

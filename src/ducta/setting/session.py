@@ -302,13 +302,11 @@ class SparkSessionFactory:
         "spark.sql.adaptive.enabled": "true",
         "spark.sql.adaptive.coalescePartitions.enabled": "true",
         "spark.sql.adaptive.skewJoin.enabled": "true",
-        # Emit per-query StreamingQueryProgress metrics so DuctaProgressListener
-        # can capture batch durations / throughput without extra RPC polling.
         "spark.sql.streaming.metricsEnabled": "true",
         "spark.sql.streaming.stateStore.providerClass": "org.apache.spark.sql.execution.streaming.state.RocksDBStateStoreProvider",
         "spark.sql.streaming.stateStore.rocksdb.changelogCheckpointing.enabled": "true",
         "spark.databricks.delta.properties.defaults.enableChangeDataFeed": "true",
-        "spark.sql.execution.arrow.pyspark.enabled": "false",
+        "spark.sql.execution.arrow.pyspark.enabled": "true",
         "spark.sql.execution.arrow.pyspark.fallback.enabled": "true",
         "spark.sql.streaming.stateStore.rocksdb.blockCacheSize": "256mb",
         "spark.sql.streaming.stateStore.rocksdb.lockAcquireTimeoutMs": "60000",
@@ -340,9 +338,6 @@ class SparkSessionFactory:
         ),
     }
 
-    # Framework-owned defaults for local dev sessions — applied unconditionally
-    # (unlike caller-supplied ml_config, these are never subject to
-    # PROTECTED_CONFIGS filtering; see _apply_local_defaults).
     LOCAL_DEFAULT_CONFIGS: Dict[str, Any] = {
         "spark.sql.shuffle.partitions": "2",
         "spark.default.parallelism": "2",
@@ -362,11 +357,6 @@ class SparkSessionFactory:
     @classmethod
     def _apply_local_defaults(cls, builder: Any) -> Any:
         """Apply local-mode defaults to the Spark builder.
-
-        Deliberately bypasses PROTECTED_CONFIGS: that filter exists to stop a
-        caller's ml_config from overriding infra-sensitive settings, not to
-        block the framework's own local dev defaults (e.g. a low shuffle-
-        partition count so local runs don't pay a 200-partition shuffle tax).
         """
         for k, v in cls.LOCAL_DEFAULT_CONFIGS.items():
             try:
@@ -485,11 +475,6 @@ class SparkSessionFactory:
     @staticmethod
     def _raise_if_databricks_connect_shadows_pyspark(error: Exception) -> None:
         """Re-raise a local-session failure as an actionable install diagnostic.
-
-        `databricks-connect` ships its own top-level ``pyspark`` package and
-        overwrites the real one when both are installed. Local mode then fails
-        with Spark's own message, which names neither package and reads as a
-        configuration problem rather than the install conflict it is.
         """
         if "Only remote Spark sessions" not in str(error):
             return

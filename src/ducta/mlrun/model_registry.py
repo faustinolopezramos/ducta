@@ -18,6 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import math
 import os
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
@@ -33,11 +34,11 @@ from loguru import logger
 from ducta.mlrun.concurrency import file_lock
 from ducta.mlrun.exceptions import (
     ArtifactNotFoundError,
+    ArtifactValidationError,
     ModelNotFoundError,
     ModelRegistrationError,
     ProtectedVersionError,
 )
-from ducta.mlrun.resilience import with_mlops_resilience
 from ducta.mlrun.storage import StorageBackend
 from ducta.mlrun.validators import (
     ArtifactValidator,
@@ -45,6 +46,7 @@ from ducta.mlrun.validators import (
     validate_artifact_type,
     validate_description,
     validate_framework,
+    validate_metrics,
     validate_model_name,
     validate_parameters,
     validate_tags,
@@ -62,20 +64,13 @@ class ModelStage(str, Enum):
 @dataclass
 class PromotionPolicy:
     """Metric gate a model must pass to be promoted to Production.
-
-    compare_to:
-        - "current_production": candidate must beat the model currently in
-          Production by min_delta on `metric` (first promotion passes if the
-          metric exists).
-        - "baseline": candidate must beat its own recorded `baseline_<metric>`
-          (e.g. f1 vs baseline_f1) by min_delta — requires the training node to
-          log baseline metrics (see ducta.mlrun.baseline).
     """
 
     metric: str
     min_delta: float = 0.0
     compare_to: str = "current_production"  # or "baseline"
     higher_is_better: bool = True
+    require_schema_match: bool = False
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "PromotionPolicy":
@@ -193,13 +188,6 @@ class ModelRegistry:
     ):
         """
         Initialize Model Registry.
-
-        Args:
-            storage: Storage backend for artifacts
-            registry_path: Base path for registry data
-            validate_artifacts: When False, skip the artifact-load check in
-                ``register_model`` (useful for large models to avoid doubling
-                memory usage during registration).
         """
         self.storage = storage
         self.registry_path = registry_path
@@ -282,7 +270,6 @@ class ModelRegistry:
         except Exception as e:
             logger.warning(f"Could not write audit log: {e}")
 
-    @with_mlops_resilience(operation_name="register_model")
     def register_model(
         self,
         name: str,
@@ -302,21 +289,9 @@ class ModelRegistry:
     ) -> ModelVersion:
         """
         Register a new model or version with validation and locking.
-
-        `trust_artifact_source` gates whether pickle/joblib-based frameworks
-        (sklearn, pickle, joblib, custom, and the pickle fallback path of
-        xgboost/lightgbm) are actually deserialized during validation.
-        Loading a pickle means executing it, so this defaults to False —
-        artifacts from a source you haven't vetted only get a lightweight
-        existence/size/extension check. Set it to True only when
-        `artifact_path` is known to come from a trusted origin (the same
-        trust boundary `PickleReader.allow_untrusted_pickle` enforces in
-        `ducta.gate.readers`).
         """
-        # Ensure registry structure exists before registering model
         self._ensure_registry_structure()
 
-        # VALIDATION: Perform all validations before acquiring lock
         try:
             # Validate inputs
             name = validate_model_name(name)
@@ -325,6 +300,7 @@ class ModelRegistry:
             description = validate_description(description)
             hyperparameters = validate_parameters(hyperparameters)
             tags = validate_tags(tags)
+            metrics = validate_metrics(metrics)
 
             logger.debug(f"Input validation passed for model '{name}'")
 
@@ -332,15 +308,15 @@ class ModelRegistry:
             logger.error(f"Validation failed for model registration: {e}")
             raise ModelRegistrationError(name, str(e)) from e
 
-        # ARTIFACT VALIDATION: Check artifact exists and is valid
+        artifact_file = Path(artifact_path)
         try:
-            artifact_file = Path(artifact_path)
             PathValidator.validate_file_exists(artifact_file)
             PathValidator.validate_is_file_or_dir(artifact_file)
+        except Exception as e:
+            logger.error(f"Artifact not found: {e}")
+            raise ArtifactNotFoundError(artifact_path) from e
 
-            # NEW: Validate that artifact can be loaded (v2.1+)
-            # Set validate_artifacts=False on the ModelRegistry instance to skip
-            # the expensive model-load check (e.g. for large PyTorch models).
+        try:
             if self.validate_artifacts:
                 ArtifactValidator.validate_artifact(
                     artifact_path=str(artifact_file),
@@ -351,21 +327,18 @@ class ModelRegistry:
 
         except Exception as e:
             logger.error(f"Artifact validation failed: {e}")
-            raise ArtifactNotFoundError(artifact_path) from e
+            raise ArtifactValidationError(artifact_path, framework, str(e)) from e
 
-        # ATOMIC OPERATION: Register under lock
         try:
             with self._registry_lock():
                 model_id = str(uuid4())
                 version = 1
 
-                # Load current index
                 try:
                     models_df = self._load_models_index()
                 except Exception:
                     models_df = pd.DataFrame(columns=["model_id", "name", "version", "created_at"])
 
-                # Check if model exists (increment version)
                 if "name" in models_df.columns and name in models_df["name"].values:
                     model_rows = models_df[models_df["name"] == name]
                     version = int(model_rows["version"].max()) + 1
@@ -376,7 +349,6 @@ class ModelRegistry:
 
                 now = datetime.now(tz=timezone.utc).isoformat()
 
-                # Create metadata
                 metadata = ModelMetadata(
                     name=name,
                     framework=framework,
@@ -391,7 +363,6 @@ class ModelRegistry:
                     dependencies=dependencies or [],
                 )
 
-                # Copy artifact to storage
                 artifact_destination = str(
                     Path(self.registry_path) / "artifacts" / model_id / f"v{version}"
                 )
@@ -399,7 +370,6 @@ class ModelRegistry:
                     str(artifact_file), artifact_destination, mode="overwrite"
                 )
 
-                # Create version record
                 model_version = ModelVersion(
                     model_id=model_id,
                     version=version,
@@ -412,13 +382,11 @@ class ModelRegistry:
                     size_bytes=artifact_metadata.size_bytes,
                 )
 
-                # Persist metadata
                 metadata_path = str(
                     Path(self.registry_path) / "metadata" / model_id / f"v{version}.json"
                 )
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
-                # Update index (skip_lock=True since we're already under _registry_lock)
                 self._update_models_index(model_version, skip_lock=True)
 
                 logger.info(
@@ -426,7 +394,6 @@ class ModelRegistry:
                     f"(ID: {model_id}, size: {artifact_metadata.size_bytes} bytes)"
                 )
 
-                # NEW: record audit log (v2.1+)
                 audit_user: Optional[str] = None
                 audit_reason: Optional[str] = None
                 if audit_info:
@@ -491,11 +458,9 @@ class ModelRegistry:
         if model_rows.empty:
             raise ModelNotFoundError(name)
 
-        # Fast path: filter by stage column when available in the index (N-01 optimisation)
         if "stage" in model_rows.columns:
             stage_rows = model_rows[model_rows["stage"] == stage.value]
             if not stage_rows.empty:
-                # Pick highest version from index — load only that single JSON
                 best_row = stage_rows.sort_values("version", ascending=False).iloc[0]
                 metadata_path = str(
                     Path(self.registry_path)
@@ -507,7 +472,6 @@ class ModelRegistry:
                 return ModelVersion.from_dict(data)
             raise ModelNotFoundError(f"{name} in stage {stage.value}")
 
-        # Slow path (legacy index without stage column): iterate all version JSONs
         candidates: List[ModelVersion] = []
         for _, row in model_rows.iterrows():
             metadata_path = str(
@@ -521,7 +485,6 @@ class ModelRegistry:
         if not candidates:
             raise ModelNotFoundError(f"{name} in stage {stage.value}")
 
-        # Return highest version in the requested stage
         return sorted(candidates, key=lambda mv: mv.version, reverse=True)[0]
 
     def list_models(self) -> List[Dict[str, Any]]:
@@ -573,7 +536,49 @@ class ModelRegistry:
 
         return result
 
-    @with_mlops_resilience(operation_name="promote_model")
+    def list_model_versions_lite(self, name: str) -> List[Dict[str, Any]]:
+        """Cheap version of ``list_model_versions``: answers from the models
+        index alone, with zero per-version JSON reads. Returns ``model_id``,
+        ``version``, ``created_at``, ``stage``, ``size_bytes`` — no
+        ``metrics`` (that needs the full JSON, which is exactly the cost this
+        avoids).
+        """
+        models_df = self._load_models_index()
+        model_rows = models_df[models_df["name"] == name].sort_values("version", ascending=False)
+
+        if model_rows.empty:
+            raise ModelNotFoundError(name)
+
+        has_index_columns = "size_bytes" in model_rows.columns and "stage" in model_rows.columns
+
+        result = []
+        for _, row in model_rows.iterrows():
+            version = int(row["version"])
+            if has_index_columns:
+                raw_size = row["size_bytes"]
+                result.append(
+                    {
+                        "model_id": row["model_id"],
+                        "version": version,
+                        "created_at": row["created_at"],
+                        "stage": row["stage"],
+                        "size_bytes": None if pd.isna(raw_size) else int(raw_size),
+                    }
+                )
+            else:
+                model_version = self.get_model_version(name, version)
+                result.append(
+                    {
+                        "model_id": model_version.model_id,
+                        "version": version,
+                        "created_at": model_version.created_at,
+                        "stage": model_version.metadata.stage.value,
+                        "size_bytes": model_version.size_bytes,
+                    }
+                )
+
+        return result
+
     def promote_model(
         self,
         name: str,
@@ -586,16 +591,6 @@ class ModelRegistry:
     ) -> ModelVersion:
         """
         Promote model to new stage.
-
-        When promoting to Production with a ``policy``, the candidate must pass
-        the metric gate or ``PromotionGateError`` is raised. ``force=True``
-        bypasses the gate; the bypass is recorded in the audit log.
-
-        Promoting a version to Production demotes any other version of the same
-        model currently in Production to Archived, in the same locked operation —
-        otherwise multiple versions could be "Production" simultaneously, and
-        garbage collection (which treats every Production-staged version as
-        permanently protected) would never reclaim the superseded ones.
         """
         with self._registry_lock():
             model_version = self.get_model_version(name, version)
@@ -624,13 +619,10 @@ class ModelRegistry:
             if stage == ModelStage.PRODUCTION:
                 demoted_versions = self._demote_other_production_versions(name, version, user=user)
 
-            # N-01: Keep stage column in index up-to-date so get_model_by_stage
-            # can filter without reading all JSON files.
             self._update_models_index(model_version, skip_lock=True)
 
             logger.info(f"Model {name} v{version} promoted to {stage.value}")
 
-            # NEW: record audit log (v2.1+)
             audit_details: Dict[str, Any] = {
                 "old_stage": old_stage.value,
                 "new_stage": stage.value,
@@ -655,9 +647,6 @@ class ModelRegistry:
         self, name: str, keep_version: int, user: Optional[str] = None
     ) -> List[int]:
         """Archive every other Production-staged version of ``name``.
-
-        Must be called while already holding ``_registry_lock()``. Returns the
-        list of version numbers that were demoted, for the caller's audit entry.
         """
         models_df = self._load_models_index()
         if models_df.empty or "stage" not in models_df.columns:
@@ -702,6 +691,41 @@ class ModelRegistry:
 
         return demoted
 
+    def _check_schema_consistency(
+        self,
+        name: str,
+        candidate: "ModelVersion",
+        current: "ModelVersion",
+        policy: PromotionPolicy,
+    ) -> None:
+        """Compare the candidate's feature contract against the incumbent's.
+
+        """
+        from ducta.mlrun.exceptions import PromotionGateError
+
+        if not candidate.metadata.input_schema and not current.metadata.input_schema:
+
+            return
+
+        warnings = candidate.metadata.validate_consistency(current.metadata)
+        if not warnings:
+            logger.debug(f"Promotion gate: schema consistent for {name} v{candidate.version}")
+            return
+
+        detail = "; ".join(warnings)
+        if policy.require_schema_match:
+            raise PromotionGateError(
+                name,
+                candidate.version,
+                f"schema/contract differs from current Production v{current.version}: "
+                f"{detail}. Set promotion_policy.require_schema_match=false to allow it, "
+                f"or promote with force=True (audit-logged).",
+            )
+        logger.warning(
+            f"Promotion gate: {name} v{candidate.version} differs from current Production "
+            f"v{current.version}: {detail}. Allowing (require_schema_match=false)."
+        )
+
     def _check_promotion_gate(
         self, name: str, candidate: "ModelVersion", policy: PromotionPolicy
     ) -> None:
@@ -718,9 +742,25 @@ class ModelRegistry:
                 "register models with metrics to enable gated promotion",
             )
 
+        try:
+            candidate_metric_value = float(candidate_metrics[policy.metric])
+        except (TypeError, ValueError) as e:
+            raise PromotionGateError(
+                name,
+                candidate.version,
+                f"candidate '{policy.metric}' metric is not numeric "
+                f"({candidate_metrics[policy.metric]!r})",
+            ) from e
+        if not math.isfinite(candidate_metric_value):
+            raise PromotionGateError(
+                name,
+                candidate.version,
+                f"candidate '{policy.metric}' is {candidate_metric_value} (not a finite "
+                "number) — a diverged or broken training run cannot be compared against "
+                "anything, so it is refused rather than silently promoted",
+            )
+
         if policy.compare_to == "baseline":
-            # Without this check compare_to_baseline falls back to comparing the
-            # metric against itself (delta 0), which passes any min_delta <= 0.
             baseline_key = f"baseline_{policy.metric}"
             if baseline_key not in candidate_metrics:
                 raise PromotionGateError(
@@ -759,6 +799,8 @@ class ModelRegistry:
             )
             return
 
+        self._check_schema_consistency(name, candidate, current, policy)
+
         current_metrics = current.metadata.metrics or {}
         if policy.metric not in current_metrics:
             logger.warning(
@@ -767,8 +809,19 @@ class ModelRegistry:
             )
             return
 
-        candidate_value = float(candidate_metrics[policy.metric])
-        current_value = float(current_metrics[policy.metric])
+        candidate_value = candidate_metric_value  # already float + finite-checked above
+        try:
+            current_value = float(current_metrics[policy.metric])
+        except (TypeError, ValueError):
+            current_value = float("nan")
+        if not math.isfinite(current_value):
+            logger.warning(
+                f"Promotion gate: current Production model {name} v{current.version} has a "
+                f"non-finite '{policy.metric}' ({current_metrics[policy.metric]!r}); allowing "
+                f"promotion of the finite candidate (cannot compare)"
+            )
+            return
+
         delta = (
             candidate_value - current_value
             if policy.higher_is_better
@@ -798,13 +851,6 @@ class ModelRegistry:
 
     def delete_model_version(self, name: str, version: int, force: bool = False) -> None:
         """Delete specific model version and remove it from the index.
-
-        Re-reads the version's live stage under the registry lock immediately
-        before deleting: if it is currently in Production, deletion is refused
-        with ``ProtectedVersionError`` unless ``force=True``. This closes the
-        race with garbage collection, which decides what to delete from a
-        snapshot taken before this lock is acquired — if the version was
-        promoted to Production in the meantime, this check catches it.
         """
         with self._registry_lock():
             model_version = self.get_model_version(name, version)
@@ -827,7 +873,6 @@ class ModelRegistry:
             except Exception as e:
                 logger.warning(f"Could not delete metadata: {e}")
 
-            # Remove from index (prevents corrupted index with dangling references)
             df = self._load_models_index()
             if not df.empty:
                 df = df[~((df["name"] == name) & (df["version"] == version))]
@@ -863,6 +908,7 @@ class ModelRegistry:
                         "version": model_version.version,
                         "created_at": model_version.created_at,
                         "stage": model_version.metadata.stage.value,
+                        "size_bytes": model_version.size_bytes,
                     }
                 ]
             )

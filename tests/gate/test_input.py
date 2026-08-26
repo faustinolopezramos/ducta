@@ -306,3 +306,83 @@ class TestEnforceFingerprintPolicy:
         fingerprint = self._make_fingerprint(fingerprint="new_hash")
 
         loader._enforce_fingerprint_policy("ds1", fingerprint)  # must not raise
+
+
+class TestReadFallbackPaths:
+    """Set by parallel sweep/search trials (core.sweep_worker): trial 1
+    materializes the trial-invariant upstream prefix into a shared directory,
+    and trials 2..N fall back to reading from it when a dataset isn't (yet)
+    in their own isolated output_path."""
+
+    def test_resolves_from_fallback_when_missing_in_own_output_path(self, dict_context, temp_dir):
+        own = temp_dir / "trial_2"
+        shared = temp_dir / "_shared"
+        own.mkdir()
+        (shared / "schema" / "table").mkdir(parents=True)
+        (shared / "schema" / "table" / "part.parquet").write_text("data")
+
+        dict_context["execution_mode"] = "local"
+        dict_context["output_path"] = str(own)
+        dict_context["_read_fallback_paths"] = [str(shared)]
+        loader = InputLoader(dict_context)
+
+        missing_path = str(own / "schema" / "table" / "part.parquet")
+        result = loader._get_filepath({"filepath": missing_path}, "ds1")
+
+        assert Path(result).resolve() == (shared / "schema" / "table" / "part.parquet").resolve()
+
+    def test_does_not_apply_to_inputs_outside_own_output_path(self, dict_context, temp_dir):
+        # An externally-declared input path (outside output_path) has nothing
+        # to do with trial isolation — it must raise normally, not silently
+        # search the fallback prefix for something with a matching relative path.
+        shared = temp_dir / "_shared"
+        shared.mkdir()
+        external = temp_dir / "external.csv"  # never created
+
+        dict_context["execution_mode"] = "local"
+        dict_context["output_path"] = str(temp_dir / "trial_2")
+        dict_context["_read_fallback_paths"] = [str(shared)]
+        loader = InputLoader(dict_context)
+
+        with pytest.raises(ConfigurationError, match="does not exist"):
+            loader._get_filepath({"filepath": str(external)}, "ds1")
+
+    def test_still_raises_when_missing_from_both_own_and_fallback(self, dict_context, temp_dir):
+        own = temp_dir / "trial_2"
+        shared = temp_dir / "_shared"
+        own.mkdir()
+        shared.mkdir()
+
+        dict_context["execution_mode"] = "local"
+        dict_context["output_path"] = str(own)
+        dict_context["_read_fallback_paths"] = [str(shared)]
+        loader = InputLoader(dict_context)
+
+        with pytest.raises(ConfigurationError, match="does not exist"):
+            loader._get_filepath({"filepath": str(own / "nope.parquet")}, "ds1")
+
+    def test_no_fallback_configured_behaves_exactly_as_before(self, dict_context, temp_dir):
+        own = temp_dir / "trial_2"
+        own.mkdir()
+
+        dict_context["execution_mode"] = "local"
+        dict_context["output_path"] = str(own)
+        # No "_read_fallback_paths" key at all — any caller predating this
+        # feature has this exact context shape.
+        loader = InputLoader(dict_context)
+
+        with pytest.raises(ConfigurationError, match="does not exist"):
+            loader._get_filepath({"filepath": str(own / "nope.parquet")}, "ds1")
+
+    def test_own_output_path_missing_disables_fallback_lookup(self, dict_context, temp_dir):
+        shared = temp_dir / "_shared"
+        (shared / "part.parquet").parent.mkdir(parents=True, exist_ok=True)
+        (shared / "part.parquet").write_text("data")
+
+        dict_context["execution_mode"] = "local"
+        dict_context.pop("output_path", None)
+        dict_context["_read_fallback_paths"] = [str(shared)]
+        loader = InputLoader(dict_context)
+
+        with pytest.raises(ConfigurationError, match="does not exist"):
+            loader._get_filepath({"filepath": str(temp_dir / "trial_2" / "part.parquet")}, "ds1")

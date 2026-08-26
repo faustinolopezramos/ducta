@@ -102,12 +102,6 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
     ) -> PipelineRunResult:
         """Execute one pipeline and return a typed description of what happened.
-
-        Always returns a :class:`PipelineRunResult`, for every pipeline type. It
-        used to return ``None`` for batch, an execution-id ``str`` for streaming
-        and a result ``dict`` for hybrid, which forced callers to sniff the type
-        and left outcomes like a blocked quality gate reachable only by reading
-        private attributes off the sub-executors.
         """
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
@@ -129,8 +123,6 @@ class PipelineExecutor:
                 requires_dates=requires_dates,
             )
 
-        # Async streaming returns before the pipeline finishes, so there is no
-        # terminal outcome to certify yet — only the id it is running under.
         if pipeline_type == PipelineType.STREAMING.value and execution_mode != "sync":
             execution_id = self.streaming_executor.execute(pipeline_name, execution_mode)
             return PipelineRunResult(
@@ -143,8 +135,6 @@ class PipelineExecutor:
         from datetime import datetime, timezone
 
         run_id = uuid.uuid4().hex
-        # One place that declares what a run records, instead of three setattr
-        # calls against a naming convention nothing verified.
         ledger = RunLedger.start(self.context, run_id)
         started_at = datetime.now(timezone.utc)
         result = PipelineRunResult(pipeline=pipeline_name, run_id=run_id)
@@ -169,16 +159,6 @@ class PipelineExecutor:
             result.add_error(str(e))
             raise
         finally:
-            # Order matters. `resolve_status` reasons about `result.nodes`, which
-            # only `absorb_trace` fills in, and the certificate records the status
-            # `resolve_status` decides — so the trace has to land first, then the
-            # status, then everything that reads it.
-            #
-            # This used to be: `else: resolve_status()` followed by `finally:
-            # absorb_trace()`. Python runs `else` before `finally`, so the status
-            # was always decided against an empty node list: `resolve_status`'s
-            # failed-node branch could never fire, and its `not self.nodes` guard
-            # was trivially true.
             try:
                 result.absorb_trace(ledger.node_details)
                 result.resolve_status()
@@ -196,9 +176,6 @@ class PipelineExecutor:
                 self._record_chain_state(pipeline_name, pipeline_type, start_date, end_date)
 
         if result.failed:
-            # A hybrid run reports failure in its result rather than raising.
-            # Surfacing it as an exception is what stops the chain runner from
-            # continuing on data its failed ancestor never produced.
             failure = PipelineExecutionError(
                 pipeline=pipeline_name,
                 message=(
@@ -213,10 +190,6 @@ class PipelineExecutor:
 
     def _collect_batch_outcome(self, result: PipelineRunResult) -> None:
         """Fold the batch executor's non-raising outcomes into the run result.
-
-        ``skip_downstream`` gate blocks and atomic single-node skips both let the
-        run finish without an exception, which is precisely why they need an
-        explicit home on the result instead of living on private attributes.
         """
         batch = self._batch_executor
         if batch is None:
@@ -229,11 +202,22 @@ class PipelineExecutor:
         if skipped:
             result.skipped[skipped["node"]] = skipped["reason"]
 
+        self._collect_mlops_outcome(result, batch)
+
+    @staticmethod
+    def _collect_mlops_outcome(result: PipelineRunResult, executor: Any) -> None:
+        """Copy the tracked run's id and final metrics onto the result."""
+        result.metrics.update(getattr(executor, "last_run_metrics", None) or {})
+        mlops_run_id = getattr(executor, "last_mlops_run_id", None)
+        if mlops_run_id:
+            result.mlops_run_id = mlops_run_id
+
     def _collect_hybrid_outcome(self, result: PipelineRunResult, hybrid_result: Any) -> None:
         """Fold HybridExecutor's result dict into the typed run result."""
         hybrid = self._hybrid_executor
         node_executor = getattr(hybrid, "node_executor", None)
         result.gate_blocked.update(getattr(node_executor, "gate_blocked", None) or {})
+        self._collect_mlops_outcome(result, hybrid)
 
         if not isinstance(hybrid_result, dict):
             return
@@ -260,9 +244,6 @@ class PipelineExecutor:
         error: Optional[str],
     ) -> Optional[str]:
         """Assemble and persist the Run Certificate. Best-effort — never raises.
-
-        Returns the written path so it can be attached to the run result, or
-        None when certificates are disabled or emission failed.
         """
         try:
             from ducta.core import certificate as cert_mod
@@ -443,14 +424,10 @@ class PipelineExecutor:
         rerun_all: bool = False,
     ) -> PipelineRunResult:
         """Execute *pipeline_name* and its transitive dependencies in topological order.
-
-        Returns the *target* pipeline's :class:`PipelineRunResult`, with the
-        ancestors that were skipped as already-materialized recorded on it.
         """
         from ducta.core.dependency_inference import merge_pipeline_depends_on
         from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
 
-        # Per-run overrides of the global chain-reuse defaults (from CLI flags).
         self._force_reuse = bool(reuse_upstream)
         self._force_rerun_all = bool(rerun_all)
         self.reused_pipelines = []
@@ -541,10 +518,6 @@ class PipelineExecutor:
         self, pipeline_name: str, start_date: Optional[str], end_date: Optional[str]
     ) -> bool:
         """True if *pipeline_name* can be safely skipped as already materialized.
-
-        Conservative by construction: any ambiguity (ineligible type, non-overwrite
-        output, unresolved/absent output, stale input) returns False so the
-        pipeline re-runs. See :meth:`_is_skip_eligible` for the guard rails.
         """
         try:
             pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
@@ -643,9 +616,6 @@ class PipelineExecutor:
 
     def _pipeline_env(self) -> Optional[str]:
         """Resolve the active environment name for output-path resolution.
-
-        Must mirror OutputWriter.save's resolution order (context.env first),
-        so the reuse check looks at the same path the write used.
         """
         return self.settings.env
 
@@ -711,20 +681,11 @@ class PipelineExecutor:
 
     def validate_pipeline(self, pipeline_name: str) -> bool:
         """Validate if a pipeline exists in the configuration.
-
-        Args:
-            pipeline_name: Name of the pipeline to validate
-
-        Returns:
-            True if the pipeline exists, False otherwise
         """
         return pipeline_name in self.context.pipelines
 
     def list_pipelines(self) -> List[str]:
         """List all available pipelines.
-
-        Returns:
-            List of pipeline names available in the configuration
         """
         return list(self.context.pipelines.keys())
 

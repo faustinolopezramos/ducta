@@ -32,7 +32,7 @@ from ducta.api.dependencies import SourcePathDep, require_permission
 from ducta.mlrun.config import DEFAULT_REGISTRY_PATH, DEFAULT_TRACKING_PATH
 from ducta.mlrun.exceptions import ExperimentNotFoundError, ModelNotFoundError, RunNotFoundError
 from ducta.mlrun.experiment_tracking import ExperimentTracker, RunStatus
-from ducta.mlrun.model_registry import ModelRegistry, ModelStage
+from ducta.mlrun.model_registry import ModelRegistry, ModelStage, PromotionPolicy
 from ducta.mlrun.storage import LocalStorageBackend
 
 router = APIRouter(prefix="/mlops", tags=["MLOps"])
@@ -58,12 +58,41 @@ class CloseRunRequest(BaseModel):
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 
-def _resolve_mlops_storage(source_path: Path, override: Optional[str]) -> str:
-    """Resolve mlops storage path from workspace or explicit override."""
-    if override:
-        return override
+def _resolve_workspace_context(source_path: Path, env: Optional[str]) -> Optional[Any]:
+    """Build a real project ``Context`` for this workspace/env, the same way
+    ``api/execution/runner.py`` does when actually running a pipeline.
 
-    # Try reading mlops.storage_path from global settings files
+    Never raises: returns ``None`` on any failure (no ``env``, workspace not
+    found, config missing) so callers fall back to their own heuristic.
+    """
+    if not env:
+        return None
+    try:
+        from ducta.api.workspace.manager import WorkspaceManager
+
+        return WorkspaceManager(source_path).load_context(env)
+    except Exception as exc:
+        logger.debug("Context-based mlops resolution failed for env='{}': {}", env, exc)
+        return None
+
+
+def _resolve_global_settings(source_path: Path, env: Optional[str]) -> Dict[str, Any]:
+    """Best-effort ``global_settings`` dict for this workspace, preferring a
+    real ``Context`` (see ``_resolve_workspace_context``) over the flat-file
+    heuristic below. Shared by ``_resolve_mlops_storage`` and the promotion
+    policy lookup in ``promote_model`` so both agree on the same settings —
+    previously ``promote_model`` resolved its policy via
+    ``console.mlops_commands._resolve_promotion_policy()``, which discovers a
+    project from the CLI process's current working directory: meaningless
+    inside a long-running API server juggling requests for many workspaces,
+    so the promotion policy was silently never applied here.
+    """
+    context = _resolve_workspace_context(source_path, env)
+    if context is not None:
+        gs = getattr(context, "global_settings", {})
+        if isinstance(gs, dict):
+            return gs
+
     for candidate in ("global_settings.toml", "global_settings.yaml", "global_settings.yml"):
         cfg_file = source_path / candidate
         if cfg_file.is_file():
@@ -73,12 +102,39 @@ def _resolve_mlops_storage(source_path: Path, override: Optional[str]) -> str:
                 # source_path/project_id is workspace-controlled; keep Python
                 # config files out of reach here regardless of extension.
                 data = ConfigLoaderFactory(allow_python=False).load_config(str(cfg_file))
-                mlops_cfg = data.get("mlops") or {}
-                path = mlops_cfg.get("storage_path") or data.get("mlops_storage_path")
-                if path:
-                    return path
+                if isinstance(data, dict):
+                    return data
             except Exception as exc:
                 logger.debug("Could not read global settings: {}", exc)
+
+    return {}
+
+
+def _resolve_mlops_storage(
+    source_path: Path,
+    override: Optional[str],
+    env: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+    global_settings: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Resolve mlops storage path from workspace or explicit override.
+    """
+    if override:
+        return override
+
+    context = _resolve_workspace_context(source_path, env)
+    if context is not None:
+        from ducta.mlrun.config import StorageBackendFactory
+
+        resolved = StorageBackendFactory._resolve_mlops_path(context, pipeline_name=pipeline_name)
+        if resolved:
+            return resolved
+
+    gs = global_settings if global_settings is not None else _resolve_global_settings(source_path, env)
+    mlops_cfg = gs.get("mlops") or {}
+    path = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
+    if path:
+        return path
 
     # Fall back to a conventional location relative to the workspace
     return str(source_path / "mlops_data")
@@ -104,9 +160,11 @@ def _make_registry(storage_path: str) -> ModelRegistry:
 async def list_experiments(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None, description="Override MLOps storage path"),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> List[Dict[str, Any]]:
     """List all MLOps experiments (most recent first)."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         return _make_tracker(resolved).list_experiments()
@@ -126,9 +184,11 @@ async def get_experiment(
     experiment_id: str,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> Dict[str, Any]:
     """Get an experiment and its runs."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         tracker = _make_tracker(resolved)
@@ -162,6 +222,8 @@ async def close_run(
     body: CloseRunRequest,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> Dict[str, Any]:
     """Force a run stuck in RUNNING to a terminal status.
 
@@ -169,7 +231,7 @@ async def close_run(
     records, not jobs with a PID), so this cannot "cancel" anything — it only
     closes a run that a crashed/orphaned process never ended.
     """
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         tracker = _make_tracker(resolved)
@@ -195,8 +257,10 @@ async def delete_run(
     run_id: str,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> None:
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         _make_tracker(resolved).delete_run(run_id)
@@ -220,9 +284,11 @@ async def delete_run(
 async def list_models(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> List[Dict[str, Any]]:
     """List all registered models (latest version per model)."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         return _make_registry(resolved).list_models()
@@ -242,9 +308,11 @@ async def get_model_versions(
     name: str,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> List[Dict[str, Any]]:
     """Get all versions of a model."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         return _make_registry(resolved).list_model_versions(name)
@@ -267,9 +335,12 @@ async def promote_model(
     body: PromoteModelRequest,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> Dict[str, Any]:
     """Promote a model version to a new stage."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    gs = _resolve_global_settings(source_path, env)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, global_settings=gs)
 
     try:
         target_stage = ModelStage(body.stage.capitalize())
@@ -279,11 +350,16 @@ async def promote_model(
             detail=f"Invalid stage '{body.stage}'. Valid values: staging, production, archived",
         )
 
-    def _run():
-        from ducta.console.mlops_commands import _resolve_promotion_policy
+    policy_cfg = (gs.get("mlops") or {}).get("promotion_policy")
+    policy: Optional[PromotionPolicy] = None
+    if isinstance(policy_cfg, dict) and policy_cfg.get("metric"):
+        try:
+            policy = PromotionPolicy.from_dict(policy_cfg)
+        except Exception as exc:
+            logger.warning("Invalid mlops.promotion_policy ignored: {}", exc)
 
+    def _run():
         registry = _make_registry(resolved)
-        policy = _resolve_promotion_policy()
         registry.promote_model(name, body.version, target_stage, policy=policy, force=body.force)
         return {
             "name": name,
@@ -311,9 +387,11 @@ async def delete_model_version(
     version: int,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> None:
     """Delete a specific model version and its artifact."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
         _make_registry(resolved).delete_model_version(name, version)
@@ -335,14 +413,22 @@ async def run_gc(
     body: GcRequest,
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
+    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
+    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
 ) -> Dict[str, Any]:
     """Garbage-collect old model versions."""
-    resolved = _resolve_mlops_storage(source_path, storage_path)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
     def _run():
+        from ducta.mlrun.config import MLOpsConfig
         from ducta.mlrun.gc import ModelGarbageCollector
 
-        gc = ModelGarbageCollector(storage_path=resolved)
+        mlops_config = MLOpsConfig.from_env()
+        gc = ModelGarbageCollector(
+            storage_path=resolved,
+            max_versions_per_model=mlops_config.max_versions_per_model,
+            model_retention_days=mlops_config.model_retention_days,
+        )
         stats = gc.run(dry_run=body.dry_run)
         return {
             "dry_run": body.dry_run,

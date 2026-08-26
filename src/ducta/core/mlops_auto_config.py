@@ -74,6 +74,20 @@ class MLOpsAutoConfigurator:
             return [str(item) for item in raw]
         return [str(raw)]
 
+    @staticmethod
+    def resolve_ml_stage(node_config: Dict[str, Any]) -> str:
+        """Read a node's ML lifecycle stage, accepting both spellings in the wild.
+        """
+        if not isinstance(node_config, dict):
+            return ""
+        flat = node_config.get("ml_stage")
+        if flat:
+            return str(flat)
+        nested = node_config.get("ml")
+        if isinstance(nested, dict) and nested.get("stage"):
+            return str(nested["stage"])
+        return ""
+
     @classmethod
     def get_logging_strategy(cls, ml_stage: str) -> Dict[str, bool]:
         """Return logging strategies based on ml_stage."""
@@ -90,6 +104,9 @@ class MLOpsAutoConfigurator:
         """
         Detect if a node needs MLOps automatically.
         """
+        if cls.resolve_ml_stage(node_config):
+            return True
+
         if "ml" in node_config:
             return True
 

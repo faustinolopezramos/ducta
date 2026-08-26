@@ -110,6 +110,71 @@ class TestResolveMLOpsPath:
         assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev"
 
 
+class TestEnvBoolAcceptsCommonSpellings:
+    """_env_bool used to only recognize the literal "true"; a plausible
+    Ducta_MLOPS_ENABLE_RETRY=1 silently became False with no warning."""
+
+    @pytest.mark.parametrize("raw", ["true", "yes", "on", "1", "TRUE", "On"])
+    def test_true_spellings(self, monkeypatch, raw):
+        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", raw)
+        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", False) is True
+
+    @pytest.mark.parametrize("raw", ["false", "no", "off", "0"])
+    def test_false_spellings(self, monkeypatch, raw):
+        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", raw)
+        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", True) is False
+
+    def test_unrecognized_value_falls_back_to_default_with_warning(self, monkeypatch, caplog):
+        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", "maybe")
+        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", True) is True
+
+
+class TestFromContextConfigWiring:
+    """MLOpsContext.from_context() used to ignore MLOpsConfig entirely — every
+    Ducta_MLOPS_* env var and every field on a caller-built MLOpsConfig had no
+    effect on the path a real pipeline run actually takes."""
+
+    def _ctx(self, tmp_path):
+        return SimpleNamespace(
+            global_settings={},
+            output_path=str(tmp_path / "output"),
+            env="dev",
+            execution_mode="local",
+        )
+
+    def test_explicit_kwarg_wins_over_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("Ducta_MLOPS_MAX_ACTIVE_RUNS", "3")
+        ctx = self._ctx(tmp_path)
+        mlops_ctx = MLOpsContext.from_context(ctx, max_active_runs=2, pipeline_name="sales.train")
+        assert mlops_ctx.experiment_tracker.max_active_runs == 2
+
+    def test_env_var_takes_effect_without_explicit_kwarg(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("Ducta_MLOPS_MAX_ACTIVE_RUNS", "3")
+        ctx = self._ctx(tmp_path)
+        mlops_ctx = MLOpsContext.from_context(ctx, pipeline_name="sales.train")
+        assert mlops_ctx.experiment_tracker.max_active_runs == 3
+
+    def test_config_is_attached(self, tmp_path):
+        ctx = self._ctx(tmp_path)
+        mlops_ctx = MLOpsContext.from_context(ctx, pipeline_name="sales.train")
+        assert mlops_ctx.config is not None
+        assert mlops_ctx.config.max_active_runs == mlops_ctx.experiment_tracker.max_active_runs
+
+    def test_retry_classification_preserved_for_missing_index(self, tmp_path):
+        """A bare RetryConfig() defaults non_retryable_exceptions=() empty,
+        and FileNotFoundError *is* an OSError subclass — so building the
+        per-context retry_config from scratch instead of from
+        STORAGE_RETRY_CONFIG would make "index file doesn't exist yet" (a
+        normal outcome _load_experiments_index's own except FileNotFoundError
+        relies on) retry 3x and surface as RetryExhaustedError instead."""
+        ctx = self._ctx(tmp_path)
+        mlops_ctx = MLOpsContext.from_context(ctx, pipeline_name="sales.train")
+        # No experiment/run ever created, so the runs index parquet does not
+        # exist — list_experiments() must return [] via the FileNotFoundError
+        # fallback, not raise.
+        assert mlops_ctx.experiment_tracker.list_experiments() == []
+
+
 class TestMLOpsContextSharedStorage:
     def _ctx(self, tmp_path):
         return SimpleNamespace(

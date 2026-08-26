@@ -22,6 +22,7 @@ import hashlib
 import json
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from datetime import datetime
 from inspect import Parameter, signature
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -184,6 +185,7 @@ class MLNodeCommand(NodeCommand):
         mlops_run_id: Optional[str] = None,
         seed: Optional[int] = None,
         split: Optional[Dict[str, Any]] = None,
+        cv_folds: Optional[int] = None,
         spark=None,
         input_names: Optional[List[str]] = None,
     ):
@@ -200,14 +202,13 @@ class MLNodeCommand(NodeCommand):
         self.mlops_run_id = mlops_run_id
         self.seed = seed
         self.split = split
+        self.cv_folds = cv_folds
         self.spark = spark
-
         self.node_hyperparams = self.node_config.get("hyperparams", {}) or {}
         self.metrics = self.node_config.get("metrics", []) or []
         self.description = self.node_config.get("description", "") or ""
-
         self.merged_hyperparams = {**self.hyperparams, **self.node_hyperparams}
-
+        self._last_ml_context: Any = None
         self.execution_metadata: Dict[str, Any] = {
             "node_name": self.node_name,
             "model_version": self.model_version,
@@ -292,6 +293,14 @@ class MLNodeCommand(NodeCommand):
             logger.error(f"Error executing ML node '{self.node_name}': {str(e)}")
             raise
 
+    def split_was_applied(self) -> bool:
+        """Whether the node called split_dataframe/kfold_splits with this ml_context.
+        """
+        ctx = self._last_ml_context
+        if ctx is None:
+            return False
+        return bool(ctx["split_applied"] if isinstance(ctx, Mapping) else ctx.split_applied)
+
     def _derive_node_seed(self) -> Optional[int]:
         """Derive a deterministic per-node seed from the global seed."""
         if self.seed is None:
@@ -315,8 +324,10 @@ class MLNodeCommand(NodeCommand):
             seed=self.seed,
             node_seed=self._derive_node_seed(),
             split=self.split,
+            cv_folds=self.cv_folds,
             spark=self.spark,
         )
+        self._last_ml_context = ml_context
 
         accepts_ml_context = False
         try:

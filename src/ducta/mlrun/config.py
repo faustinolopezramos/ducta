@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import os
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
 
@@ -28,6 +28,7 @@ from loguru import logger
 
 from ducta.mlrun.experiment_tracking import ExperimentTracker
 from ducta.mlrun.model_registry import ModelRegistry
+from ducta.mlrun.resilience import STORAGE_RETRY_CONFIG, RetryConfig
 from ducta.mlrun.storage import (
     DatabricksStorageBackend,
     LocalStorageBackend,
@@ -113,12 +114,33 @@ class MLOpsConfig:
         except ValueError as e:
             raise ValueError(f"Environment variable {name} must be a number, got {raw!r}") from e
 
+    _TRUE_VALUES = frozenset({"true", "yes", "on", "1"})
+    _FALSE_VALUES = frozenset({"false", "no", "off", "0", ""})
+
     @classmethod
     def _env_bool(cls, name: str, default: bool) -> bool:
+        """Parse a boolean env var, accepting the same spellings as
+        ``ducta.core.settings.coerce_bool`` (``true/yes/on/1`` and
+        ``false/no/off/0``) instead of only the literal string ``"true"`` —
+        the old behavior silently treated ``Ducta_MLOPS_ENABLE_RETRY=1`` as
+        False with no warning.
+        """
         raw = cls._env(name)
         if raw is None:
             return default
-        return raw.strip().lower() == "true"
+        normalized = raw.strip().lower()
+        if normalized in cls._TRUE_VALUES:
+            return True
+        if normalized in cls._FALSE_VALUES:
+            return False
+        logger.warning(
+            "Environment variable {} has unrecognized boolean value {!r}; "
+            "expected true/false. Falling back to default={}.",
+            name,
+            raw,
+            default,
+        )
+        return default
 
     @classmethod
     def from_env(cls) -> "MLOpsConfig":
@@ -209,10 +231,7 @@ class StorageBackendFactory:
             return base_path
 
         gs = getattr(context, "global_settings", {}) or {}
-        # Truthiness, not key-existence: a `mlops_path: ""` value (e.g. from a
-        # templated config that resolved to empty) must fall through to the
-        # next tier, not silently return "" and have LocalStorageBackend write
-        # into the current working directory.
+
         if gs.get("mlops_path"):
             return gs["mlops_path"]
 
@@ -267,7 +286,13 @@ class StorageBackendFactory:
                 if path is None:
                     logger.error("Could not resolve safe MLOps directory path.")
                     return None
-                return backend_cls(base_path=path)
+
+                local_kwargs: Dict[str, Any] = {}
+                if "retry_config" in kwargs:
+                    local_kwargs["retry_config"] = kwargs["retry_config"]
+                if "enable_circuit_breaker" in kwargs:
+                    local_kwargs["enable_circuit_breaker"] = kwargs["enable_circuit_breaker"]
+                return backend_cls(base_path=path, **local_kwargs)
 
             if mode in ("databricks", "distributed"):
                 catalog_to_use = catalog or os.getenv("DATABRICKS_CATALOG", "main")
@@ -280,12 +305,19 @@ class StorageBackendFactory:
                     f"Creating {backend_cls.__name__} (UC: {catalog_to_use}.{schema_to_use})"
                 )
 
+                databricks_kwargs: Dict[str, Any] = {}
+                if "retry_config" in kwargs:
+                    databricks_kwargs["retry_config"] = kwargs["retry_config"]
+                if "enable_circuit_breaker" in kwargs:
+                    databricks_kwargs["enable_circuit_breaker"] = kwargs["enable_circuit_breaker"]
+
                 return backend_cls(
                     catalog=catalog_to_use,
                     schema=schema_to_use,
                     volume_name=volume_to_use,
                     workspace_url=kwargs.get("workspace_url"),
                     token=kwargs.get("token"),
+                    **databricks_kwargs,
                 )
 
             raise ValueError(
@@ -347,16 +379,15 @@ class ExperimentTrackerFactory:
         tracking_path: str = "experiment_tracking",
         metric_buffer_size: int = 100,
         auto_flush_metrics: bool = True,
+        max_active_runs: int = DEFAULT_MAX_ACTIVE_RUNS,
+        auto_cleanup_stale: bool = True,
+        stale_run_age_seconds: float = DEFAULT_STALE_RUN_AGE,
         pipeline_name: Optional[str] = None,
         storage: Optional[StorageBackend] = None,
         **storage_kwargs: Any,
     ) -> Optional[ExperimentTracker]:
         """
         Create ExperimentTracker with appropriate storage backend from context.
-
-        Pass an existing ``storage`` (as ``MLOpsContext.from_context`` does, so
-        the tracker and the model registry share one backend instance) to skip
-        resolving/creating a new one.
         """
 
         if storage is None:
@@ -388,6 +419,9 @@ class ExperimentTrackerFactory:
             tracking_path=tracking_path,
             metric_buffer_size=metric_buffer_size,
             auto_flush_metrics=auto_flush_metrics,
+            max_active_runs=max_active_runs,
+            auto_cleanup_stale=auto_cleanup_stale,
+            stale_run_age_seconds=stale_run_age_seconds,
         )
 
 
@@ -540,12 +574,8 @@ class MLOpsContext:
 
         config.validate()
 
-        # Resolve backend type
-
         resolved_backend = _resolve_backend_type(config.backend_type)
 
-        # Create storage backend via registry so that externally registered backends
-        # are automatically discovered (A-08: avoid duplicated hard-coded instantiation).
         backend_cls = StorageBackendRegistry.get(resolved_backend)
 
         if resolved_backend == "local":
@@ -558,7 +588,6 @@ class MLOpsContext:
                 volume_name=config.volume or os.getenv("DATABRICKS_VOLUME", "mlops_artifacts"),
             )
 
-        # Create MLOps components with full configuration
 
         model_registry = ModelRegistry(
             storage=storage,
@@ -590,16 +619,33 @@ class MLOpsContext:
     def from_context(
         cls,
         context: "Context",
-        registry_path: str = DEFAULT_REGISTRY_PATH,
-        tracking_path: str = DEFAULT_TRACKING_PATH,
-        metric_buffer_size: int = DEFAULT_METRIC_BUFFER_SIZE,
-        auto_flush_metrics: bool = True,
-        max_active_runs: int = DEFAULT_MAX_ACTIVE_RUNS,
+        registry_path: Optional[str] = None,
+        tracking_path: Optional[str] = None,
+        metric_buffer_size: Optional[int] = None,
+        auto_flush_metrics: Optional[bool] = None,
+        max_active_runs: Optional[int] = None,
         pipeline_name: Optional[str] = None,
+        config: Optional[MLOpsConfig] = None,
     ) -> "MLOpsContext":
         """
         Create MLOpsContext from Ducta execution context.
         """
+        if config is None:
+            config = MLOpsConfig.from_env()
+        self_config = config
+
+        resolved_registry_path = registry_path if registry_path is not None else config.registry_path
+        resolved_tracking_path = tracking_path if tracking_path is not None else config.tracking_path
+        resolved_metric_buffer_size = (
+            metric_buffer_size if metric_buffer_size is not None else config.metric_buffer_size
+        )
+        resolved_auto_flush_metrics = (
+            auto_flush_metrics if auto_flush_metrics is not None else config.auto_flush_metrics
+        )
+        resolved_max_active_runs = (
+            max_active_runs if max_active_runs is not None else config.max_active_runs
+        )
+
         active_env = getattr(context, "env", None) or getattr(context, "environment", None)
 
         mode = getattr(context, "execution_mode", "local")
@@ -608,26 +654,39 @@ class MLOpsContext:
             f"MLOpsContext.from_context: active_env='{active_env}', mode='{mode}', pipeline='{pipeline_name}'"
         )
 
-        # Resolve the storage backend once and share it between the registry
-        # and the tracker (mirroring from_config()) — previously each factory
-        # independently called StorageBackendFactory.create_from_context,
-        # producing two separate backend instances pointed at the same path
-        # but with independent in-process state (e.g. any connection pooling
-        # a backend like DatabricksStorageBackend keeps gets doubled).
-        storage = StorageBackendFactory.create_from_context(context, pipeline_name=pipeline_name)
+        retry_config = (
+            replace(STORAGE_RETRY_CONFIG, max_attempts=1)
+            if not config.enable_retry
+            else replace(
+                STORAGE_RETRY_CONFIG,
+                max_attempts=max(1, config.max_retries),
+                initial_delay=config.retry_delay,
+            )
+        )
+
+
+        storage = StorageBackendFactory.create_from_context(
+            context,
+            pipeline_name=pipeline_name,
+            retry_config=retry_config,
+            enable_circuit_breaker=config.enable_circuit_breaker,
+        )
 
         model_registry = ModelRegistryFactory.from_context(
             context,
-            registry_path=registry_path,
+            registry_path=resolved_registry_path,
             pipeline_name=pipeline_name,
             storage=storage,
         )
 
         experiment_tracker = ExperimentTrackerFactory.from_context(
             context,
-            tracking_path=tracking_path,
-            metric_buffer_size=metric_buffer_size,
-            auto_flush_metrics=auto_flush_metrics,
+            tracking_path=resolved_tracking_path,
+            metric_buffer_size=resolved_metric_buffer_size,
+            auto_flush_metrics=resolved_auto_flush_metrics,
+            max_active_runs=resolved_max_active_runs,
+            auto_cleanup_stale=config.auto_cleanup_stale,
+            stale_run_age_seconds=config.stale_run_age_seconds,
             pipeline_name=pipeline_name,
             storage=storage,
         )
@@ -636,12 +695,14 @@ class MLOpsContext:
             f"MLOpsContext created from context "
             f"(mode: {mode}"
             f"{f', env: {active_env}' if active_env else ''}"
-            f"{f', pipeline: {pipeline_name}' if pipeline_name else ''})"
+            f"{f', pipeline: {pipeline_name}' if pipeline_name else ''}"
+            f", max_runs: {resolved_max_active_runs})"
         )
 
         return cls(
             model_registry=model_registry,
             experiment_tracker=experiment_tracker,
+            config=self_config,
         )
 
     @classmethod
@@ -689,8 +750,6 @@ def _resolve_backend_type(
 
     if backend_type is None:
         backend_type = "local"
-
-    # Handle 'distributed' as alias for 'databricks'
 
     if backend_type == "distributed":
         return "databricks"

@@ -139,6 +139,53 @@ class UnifiedArgumentParser:
         )
 
         start_parser.add_argument(
+            "--search",
+            action="store_true",
+            help="Drive a real search strategy from the pipeline's hyperparams_config "
+            "(algorithm: grid|random|bayesian, honoring n_trials and objective.metric) "
+            "instead of the flat cartesian product --sweep expands. Each trial's "
+            "objective value is fed back to the strategy, so Bayesian search learns "
+            "between trials",
+        )
+        start_parser.add_argument(
+            "--search-metric",
+            help="Objective metric to optimize, overriding hyperparams_config.objective.metric. "
+            "Point it at a validation metric: selecting on a test metric invalidates it",
+        )
+        start_parser.add_argument(
+            "--search-trials",
+            type=int,
+            help="Trial budget for --search (random/bayesian), overriding n_trials",
+        )
+        start_parser.add_argument(
+            "--no-sweep-reuse",
+            action="store_true",
+            help="Recompute every node on each sweep/search trial. By default the "
+            "trial-invariant upstream nodes are materialized once and reused, since "
+            "trials differ only in hyperparameters",
+        )
+        start_parser.add_argument(
+            "--sweep-parallel",
+            type=int,
+            default=1,
+            metavar="N",
+            help="Run N sweep/search trials concurrently, each in its own process and "
+            "its own output directory. Mutually exclusive with upstream reuse (an "
+            "isolated trial has nothing shared to reuse), and not applied to Bayesian "
+            "search, which needs each trial's result before choosing the next. Use it "
+            "when training dominates the runtime, and --no-sweep-reuse off (the "
+            "default) when feature engineering does",
+        )
+        start_parser.add_argument(
+            "--max-sweep-size",
+            type=int,
+            default=None,
+            metavar="N",
+            help="Cap on the number of combinations a --sweep/--search grid may expand "
+            "to (default: 50). Mirrors the API's max_sweep_size setting for the CLI path",
+        )
+
+        start_parser.add_argument(
             "--validate-only",
             action="store_true",
             help="Validate configuration without executing the pipeline",
@@ -536,6 +583,26 @@ class UnifiedArgumentParser:
             help="MLOps storage path (Optional, auto-discovered by default)",
             default=None,
         )
+        list_p.add_argument(
+            "--env",
+            help="Project environment to resolve the storage path from "
+            "(e.g. dev, prod) — auto-discovery requires this",
+            default=None,
+        )
+        list_p.add_argument(
+            "--pipeline",
+            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+            "storage path — matches how a real run resolves its own path when "
+            "no global 'mlops_path' override is set. Omit to look at the "
+            "environment's shared/default MLOps directory instead.",
+            default=None,
+        )
+        list_p.add_argument(
+            "--limit",
+            type=int,
+            help="Maximum number of experiments to show (default: all)",
+            default=None,
+        )
 
     @staticmethod
     def _add_model_subcommand(subparsers):
@@ -560,6 +627,19 @@ class UnifiedArgumentParser:
             default=None,
         )
         prom_p.add_argument(
+            "--env",
+            help="Project environment to resolve the storage path from "
+            "(e.g. dev, prod) — auto-discovery requires this",
+            default=None,
+        )
+        prom_p.add_argument(
+            "--pipeline",
+            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+            "storage path — matches how a real run resolves its own path when "
+            "no global 'mlops_path' override is set.",
+            default=None,
+        )
+        prom_p.add_argument(
             "--force",
             action="store_true",
             help="Bypass the promotion policy gate (the bypass is audit-logged)",
@@ -572,6 +652,20 @@ class UnifiedArgumentParser:
         gc_p.add_argument(
             "--storage-path",
             help="MLOps storage path (Optional, auto-discovered by default)",
+            default=None,
+        )
+        gc_p.add_argument(
+            "--env",
+            help="Project environment to resolve the storage path from "
+            "(e.g. dev, prod) — auto-discovery requires this",
+            default=None,
+        )
+        gc_p.add_argument(
+            "--pipeline",
+            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+            "storage path — matches how a real run resolves its own path when "
+            "no global 'mlops_path' override is set. Omit to garbage-collect "
+            "the environment's shared/default MLOps directory instead.",
             default=None,
         )
 

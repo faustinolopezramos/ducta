@@ -248,9 +248,38 @@ class InputLoader(BaseIO):
             return self._handle_glob_pattern(path_obj, path)
 
         if not path_obj.exists():
+            fallback = self._try_read_fallback(path_obj)
+            if fallback is not None:
+                return fallback
             raise ConfigurationError(f"File '{path}' does not exist in local mode") from None
 
         return path_obj.as_posix()
+
+    def _try_read_fallback(self, path_obj: Path) -> Optional[str]:
+        """Resolve a missing local input from a shared read-fallback prefix, if configured.
+        """
+        fallback_paths = self._ctx_get("_read_fallback_paths", None) or []
+        own_output_path = self._ctx_get("output_path", None)
+        if not fallback_paths or not own_output_path:
+            return None
+
+        try:
+            relative = path_obj.resolve().relative_to(Path(own_output_path).resolve())
+        except ValueError:
+
+            return None
+
+        for fallback_root in fallback_paths:
+            candidate = Path(fallback_root) / relative
+            if candidate.exists():
+                logger.debug(
+                    "Input '{}' not found under trial output_path; resolved from "
+                    "shared prefix '{}' instead.",
+                    path_obj,
+                    fallback_root,
+                )
+                return candidate.as_posix()
+        return None
 
     @staticmethod
     def _contains_glob_pattern(path: str) -> bool:

@@ -51,6 +51,26 @@ def _ctx_get(ml_context: Any, key: str, default: Any = None) -> Any:
     return getattr(ml_context, key, default)
 
 
+def infer_schema(data: Any) -> Optional[Dict[str, str]]:
+    """Infer a ``{column: dtype}`` contract from a pandas DataFrame/Series.
+    """
+    if data is None:
+        return None
+    try:
+        columns = getattr(data, "columns", None)
+        dtypes = getattr(data, "dtypes", None)
+
+        # DataFrame: one entry per column.
+        if columns is not None and dtypes is not None:
+            return {str(col): str(dtype) for col, dtype in zip(columns, dtypes)}
+
+        if dtypes is not None:
+            return {str(getattr(data, "name", None) or "target"): str(dtypes)}
+    except Exception as e:  # noqa: BLE001 — schema capture is best-effort
+        logger.debug("Could not infer schema from {}: {}", type(data).__name__, e)
+    return None
+
+
 def persist_model(
     model: Any,
     ml_context: Any,
@@ -61,22 +81,12 @@ def persist_model(
     hyperparameters: Optional[Dict[str, Any]] = None,
     description: str = "",
     base_dir: str = "models",
+    X: Any = None,
+    y: Any = None,
+    input_schema: Optional[Dict[str, str]] = None,
+    output_schema: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``.
-
-    Prefers the MLOps model registry (versioned by design). When no registry is
-    available it writes a run/version-stamped local file with a ``latest`` pointer,
-    never overwriting a previous version.
-
-    Args:
-        model: The trained model object.
-        ml_context: The node's ``ml_context`` (used for run id, version, registry).
-        name: Logical model name (registry key / local subfolder).
-        framework: Model framework (e.g. ``"sklearn"``, ``"xgboost"``).
-        metrics: Evaluation metrics to record alongside the version.
-        hyperparameters: Hyperparameters to record alongside the version.
-        description: Optional human-readable description.
-        base_dir: Base directory for the local fallback.
     """
     mlops_context = _ctx_get(ml_context, "mlops_context")
     run_id = _ctx_get(ml_context, "mlops_run_id")
@@ -85,7 +95,16 @@ def persist_model(
 
     stamp = str(run_id or model_version or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
 
-    # --- Preferred path: the versioned model registry -----------------------
+    resolved_input_schema = input_schema if input_schema is not None else infer_schema(X)
+    resolved_output_schema = output_schema if output_schema is not None else infer_schema(y)
+    if resolved_input_schema is None:
+        logger.debug(
+            "Model '{}' registered without an input schema: pass X= (the training features) "
+            "to persist_model so the version carries its feature contract and the promotion "
+            "gate can detect schema drift against the incumbent.",
+            name,
+        )
+
     if registry is not None:
         import tempfile
 
@@ -101,6 +120,8 @@ def persist_model(
                     description=description,
                     hyperparameters=hyperparameters,
                     metrics=metrics,
+                    input_schema=resolved_input_schema,
+                    output_schema=resolved_output_schema,
                     experiment_run_id=run_id,
                 )
                 logger.info(
@@ -117,16 +138,13 @@ def persist_model(
                     error,
                 )
 
-    # --- Fallback: run/version-stamped local file with a 'latest' pointer ----
     dest_dir = Path(base_dir) / name / stamp
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "model.pkl"
     serializer = _serialize(model, dest)
 
-    # Portable 'latest' pointer (no symlink dependency): a text file with the path.
     pointer = Path(base_dir) / name / "latest.txt"
     pointer.write_text(str(dest.resolve()), encoding="utf-8")
 
     logger.info("Persisted model '{}' to {} ({}); latest -> {}", name, dest, serializer, pointer)
-    # file:// URI so the executor recognizes it as an artifact and skips DataFrame save.
     return {"artifact_uri": dest.resolve().as_uri(), "version": stamp}

@@ -53,9 +53,7 @@ class _HandoffStore:
         with self._lock:
             previous = self._frames.get(key)
             self._frames[key] = dataframe
-        # Outside the lock, same as clear() below — unpersist() can be a
-        # non-trivial Spark operation and shouldn't block other threads
-        # touching the store.
+
         if previous is not None and previous is not dataframe:
             try:
                 if hasattr(previous, "unpersist"):
@@ -82,7 +80,6 @@ class _HandoffStore:
 
 def get_store(context: Any) -> Optional[_HandoffStore]:
     """Get-or-create the per-context handoff store; None if it can't attach."""
-    # dict-style context
     if isinstance(context, dict):
         store = context.get(_DICT_KEY)
         if store is None:
@@ -102,48 +99,89 @@ def get_store(context: Any) -> Optional[_HandoffStore]:
                 try:
                     setattr(context, _ATTR, store)
                 except Exception:
-                    # Context rejects attribute assignment (e.g. __slots__); handoff
-                    # silently degrades to the normal disk path.
+
                     return None
     return store
 
 
+def _is_spark_dataframe(dataframe: Any) -> bool:
+    return hasattr(dataframe, "persist") and hasattr(dataframe, "rdd")
+
+
+def _is_pandas_dataframe(dataframe: Any) -> bool:
+    """True for a pandas DataFrame, without importing pandas when absent."""
+    if dataframe is None or _is_spark_dataframe(dataframe):
+        return False
+    try:
+        import pandas as pd  # type: ignore
+
+        return isinstance(dataframe, pd.DataFrame)
+    except ImportError:
+        return False
+
+
 def offer(context: Any, path: Any, dataframe: Any, write_mode: Optional[str]) -> None:
-    """Persist and register ``dataframe`` for handoff under ``path`` when eligible."""
+    """Persist and register ``dataframe`` for handoff under ``path`` when eligible.
+    """
     if not is_enabled(context):
         return
     mode = (write_mode or "overwrite").lower()
     if mode != "overwrite":
         return
-    if not (hasattr(dataframe, "persist") and hasattr(dataframe, "rdd")):
-        return
+
     store = get_store(context)
     if store is None:
         return
-    try:
-        from pyspark import StorageLevel  # type: ignore
 
-        dataframe.persist(StorageLevel.MEMORY_AND_DISK)
-    except Exception:
+    if _is_spark_dataframe(dataframe):
         try:
-            dataframe.persist()
+            from pyspark import StorageLevel  # type: ignore
+
+            dataframe.persist(StorageLevel.MEMORY_AND_DISK)
+        except Exception:
+            try:
+                dataframe.persist()
+            except Exception as error:
+                logger.warning("Could not persist DataFrame for handoff at '{}': {}", path, error)
+                return
+        store.put(normalize_key(path), dataframe)
+        logger.debug("Registered in-memory handoff for path '{}'", path)
+        return
+
+    if _is_pandas_dataframe(dataframe):
+        try:
+            snapshot = dataframe.copy(deep=True)
         except Exception as error:
-            logger.warning("Could not persist DataFrame for handoff at '{}': {}", path, error)
+            logger.warning("Could not snapshot pandas frame for handoff at '{}': {}", path, error)
             return
-    store.put(normalize_key(path), dataframe)
-    logger.debug("Registered in-memory handoff for path '{}'", path)
+        store.put(normalize_key(path), snapshot)
+        logger.debug("Registered in-memory pandas handoff for path '{}'", path)
 
 
 def take(context: Any, path: Any) -> Optional[Any]:
-    """Return a cached DataFrame for ``path`` if handoff is enabled and present."""
+    """Return a cached DataFrame for ``path`` if handoff is enabled and present.
+    """
     if not is_enabled(context):
         return None
     store = get_store(context)
     if store is None:
         return None
     dataframe = store.get(normalize_key(path))
-    if dataframe is not None:
-        logger.info("Serving input from in-memory handoff (skipped disk read): {}", path)
+    if dataframe is None:
+        return None
+
+    logger.info("Serving input from in-memory handoff (skipped disk read): {}", path)
+    if _is_pandas_dataframe(dataframe):
+        try:
+            return dataframe.copy(deep=True)
+        except Exception as error:
+            logger.warning(
+                "Could not copy cached pandas frame for '{}': {}; falling back to a disk "
+                "read so no node can mutate another's input",
+                path,
+                error,
+            )
+            return None
     return dataframe
 
 

@@ -43,13 +43,6 @@ DATA_GOLD = "data/gold"
 PIPELINES_ETL_MODULE = "pipelines.etl"
 _TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
 
-# `--project-name` becomes a directory name (default output path) and
-# `--sandbox-developers` entries become `config/sandbox_<dev>` directory
-# names — both were used unvalidated, so e.g. `--project-name ../../etc` or
-# `--sandbox-developers ../../tmp/evil` escaped the intended output directory
-# via mkdir(parents=True). Restrict both to a safe identifier charset
-# (shared with certify_cmds.py's --run-id validation — see console/core.py).
-
 
 class TemplateType(Enum):
     """Available template types for project generation."""
@@ -385,6 +378,18 @@ class MLReadyTemplate(MedallionBasicTemplate):
             "outputs": [],
             # Versioned hyperparameters: delivered to nodes via ml_context
             "hyperparams": {"n_estimators": 100, "max_depth": 5},
+            # Declarative split, delivered via ml_context["split"]. val_size is
+            # what keeps model selection off the test set: candidates are
+            # compared on validation, and test is scored once at the end.
+            "split": {
+                "method": "stratified",
+                "stratify_col": "target",
+                "test_size": 0.2,
+                "val_size": 0.2,
+            },
+            # Average the selection metric over this many folds instead of one
+            # validation split (delivered via ml_context["cv_folds"]).
+            "cv_folds": 3,
         }
         return config
 
@@ -417,7 +422,9 @@ class MLReadyTemplate(MedallionBasicTemplate):
             "ml_stage": "training",
             # Node-level hyperparams override pipeline-level ones
             "hyperparams": {},
-            "metrics": ["f1", "baseline_f1"],
+            # val_f1 is the selection metric (computed on validation/CV folds);
+            # test_f1 is the unbiased estimate, reported but never selected on.
+            "metrics": ["val_f1", "baseline_f1", "test_f1"],
         }
         return nodes
 
@@ -851,7 +858,7 @@ def register_transforms(registry) -> None:
         ml_code = '''"""
 ML Training Pipeline (best-practice skeleton)
 
-This sample encodes the five habits every Ducta training node should keep:
+This sample encodes the habits every Ducta training node should keep:
 
 1. Declarative split: the criteria (method, sizes, columns) live versioned
    in the pipeline config and arrive via ml_context["split"]; the node only
@@ -863,7 +870,12 @@ This sample encodes the five habits every Ducta training node should keep:
    encoders) is fit on train only, then applied to the other splits.
 4. Hyperparameters from versioned config (ml_context["hyperparams"]),
    never hardcoded.
-5. Baseline comparison: metrics are reported relative to a trivial
+5. Selection on validation, NEVER on test. Model choice and hyperparameter
+   comparison use the validation split (or cross-validation folds when
+   ml_context["cv_folds"] is set). The test set is touched exactly once,
+   at the end, to report an unbiased estimate — using it to choose
+   anything silently invalidates that estimate.
+6. Baseline comparison: metrics are reported relative to a trivial
    baseline (majority class), and any registration gate is relative
    (f1 > baseline_f1 + margin), not an absolute threshold.
 
@@ -881,6 +893,35 @@ if TYPE_CHECKING:
 TARGET_COLUMN = "target"  # change to your label column
 
 
+def _fit_and_score(train_df, eval_df, params, seed):
+    """Fit on train_df, score on eval_df. Returns (model, f1, baseline_f1).
+
+    Every learned transformation is fit on train_df only — that is what keeps
+    eval_df an honest estimate rather than a number the model already saw.
+    """
+    from sklearn.dummy import DummyClassifier
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import f1_score
+
+    X_train = train_df.drop(TARGET_COLUMN, axis=1)
+    y_train = train_df[TARGET_COLUMN]
+    X_eval = eval_df.drop(TARGET_COLUMN, axis=1)
+    y_eval = eval_df[TARGET_COLUMN]
+
+    # Anti-leakage: fill values are LEARNED from train only, then applied
+    # everywhere. Same rule for scalers, encoders and feature selection.
+    fill_values = X_train.median(numeric_only=True)
+    X_train = X_train.fillna(fill_values)
+    X_eval = X_eval.fillna(fill_values)
+
+    baseline = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
+    baseline_f1 = f1_score(y_eval, baseline.predict(X_eval))
+
+    model = RandomForestClassifier(**params, random_state=seed).fit(X_train, y_train)
+    f1 = f1_score(y_eval, model.predict(X_eval))
+    return model, f1, baseline_f1
+
+
 def train(
     clean_data: Any,
     start_date: Optional[str] = None,
@@ -888,11 +929,7 @@ def train(
     ml_context: "Optional[MLNodeContext]" = None,
 ) -> Any:
     """Train a model with declarative split, config-driven params and baseline gate."""
-    from sklearn.dummy import DummyClassifier
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import f1_score
-
-    from ducta.mlrun import persist_model, split_dataframe
+    from ducta.mlrun import kfold_splits, persist_model, split_dataframe
 
     ml_context = ml_context or {}
 
@@ -903,36 +940,73 @@ def train(
     df = clean_data.toPandas() if hasattr(clean_data, "toPandas") else clean_data
 
     # Split criteria from the pipeline config ('split' block); the fallback
-    # only covers local runs without one. Returns (train, test) or
-    # (train, val, test) when the config sets val_size — tune on val, never
-    # on test.
+    # only covers local runs without one. Ask for a validation split so
+    # selection never touches test.
     split_cfg = ml_context.get("split") or {
         "method": "stratified",
         "stratify_col": TARGET_COLUMN,
         "test_size": 0.2,
+        "val_size": 0.2,
     }
     parts = split_dataframe(df, split_cfg, default_seed=seed)
-    train_df, test_df = parts[0], parts[-1]
 
-    X_train = train_df.drop(TARGET_COLUMN, axis=1)
-    y_train = train_df[TARGET_COLUMN]
-    X_test = test_df.drop(TARGET_COLUMN, axis=1)
-    y_test = test_df[TARGET_COLUMN]
+    # (train, val, test) when the config sets val_size, else (train, test).
+    if len(parts) == 3:
+        train_df, val_df, test_df = parts
+    else:
+        train_df, test_df = parts
+        val_df = None
+        logger.warning(
+            "split has no 'val_size': falling back to selecting on test, which "
+            "invalidates the final estimate. Add 'val_size' to the pipeline's "
+            "split block."
+        )
 
-    # Anti-leakage: fill values are LEARNED from train only, then applied
-    # everywhere. Same rule for scalers, encoders and feature selection.
-    fill_values = X_train.median(numeric_only=True)
-    X_train = X_train.fillna(fill_values)
-    X_test = X_test.fillna(fill_values)
+    # --- Selection phase: validation or cross-validation, never test --------
+    cv_folds = ml_context.get("cv_folds")
+    if cv_folds and val_df is not None:
+        # Averaging over folds makes selection far less sensitive to one
+        # lucky partition. Folds come from train+val so test stays untouched.
+        import pandas as pd
 
-    # Trivial baseline: the floor any model must beat to add value
-    baseline = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
-    baseline_f1 = f1_score(y_test, baseline.predict(X_test))
+        selection_pool = pd.concat([train_df, val_df])
+        scores, baseline_scores = [], []
+        for fold_train, fold_val in kfold_splits(
+            selection_pool, split_cfg, n_splits=int(cv_folds), default_seed=seed
+        ):
+            _, fold_f1, fold_baseline_f1 = _fit_and_score(fold_train, fold_val, params, seed)
+            scores.append(fold_f1)
+            baseline_scores.append(fold_baseline_f1)
+        val_f1 = sum(scores) / len(scores)
+        baseline_f1 = sum(baseline_scores) / len(baseline_scores)
+        logger.info(
+            "{}-fold CV f1={:.4f} (per fold: {})",
+            cv_folds,
+            val_f1,
+            ", ".join(f"{s:.4f}" for s in scores),
+        )
+    elif val_df is not None:
+        _, val_f1, baseline_f1 = _fit_and_score(train_df, val_df, params, seed)
+        logger.info("validation f1={:.4f} | baseline_f1={:.4f}", val_f1, baseline_f1)
+    else:
+        _, val_f1, baseline_f1 = _fit_and_score(train_df, test_df, params, seed)
 
-    model = RandomForestClassifier(**params, random_state=seed).fit(X_train, y_train)
-    f1 = f1_score(y_test, model.predict(X_test))
+    # --- Final model: refit on everything except test, score on test once ---
+    if val_df is not None:
+        import pandas as pd
 
-    logger.info("f1={:.4f} | baseline_f1={:.4f} | lift={:.4f}", f1, baseline_f1, f1 - baseline_f1)
+        fit_df = pd.concat([train_df, val_df])
+    else:
+        fit_df = train_df
+    model, test_f1, test_baseline_f1 = _fit_and_score(fit_df, test_df, params, seed)
+
+    logger.info(
+        "val_f1={:.4f} | test_f1={:.4f} | baseline_f1={:.4f} | lift={:.4f}",
+        val_f1,
+        test_f1,
+        baseline_f1,
+        val_f1 - baseline_f1,
+    )
 
     # Log to the pipeline-level experiment run if MLOps is configured
     mlops = ml_context.get("mlops_context")
@@ -942,29 +1016,40 @@ def train(
         split_params = {f"split_{k}": v for k, v in dict(split_cfg).items() if v is not None}
         for key, value in {**params, "seed": seed, **split_params}.items():
             tracker.log_parameter(run_id, key, value)
-        tracker.log_metric(run_id, "f1", f1)
+        # val_f1 is the selection metric: point sweeps and promotion policies
+        # at it. test_f1 is reported for the record, never to choose with.
+        tracker.log_metric(run_id, "val_f1", val_f1)
         tracker.log_metric(run_id, "baseline_f1", baseline_f1)
-        tracker.log_metric(run_id, "f1_lift", f1 - baseline_f1)
+        tracker.log_metric(run_id, "val_f1_lift", val_f1 - baseline_f1)
+        tracker.log_metric(run_id, "test_f1", test_f1)
 
-    if f1 <= baseline_f1:
+    if val_f1 <= baseline_f1:
         logger.warning(
             "Model does NOT beat the trivial baseline ({:.4f} <= {:.4f}) - "
             "it adds no value yet. Review features/hyperparams before promoting.",
-            f1,
+            val_f1,
             baseline_f1,
         )
 
     # Persist the model reproducibly: the registry versions it by design, with a
-    # run/version-stamped local file as fallback. Returning the artifact dict makes
-    # the executor record the URI and skip the standard output save. Never returns a
-    # raw model object (there is no object writer in the output catalog).
+    # run/version-stamped local file as fallback. Passing X= records the feature
+    # contract on the version, so the promotion gate can detect schema drift
+    # against whatever is currently in Production. Returning the artifact dict
+    # makes the executor record the URI and skip the standard output save.
     return persist_model(
         model,
         ml_context,
         name="demo_model",
         framework="sklearn",
-        metrics={"f1": f1, "baseline_f1": baseline_f1},
+        metrics={
+            "val_f1": val_f1,
+            "baseline_f1": baseline_f1,
+            "test_f1": test_f1,
+            "test_baseline_f1": test_baseline_f1,
+        },
         hyperparameters=params,
+        X=fit_df.drop(TARGET_COLUMN, axis=1),
+        y=fit_df[TARGET_COLUMN],
     )
 '''
         ml_file = self.output_path / "pipelines" / "ml.py"
@@ -1378,7 +1463,6 @@ spark-warehouse/
         gitignore_file = self.output_path / ".gitignore"
         self._write_text_file(gitignore_file, gitignore)
 
-        # Sample input data (template-specific: ML needs numeric features + target)
         sample_data = template.get_sample_data()
         sample_data_file = self.output_path / "data" / "input.csv"
         self._write_text_file(sample_data_file, sample_data)
@@ -1415,7 +1499,6 @@ class TemplateCommand:
             if interactive:
                 return self._interactive_generation()
 
-            # Validate required inputs
             validation_error = self._validate_inputs(template_type, project_name)
             if validation_error:
                 return validation_error
@@ -1591,7 +1674,6 @@ class TemplateCommand:
     ) -> int:
         """Generate template with specified parameters."""
         try:
-            # Validate template type
             try:
                 template_enum = TemplateType(template_type)
             except ValueError:
@@ -1600,7 +1682,6 @@ class TemplateCommand:
                 logger.info("Available types: {}", ", ".join(available))
                 return ExitCode.VALIDATION_ERROR.value
 
-            # Validate config format
             try:
                 format_enum = ConfigFormat(config_format)
             except ValueError:
@@ -1609,7 +1690,6 @@ class TemplateCommand:
                 logger.info("Available formats: {}", ", ".join(available))
                 return ExitCode.VALIDATION_ERROR.value
 
-            # Set default output path
             if not output_path:
                 output_path = f"./{project_name}"
 

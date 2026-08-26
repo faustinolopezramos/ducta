@@ -19,7 +19,8 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import hashlib
-from typing import Any, Dict, Optional, Tuple
+from collections.abc import MutableMapping
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -41,12 +42,22 @@ def _normalize_config(split_config: Any) -> Dict[str, Any]:
     raise SplitError(f"Unsupported split config type: {type(split_config)}")
 
 
+def _mark_split_applied(ml_context: Any) -> None:
+    """Best-effort: set split_applied=True on ml_context, whatever its shape.
+    """
+    if ml_context is None:
+        return
+    try:
+        if isinstance(ml_context, MutableMapping):
+            ml_context["split_applied"] = True
+        else:
+            setattr(ml_context, "split_applied", True)
+    except Exception as e:  # noqa: BLE001 — marking the flag is best-effort
+        logger.debug("Could not mark split_applied on ml_context: {}", e)
+
+
 def _require_pandas(df: Any) -> None:
     """Reject non-pandas inputs with an actionable message.
-
-    All split strategies rely on pandas semantics (``sort_values``, ``.iloc``,
-    boolean masks, ``value_counts``). A Spark DataFrame would otherwise fail
-    deep inside with an opaque ``AttributeError``, so fail loudly and early.
     """
     if hasattr(df, "iloc") and hasattr(df, "columns"):
         return
@@ -82,13 +93,20 @@ def split_dataframe(
     df: Any,
     split_config: Any,
     default_seed: Optional[int] = None,
+    ml_context: Any = None,
 ) -> Tuple[Any, ...]:
     """Split a pandas DataFrame according to a declarative split config.
-
-    Returns ``(train, test)``, or ``(train, val, test)`` when ``val_size`` is
-    set. Rows are never shuffled across the temporal boundary, and with
-    ``method='group'`` all rows of an entity land on the same side.
     """
+    parts = _split_dataframe_impl(df, split_config, default_seed)
+    _mark_split_applied(ml_context)
+    return parts
+
+
+def _split_dataframe_impl(
+    df: Any,
+    split_config: Any,
+    default_seed: Optional[int] = None,
+) -> Tuple[Any, ...]:
     _require_pandas(df)
     cfg = _normalize_config(split_config)
 
@@ -136,16 +154,11 @@ def split_dataframe(
         return parts
 
     if method == "group":
-        # All rows of an entity share one hash, so the entity lands entirely on
-        # one side. The fraction is over groups, not rows.
         group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
-        fractions = df[group_col].map(lambda v: _stable_fraction(v, seed))
+        group_lookup = {v: _stable_fraction(v, seed) for v in df[group_col].unique()}
+        fractions = df[group_col].map(group_lookup)
     elif method == "stratified":
-        # Per-class percentile rank of per-row random values: every class
-        # contributes ~test_size of its rows, preserving class balance.
         stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
-        # A 1-row class gets percentile 1.0 and would always land entirely in
-        # test, so train would never see it. Fail loudly like sklearn does.
         class_counts = df[stratify_col].value_counts()
         singletons = class_counts[class_counts < 2]
         if not singletons.empty:
@@ -175,11 +188,6 @@ def split_dataframe(
 
 def _check_non_degenerate(parts: Tuple[Any, ...], n: int, method: str) -> None:
     """Reject a split where a requested partition ends up with 0 rows.
-
-    ``method='group'`` has no per-class minimum-count guard the way
-    ``stratified`` does, so with too few distinct groups (or one dominant
-    group) the fraction-based masks can silently produce an empty train/val/test
-    partition. Applied to every method as a general safety net.
     """
     if n < 2:
         return
@@ -202,3 +210,156 @@ def _row_fractions(df: Any, seed: int):
 
     rng = np.random.default_rng(seed)
     return pd.Series(rng.random(len(df)), index=df.index)
+
+
+def kfold_splits(
+    df: Any,
+    split_config: Any = None,
+    n_splits: int = 5,
+    default_seed: Optional[int] = None,
+    ml_context: Any = None,
+) -> List[Tuple[Any, Any]]:
+    """Yield ``n_splits`` ``(train, validation)`` folds using the same
+    declarative semantics as :func:`split_dataframe`.
+    """
+    folds = _kfold_splits_impl(df, split_config, n_splits, default_seed)
+    _mark_split_applied(ml_context)
+    return folds
+
+
+def _kfold_splits_impl(
+    df: Any,
+    split_config: Any = None,
+    n_splits: int = 5,
+    default_seed: Optional[int] = None,
+) -> List[Tuple[Any, Any]]:
+    _require_pandas(df)
+    cfg = _normalize_config(split_config) if split_config is not None else {"method": "random"}
+
+    method = cfg.get("method", "random")
+    if method not in VALID_METHODS:
+        raise SplitError(f"Unknown split method '{method}'. Valid: {VALID_METHODS}")
+
+    n_splits = int(n_splits)
+    if n_splits < 2:
+        raise SplitError(f"n_splits must be at least 2, got {n_splits}")
+    if len(df) < n_splits:
+        raise SplitError(
+            f"Cannot build {n_splits} folds from {len(df)} row(s): "
+            "use fewer folds or more data."
+        )
+
+    seed = cfg.get("seed")
+    seed = default_seed if seed is None else seed
+    if seed is None:
+        seed = 42
+        logger.warning(
+            "kfold_splits called without a seed (config or default): using 42. "
+            "Set global_settings.random_seed for explicit reproducibility."
+        )
+
+    if method == "temporal":
+        time_col = _require_column(df, cfg.get("time_col"), method, "time_col")
+        ordered = df.sort_values(time_col, kind="mergesort")
+        n = len(ordered)
+        bounds = [int(round(n * i / (n_splits + 1))) for i in range(n_splits + 2)]
+        folds: List[Tuple[Any, Any]] = []
+        for i in range(1, n_splits + 1):
+            train_part = ordered.iloc[: bounds[i]]
+            val_part = ordered.iloc[bounds[i] : bounds[i + 1]]
+            if len(train_part) == 0 or len(val_part) == 0:
+                raise SplitError(
+                    f"temporal cross-validation produced an empty fold {i} from {n} rows "
+                    f"with n_splits={n_splits}: use fewer folds or more data."
+                )
+            folds.append((train_part, val_part))
+        return folds
+
+    if method == "group":
+        group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
+        group_lookup = {v: _stable_fraction(v, seed) for v in df[group_col].unique()}
+        fractions = df[group_col].map(group_lookup)
+    elif method == "stratified":
+        stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
+        class_counts = df[stratify_col].value_counts()
+        too_small = class_counts[class_counts < n_splits]
+        if not too_small.empty:
+            shown = {str(k): int(v) for k, v in too_small.head(10).items()}
+            raise SplitError(
+                f"Stratified {n_splits}-fold requires at least {n_splits} rows per class; "
+                f"{len(too_small)} class(es) have fewer: {shown}. "
+                "Use fewer folds, merge/drop rare classes, or method='random'."
+            )
+        fractions = (
+            _row_fractions(df, seed).groupby(df[stratify_col].values).rank(pct=True, method="first")
+        )
+    else:  # random
+        fractions = _row_fractions(df, seed).rank(pct=True, method="first")
+
+    fold_ids = (fractions * n_splits).astype(int).clip(upper=n_splits - 1)
+
+    folds = []
+    for fold in range(n_splits):
+        val_mask = fold_ids == fold
+        train_part, val_part = df[~val_mask], df[val_mask]
+        if len(train_part) == 0 or len(val_part) == 0:
+            raise SplitError(
+                f"split.method='{method}' produced an empty fold {fold} "
+                f"(n_splits={n_splits}, rows={len(df)}) — too few distinct "
+                "groups/classes for this many folds."
+            )
+        folds.append((train_part, val_part))
+    return folds
+
+
+def cross_validate(
+    fit: Callable[[Any, Any], Any],
+    score: Callable[[Any, Any, Any], float],
+    ml_context: Any,
+    df: Any = None,
+    n_splits: Optional[int] = None,
+    metric_name: str = "score",
+) -> Dict[str, float]:
+    """Run k-fold CV using ml_context's declared split/cv_folds/node_seed.
+    """
+    from ducta.mlrun.persistence import _ctx_get
+
+    if df is None:
+        raise SplitError(
+            "cross_validate requires df: pass the dataset to fold (ml_context "
+            "does not carry the raw dataframe)."
+        )
+
+    split_config = _ctx_get(ml_context, "split")
+    cv_folds = _ctx_get(ml_context, "cv_folds") or 5
+    node_seed = _ctx_get(ml_context, "node_seed")
+    resolved_n_splits = n_splits or cv_folds
+
+    folds = kfold_splits(df, split_config, n_splits=resolved_n_splits, default_seed=node_seed)
+
+    scores: List[float] = []
+    for train_df, val_df in folds:
+        model = fit(train_df, val_df)
+        scores.append(float(score(model, val_df, val_df)))
+
+    mean = sum(scores) / len(scores)
+    variance = sum((s - mean) ** 2 for s in scores) / len(scores)
+    std = variance**0.5
+
+    result = {
+        f"{metric_name}_mean": mean,
+        f"{metric_name}_std": std,
+        f"{metric_name}_folds": scores,
+    }
+
+    mlops_context = _ctx_get(ml_context, "mlops_context")
+    mlops_run_id = _ctx_get(ml_context, "mlops_run_id")
+    if mlops_context is not None and mlops_run_id:
+        try:
+            tracker = mlops_context.experiment_tracker
+            tracker.log_metric(mlops_run_id, f"{metric_name}_mean", mean)
+            tracker.log_metric(mlops_run_id, f"{metric_name}_std", std)
+        except Exception as e:  # noqa: BLE001 — logging the summary is best-effort
+            logger.warning("cross_validate could not log metrics: {}", e)
+
+    return result

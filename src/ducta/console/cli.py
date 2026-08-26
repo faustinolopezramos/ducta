@@ -161,18 +161,11 @@ def validate_init_arguments(args: argparse.Namespace) -> None:
 class UnifiedCLI:
     def run(self, args: Optional[List[str]] = None) -> int:
         parsed_args: Optional[argparse.Namespace] = None
-        # Command handlers may os.chdir into a config directory; guarantee the
-        # process working directory is restored regardless of how they exit.
         original_cwd = Path.cwd()
         try:
             parsed_args = self._parse_and_setup_logging(args)
             return self._dispatch_subcommand(parsed_args)
         except EngineError as e:
-            # Covers both the console's own errors and everything the engine
-            # raises on purpose: `ducta.console.core.DuctaError` derives from
-            # `ducta.core.errors.DuctaError`. Each class declares the exit code
-            # its kind of failure deserves, so a bad pipeline config exits 2 and
-            # a failed run exits 4 instead of both collapsing to 1 here.
             logger.error("Ducta error: {}", e)
             if parsed_args is not None and getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
@@ -238,10 +231,6 @@ class UnifiedCLI:
                 validator(parsed_args)
             return handler(parsed_args)
         except ValidationError as e:
-            # Deliberately caught here rather than by `run()`'s handler, which
-            # would map it to the same exit code but print a plain log line. Bad
-            # arguments are the most common failure a user hits, so they get the
-            # annotated rendering; everything else falls through to `run()`.
             try:
                 from ducta.console.ux.error_analyzer import format_error_for_developer
                 from ducta.console.ux.rich_logger import RichLoggerManager
@@ -258,7 +247,12 @@ class UnifiedCLI:
 
         cmd = getattr(parsed_args, "experiment_command", None)
         if cmd == "list":
-            return experiment_list(parsed_args.storage_path)
+            return experiment_list(
+                parsed_args.storage_path,
+                env=getattr(parsed_args, "env", None),
+                limit=getattr(parsed_args, "limit", None),
+                pipeline_name=getattr(parsed_args, "pipeline", None),
+            )
         logger.error("Unknown experiment command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value
 
@@ -273,9 +267,16 @@ class UnifiedCLI:
                 parsed_args.stage,
                 parsed_args.storage_path,
                 force=getattr(parsed_args, "force", False),
+                env=getattr(parsed_args, "env", None),
+                pipeline_name=getattr(parsed_args, "pipeline", None),
             )
         elif cmd == "gc":
-            return model_gc(parsed_args.storage_path, dry_run=parsed_args.dry_run)
+            return model_gc(
+                parsed_args.storage_path,
+                dry_run=parsed_args.dry_run,
+                env=getattr(parsed_args, "env", None),
+                pipeline_name=getattr(parsed_args, "pipeline", None),
+            )
         logger.error("Unknown model command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value
 

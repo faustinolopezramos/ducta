@@ -119,6 +119,14 @@ Create a pipeline that executes your training script.
          n_estimators = 150
          max_depth = 12
 
+         # Declared once here, applied by the node via split_dataframe — the
+         # run certificate then records the split that actually ran.
+         [ml_training.split]
+         method = "stratified"
+         stratify_col = "churn"
+         test_size = 0.2
+         val_size = 0.1
+
    .. tab-item:: YAML
 
       .. code-block:: yaml
@@ -133,6 +141,13 @@ Create a pipeline that executes your training script.
            hyperparams:
              n_estimators: 150
              max_depth: 12
+           # Declared once here, applied by the node via split_dataframe — the
+           # run certificate then records the split that actually ran.
+           split:
+             method: stratified
+             stratify_col: churn
+             test_size: 0.2
+             val_size: 0.1
 
    .. tab-item:: JSON
 
@@ -147,6 +162,12 @@ Create a pipeline that executes your training script.
              "hyperparams": {
                "n_estimators": 150,
                "max_depth": 12
+             },
+             "split": {
+               "method": "stratified",
+               "stratify_col": "churn",
+               "test_size": 0.2,
+               "val_size": 0.1
              }
            }
          }
@@ -213,7 +234,8 @@ per-node seed, the pipeline-level experiment run id, and the MLOps context
    from sklearn.dummy import DummyClassifier
    from sklearn.ensemble import RandomForestClassifier
    from sklearn.metrics import f1_score
-   from sklearn.model_selection import train_test_split
+
+   from ducta.mlrun import split_dataframe
 
 
    def train_and_register(training_data: pd.DataFrame, start_date=None, end_date=None, ml_context=None):
@@ -224,37 +246,45 @@ per-node seed, the pipeline-level experiment run id, and the MLOps context
        params = {"n_estimators": 150, "max_depth": 12, **(ml_context.get("hyperparams") or {})}
        seed = ml_context.get("node_seed", 42)
 
-       X = training_data.drop("churn", axis=1)
-       y = training_data["churn"]
-
-       # Stratified + seeded split: reproducible, and preserves the class
-       # balance of an imbalanced target like churn.
-       X_train, X_test, y_train, y_test = train_test_split(
-           X, y, test_size=0.2, stratify=y, random_state=seed
+       # The split is declared once in pipelines.toml ([ml_training.split]) and
+       # applied here — passing ml_context marks split_applied on it, so the
+       # engine can confirm the split it logged to the run is the split that
+       # actually ran. Model selection happens on val; test is touched exactly
+       # once, at the end, purely to report an unbiased estimate.
+       train, val, test = split_dataframe(
+           training_data, ml_context.get("split"), default_seed=seed, ml_context=ml_context,
        )
+       X_train, y_train = train.drop("churn", axis=1), train["churn"]
+       X_val, y_val = val.drop("churn", axis=1), val["churn"]
+       X_test, y_test = test.drop("churn", axis=1), test["churn"]
 
        # Trivial baseline: the floor any model must beat to add value.
        baseline = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
-       baseline_f1 = f1_score(y_test, baseline.predict(X_test))
+       baseline_f1 = f1_score(y_val, baseline.predict(X_val))
 
        model = RandomForestClassifier(**params, random_state=seed).fit(X_train, y_train)
-       f1 = f1_score(y_test, model.predict(X_test))
+       val_f1 = f1_score(y_val, model.predict(X_val))
+
+       # Test is scored once, after the model is already chosen on val — never
+       # used to pick hyperparameters or to decide whether to register.
+       test_f1 = f1_score(y_test, model.predict(X_test))
 
        # Log to the pipeline-level run Ducta already started.
        mlops = ml_context.get("mlops_context")
        run_id = ml_context.get("mlops_run_id")
        if mlops and run_id:
            tracker = mlops.experiment_tracker
-           for key, value in {**params, "seed": seed, "split": "stratified_80_20"}.items():
+           for key, value in {**params, "seed": seed}.items():
                tracker.log_parameter(run_id, key, value)
-           tracker.log_metric(run_id, "f1", f1)
+           tracker.log_metric(run_id, "val_f1", val_f1)
            tracker.log_metric(run_id, "baseline_f1", baseline_f1)
-           tracker.log_metric(run_id, "f1_lift", f1 - baseline_f1)
+           tracker.log_metric(run_id, "val_f1_lift", val_f1 - baseline_f1)
+           tracker.log_metric(run_id, "test_f1", test_f1)
 
-       # Register only if the model beats the trivial baseline by a margin —
-       # an absolute threshold (e.g. accuracy > 0.85) is meaningless on
+       # Register only if the model beats the trivial baseline on val by a
+       # margin — an absolute threshold (e.g. accuracy > 0.85) is meaningless on
        # imbalanced data, where predicting the majority class can pass it.
-       if mlops and f1 > baseline_f1 + 0.05:
+       if mlops and val_f1 > baseline_f1 + 0.05:
            with tempfile.TemporaryDirectory() as tmp:
                artifact = Path(tmp) / "model.joblib"
                joblib.dump(model, artifact)
@@ -264,11 +294,11 @@ per-node seed, the pipeline-level experiment run id, and the MLOps context
                    artifact_type="model",
                    framework="sklearn",
                    hyperparameters={**params, "seed": seed},
-                   metrics={"f1": f1, "baseline_f1": baseline_f1},
+                   metrics={"val_f1": val_f1, "baseline_f1": baseline_f1, "test_f1": test_f1},
                    experiment_run_id=run_id,
                )
 
-       return {"f1": f1, "baseline_f1": baseline_f1}
+       return {"val_f1": val_f1, "baseline_f1": baseline_f1, "test_f1": test_f1}
 
 .. important::
 
@@ -319,30 +349,36 @@ winner's.
 Declarative train/test split
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Version the split criteria in the pipeline config instead of hardcoding them
-in node code:
-
-.. code-block:: toml
-
-   # config/pipelines.toml — flat: [<pipeline_name>.split]
-   [ml_training.split]
-   method = "stratified"      # random | stratified | temporal | group
-   test_size = 0.2
-   stratify_col = "churn"
-
-Nodes apply it with one call — the same config also gets logged to the run:
+The ``[ml_training.split]`` block from Step 3 versions the split criteria in
+the pipeline config instead of hardcoding them in node code, and
+``train_and_register`` already applies it with one call — passing
+``ml_context=`` marks ``ml_context["split_applied"]``, so the run certificate
+is guaranteed to record the split that actually ran, not just the split that
+was configured:
 
 .. code-block:: python
 
    from ducta.mlrun import split_dataframe
 
-   train_df, test_df = split_dataframe(
-       data, ml_context["split"], default_seed=ml_context.get("node_seed")
+   train, val, test = split_dataframe(
+       data, ml_context["split"], default_seed=ml_context.get("node_seed"),
+       ml_context=ml_context,
    )
 
-Use ``method = "group"`` with ``group_col`` when the same entity (customer,
-device) appears in several rows, so it never lands on both sides of the split;
-use ``method = "temporal"`` with ``time_col`` to cut without shuffling time.
+``val_size`` is what makes this a 3-way split: model selection happens on
+``val``, and ``test`` is scored exactly once, at the end, to report an
+unbiased estimate — never used to choose hyperparameters or to decide
+whether to register. Omit ``val_size`` for a plain 2-way ``(train, test)``
+split. Use ``method = "group"`` with ``group_col`` when the same entity
+(customer, device) appears in several rows, so it never lands on both sides
+of the split; use ``method = "temporal"`` with ``time_col`` to cut without
+shuffling time.
+
+.. warning::
+
+   If a node declares a ``split`` but never calls ``split_dataframe``/
+   ``kfold_splits``, Ducta logs a warning — the certificate would otherwise
+   record a split configuration that the node silently ignored.
 
 Promotion gates
 ~~~~~~~~~~~~~~~
@@ -353,14 +389,14 @@ trivial baseline) by a margin:
 .. code-block:: toml
 
    [mlops.promotion_policy]
-   metric = "f1"
+   metric = "val_f1"
    min_delta = 0.01
    compare_to = "current_production"   # or "baseline"
 
 .. code-block:: bash
 
    ducta model promote churn-predictor 3 production
-   # blocked if v3 does not beat Production by min_delta on f1;
+   # blocked if v3 does not beat Production by min_delta on val_f1;
    # bypass consciously (audit-logged): --force
 
 Reproducibility guards
@@ -376,35 +412,6 @@ Two settings turn lineage recording into guarantees:
 
 With ``fingerprint_policy = "fail"`` the pipeline aborts before training on
 data that changed since the previous successful run of the same pipeline.
-
-Step 5: Monitoring and Health
-------------------------------
-
-Ducta includes built-in monitoring for MLOps infrastructure health.
-
-.. grid:: 1 2 2 2
-   :gutter: 3
-
-   .. grid-item-card:: 🔍 Health Checks
-
-      Verify storage availability, disk space, and backend connectivity.
-
-      .. code-block:: python
-
-         from ducta.mlrun import HealthMonitor
-         monitor = HealthMonitor()
-         report = monitor.check_health()
-         print(f"Status: {report.overall_status}")
-
-   .. grid-item-card:: 📈 Operational Metrics
-
-      Track system-level metrics like registration counts and active runs.
-
-      .. code-block:: python
-
-         from ducta.mlrun import get_metrics_collector
-         collector = get_metrics_collector()
-         print(f"Active Runs: {collector.get_counter('active_runs')}")
 
 Next Steps
 ----------

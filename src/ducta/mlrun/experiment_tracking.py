@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import atexit
 import bisect
+import json
 import math
 import threading
 import weakref
@@ -128,8 +129,6 @@ class MetricIndex:
                 self.by_step[key] = {}
                 self._sorted_steps[key] = []
 
-            # When deque is at capacity, next append evicts the leftmost element.
-            # Mirror that eviction into by_step and _sorted_steps.
             if len(self.by_key[key]) == self.max_size:
                 evicted = self.by_key[key][0]
                 if self.by_step[key].get(evicted.step) is evicted:
@@ -230,16 +229,11 @@ class Run:
     tags: Dict[str, str] = field(default_factory=dict)
     parent_run_id: Optional[str] = None
     notes: str = ""
-    # Environment captured at run start for reproducibility
     environment: str = ""
-    # v2.1+: Fast index for metric lookups (not serialized)
     metric_index: MetricIndex = field(default_factory=MetricIndex, init=False, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        # Build dict manually, skipping non-serializable MetricIndex (contains RLock)
-        # asdict() deep-copies ALL fields before we can exclude metric_index,
-        # causing TypeError: cannot pickle '_thread.RLock' object
         d = {}
         for f in fields(self):
             if f.name == "metric_index":
@@ -260,7 +254,6 @@ class Run:
             if isinstance(metrics_container, MetricRollingWindow):
                 d["metrics"][key] = [m.to_dict() for m in metrics_container.get_all()]
             else:
-                # Backward compatibility with old list format
                 d["metrics"][key] = [
                     m.to_dict() if isinstance(m, Metric) else m for m in metrics_container
                 ]
@@ -281,15 +274,12 @@ class Run:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Run":
         """Create from dictionary."""
-        # Strip fields that are excluded from init (metric_index is init=False)
         data = {k: v for k, v in data.items() if k != "metric_index"}
         data["status"] = RunStatus(data.get("status", "RUNNING"))
-        # v2.1+: Restore MetricRollingWindow from serialized data
         if "metrics" in data:
             data["metrics"] = cls._deserialize_metrics(data["metrics"])
         run = cls(**data)
-        # Rebuild metric_index from deserialized metrics so that
-        # compare_runs / search_runs can use the fast index path.
+
         for _, metrics_container in run.metrics.items():
             if isinstance(metrics_container, MetricRollingWindow):
                 for metric in metrics_container.get_all():
@@ -322,10 +312,8 @@ class ExperimentTracker:
     Experiment Tracking system for logging metrics, parameters, and artifacts.
     """
 
-    # Class-level registry for cleanup on exit
     _instances: Set[weakref.ref] = set()
     _instances_lock = threading.Lock()
-    # Sentinel to register atexit only once across all instances
     _atexit_registered: bool = False
 
     def __init__(
@@ -353,22 +341,17 @@ class ExperimentTracker:
         self.stale_run_age_seconds = stale_run_age_seconds
         self.max_metrics_per_key = max_metrics_per_key
         self.max_metrics_per_run = max_metrics_per_run
-
-        # Thread-safe active runs with LRU behavior
         self._active_runs: OrderedDict[str, Run] = OrderedDict()
         self._metric_counts: Dict[str, int] = defaultdict(int)
         self._pending_metrics: Dict[str, deque] = {}
         self._runs_lock = threading.RLock()
-
-        # Statistics
+        self._last_flushed_index: Dict[str, Dict[str, int]] = {}
+        self._last_seen_evictions: Dict[str, Dict[str, int]] = {}
         self._total_runs_started = 0
         self._total_runs_completed = 0
         self._total_runs_failed = 0
         self._cleanup_count = 0
-        # Incremental total metric counter per run (avoids O(n_keys) sum every log_metric call)
         self._total_metric_counts: Dict[str, int] = {}
-
-        # Flag to track if structure has been ensured (lazy initialization)
         self._structure_ensured = False
 
         # Register for cleanup on exit
@@ -383,9 +366,6 @@ class ExperimentTracker:
         with ExperimentTracker._instances_lock:
             ref = weakref.ref(self, ExperimentTracker._cleanup_ref)
             ExperimentTracker._instances.add(ref)
-            # Guard against TOCTOU race: check and set _atexit_registered under
-            # the same lock so two concurrent instantiations cannot both see
-            # _atexit_registered == False and register the handler twice.
             if not ExperimentTracker._atexit_registered:
                 atexit.register(ExperimentTracker._cleanup_all_instances)
                 ExperimentTracker._atexit_registered = True
@@ -455,10 +435,8 @@ class ExperimentTracker:
         """
         Create new experiment.
         """
-        # Ensure tracking structure exists before creating experiment
         self._ensure_tracking_structure()
 
-        # Validate inputs
         name = validate_experiment_name(name)
         description = validate_description(description)
         tags = validate_tags(tags)
@@ -476,11 +454,9 @@ class ExperimentTracker:
             artifact_location=f"{self.tracking_path}/artifacts/{experiment_id}",
         )
 
-        # Store experiment metadata
         exp_path = f"{self.tracking_path}/experiments/{experiment_id}.json"
         self.storage.write_json(experiment.to_dict(), exp_path, mode="overwrite")
 
-        # Update experiments index
         self._update_experiments_index(experiment)
 
         logger.info(f"Created experiment {name} (ID: {experiment_id})")
@@ -600,7 +576,9 @@ class ExperimentTracker:
         if run.start_time:
             run.duration_seconds = self._duration_seconds(run.start_time, now)
 
-        # Persist run to storage
+        self._flush_metrics(run_id)
+        self._write_final_metrics_snapshot(run)
+
         try:
             run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
             self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
@@ -608,10 +586,11 @@ class ExperimentTracker:
         except Exception as e:
             logger.error(f"Failed to persist run {run_id}: {e}")
 
-        # Remove from active runs
         del self._active_runs[run_id]
         self._metric_counts.pop(run_id, None)
         self._total_metric_counts.pop(run_id, None)
+        self._last_flushed_index.pop(run_id, None)
+        self._last_seen_evictions.pop(run_id, None)
 
         if status == RunStatus.COMPLETED:
             self._total_runs_completed += 1
@@ -787,6 +766,11 @@ class ExperimentTracker:
             if run.start_time:
                 run.duration_seconds = self._duration_seconds(run.start_time, now)
 
+            # Final incremental flush + consolidated snapshot, before the run
+            # object (and its in-memory metrics) is discarded below.
+            self._flush_metrics(run_id)
+            self._write_final_metrics_snapshot(run)
+
             # Persist run to storage
             run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
             self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
@@ -798,6 +782,8 @@ class ExperimentTracker:
             del self._active_runs[run_id]
             self._metric_counts.pop(run_id, None)
             self._total_metric_counts.pop(run_id, None)  # B-02: prevent memory leak
+            self._last_flushed_index.pop(run_id, None)
+            self._last_seen_evictions.pop(run_id, None)
 
             # Update statistics
             if status == RunStatus.COMPLETED:
@@ -814,20 +800,6 @@ class ExperimentTracker:
         """
         Force a run's status to a terminal value and persist it, without
         requiring the run to be active in this process's memory.
-
-        ``end_run`` only works within the same tracker instance that called
-        ``start_run`` (it mutates ``self._active_runs``). API requests build a
-        fresh ``ExperimentTracker`` per call, so a run left in ``RUNNING`` by a
-        crashed/orphaned process can never be closed via ``end_run`` — this
-        method reads the persisted run directly and rewrites it instead.
-
-        Unlike ``end_run`` (which raises if the run isn't active), this is the
-        one path designed to act on an already-persisted run — so it has no
-        natural "already ended" guard. Calling it twice, or on a run that has
-        already reached a terminal status by some other path, would otherwise
-        silently rewrite a COMPLETED run's outcome to FAILED (or vice versa)
-        and corrupt its recorded end_time/duration. Pass ``allow_override=True``
-        to intentionally rewrite an already-terminal run's status.
         """
         with self._runs_lock:
             if run_id in self._active_runs:
@@ -879,20 +851,14 @@ class ExperimentTracker:
             self._active_runs.pop(run_id, None)
             self._metric_counts.pop(run_id, None)
             self._total_metric_counts.pop(run_id, None)
+            self._last_flushed_index.pop(run_id, None)
+            self._last_seen_evictions.pop(run_id, None)
 
         logger.info(f"Deleted run {run_id}")
 
     def get_run(self, run_id: str) -> Run:
         """
         Get run by ID.
-
-        For an active run, returns a snapshot copy (via the to_dict/from_dict
-        round trip, since Run.metric_index holds an RLock that can't be
-        deep-copied directly) rather than the live object other threads
-        mutate under ``_runs_lock`` via log_metric/set_tag/end_run — callers
-        (including list_runs/compare_runs, which both call this) previously
-        read that shared object with no lock of their own, racing a
-        concurrent mutation.
         """
         with self._runs_lock:
             if run_id in self._active_runs:
@@ -1082,10 +1048,8 @@ class ExperimentTracker:
         Download artifact from run.
         Verifies that the artifact path belongs to this run before downloading.
         """
-        # Verify artifact belongs to this run (path-prefix check)
         expected_prefix = f"{self.tracking_path}/artifacts/{run_id}"
         if not artifact_path.startswith(expected_prefix):
-            # Fallback: check against recorded artifact list for stored runs
             try:
                 run = self.get_run(run_id)
                 if artifact_path not in run.artifacts:
@@ -1101,13 +1065,7 @@ class ExperimentTracker:
 
     def _flush_metrics(self, run_id: str) -> bool:
         """
-        Flush metrics for a run to storage (incremental persistence).
-
-        Returns whether the flush actually succeeded, so callers can avoid
-        resetting their buffer counter on a failed flush — otherwise the
-        tracker believes metrics up to that point are persisted and won't
-        retry until another full buffer accumulates, silently losing them if
-        the process dies before ``end_run``'s full persistence.
+        Flush metrics for a run to storage (incremental, append-only persistence).
         """
         if run_id not in self._active_runs:
             return False
@@ -1115,8 +1073,51 @@ class ExperimentTracker:
         run = self._active_runs[run_id]
 
         try:
-            # Store current metrics snapshot
-            metrics_path = f"{self.tracking_path}/metrics/{run.experiment_id}/{run_id}_metrics.json"
+            last_flushed = self._last_flushed_index.setdefault(run_id, {})
+            last_evictions = self._last_seen_evictions.setdefault(run_id, {})
+            new_lines: List[str] = []
+
+            for key, metrics in run.metrics.items():
+                if isinstance(metrics, MetricRollingWindow):
+                    all_metrics = metrics.get_all()
+                    evictions_now = metrics.get_stats()["evictions"]
+                else:
+                    all_metrics = list(metrics)
+                    evictions_now = 0
+
+                start = last_flushed.get(key, 0)
+                if evictions_now > last_evictions.get(key, 0):
+                    logger.warning(
+                        "Run {}: metric '{}' rolling window evicted entries "
+                        "since the last flush; resending the full window for "
+                        "this key to avoid missing points. Consider a larger "
+                        "max_metrics_per_key or more frequent flushing "
+                        "(smaller metric_buffer_size).",
+                        run_id,
+                        key,
+                    )
+                    start = 0
+
+                for m in all_metrics[start:]:
+                    new_lines.append(json.dumps({"key": key, **m.to_dict()}, default=str))
+                last_flushed[key] = len(all_metrics)
+                last_evictions[key] = evictions_now
+
+            if not new_lines:
+                return True
+
+            deltas_path = f"{self.tracking_path}/metrics/{run.experiment_id}/{run_id}_metrics.jsonl"
+            self.storage.append_lines(new_lines, deltas_path)
+            logger.debug(f"Flushed {len(new_lines)} new metric point(s) for run {run_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not flush metrics for run {run_id}: {e}")
+            return False
+
+    def _write_final_metrics_snapshot(self, run: "Run") -> None:
+        """Write the complete, consolidated metrics snapshot once a run ends.
+        """
+        try:
             metrics_data = {
                 key: [
                     m.to_dict()
@@ -1126,12 +1127,12 @@ class ExperimentTracker:
                 ]
                 for key, metrics in run.metrics.items()
             }
+            metrics_path = (
+                f"{self.tracking_path}/metrics/{run.experiment_id}/{run.run_id}_metrics.json"
+            )
             self.storage.write_json(metrics_data, metrics_path, mode="overwrite")
-            logger.debug(f"Flushed metrics for run {run_id}")
-            return True
         except Exception as e:
-            logger.warning(f"Could not flush metrics for run {run_id}: {e}")
-            return False
+            logger.warning(f"Could not write final metrics snapshot for run {run.run_id}: {e}")
 
     def _get_active_run(self, run_id: str) -> Run:
         """Get active run, raise if not found."""
@@ -1232,22 +1233,18 @@ class ExperimentTracker:
         try:
             metrics_index_path = f"{self.tracking_path}/metrics/index.parquet"
 
-            # Load existing index
             try:
                 metrics_df = self.storage.read_dataframe(metrics_index_path)
             except FileNotFoundError:
                 metrics_df = pd.DataFrame(columns=["run_id", "experiment_id"])
 
-            # Remove old entry for this run
             metrics_df = metrics_df[metrics_df["run_id"] != run.run_id]
 
-            # Create new row with latest metrics
             row_data = {
                 "run_id": run.run_id,
                 "experiment_id": run.experiment_id,
             }
 
-            # Add latest value for each metric using the O(1) index
             for metric_name in run.metrics:
                 latest = run.metric_index.get_latest(metric_name)
                 if latest is not None:
@@ -1256,16 +1253,12 @@ class ExperimentTracker:
             new_row = pd.DataFrame([row_data])
             metrics_df = pd.concat([metrics_df, new_row], ignore_index=True)
 
-            # Write back
             self.storage.write_dataframe(metrics_df, metrics_index_path, mode="overwrite")
             logger.debug(f"Updated metrics index for run {run.run_id}")
 
         except Exception as e:
             logger.warning(f"Could not update metrics index: {e}")
 
-    # =========================================================================
-    # Cleanup and Context Manager Methods
-    # =========================================================================
 
     def _is_run_stale(self, run, now: datetime, max_age_seconds: float) -> bool:
         """
@@ -1276,7 +1269,6 @@ class ExperimentTracker:
 
         try:
             start_time = datetime.fromisoformat(run.start_time)
-            # Handle timezone-naive datetimes
             if start_time.tzinfo is None:
                 start_time = start_time.replace(tzinfo=timezone.utc)
 
@@ -1295,7 +1287,6 @@ class ExperimentTracker:
                 f"Could not parse start_time for run {getattr(run, 'run_id', 'unknown')}: {e}. "
                 f"Run will NOT be marked as stale to prevent accidental cleanup."
             )
-            # Do NOT treat parsing failures as stale - this could cause data loss
             return False
 
     def cleanup_stale_runs(
@@ -1310,14 +1301,12 @@ class ExperimentTracker:
             now = datetime.now(timezone.utc)
             cleaned_count = 0
 
-            # Identify stale runs first (avoid modifying dict during iteration)
             stale_run_ids = [
                 run_id
                 for run_id, run in self._active_runs.items()
                 if self._is_run_stale(run, now, max_age_seconds)
             ]
 
-            # Clean up stale runs
             for run_id in stale_run_ids:
                 try:
                     self._end_run_internal(run_id, status)
@@ -1444,16 +1433,13 @@ class ExperimentTracker:
 
         try:
             yield run
-            # Success - end with COMPLETED status
             self.end_run(run.run_id, RunStatus.COMPLETED)
             logger.debug(f"Run context completed successfully: {run.run_id}")
 
         except Exception as e:
-            # Error - end with FAILED status (or COMPLETED if fail_on_error=False)
             status = RunStatus.FAILED if fail_on_error else RunStatus.COMPLETED
 
             try:
-                # Try to log the error before ending
                 self.set_tag(run.run_id, "error_type", type(e).__name__)
                 self.set_tag(run.run_id, "error_message", str(e)[:500])  # Truncate long messages
             except Exception:
@@ -1462,5 +1448,4 @@ class ExperimentTracker:
             self.end_run(run.run_id, status)
             logger.warning(f"Run context ended with error: {run.run_id} - {e}")
 
-            # Re-raise the original exception
             raise

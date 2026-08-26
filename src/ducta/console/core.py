@@ -91,18 +91,6 @@ class ExitCode(Enum):
 
 class DuctaError(EngineError):
     """Base exception for errors raised by the console itself.
-
-    Derives from :class:`ducta.core.errors.DuctaError` so that one ``except``
-    clause in :meth:`UnifiedCLI.run` covers both the console's own errors and
-    the ones the engine raises. Before that, the two hierarchies were unrelated
-    classes that merely shared a name, and an engine error — a bad pipeline
-    config, a failed preflight — fell through to the catch-all handler and
-    exited 1 with the message "Unexpected error", discarding the ``exit_code``
-    the engine had already worked out.
-
-    ``exit_code`` is stored as the plain ``int`` the base class declares. The
-    constructor still takes an :class:`ExitCode` because that is what every
-    console call site passes, and the enum is the readable spelling.
     """
 
     def __init__(self, message: str, exit_code: ExitCode = ExitCode.GENERAL_ERROR):
@@ -124,11 +112,6 @@ class ValidationError(DuctaError):
         super().__init__(message, ExitCode.VALIDATION_ERROR)
 
 
-#: Pipeline execution failures come from the engine, which raises
-#: :class:`ducta.core.errors.ExecutionError` (and its subclasses
-#: ``PipelineExecutionError``, ``ChainExecutionError``, ``NodeTimeoutError``).
-#: The console never raised its own version — the class existed but had no
-#: ``raise`` site anywhere — so this is an alias rather than a parallel type.
 ExecutionError = EngineExecutionError
 
 
@@ -173,19 +156,16 @@ class CLIConfig:
     model_version: Optional[str] = None
     hyperparams: Optional[str] = None
     sweep: Optional[str] = None
-    # Execution mode for streaming/hybrid pipelines: "async" (default, return
-    # immediately) or "sync" (block until terminating queries finish).
+    search: bool = False
+    search_metric: Optional[str] = None
+    search_trials: Optional[int] = None
+    sweep_reuse_upstream: bool = True
+    sweep_parallel: int = 1
+    max_sweep_size: int = 50
     execution_mode: str = "async"
-    # Chain-reuse flags: skip materialized upstream pipelines, or force full rerun.
     reuse_upstream: bool = False
     rerun_all: bool = False
 
-
-#: Safe identifier charset shared by every CLI-supplied name that ends up as
-#: a filesystem path component (project names, sandbox developer names, run
-#: ids, ...) — reused instead of re-declared per module so a fix applied
-#: once (see template.py's project_name/sandbox_developers validation)
-#: covers every caller, not just the one it was first written for.
 VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -213,10 +193,7 @@ class SecurityValidator:
 
     @staticmethod
     def _is_permissive() -> bool:
-        # Accept both the historical mixed-case name and the conventional
-        # all-caps form — a very plausible typo/convention mismatch would
-        # otherwise silently leave this unset (same fix already applied to
-        # the signing-key env var in core/certificate.py).
+
         val = os.getenv("Ducta_PERMISSIVE_PATH_VALIDATION") or os.getenv(
             "DUCTA_PERMISSIVE_PATH_VALIDATION", "0"
         )
@@ -230,8 +207,6 @@ class SecurityValidator:
             resolved_base = base_path.resolve()
             resolved_target = target_path.resolve()
 
-            # Always validate path is within base_path, regardless of permissive mode
-            # Prevents path traversal attacks using absolute paths
             SecurityValidator._check_relative_to_base(resolved_base, resolved_target)
             SecurityValidator._check_sensitive_dirs(resolved_target)
             SecurityValidator._check_hidden_parts(resolved_base, resolved_target)
@@ -263,13 +238,6 @@ class SecurityValidator:
     @staticmethod
     def _check_hidden_parts(resolved_base: Path, resolved_target: Path) -> None:
         """Reject paths whose *target-relative-to-base* components are hidden.
-
-        Iterating resolved_target.parts (the full absolute path) rejected
-        anything under a dotdir ancestor of base_path itself (e.g.
-        ~/.config/ducta_projects/proj) even when nothing under proj was
-        hidden — _check_relative_to_base above already proved the relation
-        is valid, so only the part actually under the caller's control
-        should be checked here.
         """
         relative_parts = resolved_target.relative_to(resolved_base).parts
         for part in relative_parts:

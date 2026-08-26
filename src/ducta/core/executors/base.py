@@ -16,8 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-BaseExecutor: what every pipeline type shares — settings, MLOps wiring, ml_info, quality aggregation.
 """
 
 from __future__ import annotations
@@ -77,34 +75,28 @@ class BaseExecutor:
 
     def __init__(self, context: Context, settings: Optional[CoreSettings] = None):
         self.context = context
-        # Resolved once, here. Coercion, defaults and clamping live in
-        # CoreSettings, so no execution path below re-reads global_settings with
-        # its own inline default.
         self.settings = settings or CoreSettings.from_context(context)
 
         self._mlops_context = None
         self._mlops_auto_config = MLOpsAutoConfigurator()
         self._mlops_init_attempted = False
         self._mlops_pipeline_name: Optional[str] = None
-
         self.input_loader = InputLoader(self.context)
         self.output_manager = DataOutputManager(self.context)
         self.quality_output_manager = QualityOutputManager(self.context)
         self.is_ml_layer = getattr(self.context, "is_ml_layer", False)
         self.max_workers = self.settings.max_parallel_nodes
         self.timeout_seconds = self.settings.execution_timeout_seconds
-
         self._mlflow_enabled = self._should_enable_mlflow()
         self._mlflow_required = self.settings.mlops_required
         self._mlflow_tracker = None
         self.node_executor = self._build_node_executor()
-
-        # Only HybridExecutor builds one (cross-type dependency tracking +
-        # streaming query lifecycle); batch and streaming leave it None.
         self.unified_state: Optional[UnifiedPipelineState] = None
         self.pipeline_status: str = "initializing"
         self._sanity_reports: Dict[str, QualityReport] = {}
         self._skipped_atomic_node: Optional[Dict[str, str]] = None
+        self.last_run_metrics: Dict[str, float] = {}
+        self.last_mlops_run_id: Optional[str] = None
 
     def _build_node_executor(self):
         """Build the node executor, with MLflow tracking when it is available.
@@ -151,9 +143,6 @@ class BaseExecutor:
 
     def _should_enable_mlflow(self) -> bool:
         """Whether MLflow tracking should be wired in for this run.
-
-        The environment-variable override now lives in ``CoreSettings`` with
-        every other setting, instead of being read here with its own parsing.
         """
         if not MLFLOW_INTEGRATION_AVAILABLE:
             return False
@@ -304,10 +293,6 @@ class BaseExecutor:
 
     def _apply_global_seed(self) -> None:
         """Seed the process-wide RNGs for reproducibility. Best-effort.
-
-        Lives on BaseExecutor so every executor gets it: it used to be inlined
-        in BatchExecutor.execute only, which left hybrid ML runs unseeded (and
-        therefore irreproducible) for no reason other than where the code sat.
         """
         seed = self._resolve_global_seed()
         if seed is None:
@@ -475,7 +460,6 @@ class BaseExecutor:
 
         logger.info("Running preflight sanity checks...")
 
-        # Load quality profiles from global_settings so profile= references resolve
         try:
             from ducta.check.profiles import load_profiles as _load_profiles
 
@@ -506,17 +490,21 @@ class BaseExecutor:
         mlops_integration: Optional[MLOpsExecutorIntegration],
         mlops_run_id: Optional[str],
     ) -> None:
-        """Close MLOps run with given status."""
+        """Close MLOps run with given status.
+        """
         if not mlops_integration or not mlops_run_id:
             return
 
         try:
             if success:
-                mlops_integration.end_pipeline_run(mlops_run_id)
+                self.last_run_metrics = mlops_integration.end_pipeline_run(mlops_run_id) or {}
             else:
                 from ducta.mlrun.experiment_tracking import RunStatus
 
-                mlops_integration.end_pipeline_run(mlops_run_id, status=RunStatus.FAILED)
+                self.last_run_metrics = (
+                    mlops_integration.end_pipeline_run(mlops_run_id, status=RunStatus.FAILED) or {}
+                )
+            self.last_mlops_run_id = mlops_run_id
         except Exception as e:
             log_fn = logger.warning if success else logger.error
             msg = (
@@ -558,8 +546,31 @@ class BaseExecutor:
 
         ml_info.setdefault("seed", self._resolve_global_seed())
         ml_info.setdefault("split", self._get_pipeline_split_config(pipeline_name))
+        ml_info.setdefault("cv_folds", self._resolve_cv_folds(pipeline_name, ml_info))
 
         return ml_info
+
+    def _resolve_cv_folds(self, pipeline_name: str, ml_info: Dict[str, Any]) -> Optional[int]:
+        """Resolve the cross-validation fold count for this pipeline.
+        """
+        try:
+            pipelines_config = getattr(self.context, "pipelines_config", {}) or {}
+            pipeline_cfg = pipelines_config.get(pipeline_name, {}) or {}
+            if hasattr(pipeline_cfg, "model_dump"):
+                pipeline_cfg = pipeline_cfg.model_dump()
+            if isinstance(pipeline_cfg, dict) and pipeline_cfg.get("cv_folds") is not None:
+                return int(pipeline_cfg["cv_folds"])
+        except (TypeError, ValueError) as e:
+            logger.debug("Could not read cv_folds from pipeline config: {}", e)
+
+        hp_cfg = ml_info.get("hyperparams_config")
+        folds = getattr(hp_cfg, "cv_folds", None)
+        if folds is not None:
+            try:
+                return int(folds)
+            except (TypeError, ValueError):
+                logger.debug("Ignoring non-integer cv_folds on hyperparams_config: {!r}", folds)
+        return None
 
     def _start_mlops_integration(
         self,
