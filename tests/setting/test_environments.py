@@ -16,6 +16,7 @@ from ducta.setting.environments import (
     is_sandbox_environment,
     is_valid_environment,
     normalize_environment,
+    sanitize_env_for_path,
 )
 
 
@@ -199,3 +200,27 @@ class TestIsAllowedEnvironment:
 
     def test_invalid_type(self):
         assert is_allowed_environment(None) is False
+
+
+class TestSanitizeEnvForPath:
+    """Used to build .ducta/chain_state/<env>/... and .ducta/runs/<env>/... segments."""
+
+    def test_none_falls_back_to_base(self):
+        assert sanitize_env_for_path(None) == "base"
+
+    def test_empty_string_falls_back_to_base(self):
+        assert sanitize_env_for_path("") == "base"
+
+    def test_plain_env_name_is_unchanged(self):
+        assert sanitize_env_for_path("dev") == "dev"
+        assert sanitize_env_for_path("prod") == "prod"
+        assert sanitize_env_for_path("sandbox_juan") == "sandbox_juan"
+
+    def test_path_separators_are_stripped(self):
+        assert "/" not in sanitize_env_for_path("dev/../../etc")
+        assert "\\" not in sanitize_env_for_path("dev\\..\\etc")
+
+    def test_traversal_sequence_cannot_escape_the_base_dir(self):
+        result = sanitize_env_for_path("../../../etc/passwd")
+        assert ".." not in result
+        assert "/" not in result

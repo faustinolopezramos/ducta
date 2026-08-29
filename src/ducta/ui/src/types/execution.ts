@@ -15,6 +15,7 @@ export interface Execution {
   model_version?: string;
   sweep_id?: string;
   sweep_index?: number;
+  certificate_run_id?: string;
 }
 
 export interface NodeExecution {

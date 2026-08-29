@@ -732,10 +732,21 @@ class UnifiedArgumentParser:
 
         list_parser = certify_subparsers.add_parser("list", help="List run certificates")
         list_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        list_parser.add_argument(
+            "--env", help="Environment to scope the search to (default: search all environments)"
+        )
 
-        show_parser = certify_subparsers.add_parser("show", help="Print a certificate as JSON")
+        show_parser = certify_subparsers.add_parser(
+            "show", help="Show a certificate (human-readable by default)"
+        )
         show_parser.add_argument("--run-id", required=True, help="Run id (or a unique prefix)")
         show_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        show_parser.add_argument(
+            "--env", help="Environment to scope the search to (default: search all environments)"
+        )
+        show_parser.add_argument(
+            "--json", action="store_true", help="Print the full certificate as raw JSON"
+        )
 
         verify_parser = certify_subparsers.add_parser(
             "verify",
@@ -744,9 +755,22 @@ class UnifiedArgumentParser:
         verify_parser.add_argument("--run-id", required=True, help="Run id (or a unique prefix)")
         verify_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
         verify_parser.add_argument(
+            "--env", help="Environment to scope the search to (default: search all environments)"
+        )
+        verify_parser.add_argument(
             "--reproduce",
             action="store_true",
             help="Re-run the pipeline and confirm every output reproduces the certificate",
         )
         verify_parser.add_argument("--start-date", help="Start date for the reproduction run")
         verify_parser.add_argument("--end-date", help="End date for the reproduction run")
+
+        diff_parser = certify_subparsers.add_parser(
+            "diff", help="Compare two run certificates (config, outputs, quality)"
+        )
+        diff_parser.add_argument("run_a", help="First run id (or a unique prefix)")
+        diff_parser.add_argument("run_b", help="Second run id (or a unique prefix)")
+        diff_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        diff_parser.add_argument(
+            "--env", help="Environment to scope the search to (default: search all environments)"
+        )

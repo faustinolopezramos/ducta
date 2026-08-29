@@ -28,9 +28,11 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
+
+from ducta.setting.environments import sanitize_env_for_path
 
 SCHEMA_VERSION = "1.0"
 DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
@@ -296,10 +298,50 @@ def build_certificate(
 
 
 def certificate_dir(context: Any, run_id: str) -> Path:
-    """Resolve ``<run_certificate_dir>/<run_id>`` for this run (relative to cwd)."""
+    """Resolve ``<run_certificate_dir>/<env>/<run_id>`` for this run (relative to cwd)."""
     from ducta.core.settings import CoreSettings
 
-    return Path(CoreSettings.from_context(context).run_certificate_dir) / run_id
+    settings = CoreSettings.from_context(context)
+    env = sanitize_env_for_path(settings.env)
+    return Path(settings.run_certificate_dir) / env / run_id
+
+
+def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[Optional[str], str, Path]]:
+    """Yield ``(env, run_id, run_dir)`` for every certificate under ``base_dir``.
+
+    Walks both the legacy flat layout (``base_dir/<run_id>/certificate.json``,
+    ``env`` yielded as ``None``) and the per-environment layout
+    (``base_dir/<env>/<run_id>/certificate.json``), so callers can list runs
+    written before and after the per-environment change transparently.
+    """
+    if not base_dir.is_dir():
+        return
+    for entry in sorted(base_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        if (entry / "certificate.json").is_file():
+            yield None, entry.name, entry
+            continue
+        for sub in sorted(entry.iterdir()):
+            if sub.is_dir() and (sub / "certificate.json").is_file():
+                yield entry.name, sub.name, sub
+
+
+def find_certificate_dir(base_dir: Path, run_id: str, env: Optional[str] = None) -> Optional[Path]:
+    """Resolve a single run's certificate directory under ``base_dir``.
+
+    When ``env`` is given, the per-environment path is tried first; either
+    way, falls back to scanning both layouts so a run written under a
+    different (or legacy/no) environment is still found by ``run_id``.
+    """
+    if env:
+        candidate = base_dir / sanitize_env_for_path(env) / run_id
+        if (candidate / "certificate.json").is_file():
+            return candidate
+    for found_env, found_run_id, run_dir in iter_certificate_dirs(base_dir):
+        if found_run_id == run_id and (env is None or found_env == env):
+            return run_dir
+    return None
 
 
 def is_enabled(context: Any) -> bool:
@@ -402,3 +444,93 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
         reason="signature mismatch — not signed by the provided key",
         signature="invalid",
     )
+
+
+def logical_fingerprint(fp: Dict[str, Any]) -> tuple:
+    """The reproducibility-relevant identity of a dataset: schema + rows + sample.
+
+    Excludes ``file_size_bytes``/``file_mtime`` (which can jitter across otherwise
+    identical writes) — so 'reproducible' means 'same data', not 'same bytes'.
+    """
+    return (fp.get("schema_hash"), fp.get("row_count"), fp.get("sample_hash"))
+
+
+def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Structural diff between two certificates: identity, config, outputs, quality.
+
+    Shared by ``ducta certify diff`` and the certificates API's diff endpoint so
+    both surfaces agree on what "different" means. Outputs are compared by
+    :func:`logical_fingerprint` (schema/rows/sample), not raw bytes — a dataset
+    rewritten with identical content is "same", a reordered/regenerated one with
+    different content is "different".
+    """
+    outputs_a = a.get("outputs", {}) or {}
+    outputs_b = b.get("outputs", {}) or {}
+    output_rows = []
+    for key in sorted(set(outputs_a) | set(outputs_b)):
+        fp_a = outputs_a.get(key)
+        fp_b = outputs_b.get(key)
+        if fp_a is None or fp_b is None:
+            match = False
+        else:
+            match = logical_fingerprint(fp_a) == logical_fingerprint(fp_b)
+        output_rows.append(
+            {
+                "key": key,
+                "in_a": fp_a is not None,
+                "in_b": fp_b is not None,
+                "match": match,
+            }
+        )
+
+    def _quality_key(entry: Dict[str, Any]) -> tuple:
+        return (entry.get("node"), entry.get("phase"))
+
+    quality_a = {_quality_key(q): q for q in (a.get("quality", []) or [])}
+    quality_b = {_quality_key(q): q for q in (b.get("quality", []) or [])}
+    quality_rows = []
+    for key in sorted(set(quality_a) | set(quality_b), key=lambda k: (k[0] or "", k[1] or "")):
+        qa = quality_a.get(key)
+        qb = quality_b.get(key)
+        quality_rows.append(
+            {
+                "node": key[0],
+                "phase": key[1],
+                "passed_a": qa.get("passed") if qa else None,
+                "passed_b": qb.get("passed") if qb else None,
+                "errors_a": qa.get("errors") if qa else None,
+                "errors_b": qb.get("errors") if qb else None,
+                "match": (
+                    qa is not None and qb is not None and qa.get("passed") == qb.get("passed")
+                ),
+            }
+        )
+
+    config_fingerprint_match = bool(a.get("config_fingerprint")) and a.get(
+        "config_fingerprint"
+    ) == b.get("config_fingerprint")
+    pipeline_match = a.get("pipeline") == b.get("pipeline")
+    environment_match = a.get("environment_name") == b.get("environment_name")
+    status_match = a.get("status") == b.get("status")
+    outputs_match = all(row["match"] for row in output_rows) if output_rows else True
+
+    return {
+        "run_a": a.get("run_id"),
+        "run_b": b.get("run_id"),
+        "pipeline_a": a.get("pipeline"),
+        "pipeline_b": b.get("pipeline"),
+        "pipeline_match": pipeline_match,
+        "environment_match": environment_match,
+        "status_a": a.get("status"),
+        "status_b": b.get("status"),
+        "status_match": status_match,
+        "config_fingerprint_match": config_fingerprint_match,
+        "outputs": output_rows,
+        "outputs_match": outputs_match,
+        "quality": quality_rows,
+        "identical": pipeline_match
+        and environment_match
+        and status_match
+        and config_fingerprint_match
+        and outputs_match,
+    }

@@ -44,6 +44,7 @@ from ducta.core.settings import CoreSettings
 from ducta.core.utils import extract_pipeline_nodes
 from ducta.gate.constants import WriteMode
 from ducta.setting.contexts import Context
+from ducta.setting.environments import sanitize_env_for_path
 from ducta.stream.constants import PipelineType
 
 
@@ -101,8 +102,7 @@ class PipelineExecutor:
         hyperparams: Optional[Dict[str, Any]] = None,
         execution_mode: Optional[str] = "async",
     ) -> PipelineRunResult:
-        """Execute one pipeline and return a typed description of what happened.
-        """
+        """Execute one pipeline and return a typed description of what happened."""
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
@@ -189,8 +189,7 @@ class PipelineExecutor:
         return result
 
     def _collect_batch_outcome(self, result: PipelineRunResult) -> None:
-        """Fold the batch executor's non-raising outcomes into the run result.
-        """
+        """Fold the batch executor's non-raising outcomes into the run result."""
         batch = self._batch_executor
         if batch is None:
             return
@@ -243,8 +242,7 @@ class PipelineExecutor:
         status: str,
         error: Optional[str],
     ) -> Optional[str]:
-        """Assemble and persist the Run Certificate. Best-effort — never raises.
-        """
+        """Assemble and persist the Run Certificate. Best-effort — never raises."""
         try:
             from ducta.core import certificate as cert_mod
 
@@ -423,8 +421,7 @@ class PipelineExecutor:
         reuse_upstream: bool = False,
         rerun_all: bool = False,
     ) -> PipelineRunResult:
-        """Execute *pipeline_name* and its transitive dependencies in topological order.
-        """
+        """Execute *pipeline_name* and its transitive dependencies in topological order."""
         from ducta.core.dependency_inference import merge_pipeline_depends_on
         from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
 
@@ -517,8 +514,7 @@ class PipelineExecutor:
     def _pipeline_is_up_to_date(
         self, pipeline_name: str, start_date: Optional[str], end_date: Optional[str]
     ) -> bool:
-        """True if *pipeline_name* can be safely skipped as already materialized.
-        """
+        """True if *pipeline_name* can be safely skipped as already materialized."""
         try:
             pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         except Exception:
@@ -615,13 +611,19 @@ class PipelineExecutor:
         return oldest
 
     def _pipeline_env(self) -> Optional[str]:
-        """Resolve the active environment name for output-path resolution.
-        """
+        """Resolve the active environment name for output-path resolution."""
         return self.settings.env
 
     CHAIN_STATE_DIR = ".ducta/chain_state"
 
     def _chain_state_path(self, pipeline_name: str) -> Path:
+        """Per-environment chain-state path: <CHAIN_STATE_DIR>/<env>/<pipeline>.json."""
+        safe_name = pipeline_name.replace("/", "_")
+        env = sanitize_env_for_path(self.settings.env)
+        return Path(self.CHAIN_STATE_DIR) / env / f"{safe_name}.json"
+
+    def _legacy_chain_state_path(self, pipeline_name: str) -> Path:
+        """Pre-per-environment flat path, kept for backward-compat reads only."""
         safe_name = pipeline_name.replace("/", "_")
         return Path(self.CHAIN_STATE_DIR) / f"{safe_name}.json"
 
@@ -669,24 +671,29 @@ class PipelineExecutor:
             logger.debug("Could not record chain state for '{}': {}", pipeline_name, e)
 
     def _load_chain_state(self, pipeline_name: str) -> Optional[Dict[str, Any]]:
-        """Read the chain-state marker for a pipeline; None when absent/corrupt."""
+        """Read the chain-state marker for a pipeline; None when absent/corrupt.
+
+        Falls back to the pre-per-environment flat path so runs recorded
+        before this change aren't silently discarded; a subsequent run in
+        this environment will migrate the marker to the new per-env path.
+        """
         try:
             path = self._chain_state_path(pipeline_name)
             if not path.exists():
-                return None
+                path = self._legacy_chain_state_path(pipeline_name)
+                if not path.exists():
+                    return None
             data = json.loads(path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except Exception:  # noqa: BLE001
             return None
 
     def validate_pipeline(self, pipeline_name: str) -> bool:
-        """Validate if a pipeline exists in the configuration.
-        """
+        """Validate if a pipeline exists in the configuration."""
         return pipeline_name in self.context.pipelines
 
     def list_pipelines(self) -> List[str]:
-        """List all available pipelines.
-        """
+        """List all available pipelines."""
         return list(self.context.pipelines.keys())
 
     def get_pipeline_info(self, pipeline_name: str) -> Dict[str, Any]:

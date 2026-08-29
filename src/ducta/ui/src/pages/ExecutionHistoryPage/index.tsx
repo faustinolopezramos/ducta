@@ -140,6 +140,7 @@ export function ExecutionHistoryPage() {
 
       {certModal && (
         <CertificateModal
+          key={certModal.runId}
           projectId={certModal.projectId}
           runId={certModal.runId}
           onClose={() => setCertModal(null)}

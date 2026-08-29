@@ -176,6 +176,21 @@ def allowed_environments() -> List[str]:
     return uniq
 
 
+def sanitize_env_for_path(env_name: Optional[str]) -> str:
+    """Sanitize an environment name for use as a filesystem path segment.
+
+    Falls back to "base" for empty/None input, and strips path separators
+    and traversal sequences so a hostile/malformed env string can never
+    escape the intended directory (e.g. "../../etc", "prod/../../x").
+    """
+    if not env_name:
+        return "base"
+    candidate = str(env_name).strip().replace("/", "_").replace("\\", "_")
+    candidate = candidate.replace("..", "_")
+    candidate = "".join(c for c in candidate if c.isalnum() or c in ("_", "-"))
+    return candidate or "base"
+
+
 def is_allowed_environment(env_name: str) -> bool:
     """Check whether an environment is allowed (after normalization)."""
     if not is_valid_environment(env_name):

@@ -6,6 +6,9 @@ import json
 
 from ducta.core.certificate import (
     RunCertificate,
+    certificate_dir,
+    find_certificate_dir,
+    iter_certificate_dirs,
     load_certificate,
     resolve_signing_key,
     resolve_signing_key_from_dir,
@@ -158,3 +161,83 @@ class TestResolveSigningKeyFromDir:
             "certificate_signing_key: config-subdir-key\n"
         )
         assert resolve_signing_key_from_dir(tmp_path) == b"root-key"
+
+
+class TestCertificateDirIsPerEnvironment:
+    def test_includes_the_resolved_environment(self, tmp_path):
+        context = {"env": "dev", "run_certificate_dir": str(tmp_path / "runs")}
+        assert certificate_dir(context, "run-1") == tmp_path / "runs" / "dev" / "run-1"
+
+    def test_different_environments_get_different_directories(self, tmp_path):
+        base = str(tmp_path / "runs")
+        dev_dir = certificate_dir({"env": "dev", "run_certificate_dir": base}, "run-1")
+        prod_dir = certificate_dir({"env": "prod", "run_certificate_dir": base}, "run-1")
+        assert dev_dir != prod_dir
+        assert dev_dir.parent.name == "dev"
+        assert prod_dir.parent.name == "prod"
+
+    def test_missing_environment_falls_back_to_base(self, tmp_path):
+        context = {"run_certificate_dir": str(tmp_path / "runs")}
+        assert certificate_dir(context, "run-1") == tmp_path / "runs" / "base" / "run-1"
+
+    def test_hostile_environment_name_cannot_escape_the_runs_dir(self, tmp_path):
+        context = {"env": "../../etc", "run_certificate_dir": str(tmp_path / "runs")}
+        result = certificate_dir(context, "run-1")
+        assert (tmp_path / "runs") in result.parents
+
+
+class TestIterCertificateDirs:
+    def _write_cert(self, path):
+        path.mkdir(parents=True)
+        (path / "certificate.json").write_text("{}", encoding="utf-8")
+
+    def test_walks_legacy_flat_and_per_environment_layouts_together(self, tmp_path):
+        base = tmp_path / "runs"
+        self._write_cert(base / "legacy-run")
+        self._write_cert(base / "dev" / "run-a")
+        self._write_cert(base / "prod" / "run-b")
+
+        found = sorted(iter_certificate_dirs(base), key=lambda row: row[1])
+        assert found == [
+            (None, "legacy-run", base / "legacy-run"),
+            ("dev", "run-a", base / "dev" / "run-a"),
+            ("prod", "run-b", base / "prod" / "run-b"),
+        ]
+
+    def test_missing_base_dir_yields_nothing(self, tmp_path):
+        assert list(iter_certificate_dirs(tmp_path / "does-not-exist")) == []
+
+    def test_environment_folder_without_any_certificate_is_ignored(self, tmp_path):
+        base = tmp_path / "runs"
+        (base / "dev" / "empty-run").mkdir(parents=True)  # no certificate.json inside
+        assert list(iter_certificate_dirs(base)) == []
+
+
+class TestFindCertificateDir:
+    def _write_cert(self, path):
+        path.mkdir(parents=True)
+        (path / "certificate.json").write_text("{}", encoding="utf-8")
+
+    def test_scopes_to_the_given_environment(self, tmp_path):
+        base = tmp_path / "runs"
+        self._write_cert(base / "dev" / "run-a")
+        self._write_cert(base / "prod" / "run-a")  # same run_id, different environment
+
+        assert find_certificate_dir(base, "run-a", env="dev") == base / "dev" / "run-a"
+        assert find_certificate_dir(base, "run-a", env="prod") == base / "prod" / "run-a"
+
+    def test_without_env_finds_a_legacy_flat_run(self, tmp_path):
+        base = tmp_path / "runs"
+        self._write_cert(base / "legacy-run")
+        assert find_certificate_dir(base, "legacy-run") == base / "legacy-run"
+
+    def test_without_env_finds_a_per_environment_run_by_id_alone(self, tmp_path):
+        base = tmp_path / "runs"
+        self._write_cert(base / "dev" / "run-a")
+        assert find_certificate_dir(base, "run-a") == base / "dev" / "run-a"
+
+    def test_unknown_run_id_returns_none(self, tmp_path):
+        base = tmp_path / "runs"
+        self._write_cert(base / "dev" / "run-a")
+        assert find_certificate_dir(base, "nope") is None
+        assert find_certificate_dir(tmp_path / "does-not-exist", "run-a") is None

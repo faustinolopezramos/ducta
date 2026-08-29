@@ -19,26 +19,39 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger
 
 from ducta.console.core import VALID_NAME_RE, ExitCode
+from ducta.console.ux.formatters import create_table, get_console
 from ducta.core.certificate import (
     DEFAULT_CERTIFICATE_DIR,
+    diff_certificates,
+    find_certificate_dir,
+    iter_certificate_dirs,
     load_certificate,
+    logical_fingerprint,
     resolve_signing_key_from_dir,
     verify_certificate,
 )
+
+try:
+    from rich import box
+
+    _USE_RICH = True
+except ImportError:  # pragma: no cover - rich is a hard dependency in practice
+    _USE_RICH = False
 
 
 def _runs_dir(parsed_args) -> Path:
     return Path(getattr(parsed_args, "dir", None) or DEFAULT_CERTIFICATE_DIR)
 
 
-def _certificate_path(runs_dir: Path, run_id: str) -> Path:
-    return runs_dir / run_id / "certificate.json"
+def _env_arg(parsed_args) -> Optional[str]:
+    return getattr(parsed_args, "env", None)
 
 
 def handle_certify(parsed_args) -> int:
@@ -49,45 +62,147 @@ def handle_certify(parsed_args) -> int:
         return _handle_show(parsed_args)
     if cmd == "verify":
         return _handle_verify(parsed_args)
+    if cmd == "diff":
+        return _handle_diff(parsed_args)
     logger.error("Unknown certify command: {}", cmd)
     return ExitCode.GENERAL_ERROR.value
 
 
+# ── Formatting helpers ───────────────────────────────────────────────────────
+
+
+def _relative_time(iso_ts: Optional[str]) -> str:
+    """'2h ago' / '3d ago' style label; falls back to the raw timestamp."""
+    if not iso_ts:
+        return "?"
+    try:
+        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except ValueError:
+        return iso_ts
+    delta = datetime.now(timezone.utc) - ts
+    seconds = delta.total_seconds()
+    if seconds < 0:
+        return iso_ts
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def _status_label(status: str) -> str:
+    status = (status or "?").lower()
+    if not _USE_RICH:
+        return status
+    color = {"success": "bold bright_green", "failed": "bold bright_red"}.get(status, "yellow")
+    icon = {"success": "✓", "failed": "✗"}.get(status, "•")
+    return f"[{color}]{icon} {status}[/]"
+
+
+def _quality_summary_label(quality: list) -> str:
+    """'3/3 passed' or '2/3 passed (1 failed)' summarizing a certificate's checks."""
+    if not quality:
+        return "—"
+    total = len(quality)
+    passed = sum(1 for q in quality if q.get("passed"))
+    if passed == total:
+        return (
+            f"[bold bright_green]{passed}/{total} passed[/]"
+            if _USE_RICH
+            else f"{passed}/{total} passed"
+        )
+    label = f"{passed}/{total} passed"
+    return f"[bold bright_red]{label}[/]" if _USE_RICH else label
+
+
+# ── list ─────────────────────────────────────────────────────────────────────
+
+
 def _handle_list(parsed_args) -> int:
     runs_dir = _runs_dir(parsed_args)
+    env_filter = _env_arg(parsed_args)
     if not runs_dir.is_dir():
         logger.warning("No runs directory found at {}", runs_dir)
         return ExitCode.SUCCESS.value
 
-    certs = sorted(runs_dir.glob("*/certificate.json"))
-    if not certs:
-        logger.warning("No run certificates found under {}", runs_dir)
+    rows = []
+    for found_env, _run_id, run_dir in iter_certificate_dirs(runs_dir):
+        if env_filter is not None and found_env != env_filter:
+            continue
+        try:
+            data = load_certificate(run_dir / "certificate.json")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not read {}: {}", run_dir / "certificate.json", e)
+            continue
+        data["_env_dir"] = found_env
+        rows.append(data)
+
+    if not rows:
+        logger.warning(
+            "No run certificates found under {}{}",
+            runs_dir,
+            f" for environment '{env_filter}'" if env_filter else "",
+        )
         return ExitCode.SUCCESS.value
 
-    rows = []
-    for path in certs:
-        try:
-            data = load_certificate(path)
-            rows.append(data)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not read {}: {}", path, e)
-
     rows.sort(key=lambda d: d.get("started_at", ""), reverse=True)
-    for d in rows:
-        logger.info(
-            "{}  {:<10}  {:<10}  {}",
-            d.get("run_id", "?")[:16],
-            d.get("pipeline", "?"),
-            d.get("status", "?"),
-            d.get("started_at", "?"),
-        )
+
+    console = get_console()
+    table = (
+        create_table(title=f"Run Certificates — {runs_dir}", box=box.SIMPLE_HEAD)
+        if _USE_RICH
+        else None
+    )
+    if console is not None and table is not None:
+        table.add_column("Run ID", no_wrap=True)
+        table.add_column("Pipeline")
+        table.add_column("Status")
+        table.add_column("Env")
+        table.add_column("Started")
+        table.add_column("Duration", justify="right")
+        table.add_column("Quality")
+        table.add_column("Signed", justify="center")
+        for d in rows:
+            duration = d.get("duration_seconds")
+            env_label = d.get("_env_dir") or d.get("environment_name") or "legacy"
+            table.add_row(
+                str(d.get("run_id", "?"))[:12],
+                str(d.get("pipeline", "?")),
+                _status_label(str(d.get("status", "?"))),
+                str(env_label),
+                _relative_time(d.get("started_at")),
+                f"{duration:.1f}s" if isinstance(duration, (int, float)) else "?",
+                _quality_summary_label(d.get("quality", [])),
+                "🔏" if d.get("signature") else "–",
+            )
+        console.print(table)
+    else:
+        for d in rows:
+            logger.info(
+                "{}  {:<10}  {:<10}  {}",
+                str(d.get("run_id", "?"))[:16],
+                d.get("pipeline", "?"),
+                d.get("status", "?"),
+                d.get("started_at", "?"),
+            )
     return ExitCode.SUCCESS.value
 
 
-def _resolve_run(parsed_args) -> Optional[Path]:
-    """Resolve the certificate path for --run-id (accepts a unique prefix)."""
-    runs_dir = _runs_dir(parsed_args)
-    run_id = getattr(parsed_args, "run_id", None)
+# ── show ─────────────────────────────────────────────────────────────────────
+
+
+def _resolve_run_id(
+    runs_dir: Path, run_id: Optional[str], env: Optional[str] = None
+) -> Optional[Path]:
+    """Resolve a run id (or unique prefix) to its certificate.json under runs_dir.
+
+    Looks in both the per-environment layout and the legacy flat layout
+    (via ``find_certificate_dir``/``iter_certificate_dirs``); when ``env`` is
+    given, an exact per-env match wins, otherwise every environment is
+    searched, matching a unique run id prefix across all of them.
+    """
     if not run_id:
         logger.error("--run-id is required")
         return None
@@ -95,21 +210,131 @@ def _resolve_run(parsed_args) -> Optional[Path]:
         # run_id becomes a path component below (runs_dir / run_id / ...);
         # without this, a value like "../../../../etc" could resolve
         # outside runs_dir once matched against an existing certificate.json.
-        logger.error("Invalid --run-id '{}': must be alphanumeric, '_' or '-'", run_id)
+        logger.error("Invalid run id '{}': must be alphanumeric, '_' or '-'", run_id)
         return None
 
-    exact = _certificate_path(runs_dir, run_id)
-    if exact.exists():
-        return exact
+    exact = find_certificate_dir(runs_dir, run_id, env=env)
+    if exact is not None:
+        return exact / "certificate.json"
 
-    matches = [p for p in runs_dir.glob("*/certificate.json") if p.parent.name.startswith(run_id)]
+    matches = [
+        run_dir
+        for found_env, found_run_id, run_dir in iter_certificate_dirs(runs_dir)
+        if found_run_id.startswith(run_id) and (env is None or found_env == env)
+    ]
     if len(matches) == 1:
-        return matches[0]
+        return matches[0] / "certificate.json"
+    scope = f" in environment '{env}'" if env else ""
     if not matches:
-        logger.error("No certificate found for run '{}' under {}", run_id, runs_dir)
+        logger.error("No certificate found for run '{}'{} under {}", run_id, scope, runs_dir)
     else:
-        logger.error("Run id prefix '{}' is ambiguous ({} matches)", run_id, len(matches))
+        logger.error("Run id prefix '{}' is ambiguous{} ({} matches)", run_id, scope, len(matches))
     return None
+
+
+def _resolve_run(parsed_args) -> Optional[Path]:
+    """Resolve the certificate path for --run-id (accepts a unique prefix)."""
+    return _resolve_run_id(
+        _runs_dir(parsed_args), getattr(parsed_args, "run_id", None), env=_env_arg(parsed_args)
+    )
+
+
+def _print_certificate_human(data: Dict[str, Any]) -> None:
+    console = get_console()
+    if console is None or not _USE_RICH:
+        # No Rich available — fall back to the raw JSON rather than a half
+        # -formatted plain-text render.
+        print(json.dumps(data, indent=2))
+        return
+
+    from rich.panel import Panel
+    from rich.table import Table
+
+    summary = Table.grid(padding=(0, 2))
+    summary.add_column(style="dim")
+    summary.add_column()
+    summary.add_row("Run ID", str(data.get("run_id", "?")))
+    summary.add_row("Pipeline", str(data.get("pipeline", "?")))
+    summary.add_row("Status", _status_label(str(data.get("status", "?"))))
+    summary.add_row("Environment", str(data.get("environment_name", "?")))
+    summary.add_row("Started", str(data.get("started_at", "?")))
+    summary.add_row("Ended", str(data.get("ended_at", "?")))
+    duration = data.get("duration_seconds")
+    summary.add_row("Duration", f"{duration:.2f}s" if isinstance(duration, (int, float)) else "?")
+    summary.add_row("Config fingerprint", str(data.get("config_fingerprint", "?"))[:23] + "…")
+    summary.add_row("Certificate hash", str(data.get("certificate_hash", "?"))[:23] + "…")
+    signature = data.get("signature")
+    summary.add_row(
+        "Signed",
+        f"🔏 yes (key {data.get('key_id')})" if signature else "no",
+    )
+    if data.get("error"):
+        summary.add_row("Error", f"[bold bright_red]{data['error']}[/]")
+    console.print(Panel(summary, title="Run Certificate", border_style="cyan"))
+
+    nodes = data.get("nodes", []) or []
+    if nodes:
+        nodes_table = create_table(title="Nodes", box=box.SIMPLE_HEAD)
+        nodes_table.add_column("Name")
+        nodes_table.add_column("Type")
+        nodes_table.add_column("Status")
+        nodes_table.add_column("Duration", justify="right")
+        nodes_table.add_column("Outputs")
+        for n in nodes:
+            nodes_table.add_row(
+                str(n.get("name", "?")),
+                str(n.get("type", "?")),
+                _status_label(str(n.get("status", "?"))),
+                f"{n.get('duration_seconds', 0):.2f}s",
+                ", ".join(n.get("outputs") or []) or "—",
+            )
+        console.print(nodes_table)
+
+    datasets: Dict[str, Dict[str, Any]] = {}
+    for key, fp in (data.get("inputs", {}) or {}).items():
+        datasets[key] = {"direction": "input", **fp}
+    for key, fp in (data.get("outputs", {}) or {}).items():
+        datasets[key] = {"direction": "output", **fp}
+    if datasets:
+        ds_table = create_table(title="Datasets", box=box.SIMPLE_HEAD)
+        ds_table.add_column("Key")
+        ds_table.add_column("I/O")
+        ds_table.add_column("Rows", justify="right")
+        ds_table.add_column("Schema hash")
+        for key, fp in sorted(datasets.items()):
+            row_count = fp.get("row_count")
+            schema_hash = fp.get("schema_hash")
+            ds_table.add_row(
+                key,
+                fp["direction"],
+                str(row_count) if row_count is not None else "?",
+                str(schema_hash)[:16] + "…" if schema_hash else "?",
+            )
+        console.print(ds_table)
+
+    quality = data.get("quality", []) or []
+    if quality:
+        q_table = create_table(title="Quality checks", box=box.SIMPLE_HEAD)
+        q_table.add_column("Node")
+        q_table.add_column("Phase")
+        q_table.add_column("Result")
+        q_table.add_column("Score", justify="right")
+        q_table.add_column("Errors", justify="right")
+        q_table.add_column("Warnings", justify="right")
+        for q in quality:
+            passed = q.get("passed")
+            result = "[bold bright_green]✓ passed[/]" if passed else "[bold bright_red]✗ failed[/]"
+            q_table.add_row(
+                str(q.get("node", "?")),
+                str(q.get("phase", "?")),
+                result,
+                f"{q.get('score', 0):.2f}",
+                str(q.get("errors", 0)),
+                str(q.get("warnings", 0)),
+            )
+        console.print(q_table)
+
+    console.print("[dim]Use --json for the full machine-readable certificate.[/]")
 
 
 def _handle_show(parsed_args) -> int:
@@ -121,8 +346,15 @@ def _handle_show(parsed_args) -> int:
     except Exception as e:  # noqa: BLE001
         logger.error("Could not read certificate: {}", e)
         return ExitCode.EXECUTION_ERROR.value
-    print(json.dumps(data, indent=2))
+
+    if getattr(parsed_args, "json", False):
+        print(json.dumps(data, indent=2))
+    else:
+        _print_certificate_human(data)
     return ExitCode.SUCCESS.value
+
+
+# ── verify ───────────────────────────────────────────────────────────────────
 
 
 def _handle_verify(parsed_args) -> int:
@@ -149,15 +381,6 @@ def _handle_verify(parsed_args) -> int:
     if getattr(parsed_args, "reproduce", False):
         return _reproduce(parsed_args, path)
     return ExitCode.SUCCESS.value
-
-
-def _logical_fingerprint(fp: dict) -> tuple:
-    """The reproducibility-relevant identity of a dataset: schema + rows + sample.
-
-    Excludes ``file_size_bytes``/``file_mtime`` (which can jitter across otherwise
-    identical writes) — so 'reproducible' means 'same data', not 'same bytes'.
-    """
-    return (fp.get("schema_hash"), fp.get("row_count"), fp.get("sample_hash"))
 
 
 def _reproduce(parsed_args, cert_path: Path) -> int:
@@ -213,7 +436,7 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         new_fp = fresh.get(key)
         if not new_fp:
             mismatches.append((key, "missing in reproduction run"))
-        elif _logical_fingerprint(new_fp) != _logical_fingerprint(old_fp):
+        elif logical_fingerprint(new_fp) != logical_fingerprint(old_fp):
             mismatches.append((key, "data differs (schema/rows/sample changed)"))
 
     if mismatches:
@@ -227,4 +450,89 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         return ExitCode.VALIDATION_ERROR.value
 
     logger.info("✓ Reproducible: all {} output(s) match the certificate", len(recorded))
+    return ExitCode.SUCCESS.value
+
+
+# ── diff ─────────────────────────────────────────────────────────────────────
+
+
+def _handle_diff(parsed_args) -> int:
+    runs_dir = _runs_dir(parsed_args)
+    env = _env_arg(parsed_args)
+    path_a = _resolve_run_id(runs_dir, getattr(parsed_args, "run_a", None), env=env)
+    path_b = _resolve_run_id(runs_dir, getattr(parsed_args, "run_b", None), env=env)
+    if path_a is None or path_b is None:
+        return ExitCode.VALIDATION_ERROR.value
+
+    try:
+        cert_a = load_certificate(path_a)
+        cert_b = load_certificate(path_b)
+    except Exception as e:  # noqa: BLE001
+        logger.error("Could not read certificate: {}", e)
+        return ExitCode.EXECUTION_ERROR.value
+
+    result = diff_certificates(cert_a, cert_b)
+    console = get_console()
+
+    def _mark(ok: bool) -> str:
+        if not _USE_RICH:
+            return "same" if ok else "DIFFERENT"
+        return "[bold bright_green]same[/]" if ok else "[bold bright_red]DIFFERENT[/]"
+
+    if console is not None and _USE_RICH:
+        head = create_table(box=box.SIMPLE_HEAD)
+        head.add_column(str(result["run_a"])[:12])
+        head.add_column(str(result["run_b"])[:12])
+        head.add_column("")
+        head.add_row("Pipeline", result["pipeline_a"], result["pipeline_b"])
+        head.add_row("Status", result["status_a"], result["status_b"])
+        console.print(head)
+        console.print(f"Pipeline match:  {_mark(result['pipeline_match'])}")
+        console.print(f"Environment match: {_mark(result['environment_match'])}")
+        console.print(f"Status match: {_mark(result['status_match'])}")
+        console.print(
+            f"Config fingerprint match: {_mark(result['config_fingerprint_match'])} "
+            "[dim](same fingerprint = identical global_settings/pipelines/nodes/input/output config)[/]"
+        )
+
+        if result["outputs"]:
+            out_table = create_table(title="Outputs", box=box.SIMPLE_HEAD)
+            out_table.add_column("Key")
+            out_table.add_column(f"In {str(result['run_a'])[:8]}", justify="center")
+            out_table.add_column(f"In {str(result['run_b'])[:8]}", justify="center")
+            out_table.add_column("Match")
+            for row in result["outputs"]:
+                out_table.add_row(
+                    row["key"],
+                    "✓" if row["in_a"] else "—",
+                    "✓" if row["in_b"] else "—",
+                    _mark(row["match"]),
+                )
+            console.print(out_table)
+
+        if result["quality"]:
+            q_table = create_table(title="Quality", box=box.SIMPLE_HEAD)
+            q_table.add_column("Node")
+            q_table.add_column("Phase")
+            q_table.add_column(f"Passed ({str(result['run_a'])[:8]})", justify="center")
+            q_table.add_column(f"Passed ({str(result['run_b'])[:8]})", justify="center")
+            for row in result["quality"]:
+                q_table.add_row(
+                    str(row["node"]),
+                    str(row["phase"]),
+                    "✓" if row["passed_a"] else ("✗" if row["passed_a"] is not None else "—"),
+                    "✓" if row["passed_b"] else ("✗" if row["passed_b"] is not None else "—"),
+                )
+            console.print(q_table)
+
+        console.print()
+        if result["identical"]:
+            console.print(
+                "[bold bright_green]✓ Certificates are equivalent[/] (same config, same outputs)"
+            )
+        else:
+            console.print("[bold bright_yellow]⚠ Certificates differ[/] — see mismatches above")
+    else:
+        logger.info(json.dumps(result, indent=2, default=str))
+
     return ExitCode.SUCCESS.value
