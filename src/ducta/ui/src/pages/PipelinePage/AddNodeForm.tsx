@@ -26,11 +26,18 @@ export function AddNodeForm({ onAdd, onCancel }: { onAdd: (name: string, module:
       : undefined;
   const canAdd = Boolean(trimmedName && trimmedModule && !nameError);
   return (
-    <div className="add-node-overlay" onClick={onCancel}>
-      <div className="add-node-form" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="add-node-overlay"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div className="add-node-form">
         <div className="add-node-title">Add Node</div>
         <div className="add-node-fields">
           <Field label="Node name" required error={nameError} help="Start with a letter or _, using only letters, numbers, - or _.">
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- focus belongs in the popover the user just opened. */}
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="extract" autoFocus
               onKeyDown={(e) => { if (e.key === "Enter" && canAdd) onAdd(trimmedName, trimmedModule); if (e.key === "Escape") onCancel(); }}
               style={addInputStyle} />

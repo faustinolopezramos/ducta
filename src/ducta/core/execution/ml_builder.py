@@ -34,8 +34,7 @@ class MLContextBuilder:
         self.is_ml_layer = is_ml_layer
 
     def is_ml_node(self, node_config: Dict[str, Any], ml_info: Dict[str, Any]) -> bool:
-        """Decide whether a node must receive the ML context.
-        """
+        """Decide whether a node must receive the ML context."""
         from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
 
         return (

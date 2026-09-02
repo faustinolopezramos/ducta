@@ -1,7 +1,9 @@
 import { useState, useEffect, useMemo, memo, type ReactNode } from "react";
 import { colors } from "../../../theme/tokens";
 import { Button, Skeleton } from "../../ui";
-import { layerMeta, formatCell, formatUptime, formatRate } from "./helpers";
+import { layerMeta, formatCell, formatUptime, formatRate, VERDICT_META } from "./helpers";
+import type { RateSample, ThroughputVerdict } from "./types";
+import { Sparkline } from "../../Quality/Sparkline";
 
 export const StatCard = memo(function StatCard({
   label,
@@ -41,15 +43,18 @@ export const UptimeTicker = memo(function UptimeTicker({
   syncedAt: number | null;
   running: boolean;
 }) {
-  const [, forceTick] = useState(0);
+  // The clock is sampled in the tick, not read during render: reading
+  // `Date.now()` in a render body is impure, and this component already had a
+  // once-a-second tick to hang it off.
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (!running) return;
-    const id = setInterval(() => forceTick((t) => t + 1), 1000);
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [running]);
 
-  const extra = running && syncedAt ? Math.max(0, (Date.now() - syncedAt) / 1000) : 0;
+  const extra = running && syncedAt ? Math.max(0, (now - syncedAt) / 1000) : 0;
   return <>{formatUptime(baseSeconds + extra)}</>;
 });
 
@@ -60,41 +65,6 @@ export const SkeletonCard = memo(function SkeletonCard() {
         <Skeleton variant="text" width="60%" />
       </div>
       <Skeleton variant="text" width="40%" height="22px" />
-    </div>
-  );
-});
-
-export const Gauge = memo(function Gauge({
-  label,
-  value,
-  maxValue,
-  color,
-}: {
-  label: string;
-  value: number;
-  maxValue: number;
-  color: string;
-}) {
-  const pct = maxValue > 0 ? Math.min(100, (value / maxValue) * 100) : 0;
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: colors.textMuted, marginBottom: "5px" }}>
-        <span>{label}</span>
-        <span style={{ fontWeight: 600, color: colors.text, fontFamily: "var(--font-mono)" }}>
-          {value.toFixed(1)} rec/s
-        </span>
-      </div>
-      <div style={{ height: "6px", background: colors.border, borderRadius: "3px", overflow: "hidden" }}>
-        <div
-          style={{
-            height: "100%",
-            width: `${pct}%`,
-            background: color,
-            borderRadius: "3px",
-            transition: "width 0.6s ease",
-          }}
-        />
-      </div>
     </div>
   );
 });
@@ -121,6 +91,103 @@ export function PulsingDot({ color }: { color: string }) {
     />
   );
 }
+
+/**
+ * The monitor's headline reading: how fast records are being processed, how
+ * that has moved over the last minute, and whether it is keeping up with what
+ * is arriving.
+ *
+ * This replaces two same-scaled bars plus two percentages. The pair of bars
+ * showed arrival and processing as unrelated quantities when the whole question
+ * is the relationship between them, and the percentages — a hardcoded-green
+ * "efficiency" and a "health score" that restated the failure count — carried
+ * no information the rest of the panel did not already give.
+ */
+export const ThroughputPanel = memo(function ThroughputPanel({
+  input,
+  processed,
+  efficiency,
+  verdict,
+  history,
+  scale,
+  live,
+}: {
+  input: number;
+  processed: number;
+  efficiency?: number;
+  verdict: ThroughputVerdict;
+  history: RateSample[];
+  scale: number;
+  live: boolean;
+}) {
+  const meta = VERDICT_META[verdict];
+  const trend = history.map((s) => s.processed);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: "12px" }}>
+        <div>
+          <div style={{ fontSize: "11px", color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.4px" }}>
+            Processing
+          </div>
+          <div
+            style={{ fontSize: "26px", fontWeight: 700, color: colors.text, fontFamily: "var(--font-mono)", lineHeight: 1.2 }}
+          >
+            {formatRate(processed)}
+          </div>
+        </div>
+
+        {trend.length > 1 && (
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "2px" }}>
+            <Sparkline
+              values={trend}
+              width={140}
+              height={34}
+              color={meta.color}
+              domain={[0, scale]}
+              ariaLabel={`Processing rate over the last minute, latest ${formatRate(processed)}`}
+            />
+            <span style={{ fontSize: "10px", color: colors.textMuted }}>last 60s</span>
+          </div>
+        )}
+      </div>
+
+      {/* Verdict — the reason this panel exists. */}
+      <div
+        title={meta.hint}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "8px 10px",
+          borderRadius: "8px",
+          background: `color-mix(in srgb, ${meta.color} 10%, transparent)`,
+          border: `1px solid color-mix(in srgb, ${meta.color} 30%, transparent)`,
+        }}
+      >
+        {live && verdict !== "idle" && <PulsingDot color={meta.color} />}
+        <span style={{ fontSize: "12px", fontWeight: 700, color: meta.color }}>{meta.label}</span>
+        <span style={{ fontSize: "11px", color: colors.textMuted }}>{meta.hint}</span>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px" }}>
+        <span style={{ color: colors.textMuted }}>Arriving</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600, color: colors.text }}>
+          {formatRate(input)}
+        </span>
+      </div>
+
+      {efficiency !== undefined && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: "12px", paddingTop: "4px", borderTop: `1px solid ${colors.border}` }}>
+          <span style={{ color: colors.textMuted }}>Processed vs arriving</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 700, color: meta.color }}>
+            {efficiency.toFixed(0)}%
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
 
 export const NodeCard = memo(function NodeCard({
   name,

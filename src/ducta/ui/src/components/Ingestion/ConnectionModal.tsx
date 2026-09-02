@@ -3,7 +3,7 @@ import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
 import "../ui/Input.css"; // .input-field, reused on the bare <input>/<select> below
-import { colors } from "../../theme/tokens";
+import { colors, styles } from "../../theme/tokens";
 import { toastStore } from "../../hooks/useModalStack";
 import {
   useCreateConnection,
@@ -129,10 +129,13 @@ export function ConnectionModal({
           fontWeight: 600,
         }}
       >
-        <div
+        <button
+          type="button"
           onClick={() => setStep(1)}
+          aria-current={step === 1 ? "step" : undefined}
           style={{
-            cursor: "pointer",
+            ...styles.resetButton,
+            width: "auto",
             display: "flex",
             alignItems: "center",
             gap: 6,
@@ -154,12 +157,15 @@ export function ConnectionModal({
             1
           </span>
           1. Connection & Credentials
-        </div>
+        </button>
         <span style={{ color: "var(--border)" }}>→</span>
-        <div
+        <button
+          type="button"
           onClick={() => setStep(2)}
+          aria-current={step === 2 ? "step" : undefined}
           style={{
-            cursor: "pointer",
+            ...styles.resetButton,
+            width: "auto",
             display: "flex",
             alignItems: "center",
             gap: 6,
@@ -181,7 +187,7 @@ export function ConnectionModal({
             2
           </span>
           2. Test & Save
-        </div>
+        </button>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <Field label="Name" required error={attemptedSave && !form.name ? "Required" : undefined}>

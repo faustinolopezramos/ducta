@@ -34,7 +34,11 @@ export function WebTerminal({ output, status, onSendInput, onClear }: WebTermina
   };
 
   return (
+    // Clicking anywhere in the terminal chrome just hands focus to the input
+    // below, which owns the keystrokes — there is no separate action to bind a
+    // key to, so this is a focus shim rather than a control.
     <div
+      role="presentation"
       style={{
         display: "flex",
         flexDirection: "column",
@@ -80,6 +84,7 @@ export function WebTerminal({ output, status, onSendInput, onClear }: WebTermina
             value={currentLine}
             onChange={(e) => setCurrentLine(e.target.value)}
             onKeyDown={handleKeyDown}
+            // eslint-disable-next-line jsx-a11y/no-autofocus -- a terminal that does not take the caret is unusable.
             autoFocus
             style={{
               flex: 1,

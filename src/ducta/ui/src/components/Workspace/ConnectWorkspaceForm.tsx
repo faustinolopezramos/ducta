@@ -74,6 +74,7 @@ export function ConnectWorkspaceForm() {
                 disabled={selectSource.isPending}
                 aria-invalid={selectSource.isError || undefined}
                 aria-describedby={selectSource.isError ? "workspace-setup-error" : undefined}
+                // eslint-disable-next-line jsx-a11y/no-autofocus -- sole field of the first-run setup form.
                 autoFocus
                 required
               />

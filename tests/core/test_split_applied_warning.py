@@ -30,7 +30,10 @@ def _make_command(function, split_config):
 
 class TestMLNodeCommandSplitWasApplied:
     def test_false_before_execute(self):
-        cmd = _make_command(lambda df, start_date=None, end_date=None, ml_context=None: df, {"method": "random", "test_size": 0.2})
+        cmd = _make_command(
+            lambda df, start_date=None, end_date=None, ml_context=None: df,
+            {"method": "random", "test_size": 0.2},
+        )
         assert cmd.split_was_applied() is False
 
     def test_true_when_node_calls_split_dataframe(self):
@@ -43,7 +46,10 @@ class TestMLNodeCommandSplitWasApplied:
         assert cmd.split_was_applied() is True
 
     def test_false_when_node_ignores_the_split(self):
-        cmd = _make_command(lambda df, start_date=None, end_date=None, ml_context=None: df, {"method": "random", "test_size": 0.2})
+        cmd = _make_command(
+            lambda df, start_date=None, end_date=None, ml_context=None: df,
+            {"method": "random", "test_size": 0.2},
+        )
         cmd.execute()
         assert cmd.split_was_applied() is False
 
@@ -51,7 +57,9 @@ class TestMLNodeCommandSplitWasApplied:
         # A node without a declared split never needs to apply one — callers
         # (NodeExecutor._warn_if_split_not_applied) must check `command.split`
         # separately rather than trusting this alone.
-        cmd = _make_command(lambda df, start_date=None, end_date=None, ml_context=None: df, split_config=None)
+        cmd = _make_command(
+            lambda df, start_date=None, end_date=None, ml_context=None: df, split_config=None
+        )
         cmd.execute()
         assert cmd.split_was_applied() is False
 

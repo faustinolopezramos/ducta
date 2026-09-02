@@ -99,7 +99,10 @@ export function SlidePanel({
 
   return (
     <>
+      {/* Scrim: click-to-dismiss is a convenience next to Escape (bound by
+          `useDialogA11y`) and the panel's own close control. */}
       <div
+        role="presentation"
         onClick={onClose}
         style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 199 }}
       />

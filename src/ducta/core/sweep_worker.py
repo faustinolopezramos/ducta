@@ -30,8 +30,7 @@ SHARED_PREFIX_DIRNAME = "_shared"
 
 
 def trial_output_path(base_output_path: str, search_id: str, trial_index: int) -> str:
-    """Private output directory for one trial.
-    """
+    """Private output directory for one trial."""
     return str(Path(base_output_path) / TRIALS_DIRNAME / search_id / f"trial_{trial_index}")
 
 
@@ -42,8 +41,7 @@ def shared_prefix_path(base_output_path: str, search_id: str) -> str:
 
 
 def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute one trial in this (worker) process and return a plain summary.
-    """
+    """Execute one trial in this (worker) process and return a plain summary."""
     result: Dict[str, Any] = {
         "index": payload.get("trial_index"),
         "params": payload.get("params") or {},
@@ -112,9 +110,7 @@ def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
             result["gate_blocked"] = sorted((getattr(run, "gate_blocked", None) or {}).keys())
             if result["gate_blocked"]:
                 result["failed"] = True
-                result["reason"] = (
-                    f"blocked by quality gate: {', '.join(result['gate_blocked'])}"
-                )
+                result["reason"] = f"blocked by quality gate: {', '.join(result['gate_blocked'])}"
 
     except Exception as e:  # noqa: BLE001 — a worker must always answer
         result["failed"] = True
@@ -143,8 +139,7 @@ def build_payloads(
     model_version: Optional[str] = None,
     read_fallback_paths: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """Build one picklable payload per trial.
-    """
+    """Build one picklable payload per trial."""
     payloads = []
     for trial in trials:
         index = trial["index"]

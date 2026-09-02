@@ -52,8 +52,7 @@ def _ctx_get(ml_context: Any, key: str, default: Any = None) -> Any:
 
 
 def infer_schema(data: Any) -> Optional[Dict[str, str]]:
-    """Infer a ``{column: dtype}`` contract from a pandas DataFrame/Series.
-    """
+    """Infer a ``{column: dtype}`` contract from a pandas DataFrame/Series."""
     if data is None:
         return None
     try:
@@ -86,8 +85,7 @@ def persist_model(
     input_schema: Optional[Dict[str, str]] = None,
     output_schema: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``.
-    """
+    """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``."""
     mlops_context = _ctx_get(ml_context, "mlops_context")
     run_id = _ctx_get(ml_context, "mlops_run_id")
     model_version = _ctx_get(ml_context, "model_version")

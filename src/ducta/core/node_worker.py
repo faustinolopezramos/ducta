@@ -31,8 +31,7 @@ OUTCOME_FAILED = "failed"
 
 
 def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Execute one node in this (worker) process and describe what happened.
-    """
+    """Execute one node in this (worker) process and describe what happened."""
     outcome: Dict[str, Any] = {
         "node": payload.get("node_name"),
         "status": OUTCOME_FAILED,
@@ -139,8 +138,7 @@ def build_node_payload(
     config_type: Optional[str] = None,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Build the picklable payload for one node run.
-    """
+    """Build the picklable payload for one node run."""
     safe_ml_info = {
         key: value
         for key, value in (ml_info or {}).items()

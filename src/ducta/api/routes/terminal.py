@@ -24,6 +24,7 @@ import asyncio
 import json
 import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -145,6 +146,14 @@ async def terminal_ws(websocket: WebSocket) -> None:
     loop = asyncio.get_running_loop()
     stop = asyncio.Event()
 
+    # A dedicated single-thread executor, not the loop's default one. The read
+    # below blocks until the shell produces output — which for an idle terminal
+    # is indefinitely — and `run_in_executor(None, ...)` would park that thread
+    # in the interpreter-wide default pool that FastAPI also uses to run every
+    # `def` (non-async) endpoint. A handful of idle terminals would then starve
+    # unrelated request handling. One thread per session, released on cleanup.
+    pty_reader = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"pty-{pid}")
+
     def _set_winsize(cols: int, rows: int) -> None:
         try:
             winsize = struct.pack("HHHH", rows, cols, 0, 0)
@@ -156,7 +165,7 @@ async def terminal_ws(websocket: WebSocket) -> None:
         """Forward PTY output to the client."""
         try:
             while not stop.is_set():
-                data = await loop.run_in_executor(None, _safe_read, master_fd)
+                data = await loop.run_in_executor(pty_reader, _safe_read, master_fd)
                 if not data:
                     break
                 await websocket.send_text(
@@ -196,8 +205,21 @@ async def terminal_ws(websocket: WebSocket) -> None:
         # Kill the child first: closing the PTY slave makes the blocking os.read on
         # master_fd return EOF, so the reader thread unblocks before we close the fd
         # (avoids closing master_fd while a background read is still in flight).
+        #
+        # Signal the whole process *group*, not just the shell. `pty.fork()` makes
+        # the child a session leader, so anything it started — a build, a `tail -f`,
+        # a background job — is in that group and outlives a bare `kill(pid)`,
+        # orphaned and still holding the host's CPU and file descriptors after the
+        # browser tab is long gone.
         try:
-            os.kill(pid, 9)
+            os.killpg(os.getpgid(pid), 9)
+        except (OSError, ProcessLookupError):
+            # No process group (or it is already gone) — fall back to the shell.
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+        try:
             os.waitpid(pid, 0)
         except (OSError, ChildProcessError):
             pass
@@ -210,6 +232,10 @@ async def terminal_ws(websocket: WebSocket) -> None:
             os.close(master_fd)
         except OSError:
             pass
+        # After the fd is closed the pending read has returned, so the worker is
+        # idle and this does not block. wait=False keeps a wedged read from
+        # holding the event loop even so.
+        pty_reader.shutdown(wait=False)
         try:
             await websocket.send_text(json.dumps({"type": "exit"}))
             await websocket.close()

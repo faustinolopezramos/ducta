@@ -169,7 +169,13 @@ Lineage & Reproducibility
 
 Ducta MLOps captures essential metadata automatically to ensure reproducibility:
 
-- **Data Fingerprinting:** Generates unique hashes for input/output datasets. Configure depth via ``fingerprint_mode`` (``fast`` or ``full``).
+- **Data Fingerprinting:** Generates content digests for input/output datasets.
+  ``fingerprint_mode`` selects how much is covered: ``exact`` (default —
+  order-independent digest over every row), ``sample`` (schema plus the first
+  ``fingerprint_sample_rows`` rows) or ``schema`` (schema and row count only).
+  Each fingerprint records the engine and algorithm that produced it, so
+  fingerprints measured differently are reported as *not comparable* rather
+  than as changed data.
 - **Environment Snapshot:** Records Python version, OS, installed packages, and Git commit hash for every run.
 - **Config Snapshots:** A full copy of the active configuration is attached as a JSON artifact to the run.
 

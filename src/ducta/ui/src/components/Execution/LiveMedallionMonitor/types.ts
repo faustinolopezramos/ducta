@@ -13,8 +13,25 @@ export interface PerformanceMetrics {
   total_input_rate?: number;
   total_processing_rate?: number;
   processing_efficiency?: number;
-  health_score?: number;
 }
+
+/** One poll's throughput reading, kept in a rolling window for the sparkline. */
+export interface RateSample {
+  /** Epoch ms of the poll that produced this sample. */
+  t: number;
+  input: number;
+  processed: number;
+}
+
+/**
+ * Whether processing is keeping up with arrival — the question a streaming
+ * monitor exists to answer.
+ *
+ * `idle` is deliberately its own verdict rather than 0%: nothing arriving and
+ * nothing processed is a healthy resting stream, and reporting it as a zero
+ * efficiency made a quiet pipeline look broken.
+ */
+export type ThroughputVerdict = "idle" | "keeping-up" | "slipping" | "behind";
 
 export type MonitorState = "waiting" | "loading" | "running" | "error" | "stopped";
 

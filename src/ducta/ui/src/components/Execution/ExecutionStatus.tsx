@@ -12,21 +12,19 @@ import { StatusBadge } from "../ui";
 
 /** Returns elapsed seconds since `startedAt` (live-counting). Only ticks when started. */
 function useElapsed(startedAt: string | null | undefined) {
-  const [elapsed, setElapsed] = useState(0);
+  const origin = startedAt ? new Date(startedAt).getTime() : null;
+  // The clock is state; the elapsed count is derived from it. Storing the
+  // count instead meant the effect had to seed it with a synchronous setState
+  // on mount and reset it to 0 on every change of `startedAt`.
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!startedAt) {
-      setElapsed(0);
-      return;
-    }
-    const origin = new Date(startedAt).getTime();
-    const tick = () => setElapsed(Math.max(0, Math.floor((Date.now() - origin) / 1000)));
-    tick();
-    const id = setInterval(tick, 1000);
+    if (origin === null) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [startedAt]);
+  }, [origin]);
 
-  return elapsed;
+  return origin === null ? 0 : Math.max(0, Math.floor((now - origin) / 1000));
 }
 
 function fmtDuration(totalSeconds: number) {

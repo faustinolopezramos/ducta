@@ -186,6 +186,24 @@ class InputLoader(BaseIO):
             if not previous_hash or previous_hash == data_fingerprint.fingerprint:
                 return
 
+            # An algorithm change is not a data change. Upgrading Ducta (or
+            # switching fingerprint_mode) alters every fingerprint's value, so
+            # without this guard the first run after an upgrade would report
+            # every input as drifted — and with policy=fail, abort the pipeline
+            # over it. Skip the comparison and say why.
+            from ducta.mlrun.fingerprint import comparable
+
+            can_compare, why = comparable(previous, data_fingerprint.to_dict())
+            if not can_compare:
+                logger.info(
+                    "Skipping fingerprint_policy for '{}': the recorded fingerprint is "
+                    "not comparable to this run's ({}). This run's fingerprint becomes "
+                    "the new baseline.",
+                    input_key,
+                    why,
+                )
+                return
+
             message = (
                 f"Input '{input_key}' changed since the previous successful run: "
                 f"fingerprint {previous_hash[:12]}… → {data_fingerprint.fingerprint[:12]}… "
@@ -256,8 +274,7 @@ class InputLoader(BaseIO):
         return path_obj.as_posix()
 
     def _try_read_fallback(self, path_obj: Path) -> Optional[str]:
-        """Resolve a missing local input from a shared read-fallback prefix, if configured.
-        """
+        """Resolve a missing local input from a shared read-fallback prefix, if configured."""
         fallback_paths = self._ctx_get("_read_fallback_paths", None) or []
         own_output_path = self._ctx_get("output_path", None)
         if not fallback_paths or not own_output_path:
@@ -266,7 +283,6 @@ class InputLoader(BaseIO):
         try:
             relative = path_obj.resolve().relative_to(Path(own_output_path).resolve())
         except ValueError:
-
             return None
 
         for fallback_root in fallback_paths:

@@ -142,8 +142,7 @@ class BaseExecutor:
             return _plain()
 
     def _should_enable_mlflow(self) -> bool:
-        """Whether MLflow tracking should be wired in for this run.
-        """
+        """Whether MLflow tracking should be wired in for this run."""
         if not MLFLOW_INTEGRATION_AVAILABLE:
             return False
         return self.settings.mlflow_enabled
@@ -292,8 +291,7 @@ class BaseExecutor:
         return self.settings.random_seed
 
     def _apply_global_seed(self) -> None:
-        """Seed the process-wide RNGs for reproducibility. Best-effort.
-        """
+        """Seed the process-wide RNGs for reproducibility. Best-effort."""
         seed = self._resolve_global_seed()
         if seed is None:
             return
@@ -490,8 +488,7 @@ class BaseExecutor:
         mlops_integration: Optional[MLOpsExecutorIntegration],
         mlops_run_id: Optional[str],
     ) -> None:
-        """Close MLOps run with given status.
-        """
+        """Close MLOps run with given status."""
         if not mlops_integration or not mlops_run_id:
             return
 
@@ -551,8 +548,7 @@ class BaseExecutor:
         return ml_info
 
     def _resolve_cv_folds(self, pipeline_name: str, ml_info: Dict[str, Any]) -> Optional[int]:
-        """Resolve the cross-validation fold count for this pipeline.
-        """
+        """Resolve the cross-validation fold count for this pipeline."""
         try:
             pipelines_config = getattr(self.context, "pipelines_config", {}) or {}
             pipeline_cfg = pipelines_config.get(pipeline_name, {}) or {}

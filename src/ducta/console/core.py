@@ -90,8 +90,7 @@ class ExitCode(Enum):
 
 
 class DuctaError(EngineError):
-    """Base exception for errors raised by the console itself.
-    """
+    """Base exception for errors raised by the console itself."""
 
     def __init__(self, message: str, exit_code: ExitCode = ExitCode.GENERAL_ERROR):
         super().__init__(message)
@@ -166,6 +165,7 @@ class CLIConfig:
     reuse_upstream: bool = False
     rerun_all: bool = False
 
+
 VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -193,7 +193,6 @@ class SecurityValidator:
 
     @staticmethod
     def _is_permissive() -> bool:
-
         val = os.getenv("Ducta_PERMISSIVE_PATH_VALIDATION") or os.getenv(
             "DUCTA_PERMISSIVE_PATH_VALIDATION", "0"
         )
@@ -237,8 +236,7 @@ class SecurityValidator:
 
     @staticmethod
     def _check_hidden_parts(resolved_base: Path, resolved_target: Path) -> None:
-        """Reject paths whose *target-relative-to-base* components are hidden.
-        """
+        """Reject paths whose *target-relative-to-base* components are hidden."""
         relative_parts = resolved_target.relative_to(resolved_base).parts
         for part in relative_parts:
             if part.startswith(".") and part not in (".", ".."):

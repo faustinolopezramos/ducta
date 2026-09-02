@@ -78,6 +78,34 @@ class MLOpsExecutorIntegration:
             and self.mlops_context.model_registry is not None
         )
 
+    # Every public method here opens with `if not self.is_available(): return`,
+    # after which the tracker and registry are known to exist. A type checker
+    # cannot see through that method call, so each of the ~17 uses below read as
+    # a possible `AttributeError` on None — noise dense enough to hide a genuine
+    # one. These two accessors state the post-guard invariant in a single place.
+
+    @property
+    def _tracker(self) -> Any:
+        """The experiment tracker, for use past an :meth:`is_available` guard."""
+        ctx = self.mlops_context
+        if ctx is None or ctx.experiment_tracker is None:
+            raise RuntimeError(
+                "MLOps experiment tracker accessed while unavailable — callers "
+                "must check is_available() first."
+            )
+        return ctx.experiment_tracker
+
+    @property
+    def _registry(self) -> Any:
+        """The model registry, for use past an :meth:`is_available` guard."""
+        ctx = self.mlops_context
+        if ctx is None or ctx.model_registry is None:
+            raise RuntimeError(
+                "MLOps model registry accessed while unavailable — callers "
+                "must check is_available() first."
+            )
+        return ctx.model_registry
+
     def create_pipeline_experiment(
         self,
         pipeline_name: str,
@@ -101,7 +129,7 @@ class MLOpsExecutorIntegration:
                 }
             )
 
-            exp = self.mlops_context.experiment_tracker.create_experiment(
+            exp = self._tracker.create_experiment(
                 name=pipeline_name,
                 description=description,
                 tags=processed_tags,
@@ -146,7 +174,7 @@ class MLOpsExecutorIntegration:
                 tags["ducta_version"] = env_snapshot.ducta_version
                 tags["env_hash"] = env_snapshot.env_hash or "unknown"
 
-            run = self.mlops_context.experiment_tracker.start_run(
+            run = self._tracker.start_run(
                 experiment_id=experiment_id,
                 name=f"{pipeline_name}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
                 parameters=hyperparams or {},
@@ -161,7 +189,7 @@ class MLOpsExecutorIntegration:
                 try:
                     import json
 
-                    self.mlops_context.experiment_tracker.log_parameter(
+                    self._tracker.log_parameter(
                         run.run_id,
                         "_environment_snapshot",
                         json.dumps(env_snapshot.to_dict(), default=str),
@@ -183,9 +211,7 @@ class MLOpsExecutorIntegration:
                     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
                         json.dump(config_snapshot, f, default=str, indent=2)
                         tmp_path = f.name
-                    self.mlops_context.experiment_tracker.log_artifact(
-                        run.run_id, tmp_path, destination="config_snapshot"
-                    )
+                    self._tracker.log_artifact(run.run_id, tmp_path, destination="config_snapshot")
                     os.unlink(tmp_path)
                 except Exception as e:
                     logger.debug(f"Config snapshot skipped: {e}")
@@ -217,7 +243,7 @@ class MLOpsExecutorIntegration:
 
             import json
 
-            runs = self.mlops_context.experiment_tracker.list_runs(
+            runs = self._tracker.list_runs(
                 experiment_id,
                 status_filter=RunStatus.COMPLETED,
                 tag_filter={"pipeline_name": pipeline_name},
@@ -281,13 +307,13 @@ class MLOpsExecutorIntegration:
             except Exception as e:
                 logger.debug(f"Could not load logging strategy: {e}")
 
-            self.mlops_context.experiment_tracker.log_parameter(
+            self._tracker.log_parameter(
                 run_id,
                 f"node_{node_name}_status",
                 status,
             )
 
-            self.mlops_context.experiment_tracker.log_metric(
+            self._tracker.log_metric(
                 run_id,
                 f"node_{node_name}_duration_seconds",
                 duration_seconds,
@@ -297,7 +323,7 @@ class MLOpsExecutorIntegration:
             if metrics and log_strategy.get("log_metrics", True):
                 for metric_name, value in metrics.items():
                     if isinstance(value, (int, float)):
-                        self.mlops_context.experiment_tracker.log_metric(
+                        self._tracker.log_metric(
                             run_id,
                             f"node_{node_name}_{metric_name}",
                             float(value),
@@ -305,7 +331,7 @@ class MLOpsExecutorIntegration:
                         )
 
             if error:
-                self.mlops_context.experiment_tracker.log_parameter(
+                self._tracker.log_parameter(
                     run_id,
                     f"node_{node_name}_error",
                     error,
@@ -330,7 +356,7 @@ class MLOpsExecutorIntegration:
         try:
             for metric_name, value in metrics.items():
                 if isinstance(value, (int, float)):
-                    self.mlops_context.experiment_tracker.log_metric(
+                    self._tracker.log_metric(
                         run_id,
                         metric_name,
                         float(value),
@@ -355,7 +381,7 @@ class MLOpsExecutorIntegration:
             return None
 
         try:
-            artifact_uri = self.mlops_context.experiment_tracker.log_artifact(
+            artifact_uri = self._tracker.log_artifact(
                 run_id,
                 artifact_path,
                 destination=f"artifacts/{artifact_type}",
@@ -389,7 +415,7 @@ class MLOpsExecutorIntegration:
             if summary:
                 for key, value in summary.items():
                     if isinstance(value, (int, float)):
-                        self.mlops_context.experiment_tracker.log_metric(
+                        self._tracker.log_metric(
                             run_id,
                             f"summary_{key}",
                             float(value),
@@ -407,15 +433,15 @@ class MLOpsExecutorIntegration:
                 out_fps = ledger.output_fingerprints
 
                 if in_fps:
-                    self.mlops_context.experiment_tracker.log_parameter(
+                    self._tracker.log_parameter(
                         run_id, "_input_fingerprints", json.dumps(in_fps, default=str)
                     )
                 if out_fps:
-                    self.mlops_context.experiment_tracker.log_parameter(
+                    self._tracker.log_parameter(
                         run_id, "_output_fingerprints", json.dumps(out_fps, default=str)
                     )
 
-            tracker = self.mlops_context.experiment_tracker
+            tracker = self._tracker
             try:
                 for metric_name in list(tracker.get_run(run_id).metrics.keys()):
                     latest = tracker.get_latest_metric(run_id, metric_name)
@@ -477,7 +503,7 @@ class MLOpsExecutorIntegration:
                 if exec_mode:
                     enriched_tags["execution_mode"] = str(exec_mode)
 
-            model_version = self.mlops_context.model_registry.register_model(
+            model_version = self._registry.register_model(
                 name=model_name,
                 artifact_path=artifact_path,
                 artifact_type=artifact_type,
@@ -512,7 +538,7 @@ class MLOpsExecutorIntegration:
             return None
 
         try:
-            run_ids = self.mlops_context.experiment_tracker.search_runs(
+            run_ids = self._tracker.search_runs(
                 experiment_id,
                 metric_filter=metric_filter,
             )
@@ -520,7 +546,7 @@ class MLOpsExecutorIntegration:
             if not run_ids:
                 return None
 
-            comparison_df = self.mlops_context.experiment_tracker.compare_runs(run_ids)
+            comparison_df = self._tracker.compare_runs(run_ids)
 
             logger.info(f"Generated comparison DataFrame for {len(run_ids)} runs")
             return comparison_df

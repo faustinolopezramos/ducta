@@ -13,36 +13,56 @@ function getRuntimeMode() {
  * Hook to manage source selection and storage.
  * Stores the selected source in localStorage for persistence.
  */
+/**
+ * What the client can determine about the source without asking the server:
+ * an explicit `?source=`, a previously stored one, or the sandbox default.
+ *
+ * Pure — reads only. `resolved: false` means the caller must fall back to the
+ * server's auto-detect endpoint.
+ */
+function resolveKnownSource(): {
+  source: string | null;
+  resolved: boolean;
+  persist: boolean;
+  remember: boolean;
+} {
+  const params = new URLSearchParams(globalThis.location.search);
+  const fromUrl = normalizeSourceInput(params.get('source'));
+  if (fromUrl) return { source: fromUrl, resolved: true, persist: true, remember: true };
+
+  const stored = normalizeSourceInput(StorageService.getSource());
+  if (stored) return { source: stored, resolved: true, persist: false, remember: false };
+
+  if (getRuntimeMode() === 'sandbox') {
+    // Sandbox/local demo mode only.
+    return { source: SANDBOX_DEFAULT_SOURCE, resolved: true, persist: true, remember: false };
+  }
+
+  return { source: null, resolved: false, persist: false, remember: false };
+}
+
 export const useSourceSelection = () => {
-  const [selectedSource, setSelectedSource] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  // The URL param, storage and runtime mode are all synchronous reads, so the
+  // source they imply is known before the first paint. Resolving it in a lazy
+  // initialiser instead of an effect removes a render spent in a `isLoading`
+  // state that was never actually pending, and keeps the three setState calls
+  // out of the effect body.
+  const [initial] = useState(resolveKnownSource);
+  const [selectedSource, setSelectedSource] = useState<string | null>(initial.source);
+  const [isLoading, setIsLoading] = useState<boolean>(!initial.resolved);
 
   useEffect(() => {
-    const runtimeMode = getRuntimeMode();
-    const isSandboxRuntime = runtimeMode === 'sandbox';
-    const stored = StorageService.getSource();
+    // Persisting what we resolved is a write, so it belongs here rather than in
+    // the initialiser above.
+    if (initial.resolved) {
+      if (initial.persist && initial.source) {
+        StorageService.setSource(initial.source);
+        if (initial.remember) StorageService.addRecentSource(initial.source);
+      }
+      return;
+    }
 
-    // Check URL params
-    const params = new URLSearchParams(globalThis.location.search);
-    const pathParam = params.get('source');
-
-    const normalizedParam = normalizeSourceInput(pathParam);
-    const normalizedStored = normalizeSourceInput(stored);
-
-    if (normalizedParam) {
-      setSelectedSource(normalizedParam);
-      StorageService.setSource(normalizedParam);
-      StorageService.addRecentSource(normalizedParam);
-      setIsLoading(false);
-    } else if (normalizedStored) {
-      setSelectedSource(normalizedStored);
-      setIsLoading(false);
-    } else if (isSandboxRuntime) {
-      // Sandbox/local demo mode only.
-      setSelectedSource(SANDBOX_DEFAULT_SOURCE);
-      StorageService.setSource(SANDBOX_DEFAULT_SOURCE);
-      setIsLoading(false);
-    } else {
+    {
       // Ask the server whether it was launched with `ducta ui` from a project directory.
       // The server sets DUCTA_WORKSPACE when auto-detecting or receiving --source.
       fetch('/api/workspace/auto-detect')
@@ -64,7 +84,7 @@ export const useSourceSelection = () => {
           setIsLoading(false);
         });
     }
-  }, []);
+  }, [initial]);
 
   const updateSource = (newSource: string | null) => {
     const normalizedSource = normalizeSourceInput(newSource);

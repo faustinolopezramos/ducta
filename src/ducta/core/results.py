@@ -26,8 +26,7 @@ from typing import Any, Dict, List, Optional
 
 
 class RunStatus(str, Enum):
-    """Terminal state of a pipeline run.
-    """
+    """Terminal state of a pipeline run."""
 
     SUCCESS = "success"
     FAILED = "failed"
@@ -85,8 +84,7 @@ class NodeOutcome:
 
 @dataclass
 class PipelineRunResult:
-    """Everything one ``run_pipeline`` call produced.
-    """
+    """Everything one ``run_pipeline`` call produced."""
 
     pipeline: str
     status: RunStatus = RunStatus.SUCCESS
@@ -101,11 +99,9 @@ class PipelineRunResult:
     mlops_run_id: Optional[str] = None
     metrics: Dict[str, float] = field(default_factory=dict)
 
-
     @property
     def ok(self) -> bool:
-        """True only for a run that completed all of its work.
-        """
+        """True only for a run that completed all of its work."""
         return self.status is RunStatus.SUCCESS
 
     @property
@@ -128,7 +124,6 @@ class PipelineRunResult:
             if node.error:
                 return f"node '{node.name}': {node.error}"
         return None
-
 
     def add_error(self, message: str) -> "PipelineRunResult":
         """Record an error and mark the run failed."""
@@ -158,7 +153,6 @@ class PipelineRunResult:
         elif self.skipped and not self.nodes:
             self.status = RunStatus.SKIPPED
         return self
-
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-ready view, for the API and for structured logging."""

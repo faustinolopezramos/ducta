@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   IconCalendarEvent,
   IconClock,
@@ -19,21 +19,23 @@ export function SchedulesPage() {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [scheduleToDelete, setScheduleToDelete] = useState<string | null>(null);
-  const [projectId, setProjectId] = useState("");
+  // The user's explicit pick; empty until they choose one. The project actually
+  // in force is `projectId` or, before any pick, the first one that loaded —
+  // derived below rather than written back into state from an effect, which
+  // cost a second render pass on every load.
+  const [pickedProjectId, setPickedProjectId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
   const [cron, setCron] = useState("0 0 * * *");
   const [env, setEnv] = useState("base");
 
   const { data: projectsData } = useServerProjects();
   const projects = projectsData?.projects ?? [];
+  const projectId = pickedProjectId || projects[0]?.id || "";
   const { data: pipelinesData } = useServerProjectPipelines(projectId);
   const { data: environmentsData } = useEnvironments();
   const availablePipelines = Object.keys(pipelinesData?.pipelines ?? {});
   const environments = environmentsData?.environments?.length ? environmentsData.environments : ["base"];
 
-  useEffect(() => {
-    if (!projectId && projects[0]) setProjectId(projects[0].id);
-  }, [projectId, projects]);
 
   const handleCreate = () => {
     if (!projectId || !pipelineName || !cron) return;
@@ -47,7 +49,7 @@ export function SchedulesPage() {
       {
         onSuccess: () => {
           setShowCreateModal(false);
-          setProjectId("");
+          setPickedProjectId("");
           setPipelineName("");
         },
       }
@@ -155,7 +157,7 @@ export function SchedulesPage() {
         <Modal title="Create pipeline schedule" onClose={() => setShowCreateModal(false)} width={460}>
           <div className="projects-modal__form">
             <label className="projects-modal__label" htmlFor="schedule-project">Project</label>
-            <select id="schedule-project" className="projects-modal__select" value={projectId} onChange={(e) => { setProjectId(e.target.value); setPipelineName(""); }}>
+            <select id="schedule-project" className="projects-modal__select" value={projectId} onChange={(e) => { setPickedProjectId(e.target.value); setPipelineName(""); }}>
               <option value="">Select a project</option>
               {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
             </select>

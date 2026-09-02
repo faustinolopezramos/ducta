@@ -276,9 +276,7 @@ class TestRunTrialsParallelSharedPrefix:
         def _pool_should_not_be_used(*a, **k):
             raise AssertionError("ProcessPoolExecutor must not be constructed for one trial")
 
-        monkeypatch.setattr(
-            "concurrent.futures.ProcessPoolExecutor", _pool_should_not_be_used
-        )
+        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _pool_should_not_be_used)
 
         trials = [{"index": 1, "params": {"depth": 3}, "hyperparams": {"depth": 3}}]
         outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)
@@ -355,9 +353,7 @@ class TestRunTrialsParallelSharedPrefix:
                 return _FakeFuture(fn(payload))
 
         monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _FakePool)
-        monkeypatch.setattr(
-            "concurrent.futures.as_completed", lambda futures: list(futures.keys())
-        )
+        monkeypatch.setattr("concurrent.futures.as_completed", lambda futures: list(futures.keys()))
 
         trials = [{"index": i, "params": {}, "hyperparams": {}} for i in range(1, 4)]
         outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)

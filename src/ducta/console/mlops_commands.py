@@ -63,8 +63,7 @@ def _resolve_storage_path(
     env: Optional[str] = None,
     pipeline_name: Optional[str] = None,
 ) -> str:
-    """Resolve storage path.
-    """
+    """Resolve storage path."""
     if provided_path:
         return provided_path
 
@@ -72,9 +71,7 @@ def _resolve_storage_path(
     if context is not None:
         from ducta.mlrun.config import StorageBackendFactory
 
-        resolved = StorageBackendFactory._resolve_mlops_path(
-            context, pipeline_name=pipeline_name
-        )
+        resolved = StorageBackendFactory._resolve_mlops_path(context, pipeline_name=pipeline_name)
         if resolved:
             return resolved
 
@@ -156,8 +153,7 @@ def model_promote(
     env: Optional[str] = None,
     pipeline_name: Optional[str] = None,
 ) -> int:
-    """Promote a model version to a new stage.
-    """
+    """Promote a model version to a new stage."""
     resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
     try:
         target_stage = ModelStage(stage.capitalize())
@@ -203,8 +199,7 @@ def model_gc(
     env: Optional[str] = None,
     pipeline_name: Optional[str] = None,
 ) -> int:
-    """Garbage collect old models.
-    """
+    """Garbage collect old models."""
     resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
     try:
         from ducta.mlrun.config import MLOpsConfig

@@ -90,7 +90,9 @@ class TestGroup:
         reference_fractions = d["grp"].map(lambda v: _stable_fraction(v, seed))
         reference_fold_ids = (reference_fractions * 4).astype(int).clip(upper=3)
 
-        folds = kfold_splits(d, {"method": "group", "group_col": "grp"}, n_splits=4, default_seed=seed)
+        folds = kfold_splits(
+            d, {"method": "group", "group_col": "grp"}, n_splits=4, default_seed=seed
+        )
 
         for fold_index, (train_part, val_part) in enumerate(folds):
             expected_val_mask = reference_fold_ids == fold_index
@@ -205,7 +207,11 @@ class TestCrossValidate:
         cross_validate(
             self._fit,
             self._score,
-            ml_context={"split": {"method": "temporal", "time_col": "ts"}, "cv_folds": 7, "node_seed": 99},
+            ml_context={
+                "split": {"method": "temporal", "time_col": "ts"},
+                "cv_folds": 7,
+                "node_seed": 99,
+            },
             df=df,
         )
 

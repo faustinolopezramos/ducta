@@ -63,8 +63,7 @@ class ModelStage(str, Enum):
 
 @dataclass
 class PromotionPolicy:
-    """Metric gate a model must pass to be promoted to Production.
-    """
+    """Metric gate a model must pass to be promoted to Production."""
 
     metric: str
     min_delta: float = 0.0
@@ -646,8 +645,7 @@ class ModelRegistry:
     def _demote_other_production_versions(
         self, name: str, keep_version: int, user: Optional[str] = None
     ) -> List[int]:
-        """Archive every other Production-staged version of ``name``.
-        """
+        """Archive every other Production-staged version of ``name``."""
         models_df = self._load_models_index()
         if models_df.empty or "stage" not in models_df.columns:
             return []
@@ -698,13 +696,10 @@ class ModelRegistry:
         current: "ModelVersion",
         policy: PromotionPolicy,
     ) -> None:
-        """Compare the candidate's feature contract against the incumbent's.
-
-        """
+        """Compare the candidate's feature contract against the incumbent's."""
         from ducta.mlrun.exceptions import PromotionGateError
 
         if not candidate.metadata.input_schema and not current.metadata.input_schema:
-
             return
 
         warnings = candidate.metadata.validate_consistency(current.metadata)
@@ -850,8 +845,7 @@ class ModelRegistry:
         logger.info(f"Downloaded {name} v{model_version.version} to {local_destination}")
 
     def delete_model_version(self, name: str, version: int, force: bool = False) -> None:
-        """Delete specific model version and remove it from the index.
-        """
+        """Delete specific model version and remove it from the index."""
         with self._registry_lock():
             model_version = self.get_model_version(name, version)
 

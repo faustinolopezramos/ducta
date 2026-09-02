@@ -24,6 +24,9 @@ const ANSI_COLORS: Record<string, string> = {
 export function AnsiText({ text }: { text: string }) {
   if (!text.includes("\u001b[")) return <>{text}</>;
 
+  // ANSI SGR sequences are defined by the ESC (U+001B) control character, so
+  // matching one is the whole job here.
+  // eslint-disable-next-line no-control-regex
   const parts = text.split(/\u001b\[(\d+(?:;\d+)*)m/);
   const result: React.ReactNode[] = [];
   let currentColor: string | undefined;

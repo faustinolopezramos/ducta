@@ -143,8 +143,7 @@ class LogLevel(str, Enum):
 
 
 class ChainReuseConfig(BaseModel):
-    """Configuration for reusing already-materialized upstream pipelines.
-    """
+    """Configuration for reusing already-materialized upstream pipelines."""
 
     reuse_materialized: bool = Field(
         default=False,
@@ -227,10 +226,17 @@ class GlobalSettingsSchema(BaseModel):
         default=True, description="Enable data fingerprinting for lineage tracking"
     )
     fingerprint_mode: str = Field(
-        default="fast", description="Fingerprinting mode: 'fast' or 'full'"
+        default="exact",
+        description=(
+            "How much of a dataset the fingerprint covers: 'exact' (every row, "
+            "order-independent — what the run certificate needs to mean what it "
+            "says), 'sample' (schema + the first N rows only), or 'schema' "
+            "(schema and row count, no content). The legacy names 'fast' and "
+            "'full' still parse, mapping to 'sample' and 'exact' respectively."
+        ),
     )
     fingerprint_sample_rows: int = Field(
-        default=100, description="Rows to sample for fast fingerprinting"
+        default=100, description="Rows covered when fingerprint_mode='sample'"
     )
     fingerprint_policy: Literal["record", "warn", "fail"] = Field(
         default="record",
@@ -619,8 +625,7 @@ class NodeSchema(BaseModel):
 
 
 class SplitConfig(BaseModel):
-    """Declarative train/test split for ML pipelines.
-    """
+    """Declarative train/test split for ML pipelines."""
 
     method: Literal["random", "stratified", "temporal", "group"] = Field(
         default="random", description="Split strategy"

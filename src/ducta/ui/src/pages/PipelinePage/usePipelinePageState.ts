@@ -113,11 +113,17 @@ export function usePipelinePageState() {
 
   const rawPipelineSpec = pipelinesData?.pipelines?.[pipelineId ?? ""];
 
-  useEffect(() => {
-    if (activeExecutionId && (rawPipelineSpec?.type === "streaming" || rawPipelineSpec?.type === "hybrid")) {
-      setViewMode("streaming");
-    }
-  }, [activeExecutionId, rawPipelineSpec?.type]);
+  // A live run of a streaming/hybrid pipeline implies the streaming view; it
+  // is derived from those two facts rather than pushed into state by an effect,
+  // which fought the user's own tab clicks on every re-render.
+  const isStreamingRun =
+    Boolean(activeExecutionId) &&
+    (rawPipelineSpec?.type === "streaming" || rawPipelineSpec?.type === "hybrid");
+  const [lastStreamingRun, setLastStreamingRun] = useState(isStreamingRun);
+  if (isStreamingRun !== lastStreamingRun) {
+    setLastStreamingRun(isStreamingRun);
+    if (isStreamingRun) setViewMode("streaming");
+  }
 
   const yamlString = useMemo(() => {
     if (!rawPipelineSpec) return "";

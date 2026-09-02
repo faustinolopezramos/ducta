@@ -210,6 +210,10 @@ export function DagCanvas({
         const prev = sizes.get(id);
         return !prev || prev.w !== s.w || prev.h !== s.h;
       });
+    // Rendered dimensions cannot be known before layout, so this is the
+    // sanctioned exception: measure, then store. The `changed` guard above is
+    // what keeps it to a single extra pass.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (changed) setSizes(next);
   });
 

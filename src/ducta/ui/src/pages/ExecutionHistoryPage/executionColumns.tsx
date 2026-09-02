@@ -48,7 +48,7 @@ function ExecutionActions({
 
   return (
     // The row itself navigates; these buttons must not also trigger that.
-    <div className="exec-actions" onClick={(e) => e.stopPropagation()}>
+    <div className="exec-actions" role="presentation" onClick={(e) => e.stopPropagation()}>
       {active && (
         <button
           className="exec-action exec-action--danger"

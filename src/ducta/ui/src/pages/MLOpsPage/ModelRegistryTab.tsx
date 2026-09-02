@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { colors } from "../../theme/tokens";
+import { useRef, useState } from "react";
+import { useDialogA11y } from "../../hooks/useDialogA11y";
+import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { ActionButton } from "../../components/ui/ActionButton";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -44,8 +45,17 @@ function PromoteModal({
     promote.mutate({ name: modelName, version, stage, force }, { onSuccess: onClose });
   }
 
+  // Escape to dismiss, focus trapped in the dialog, focus restored on unmount.
+  // This dialog is hand-rolled rather than built on <Modal>, so it had none of
+  // that until now.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(dialogRef, onClose);
+
   return (
+    // Backdrop: click-outside is a convenience next to Escape (bound by
+    // `useDialogA11y`) and the Cancel control, so it needs no key handler.
     <div
+      role="presentation"
       style={{
         position: "fixed",
         inset: 0,
@@ -55,9 +65,15 @@ function PromoteModal({
         justifyContent: "center",
         zIndex: 1000,
       }}
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
         style={{
           background: colors.surface,
           border: `1px solid ${colors.border}`,
@@ -66,7 +82,6 @@ function PromoteModal({
           width: 360,
           maxWidth: "90vw",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <h3 style={{ margin: "0 0 16px", color: colors.text, fontSize: 15 }}>
           Promote {modelName} v{version}
@@ -144,6 +159,8 @@ function PromoteModal({
 }
 
 function GcModal({ onClose }: { onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(dialogRef, onClose);
   const [dryRun, setDryRun] = useState(true);
   const gc = useRunMlopsGc();
   const [result, setResult] = useState<Record<string, any> | null>(null);
@@ -161,7 +178,10 @@ function GcModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
+    // Backdrop: click-outside is a convenience next to Escape (bound by
+    // `useDialogA11y`) and the Cancel control, so it needs no key handler.
     <div
+      role="presentation"
       style={{
         position: "fixed",
         inset: 0,
@@ -171,9 +191,15 @@ function GcModal({ onClose }: { onClose: () => void }) {
         justifyContent: "center",
         zIndex: 1000,
       }}
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        tabIndex={-1}
         style={{
           background: colors.surface,
           border: `1px solid ${colors.border}`,
@@ -182,7 +208,6 @@ function GcModal({ onClose }: { onClose: () => void }) {
           width: 380,
           maxWidth: "90vw",
         }}
-        onClick={(e) => e.stopPropagation()}
       >
         <h3 style={{ margin: "0 0 8px", color: colors.text, fontSize: 15 }}>
           Model Garbage Collection
@@ -351,16 +376,19 @@ function ModelCard({ model }: { model: ModelInfo }) {
     <>
       <Panel>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-          <span
+          <button
+            type="button"
             onClick={() => setExpanded((v) => !v)}
-            style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
+            aria-expanded={expanded}
+            aria-label={expanded ? "Collapse versions" : "Expand versions"}
+            style={{ ...styles.resetButton, width: "auto", display: "flex", alignItems: "center" }}
           >
             {expanded ? (
               <IconChevronDown size={16} color={colors.textMuted} />
             ) : (
               <IconChevronRight size={16} color={colors.textMuted} />
             )}
-          </span>
+          </button>
           <span style={{ fontWeight: 600, color: colors.text, flex: 1 }}>{model.name}</span>
           <Badge color={STAGE_COLOR[model.stage ?? "Staging"] ?? "var(--text-muted)"}>
             {model.stage ?? "Staging"}

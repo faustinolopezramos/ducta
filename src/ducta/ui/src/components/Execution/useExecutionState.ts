@@ -61,18 +61,21 @@ export function useExecutionState(
 
   const { data: execution } = useExecutionStatus(activeId as any);
   const { data: execList } = useExecutionList();
-  const adoptedRef = useRef(false);
-
-  useEffect(() => {
-    if (adoptedRef.current || activeId) return;
-    const running = execList?.executions?.find(
-      (e: any) => e.pipeline_name === pipelineName && e.status === "running"
-    );
-    if (running) {
-      adoptedRef.current = true;
-      setActiveId(running.id);
-    }
-  }, [execList, pipelineName, activeId]);
+  // Adopt an execution that is already running for this pipeline, once, so a
+  // reload reattaches to it. Adjusted during render rather than in an effect:
+  // the effect had to list `activeId` — its own output — as a dependency, and
+  // the "only once" guard lived in a ref written during the effect.
+  const [adopted, setAdopted] = useState(false);
+  const adoptableId: string | null =
+    adopted || activeId
+      ? null
+      : (execList?.executions?.find(
+          (e: any) => e.pipeline_name === pipelineName && e.status === "running"
+        )?.id ?? null);
+  if (adoptableId) {
+    setAdopted(true);
+    setActiveId(adoptableId);
+  }
 
   useLogsWebSocket(activeId);
 
@@ -110,12 +113,18 @@ export function useExecutionState(
     }
   }, [isDone, activeId, currentLogs.length, saveExecutionLogs]);
 
-  useEffect(() => {
-    if (isFailed && execution?.error_message) {
-      setErrorMsg(execution.error_message);
+  // Raise the error panel when a new failure message arrives. Keyed on the
+  // message itself, so dismissing it does not immediately re-open on the next
+  // render — only a different failure does.
+  const failureMessage = isFailed ? (execution?.error_message ?? null) : null;
+  const [lastFailure, setLastFailure] = useState(failureMessage);
+  if (failureMessage !== lastFailure) {
+    setLastFailure(failureMessage);
+    if (failureMessage) {
+      setErrorMsg(failureMessage);
       setShowError(true);
     }
-  }, [isFailed, execution?.error_message]);
+  }
 
   useEffect(() => {
     if (!showParams) return;

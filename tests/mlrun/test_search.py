@@ -74,9 +74,7 @@ class TestGridSearch:
         proposals = _drain(build_search_strategy(config))
 
         assert len(proposals) == 3  # not 4: lbfgs+l1 is not declared
-        assert all(
-            p["penalty"] == "l2" for p in proposals if p["solver"] == "lbfgs"
-        )
+        assert all(p["penalty"] == "l2" for p in proposals if p["solver"] == "lbfgs")
 
     def test_refuses_a_grid_over_the_trial_cap(self):
         config = _config(search_space={f"p{i}": [1, 2, 3] for i in range(5)})  # 243 combos
@@ -187,7 +185,7 @@ class TestOptunaSearch:
     """Only runs where optuna is installed (it is an optional `mlops` extra)."""
 
     def test_learns_from_reported_scores(self):
-        optuna = pytest.importorskip("optuna")
+        pytest.importorskip("optuna")
         config = _config(
             algorithm="bayesian",
             n_trials=6,

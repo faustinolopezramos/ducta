@@ -34,8 +34,17 @@ from loguru import logger  # type: ignore
 
 from ducta.setting.environments import sanitize_env_for_path
 
-SCHEMA_VERSION = "1.0"
+# 1.1 added `evidence_complete`; 1.2 added per-dataset `engine`/`algorithm`/
+# `content_hash`. Older certificates verify unchanged: the hash is recomputed
+# over whatever keys the file actually carries. They are NOT comparable to 1.2
+# fingerprints — see `fingerprints_comparable`.
+SCHEMA_VERSION = "1.2"
 DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
+#: Fingerprints written before the algorithm was recorded. Mirrors
+#: ``ducta.mlrun.fingerprint.ALGO_LEGACY`` — duplicated as a literal rather than
+#: imported because `ducta.mlrun` is an optional extra and `certify verify` must
+#: work without it. `tests/core/test_certificate.py` asserts the two agree.
+LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
 _SIGNING_KEY_ENV = "Ducta_CERTIFICATE_KEY"
@@ -178,10 +187,18 @@ def _quality_summary(context: Any) -> List[Dict[str, Any]]:
 
 @dataclass
 class RunCertificate:
-    """A tamper-evident record of one pipeline run.
+    """A verifiable record of one pipeline run.
 
-    ``certificate_hash`` is a SHA-256 over every other field (via :meth:`content`),
-    so any later edit to the file is detectable by :func:`verify_certificate`.
+    ``certificate_hash`` is a keyless SHA-256 over every other field (via
+    :meth:`content`), so :func:`verify_certificate` detects *corruption* — a
+    truncated file, a bad merge, an edit nobody covered up. It is not by itself
+    evidence against a motivated editor, who can recompute the hash over their
+    own content and pass verification.
+
+    :meth:`sign` adds the HMAC over that hash, and that is what makes the
+    certificate tamper-*evident*: producing a valid signature requires the key.
+    Prefer a signed certificate wherever the file is meant to be relied on as
+    evidence rather than as a checksum.
     """
 
     run_id: str
@@ -200,6 +217,11 @@ class RunCertificate:
     outputs: Dict[str, Any] = field(default_factory=dict)
     quality: List[Dict[str, Any]] = field(default_factory=list)
     error: Optional[str] = None
+    #: False when the run's ledger failed to record something it was asked to.
+    #: The certificate is still emitted — a partial record beats none — but it
+    #: says so, rather than being indistinguishable from a complete one.
+    evidence_complete: bool = True
+    evidence_gaps: List[str] = field(default_factory=list)
     certificate_hash: str = ""
     signature: Optional[str] = None
     key_id: Optional[str] = None
@@ -223,6 +245,8 @@ class RunCertificate:
             "outputs": self.outputs,
             "quality": self.quality,
             "error": self.error,
+            "evidence_complete": self.evidence_complete,
+            "evidence_gaps": self.evidence_gaps,
         }
         return data
 
@@ -292,6 +316,8 @@ def build_certificate(
         outputs=ledger.output_fingerprints,
         quality=_quality_summary(context),
         error=error,
+        evidence_complete=ledger.evidence_complete,
+        evidence_gaps=ledger.record_failures,
     )
     cert.certificate_hash = cert.compute_hash()
     return cert
@@ -447,12 +473,35 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
 
 
 def logical_fingerprint(fp: Dict[str, Any]) -> tuple:
-    """The reproducibility-relevant identity of a dataset: schema + rows + sample.
+    """The reproducibility-relevant identity of a dataset.
 
     Excludes ``file_size_bytes``/``file_mtime`` (which can jitter across otherwise
     identical writes) — so 'reproducible' means 'same data', not 'same bytes'.
+
+    ``algorithm`` leads the tuple so two fingerprints measured differently can
+    never compare equal by accident. Callers should still ask
+    :func:`fingerprints_comparable` first: a mismatch here means "we cannot
+    tell", which is a different answer from "the data changed".
     """
-    return (fp.get("schema_hash"), fp.get("row_count"), fp.get("sample_hash"))
+    return (
+        fp.get("algorithm") or LEGACY_FINGERPRINT_ALGORITHM,
+        fp.get("schema_hash"),
+        fp.get("row_count"),
+        fp.get("content_hash") or fp.get("sample_hash"),
+    )
+
+
+def fingerprints_comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """Whether two serialized fingerprints may be compared at all, and why not.
+
+    A fingerprint only means something relative to the algorithm that produced
+    it. Upgrading Ducta changes every fingerprint's value; reporting that as
+    "the data changed" would be false and would teach operators to ignore the
+    one signal this system exists to give them.
+    """
+    from ducta.mlrun.fingerprint import comparable
+
+    return comparable(a, b)
 
 
 def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,16 +519,24 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     for key in sorted(set(outputs_a) | set(outputs_b)):
         fp_a = outputs_a.get(key)
         fp_b = outputs_b.get(key)
+        reason: Optional[str] = None
+        # Tri-state on purpose: True (same), False (differs), None (measured
+        # differently — no claim possible).
+        match: Optional[bool]
         if fp_a is None or fp_b is None:
             match = False
         else:
-            match = logical_fingerprint(fp_a) == logical_fingerprint(fp_b)
+            ok, reason = fingerprints_comparable(fp_a, fp_b)
+            # `match=None` is the third answer: not "same", not "different", but
+            # "these were measured differently, so no claim can be made".
+            match = (logical_fingerprint(fp_a) == logical_fingerprint(fp_b)) if ok else None
         output_rows.append(
             {
                 "key": key,
                 "in_a": fp_a is not None,
                 "in_b": fp_b is not None,
                 "match": match,
+                "not_comparable_reason": reason,
             }
         )
 
@@ -512,9 +569,15 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     pipeline_match = a.get("pipeline") == b.get("pipeline")
     environment_match = a.get("environment_name") == b.get("environment_name")
     status_match = a.get("status") == b.get("status")
-    outputs_match = all(row["match"] for row in output_rows) if output_rows else True
+    # `is not False` rather than truthiness: a `None` (not comparable) row must
+    # not silently count as a difference. `outputs_comparable` says whether the
+    # verdict covers everything, so a caller can tell "all match" from "all that
+    # could be checked match".
+    outputs_match = all(row["match"] is not False for row in output_rows) if output_rows else True
+    outputs_comparable = all(row["match"] is not None for row in output_rows)
 
     return {
+        "outputs_comparable": outputs_comparable,
         "run_a": a.get("run_id"),
         "run_b": b.get("run_id"),
         "pipeline_a": a.get("pipeline"),

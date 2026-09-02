@@ -28,7 +28,7 @@ from loguru import logger
 
 from ducta.mlrun.experiment_tracking import ExperimentTracker
 from ducta.mlrun.model_registry import ModelRegistry
-from ducta.mlrun.resilience import STORAGE_RETRY_CONFIG, RetryConfig
+from ducta.mlrun.resilience import STORAGE_RETRY_CONFIG
 from ducta.mlrun.storage import (
     DatabricksStorageBackend,
     LocalStorageBackend,
@@ -588,7 +588,6 @@ class MLOpsContext:
                 volume_name=config.volume or os.getenv("DATABRICKS_VOLUME", "mlops_artifacts"),
             )
 
-
         model_registry = ModelRegistry(
             storage=storage,
             registry_path=config.registry_path,
@@ -634,8 +633,12 @@ class MLOpsContext:
             config = MLOpsConfig.from_env()
         self_config = config
 
-        resolved_registry_path = registry_path if registry_path is not None else config.registry_path
-        resolved_tracking_path = tracking_path if tracking_path is not None else config.tracking_path
+        resolved_registry_path = (
+            registry_path if registry_path is not None else config.registry_path
+        )
+        resolved_tracking_path = (
+            tracking_path if tracking_path is not None else config.tracking_path
+        )
         resolved_metric_buffer_size = (
             metric_buffer_size if metric_buffer_size is not None else config.metric_buffer_size
         )
@@ -663,7 +666,6 @@ class MLOpsContext:
                 initial_delay=config.retry_delay,
             )
         )
-
 
         storage = StorageBackendFactory.create_from_context(
             context,

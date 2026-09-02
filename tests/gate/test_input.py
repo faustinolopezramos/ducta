@@ -237,25 +237,47 @@ class TestLoadInputsParallel:
 
 
 class TestEnforceFingerprintPolicy:
+    #: The policy only compares fingerprints measured the same way, so both
+    #: sides of every case below must carry a matching algorithm/engine — see
+    #: `test_a_changed_algorithm_is_not_reported_as_drift` for the other branch.
+    ALGO = "xxhash64-multiset/v2"
+    ENGINE = "spark"
+
+    def _previous(self, **overrides):
+        """A previously-recorded fingerprint dict, comparable by default."""
+        base = {
+            "fingerprint": "old_hash",
+            "algorithm": self.ALGO,
+            "engine": self.ENGINE,
+            "row_count": 8,
+            "file_mtime": "1.0",
+        }
+        base.update(overrides)
+        return base
+
     def _make_fingerprint(
-        self, fingerprint="new_hash", row_count=10, file_mtime="2.0", columns=None
+        self, fingerprint="new_hash", row_count=10, file_mtime="2.0", columns=None, algorithm=None
     ):
         fp = MagicMock()
         fp.fingerprint = fingerprint
         fp.row_count = row_count
         fp.file_mtime = file_mtime
         fp.columns = columns
+        # `_enforce_fingerprint_policy` asks the fingerprint to describe itself
+        # before comparing, so a mock has to answer with a real dict.
+        fp.to_dict.return_value = {
+            "fingerprint": fingerprint,
+            "algorithm": algorithm or self.ALGO,
+            "engine": self.ENGINE,
+            "row_count": row_count,
+            "columns": columns,
+        }
         return fp
 
     def test_warn_message_includes_schema_drift_detail(self, dict_context):
         dict_context["global_settings"]["fingerprint_policy"] = "warn"
         dict_context["_previous_input_fingerprints"] = {
-            "ds1": {
-                "fingerprint": "old_hash",
-                "row_count": 8,
-                "file_mtime": "1.0",
-                "columns": {"a": "int64", "b": "string"},
-            }
+            "ds1": self._previous(columns={"a": "int64", "b": "string"})
         }
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(columns={"a": "int64", "c": "bool"})
@@ -271,12 +293,7 @@ class TestEnforceFingerprintPolicy:
     def test_warn_message_without_schema_drift_has_no_detail(self, dict_context):
         dict_context["global_settings"]["fingerprint_policy"] = "warn"
         dict_context["_previous_input_fingerprints"] = {
-            "ds1": {
-                "fingerprint": "old_hash",
-                "row_count": 8,
-                "file_mtime": "1.0",
-                "columns": {"a": "int64"},
-            }
+            "ds1": self._previous(columns={"a": "int64"})
         }
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(columns={"a": "int64"})
@@ -291,7 +308,7 @@ class TestEnforceFingerprintPolicy:
     def test_fail_policy_raises_with_schema_drift(self, dict_context):
         dict_context["global_settings"]["fingerprint_policy"] = "fail"
         dict_context["_previous_input_fingerprints"] = {
-            "ds1": {"fingerprint": "old_hash", "columns": {"a": "int64"}}
+            "ds1": self._previous(columns={"a": "int64"})
         }
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(columns={"a": "float64"})
@@ -301,11 +318,33 @@ class TestEnforceFingerprintPolicy:
 
     def test_record_policy_does_nothing(self, dict_context):
         dict_context["global_settings"]["fingerprint_policy"] = "record"
-        dict_context["_previous_input_fingerprints"] = {"ds1": {"fingerprint": "old_hash"}}
+        dict_context["_previous_input_fingerprints"] = {"ds1": self._previous()}
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(fingerprint="new_hash")
 
         loader._enforce_fingerprint_policy("ds1", fingerprint)  # must not raise
+
+    def test_a_changed_algorithm_is_not_reported_as_drift(self, dict_context):
+        # Upgrading Ducta changes every fingerprint's value. Reporting that as
+        # "the input changed" would fire on every dataset the first time anyone
+        # upgrades — and with policy=fail, abort the pipeline over it.
+        dict_context["global_settings"]["fingerprint_policy"] = "fail"
+        dict_context["_previous_input_fingerprints"] = {
+            "ds1": self._previous(algorithm="legacy/v1")
+        }
+        loader = InputLoader(dict_context)
+        fingerprint = self._make_fingerprint(algorithm="xxhash64-multiset/v2")
+
+        loader._enforce_fingerprint_policy("ds1", fingerprint)  # must not raise
+
+    def test_a_changed_engine_is_not_reported_as_drift(self, dict_context):
+        dict_context["global_settings"]["fingerprint_policy"] = "fail"
+        previous = self._previous()
+        previous["engine"] = "pandas"
+        dict_context["_previous_input_fingerprints"] = {"ds1": previous}
+        loader = InputLoader(dict_context)
+
+        loader._enforce_fingerprint_policy("ds1", self._make_fingerprint())  # must not raise
 
 
 class TestReadFallbackPaths:

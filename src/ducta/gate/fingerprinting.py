@@ -38,7 +38,7 @@ def compute_fingerprint(
     """
     from ducta.mlrun.fingerprint import DataFingerprint  # optional dependency (mlrun)
 
-    mode = context_manager.get_nested("global_settings.fingerprint_mode", "fast")
+    mode = context_manager.get_nested("global_settings.fingerprint_mode", "exact")
     rows = (
         sample_rows
         if sample_rows is not None

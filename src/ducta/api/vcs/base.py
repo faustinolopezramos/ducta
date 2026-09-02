@@ -54,7 +54,7 @@ class RepositoryAdapter(ABC):
     @staticmethod
     def from_config(config: Dict[str, Any]) -> "RepositoryAdapter":
         """Instantiate the appropriate adapter from a config dict."""
-        from ducta.api.repository.local import LocalAdapter  # type: ignore
+        from ducta.api.vcs.local import LocalAdapter  # type: ignore
 
         adapter_type = config.get("type", "local")
 
@@ -63,17 +63,17 @@ class RepositoryAdapter(ABC):
 
         # Fase 2 adapters — imports deferred to avoid hard dependency failures
         if adapter_type == "github":
-            from ducta.api.repository.github import GitHubAdapter  # type: ignore
+            from ducta.api.vcs.github import GitHubAdapter  # type: ignore
 
             return GitHubAdapter(config)
 
         if adapter_type == "azure":
-            from ducta.api.repository.azure import AzureAdapter  # type: ignore
+            from ducta.api.vcs.azure import AzureAdapter  # type: ignore
 
             return AzureAdapter(config)
 
         if adapter_type == "aws":
-            from ducta.api.repository.aws import AWSAdapter  # type: ignore
+            from ducta.api.vcs.aws import AWSAdapter  # type: ignore
 
             return AWSAdapter(config)
 

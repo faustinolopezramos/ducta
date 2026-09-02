@@ -32,6 +32,7 @@ from ducta.check.core import (
     DFAdapter,
     QualityCheckError,
     QualityChecksFailed,
+    QualityConfigError,
     QualityGateBlocked,
     QualityReport,
 )
@@ -73,12 +74,60 @@ def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[st
 
 
 def _rename_result(result: "CheckResult", check_name: str) -> "CheckResult":
+    # ``executed_at`` is carried over rather than defaulted: rebuilding without
+    # it stamped the copy with the rebuild time, so every named check instance
+    # reported when it was renamed instead of when it ran.
     return result.__class__(
         check_name=check_name,
         passed=result.passed,
         severity=result.severity,
         message=result.message,
         details=result.details,
+        executed_at=result.executed_at,
+    )
+
+
+def _configured_severity(
+    check_config_dict: Dict[str, Any], check_name: str
+) -> Optional[CheckSeverity]:
+    """Resolve a node's ``severity`` override, or ``None`` if it declared none.
+
+    Resolved *before* the check runs so a typo is reported as what it is — a
+    configuration error — instead of being swallowed by the execution-error
+    handler and surfacing as "check execution failed", which points the reader
+    at their data rather than at their config.
+    """
+    raw = check_config_dict.get("severity")
+    if raw is None:
+        return None
+    try:
+        return CheckSeverity.from_str(raw)
+    except ValueError as e:
+        raise QualityConfigError(f"Invalid severity for check '{check_name}': {e}") from e
+
+
+def _apply_configured_severity(
+    result: "CheckResult", severity: Optional[CheckSeverity]
+) -> "CheckResult":
+    """Re-stamp a result with the severity the node's check config asked for.
+
+    Each check hard-codes a severity on its class, and ``_create_result``
+    resolves it as ``severity or self.severity`` — so a ``severity: "warning"``
+    written on a node's check was accepted by the config object and then read by
+    nothing. The check stayed an ERROR and still blocked at
+    ``quality_gate.max_errors``, which is the opposite of what the key asks for.
+    Downgrading is the whole point of it, so it is applied here, at the one
+    place holding both the result and the config that produced it.
+    """
+    if severity is None or severity == result.severity:
+        return result
+    return result.__class__(
+        check_name=result.check_name,
+        passed=result.passed,
+        severity=severity,
+        message=result.message,
+        details=result.details,
+        executed_at=result.executed_at,
     )
 
 
@@ -421,6 +470,8 @@ class SanityPhaseRunner:
                     )
                 continue
 
+            configured_severity = _configured_severity(check_config_dict, check_name)
+
             try:
                 # Create check instance
                 check = check_class()
@@ -435,6 +486,9 @@ class SanityPhaseRunner:
                     f"Executing check '{registry_key}' (as '{check_name}') for node '{node_name}'"
                 )
                 result = check.run(df, check_config, adapter, None)
+                # Applied before fail_fast is consulted below, so a check the
+                # config downgraded to a warning does not abort the run.
+                result = _apply_configured_severity(result, configured_severity)
                 # Override check_name with display name so reports use the node alias
                 if registry_key != check_name:
                     result = _rename_result(result, check_name)
@@ -777,6 +831,8 @@ class ValidationPhaseRunner:
                         raise QualityChecksFailed([result], dataset_name, run_id)
                     continue
 
+                configured_severity = _configured_severity(check_config_dict, check_name)
+
                 try:
                     # Create check instance
                     check = check_class()
@@ -796,6 +852,9 @@ class ValidationPhaseRunner:
                     # Execute check
                     logger.debug(f"Executing check: {registry_key} (as '{check_name}')")
                     result = check.run(df, check_config, adapter, context_datasets)
+                    # Applied before fail_fast is consulted below, so a check the
+                    # config downgraded to a warning does not abort the run.
+                    result = _apply_configured_severity(result, configured_severity)
                     # Use the node-level alias (check_name) in reports for named instances
                     if registry_key != check_name:
                         result = _rename_result(result, check_name)

@@ -84,7 +84,6 @@ class MetricRollingWindow:
                     f"Consider increasing max_size or logging less frequently."
                 )
 
-        # Deque with maxlen automatically evicts oldest when appending to full deque
         self.metrics.append(metric)
 
     def __len__(self) -> int:
@@ -354,7 +353,6 @@ class ExperimentTracker:
         self._total_metric_counts: Dict[str, int] = {}
         self._structure_ensured = False
 
-        # Register for cleanup on exit
         self._register_instance()
 
         logger.info(
@@ -1115,8 +1113,7 @@ class ExperimentTracker:
             return False
 
     def _write_final_metrics_snapshot(self, run: "Run") -> None:
-        """Write the complete, consolidated metrics snapshot once a run ends.
-        """
+        """Write the complete, consolidated metrics snapshot once a run ends."""
         try:
             metrics_data = {
                 key: [
@@ -1258,7 +1255,6 @@ class ExperimentTracker:
 
         except Exception as e:
             logger.warning(f"Could not update metrics index: {e}")
-
 
     def _is_run_stale(self, run, now: datetime, max_age_seconds: float) -> bool:
         """

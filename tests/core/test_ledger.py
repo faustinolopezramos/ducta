@@ -195,3 +195,77 @@ class TestLedgerFor:
 
         ledger = ledger_for(Locked())
         assert isinstance(ledger, RunLedger)
+
+
+class _ReadOnlyContext:
+    """A context whose ledger attributes cannot be written.
+
+    Stands in for whatever makes a real context reject a setattr — a frozen
+    dataclass, a __slots__ class, a proxy. What matters is that recording
+    fails and the ledger has to survive it.
+    """
+
+    __slots__ = ("run_ledger",)
+
+
+class TestEvidenceCompleteness:
+    def test_a_clean_run_reports_complete_evidence(self):
+        ledger = RunLedger.start(_ctx(), "run-1")
+        ledger.record_node("a", "success")
+        ledger.record_quality({"node": "a", "passed": True})
+
+        assert ledger.evidence_complete is True
+        assert ledger.record_failures == []
+
+    def test_a_failed_write_marks_the_evidence_incomplete(self):
+        ledger = RunLedger(_ReadOnlyContext())
+
+        ledger.record_node("a", "success")
+
+        assert ledger.evidence_complete is False
+        assert any("node trace for 'a'" in gap for gap in ledger.record_failures)
+
+    def test_a_failed_write_does_not_raise(self):
+        # Bookkeeping must never be the reason a pipeline fails.
+        ledger = RunLedger(_ReadOnlyContext())
+        ledger.record_node("a", "success")
+        ledger.record_quality({"node": "a", "passed": False})
+
+    def test_recording_failure_does_not_deadlock(self):
+        # `_append` holds the lock while calling `_set`, and both route failures
+        # through `_note_failure`, which takes it again. With a non-reentrant
+        # lock this hangs forever rather than failing.
+        ledger = RunLedger(_ReadOnlyContext())
+        done = threading.Event()
+
+        def _record():
+            ledger.record_node("a", "success")
+            done.set()
+
+        worker = threading.Thread(target=_record, daemon=True)
+        worker.start()
+        assert done.wait(timeout=5), "recording a failure deadlocked"
+
+    def test_a_non_list_bucket_is_reported_rather_than_ignored(self):
+        # The wire format is a plain context attribute, so anything can land in
+        # it. Appending used to no-op silently when it was not a list.
+        context = _ctx(_run_node_details="not a list")
+        ledger = RunLedger(context)
+
+        ledger.record_node("a", "success")
+
+        assert ledger.evidence_complete is False
+
+    def test_reset_clears_failures_from_the_previous_pipeline(self):
+        # One executor drives several pipelines in a chain; pipeline N's gap
+        # must not mark pipeline N+1's certificate incomplete.
+        context = _ctx(_run_node_details="not a list")
+        ledger = RunLedger(context)
+        ledger.record_node("a", "success")
+        assert ledger.evidence_complete is False
+
+        context._run_node_details = []
+        ledger.reset()
+
+        assert ledger.evidence_complete is True
+        assert ledger.record_failures == []

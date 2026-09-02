@@ -6,7 +6,11 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from ducta.mlrun.exceptions import ArtifactNotFoundError, ArtifactValidationError, ProtectedVersionError
+from ducta.mlrun.exceptions import (
+    ArtifactNotFoundError,
+    ArtifactValidationError,
+    ProtectedVersionError,
+)
 from ducta.mlrun.gc import ModelGarbageCollector
 from ducta.mlrun.model_registry import ModelRegistry, ModelStage
 from ducta.mlrun.storage import LocalStorageBackend
@@ -132,9 +136,7 @@ class TestArtifactErrorTyping:
     present-but-invalid artifact must raise ArtifactValidationError instead,
     which is a different, actionable signal for the caller."""
 
-    def test_corrupt_artifact_raises_artifact_validation_error(
-        self, validating_registry, tmp_path
-    ):
+    def test_corrupt_artifact_raises_artifact_validation_error(self, validating_registry, tmp_path):
         artifact = tmp_path / "corrupt.pkl"
         artifact.write_bytes(b"")  # empty file: exists, but not a valid pickle
 
@@ -251,9 +253,7 @@ class TestListModelVersionsLite:
             assert lite[version]["created_at"] == full[version]["created_at"]
             assert lite[version]["size_bytes"] == len(b"v1")  # "v1"/"v2" are both 2 bytes
 
-    def test_falls_back_to_full_read_for_legacy_index_without_size_bytes(
-        self, registry, tmp_path
-    ):
+    def test_falls_back_to_full_read_for_legacy_index_without_size_bytes(self, registry, tmp_path):
         _register(registry, tmp_path, content=b"v1")
 
         # Simulate a legacy on-disk index predating the size_bytes column.

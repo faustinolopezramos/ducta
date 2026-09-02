@@ -111,8 +111,7 @@ def run_search(
     run_trial: Callable[[Dict[str, Any], int], Any],
     search_id: Optional[str] = None,
 ) -> SearchOutcome:
-    """Drive ``strategy`` to completion, executing each trial via ``run_trial``.
-    """
+    """Drive ``strategy`` to completion, executing each trial via ``run_trial``."""
     search_id = search_id or new_search_id()
     outcome = SearchOutcome(
         search_id=search_id, metric=metric, direction=getattr(strategy, "direction", "maximize")

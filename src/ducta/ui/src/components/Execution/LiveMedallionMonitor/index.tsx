@@ -8,7 +8,7 @@ import {
   StatCard,
   UptimeTicker,
   SkeletonCard,
-  Gauge,
+  ThroughputPanel,
   pulseKeyframes,
   PulsingDot,
   NodeCard,
@@ -41,7 +41,9 @@ export function LiveMedallionMonitor({ executionId, onCancel, executionStatus }:
     uptime,
     isLoading,
     pm,
-    maxRateRef,
+    history,
+    scale,
+    verdict,
   } = useStreamingMonitor(executionId, executionStatus);
 
   // ── Styles ──────────────────────────────────────────────────────────────────
@@ -291,7 +293,7 @@ export function LiveMedallionMonitor({ executionId, onCancel, executionStatus }:
 
           {/* Engine Performance */}
           <div style={sectionStyle}>
-            <h3 style={sectionTitleStyle}>Engine Performance</h3>
+            <h3 style={sectionTitleStyle}>Throughput</h3>
 
             {isLoading ? (
               <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
@@ -299,41 +301,15 @@ export function LiveMedallionMonitor({ executionId, onCancel, executionStatus }:
                 <SkeletonCard />
               </div>
             ) : pm ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
-                <Gauge
-                  label="Input Velocity"
-                  value={pm.total_input_rate ?? 0}
-                  maxValue={maxRateRef.current}
-                  color={colors.blue}
-                />
-                <Gauge
-                  label="Processing Velocity"
-                  value={pm.total_processing_rate ?? 0}
-                  maxValue={maxRateRef.current}
-                  color={colors.purple}
-                />
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "4px", borderTop: `1px solid ${colors.border}` }}>
-                  <span style={{ fontSize: "12px", color: colors.textMuted }}>Processing Efficiency</span>
-                  <span style={{ fontSize: "13px", fontWeight: 700, fontFamily: "var(--font-mono)", color: colors.green }}>
-                    {(pm.processing_efficiency ?? 0).toFixed(1)}%
-                  </span>
-                </div>
-                {pm.health_score !== undefined && (
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <span style={{ fontSize: "12px", color: colors.textMuted }}>Health Score</span>
-                    <span
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 700,
-                        fontFamily: "var(--font-mono)",
-                        color: pm.health_score >= 80 ? colors.green : pm.health_score >= 50 ? colors.warningStrong : colors.red,
-                      }}
-                    >
-                      {Number(pm.health_score).toFixed(1)}%
-                    </span>
-                  </div>
-                )}
-              </div>
+              <ThroughputPanel
+                input={pm.total_input_rate ?? 0}
+                processed={pm.total_processing_rate ?? 0}
+                efficiency={pm.processing_efficiency}
+                verdict={verdict}
+                history={history}
+                scale={scale}
+                live={!isTerminal}
+              />
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: "8px", color: colors.textMuted, fontSize: "13px" }}>
                 <PulsingDot color={colors.blue} />

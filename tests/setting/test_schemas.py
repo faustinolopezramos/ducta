@@ -57,7 +57,7 @@ class TestGlobalSettingsSchema:
         s = GlobalSettingsSchema(input_path="/in", output_path="/out")
         assert s.max_parallel_nodes == 4
         assert s.execution_timeout_seconds == 3600
-        assert s.fingerprint_mode == "fast"
+        assert s.fingerprint_mode == "exact"
         assert s.mlops_enabled is True
         assert s.mlops_required is False
         assert s.ml_default_sanity_checks is True

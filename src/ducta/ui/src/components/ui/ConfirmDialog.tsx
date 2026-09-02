@@ -61,9 +61,13 @@ export function ConfirmDialog({
   const descriptionId = `${inputId}-description`;
 
   // Reset between openings so a previous attempt's text never carries over.
-  useEffect(() => {
+  // Adjusted during render, not in an effect: the dialog must never paint even
+  // one frame carrying the previous attempt's text.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) setTyped("");
-  }, [open]);
+  }
 
   // `Modal`'s useDialogA11y focuses the dialog container on mount, so the
   // initial focus has to be claimed after it — `autoFocus` alone loses the race.

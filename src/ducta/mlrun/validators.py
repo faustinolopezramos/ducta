@@ -40,8 +40,7 @@ MAX_NAME_LENGTH = 255
 
 
 class ValidationError(MLOpsException, ValueError):
-    """Base validation error.
-    """
+    """Base validation error."""
 
     error_code = ErrorCode.VALIDATION_FAILED
 
@@ -173,8 +172,7 @@ class MetricValidator:
     def validate_metrics(
         metrics: Optional[Dict[str, Any]], max_items: int = 1000
     ) -> Optional[Dict[str, float]]:
-        """Validate a whole metrics dict, value by value.
-        """
+        """Validate a whole metrics dict, value by value."""
         if metrics is None:
             return None
 
@@ -513,7 +511,10 @@ class ArtifactValidator:
         """
         framework_key = framework.lower()
 
-        if framework_key in ArtifactValidator._PICKLE_BASED_FRAMEWORKS and not trust_artifact_source:
+        if (
+            framework_key in ArtifactValidator._PICKLE_BASED_FRAMEWORKS
+            and not trust_artifact_source
+        ):
             logger.warning(
                 f"Skipping deserialization of '{framework}' artifact at {artifact_path}: "
                 "loading a pickle/joblib artifact executes it, so this requires "

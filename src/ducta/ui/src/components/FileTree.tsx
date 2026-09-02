@@ -24,6 +24,15 @@ function FileIcon({ name }: { name: string }) {
   return <IconFile size={15} stroke={1.8} color={colors.textDim} />;
 }
 
+/** Hover/focus highlight shared by the tree rows. Both are the same visual
+ *  state: a row that reacts to the mouse must react to the keyboard too. */
+const highlight = (e: { currentTarget: HTMLElement }) => {
+  e.currentTarget.style.background = colors.surfaceElevated ?? colors.surface;
+};
+const clearHighlight = (e: { currentTarget: HTMLElement }) => {
+  e.currentTarget.style.background = "transparent";
+};
+
 interface TreeNodeProps {
   entry: FileEntry;
   activePath?: string;
@@ -41,23 +50,28 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
   if (entry.type === "dir") {
     return (
       <div>
-        <div
+        <button
+          type="button"
           onClick={() => setExpanded(v => !v)}
           title={entry.path}
+          aria-expanded={expanded}
           style={{
+            ...styles.resetButton,
             display: "flex",
             alignItems: "center",
             gap: 5,
             minHeight: 28,
             padding: `4px 8px 4px ${indent}px`,
-            cursor: "pointer",
             color: colors.textMuted,
             fontSize: 12,
             ...styles.fontMono,
             userSelect: "none",
           }}
-          onMouseOver={(e) => { e.currentTarget.style.background = colors.surfaceElevated ?? colors.surface; }}
-          onMouseOut={(e) => { e.currentTarget.style.background = "transparent"; }}
+          // Focus mirrors hover so keyboard users get the same affordance.
+          onMouseOver={highlight}
+          onFocus={highlight}
+          onMouseOut={clearHighlight}
+          onBlur={clearHighlight}
         >
           <span style={{ width: 12, display: "flex", alignItems: "center", justifyContent: "center", color: colors.textDim }}>
             {expanded ? <IconChevronDown size={13} stroke={2} /> : <IconChevronRight size={13} stroke={2} />}
@@ -66,7 +80,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
             {expanded ? <IconFolderOpen size={15} stroke={1.8} color={colors.textMuted} /> : <IconFolder size={15} stroke={1.8} color={colors.textMuted} />}
           </span>
           <span style={{ color: colors.textMuted }}>{entry.name}</span>
-        </div>
+        </button>
         {expanded && data?.entries?.map(child => (
           <TreeNode
             key={child.path}
@@ -81,16 +95,18 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
   }
 
   return (
-    <div
+    <button
+      type="button"
       onClick={() => onSelectFile(entry.path)}
       title={entry.path}
+      aria-current={isActive ? "true" : undefined}
       style={{
+        ...styles.resetButton,
         display: "flex",
         alignItems: "center",
         gap: 6,
         minHeight: 28,
         padding: `4px 8px 4px ${indent}px`,
-        cursor: "pointer",
         background: isActive ? colors.accentBg : "transparent",
         borderLeft: isActive ? `2px solid ${colors.accent}` : "2px solid transparent",
         fontSize: 12,
@@ -98,8 +114,10 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
         color: isActive ? colors.text : colors.textMuted,
         userSelect: "none",
       }}
-      onMouseOver={(e) => { if (!isActive) e.currentTarget.style.background = colors.surfaceElevated ?? colors.surface; }}
-      onMouseOut={(e) => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
+      onMouseOver={isActive ? undefined : highlight}
+      onFocus={isActive ? undefined : highlight}
+      onMouseOut={isActive ? undefined : clearHighlight}
+      onBlur={isActive ? undefined : clearHighlight}
     >
       <span style={{ width: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         <FileIcon name={entry.name} />
@@ -107,7 +125,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
       <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
         {entry.name}
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -122,6 +140,7 @@ function NewFileRow({ onConfirm, onCancel }: NewFileRowProps) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px" }}>
       <input
+        // eslint-disable-next-line jsx-a11y/no-autofocus -- the inline new-file row appears on demand; focusing it is the point.
         autoFocus
         value={name}
         onChange={(e) => setName(e.target.value)}

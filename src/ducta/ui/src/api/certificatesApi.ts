@@ -7,6 +7,7 @@
  */
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { executionClient } from "./client";
+import { sourceKey } from "./utils";
 
 // ── Types (mirror ducta.api.routes.certificates / projects.PreflightResponse) ──
 
@@ -118,7 +119,7 @@ export interface RunCertificate {
 /** GET /projects/{projectId}/certificates/{runId} — the full certificate JSON. */
 export const useCertificate = (projectId: string | null, runId: string | null) =>
   useQuery<RunCertificate>({
-    queryKey: ["certificates", projectId, runId],
+    queryKey: ["certificates", sourceKey(), projectId, runId],
     queryFn: async () => {
       const { data } = await executionClient.get(
         `/projects/${projectId}/certificates/${runId}`
@@ -139,7 +140,7 @@ export const useCertificateDiff = (
   otherRunId: string | null
 ) =>
   useQuery<CertificateDiffResult>({
-    queryKey: ["certificates", "diff", projectId, runId, otherRunId],
+    queryKey: ["certificates", sourceKey(), "diff", projectId, runId, otherRunId],
     queryFn: async () => {
       const { data } = await executionClient.get(
         `/projects/${projectId}/certificates/${runId}/diff/${otherRunId}`

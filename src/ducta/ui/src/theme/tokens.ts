@@ -81,4 +81,25 @@ export const styles = {
   transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
   fontSans:    { fontFamily: 'var(--font-sans)' },
   fontMono:    { fontFamily: 'var(--font-mono)' },
-};
+
+  /**
+   * Strips a `<button>` back to looking like the `<div>` it replaced.
+   *
+   * Rows, cards and list items that respond to a click must be real buttons:
+   * a `<div onClick>` is unreachable by keyboard and invisible to assistive
+   * tech, which is what `jsx-a11y/click-events-have-key-events` and
+   * `no-static-element-interactions` were flagging across the app. Spread this
+   * first, then the element's own layout styles.
+   */
+  resetButton: {
+    background: "none",
+    border: "none",
+    padding: 0,
+    margin: 0,
+    font: "inherit",
+    color: "inherit",
+    textAlign: "left",
+    width: "100%",
+    cursor: "pointer",
+  },
+} as const;

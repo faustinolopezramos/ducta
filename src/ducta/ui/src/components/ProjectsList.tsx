@@ -49,7 +49,7 @@ function ProjectCard({ project, onNavigate, onDelete }: { project: ProjectItem; 
             <IconDotsVertical size={16} stroke={1.5} />
           </button>
           {menuOpen && (
-            <div className="project-card__dropdown" onClick={(e) => e.stopPropagation()}>
+            <div className="project-card__dropdown" role="presentation" onClick={(e) => e.stopPropagation()}>
               <button className="project-card__dropdown-item project-card__dropdown-item--danger" onClick={() => { onDelete(); setMenuOpen(false); }}>
                 <IconTrash size={14} stroke={1.5} />
                 Delete project
@@ -191,6 +191,7 @@ export function ProjectsList({
         <Modal title="Create project" onClose={() => setShowCreate(false)}>
           <div className="projects-modal__form">
             <label className="projects-modal__label" htmlFor="new-project-name">Project name</label>
+            {/* eslint-disable-next-line jsx-a11y/no-autofocus -- focus belongs in the dialog the user just opened. */}
             <input id="new-project-name" className="projects-modal__input" value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="my_project" autoFocus />
             <div className="projects-modal__actions">
               <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>

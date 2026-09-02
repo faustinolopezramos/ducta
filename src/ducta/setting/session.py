@@ -356,8 +356,7 @@ class SparkSessionFactory:
 
     @classmethod
     def _apply_local_defaults(cls, builder: Any) -> Any:
-        """Apply local-mode defaults to the Spark builder.
-        """
+        """Apply local-mode defaults to the Spark builder."""
         for k, v in cls.LOCAL_DEFAULT_CONFIGS.items():
             try:
                 builder = builder.config(k, v)
@@ -367,12 +366,7 @@ class SparkSessionFactory:
 
     @staticmethod
     def _apply_jdbc_jars(builder: Any) -> Any:
-        """Register JDBC driver JARs (declarative ingestion) on the Spark classpath.
-
-        The drivers must be present when the JVM starts, so they are added via
-        ``spark.jars`` before ``getOrCreate``. Best-effort: a missing/failed driver
-        prep never blocks session creation.
-        """
+        """Register JDBC driver JARs (declarative ingestion) on the Spark classpath."""
         try:
             from ducta.gate.gateway.spark_setup import collect_jdbc_jars
 
@@ -474,8 +468,7 @@ class SparkSessionFactory:
 
     @staticmethod
     def _raise_if_databricks_connect_shadows_pyspark(error: Exception) -> None:
-        """Re-raise a local-session failure as an actionable install diagnostic.
-        """
+        """Re-raise a local-session failure as an actionable install diagnostic."""
         if "Only remote Spark sessions" not in str(error):
             return
         raise RuntimeError(

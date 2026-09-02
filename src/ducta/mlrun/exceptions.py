@@ -317,8 +317,7 @@ class ModelVersionConflictError(MLOpsException):
 
 
 class ProtectedVersionError(MLOpsException):
-    """Raised when deleting a model version currently in Production without force=True.
-    """
+    """Raised when deleting a model version currently in Production without force=True."""
 
     error_code = ErrorCode.MODEL_VERSION_PROTECTED
 

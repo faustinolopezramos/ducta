@@ -69,9 +69,7 @@ class TestResolveStoragePathPrecedence:
         ctx = _fake_context(str(tmp_path / "output"))
         p1, p2 = _patch_context_discovery(ctx)
         with p1, p2:
-            got = mlops_commands._resolve_storage_path(
-                None, env="dev", pipeline_name="sales.train"
-            )
+            got = mlops_commands._resolve_storage_path(None, env="dev", pipeline_name="sales.train")
         assert got == str(tmp_path / "output" / "dev" / "sales" / "train")
 
     def test_no_env_and_no_project_falls_back_to_default(self, tmp_path, monkeypatch):
@@ -98,7 +96,9 @@ class TestResolveStoragePathPrecedence:
 class TestModelPromoteExitCodes:
     def test_model_not_found_maps_to_validation_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            mlops_commands, "_build_registry", lambda storage: _RaisingRegistry(ModelNotFoundError("x"))
+            mlops_commands,
+            "_build_registry",
+            lambda storage: _RaisingRegistry(ModelNotFoundError("x")),
         )
         rc = mlops_commands.model_promote(
             "missing-model", "1", "production", str(tmp_path), env=None
@@ -116,7 +116,9 @@ class TestModelPromoteExitCodes:
 
     def test_unexpected_error_maps_to_general_error(self, tmp_path, monkeypatch):
         monkeypatch.setattr(
-            mlops_commands, "_build_registry", lambda storage: _RaisingRegistry(RuntimeError("boom"))
+            mlops_commands,
+            "_build_registry",
+            lambda storage: _RaisingRegistry(RuntimeError("boom")),
         )
         rc = mlops_commands.model_promote("m", "1", "production", str(tmp_path), env=None)
         assert rc == ExitCode.GENERAL_ERROR.value

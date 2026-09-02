@@ -5,13 +5,22 @@ export function PerfMonitor() {
   const [fps, setFps] = useState(0);
   const [latency, setLatency] = useState(0);
   const framesRef = useRef(0);
-  const lastTimeRef = useRef(performance.now());
+  // Seeded when the loop starts, not at construction: `useRef(performance.now())`
+  // reads the clock on every render even though only the first value is kept,
+  // and a value sampled at first render would be stale by the time the effect
+  // actually runs.
+  const lastTimeRef = useRef(0);
   const requestRef = useRef<number | null>(null);
 
   const isEnabled = import.meta.env.VITE_DEBUG_PERF === "true" || import.meta.env.DEV;
 
   useEffect(() => {
     if (!isEnabled) return;
+
+    // rAF timestamps share performance.now()'s origin, so this is the right
+    // baseline for the first measurement window.
+    lastTimeRef.current = performance.now();
+    framesRef.current = 0;
 
     const loop = (time: number) => {
       framesRef.current++;

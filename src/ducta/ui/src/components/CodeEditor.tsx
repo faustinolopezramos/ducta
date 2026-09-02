@@ -60,7 +60,12 @@ export function CodeEditor({
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
   const onValidateRef = useRef(onValidate);
-  onValidateRef.current = onValidate;
+  // Written in an effect, not during render: the ref is only read from
+  // effects and callbacks that run later, so post-commit is soon enough,
+  // and a render-phase write is not safe under concurrent rendering.
+  useEffect(() => {
+    onValidateRef.current = onValidate;
+  });
 
   const lineCount = useMemo(() => editedCode.split("\n").length, [editedCode]);
   const fileName = filePath?.split("/").filter(Boolean).pop() ?? inferFileName(language);
@@ -70,11 +75,15 @@ export function CodeEditor({
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
 
-  // Reset local code when value prop changes (e.g., file switch)
-  useEffect(() => {
+  // Reload the buffer when the file changes. Adjusted during render rather
+  // than in an effect: an effect let the editor paint one frame showing the
+  // previous file's contents against the new file's path.
+  const [loadedValue, setLoadedValue] = useState(value);
+  if (value !== loadedValue) {
+    setLoadedValue(value);
     setEditedCode(value);
     setIsDirty(false);
-  }, [value]);
+  }
 
   const handleChange = (newValue: string | undefined) => {
     setEditedCode(newValue || "");

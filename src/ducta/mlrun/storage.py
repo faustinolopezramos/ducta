@@ -128,8 +128,7 @@ class StorageBackend(ABC):
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
-        """Write DataFrame to storage.
-        """
+        """Write DataFrame to storage."""
         pass
 
     @abstractmethod
@@ -141,8 +140,7 @@ class StorageBackend(ABC):
     def write_json(
         self, data: Dict[str, Any], path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
-        """Write JSON object to storage.
-        """
+        """Write JSON object to storage."""
         pass
 
     @abstractmethod
@@ -151,8 +149,7 @@ class StorageBackend(ABC):
         pass
 
     def append_lines(self, lines: List[str], path: str) -> StorageMetadata:
-        """Append pre-serialized JSON lines to a file, creating it if absent.
-        """
+        """Append pre-serialized JSON lines to a file, creating it if absent."""
         try:
             existing = self.read_json(path)
             current_lines = existing.get("lines", []) if isinstance(existing, dict) else []
@@ -372,8 +369,7 @@ class LocalStorageBackend(StorageBackend):
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
     ) -> StorageMetadata:
-        """Write DataFrame to Parquet file with disk space validation.
-        """
+        """Write DataFrame to Parquet file with disk space validation."""
         self._check_circuit_breaker()
 
         try:

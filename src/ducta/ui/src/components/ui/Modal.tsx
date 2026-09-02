@@ -61,7 +61,10 @@ export function Modal({
   if (!open) return null;
 
   return (
-    <div className="modal-overlay" onClick={handleBackdropClick}>
+    // The backdrop is a redundant convenience: `useDialogA11y` binds Escape and
+    // the dialog has its own close control, so this needs no key handler of its
+    // own. `role="presentation"` says it is scenery, not a control.
+    <div className="modal-overlay" role="presentation" onClick={handleBackdropClick}>
       <div
         className="modal"
         ref={modalRef}

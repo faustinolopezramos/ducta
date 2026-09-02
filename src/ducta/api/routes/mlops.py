@@ -117,8 +117,7 @@ def _resolve_mlops_storage(
     pipeline_name: Optional[str] = None,
     global_settings: Optional[Dict[str, Any]] = None,
 ) -> str:
-    """Resolve mlops storage path from workspace or explicit override.
-    """
+    """Resolve mlops storage path from workspace or explicit override."""
     if override:
         return override
 
@@ -130,7 +129,11 @@ def _resolve_mlops_storage(
         if resolved:
             return resolved
 
-    gs = global_settings if global_settings is not None else _resolve_global_settings(source_path, env)
+    gs = (
+        global_settings
+        if global_settings is not None
+        else _resolve_global_settings(source_path, env)
+    )
     mlops_cfg = gs.get("mlops") or {}
     path = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
     if path:
@@ -161,7 +164,9 @@ async def list_experiments(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None, description="Override MLOps storage path"),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> List[Dict[str, Any]]:
     """List all MLOps experiments (most recent first)."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
@@ -185,7 +190,9 @@ async def get_experiment(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> Dict[str, Any]:
     """Get an experiment and its runs."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
@@ -223,7 +230,9 @@ async def close_run(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> Dict[str, Any]:
     """Force a run stuck in RUNNING to a terminal status.
 
@@ -258,7 +267,9 @@ async def delete_run(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> None:
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
 
@@ -285,7 +296,9 @@ async def list_models(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> List[Dict[str, Any]]:
     """List all registered models (latest version per model)."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
@@ -309,7 +322,9 @@ async def get_model_versions(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> List[Dict[str, Any]]:
     """Get all versions of a model."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
@@ -336,7 +351,9 @@ async def promote_model(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> Dict[str, Any]:
     """Promote a model version to a new stage."""
     gs = _resolve_global_settings(source_path, env)
@@ -388,7 +405,9 @@ async def delete_model_version(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> None:
     """Delete a specific model version and its artifact."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)
@@ -414,7 +433,9 @@ async def run_gc(
     source_path: SourcePathDep,
     storage_path: Optional[str] = Query(None),
     env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(None, description="Pipeline name (schema.pipeline) to scope to"),
+    pipeline: Optional[str] = Query(
+        None, description="Pipeline name (schema.pipeline) to scope to"
+    ),
 ) -> Dict[str, Any]:
     """Garbage-collect old model versions."""
     resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline)

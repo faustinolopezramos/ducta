@@ -28,7 +28,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 
 from loguru import logger
 
@@ -193,6 +193,78 @@ class SourceResolver:
             projects=projects,
         )
 
+    #: How far up from the starting directory to look for an enclosing workspace.
+    _MAX_WORKSPACE_WALK_UP: ClassVar[int] = 5
+
+    #: Files whose presence marks a directory as a Ducta workspace root.
+    _WORKSPACE_MARKERS: ClassVar[tuple[str, ...]] = (
+        "environment.yaml",
+        "environment.yml",
+        "environment.toml",
+        "environment.json",
+        "ducta.yaml",
+        "ducta.yml",
+    )
+
+    @classmethod
+    def _looks_like_workspace(cls, path: Path) -> bool:
+        """Mirrors what `normalize_workspace_path` already treats as a root.
+
+        The `projects/` case is not optional: a multi-project workspace holds
+        its environment files inside `projects/<name>/` and has none of its own,
+        which is exactly the layout `ducta ui` is normally launched into.
+        """
+        try:
+            if any((path / name).exists() for name in cls._WORKSPACE_MARKERS):
+                return True
+            return (path / "config").is_dir() or (path / "projects").is_dir()
+        except OSError:
+            return False
+
+    @classmethod
+    def _confinement_base(cls) -> Path:
+        """The directory a local source has to live inside.
+
+        This used to be the process cwd, full stop, which contradicted the rest
+        of the system: `normalize_workspace_path` and `_detect_ducta_workspace`
+        both walk *upward* to find a workspace, and `ducta ui` is normally run
+        from inside a project. Launching from `<workspace>/projects/<name>` and
+        then opening `<workspace>` — the ordinary case — was rejected as a
+        traversal attempt, taking all 100+ source-dependent endpoints with it.
+
+        The base is now the outermost enclosing *workspace*, so a run started
+        anywhere inside a workspace can address the whole of it and nothing
+        beyond. When there is no workspace above the starting point, the cwd
+        remains the base and behaviour is unchanged.
+        """
+        start_raw = os.environ.get("DUCTA_WORKSPACE") or ""
+        start: Optional[Path] = None
+        if start_raw.strip():
+            try:
+                candidate = Path(start_raw.strip()).expanduser().resolve()
+                if candidate.is_dir():
+                    start = candidate
+            except OSError:
+                start = None
+        if start is None:
+            start = Path.cwd()
+
+        base = start
+        candidate = start
+        home = Path.home()
+        for _ in range(cls._MAX_WORKSPACE_WALK_UP):
+            parent = candidate.parent
+            if parent == candidate:
+                break
+            # Never treat $HOME or a filesystem root as a workspace: a stray
+            # `~/config` directory must not open the entire home directory.
+            if parent == home or parent == Path(parent.anchor):
+                break
+            candidate = parent
+            if cls._looks_like_workspace(candidate):
+                base = candidate
+        return base
+
     @staticmethod
     def resolve_local(raw_path: str) -> Path:
         normalized = SourceResolver._normalize_local_path(raw_path)
@@ -216,12 +288,22 @@ class SourceResolver:
         # cwd, same as the relative-path case below) turns that into a real
         # whitelist. This intentionally removes the "open any external
         # project folder" convenience in exchange for closing that gap.
+        base = SourceResolver._confinement_base()
         try:
             from ducta.console.core import SecurityValidator
 
-            SecurityValidator.validate_path(Path.cwd(), resolved)
+            SecurityValidator.validate_path(base, resolved)
         except Exception as exc:
-            raise ValueError(f"Path validation failed: {exc}") from exc
+            # "Path traversal attempt blocked" reads as an accusation when the
+            # cause is almost always a workspace/server mismatch. Say what the
+            # server can actually reach and how to change it.
+            if resolved.is_relative_to(base):
+                raise ValueError(f"Path validation failed: {exc}") from exc
+            raise ValueError(
+                f"'{resolved}' is outside the workspace this server can reach "
+                f"('{base}'). Restart the server from that directory, run "
+                f"`ducta ui --source {resolved}`, or pick a source inside it."
+            ) from exc
 
         return resolved
 

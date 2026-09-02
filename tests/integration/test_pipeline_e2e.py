@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+from ducta.core.certificate import iter_certificate_dirs
+
 pytestmark = pytest.mark.spark
 
 
@@ -103,16 +105,21 @@ class TestPipelineRun:
         assert written, "pipeline produced no output files under data/dev"
 
     def test_run_emits_a_verifiable_certificate(self, executed, scaffolded, ducta_cli):
-        runs = sorted((scaffolded / ".ducta" / "runs").iterdir())
+        # Discover the run through `iter_certificate_dirs` rather than by walking
+        # `.ducta/runs` by hand. Certificates moved from a flat `runs/<run_id>/`
+        # to a per-environment `runs/<env>/<run_id>/`, and the hand-rolled
+        # `sorted(...)[-1]` here kept picking `runs/dev` — a directory that holds
+        # runs rather than being one — so this test failed on a layout it should
+        # not have known about in the first place.
+        runs = list(iter_certificate_dirs(scaffolded / ".ducta" / "runs"))
         assert runs, "no run certificate directory was created"
 
-        certificate = json.loads((runs[-1] / "certificate.json").read_text())
+        _env, run_id, run_dir = runs[-1]
+        certificate = json.loads((run_dir / "certificate.json").read_text())
         assert certificate["status"] == "success"
         assert certificate["certificate_hash"]
 
-        verified = _run_cli(
-            ducta_cli, "certify", "verify", "--run-id", runs[-1].name, cwd=scaffolded
-        )
+        verified = _run_cli(ducta_cli, "certify", "verify", "--run-id", run_id, cwd=scaffolded)
         assert verified.returncode == 0, verified.stderr
         assert "verified" in (verified.stdout + verified.stderr).lower()
 

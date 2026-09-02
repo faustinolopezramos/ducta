@@ -39,7 +39,7 @@ from ducta.core.execution.quality import QualityCheckExecutor
 from ducta.core.execution.state import ThreadSafeExecutionState
 from ducta.core.execution_context import node_id_var
 from ducta.core.ledger import ledger_for
-from ducta.core.resource_manager import get_resource_manager
+from ducta.core.resource_manager import ResourceType, get_resource_manager
 from ducta.core.settings import (
     DEFAULT_NODE_TIMEOUT_SECONDS,
     MAX_TIMEOUT_SECONDS,
@@ -140,7 +140,9 @@ class NodeExecutor:
                 node_config = self._get_node_config(node_name)
 
                 if self._should_run_in_process(node_config):
-                    self._run_node_in_subprocess(node_name, node_config, start_date, end_date, ml_info)
+                    self._run_node_in_subprocess(
+                        node_name, node_config, start_date, end_date, ml_info
+                    )
                     logger.info("[node_status] node_id={} status=success", node_name)
                     return
 
@@ -217,6 +219,31 @@ class NodeExecutor:
 
                 self._warn_if_split_not_applied(command, node_name)
 
+                if result_df is not None:
+                    # Register (and materialize) BEFORE the checks, not after.
+                    #
+                    # What follows scans this DataFrame several times over: one
+                    # Spark action per quality check (`DFAdapter.count()` does not
+                    # memoize), one for the fingerprint, one for the write. Without
+                    # caching, Spark recomputes the node's whole lineage for each —
+                    # the README's own three-check example pays for it four times.
+                    # `resource_context` (above) already unpersists on exit, so
+                    # caching here needs no new lifecycle.
+                    resource_type = resource_manager.detect_resource_type(result_df)
+                    if resource_type == ResourceType.SPARK_DF:
+                        try:
+                            # Cache before registering, so the registered handle is
+                            # the cached one and `resource_context` unpersists it.
+                            result_df = result_df.cache()
+                        except Exception as exc:  # noqa: BLE001 — caching is an optimization
+                            logger.debug("Could not cache '{}' output: {}", node_name, exc)
+                    resource_manager.register(
+                        resource=result_df,
+                        resource_type=resource_type,
+                        context_id=f"node_{node_name}",
+                        metadata={"stage": "output"},
+                    )
+
                 dq_report = None
                 if result_df is not None:
                     dq_report = self._quality_executor.run_dq_checks(
@@ -232,15 +259,6 @@ class NodeExecutor:
                     ml_info,
                     pipeline_name=self.pipeline_name,
                 )
-
-                if result_df is not None:
-                    resource_type = resource_manager.detect_resource_type(result_df)
-                    resource_manager.register(
-                        resource=result_df,
-                        resource_type=resource_type,
-                        context_id=f"node_{node_name}",
-                        metadata={"stage": "output"},
-                    )
 
                 self._output_writer.save(
                     result_df,
@@ -275,8 +293,7 @@ class NodeExecutor:
 
     @staticmethod
     def _warn_if_split_not_applied(command: Any, node_name: str) -> None:
-        """Warn when a node declared a `split` but never called split_dataframe/kfold_splits.
-        """
+        """Warn when a node declared a `split` but never called split_dataframe/kfold_splits."""
         split_config = getattr(command, "split", None)
         if not split_config:
             return
@@ -290,8 +307,7 @@ class NodeExecutor:
             )
 
     def _should_run_in_process(self, node_config: Dict[str, Any]) -> bool:
-        """Whether this node opts into process isolation for CPU-bound work.
-        """
+        """Whether this node opts into process isolation for CPU-bound work."""
         if not node_config.get("run_in_process", False):
             return False
         if not self.settings.env:
@@ -303,8 +319,7 @@ class NodeExecutor:
         return True
 
     def _process_pool(self):
-        """Lazily-created process pool, shared by every cpu_bound node in the run.
-        """
+        """Lazily-created process pool, shared by every cpu_bound node in the run."""
         if self._proc_pool is None:
             import multiprocessing
             from concurrent.futures import ProcessPoolExecutor
@@ -316,8 +331,7 @@ class NodeExecutor:
         return self._proc_pool
 
     def shutdown(self) -> None:
-        """Release the process pool, if one was created.
-        """
+        """Release the process pool, if one was created."""
         pool = getattr(self, "_proc_pool", None)
         if pool is not None:
             try:
@@ -371,8 +385,7 @@ class NodeExecutor:
     def _record_node_trace(
         self, node_name: str, status: str, duration: float, error: Optional[str]
     ) -> None:
-        """Append this node's outcome to ``context._run_node_details`` for the certificate.
-        """
+        """Append this node's outcome to ``context._run_node_details`` for the certificate."""
         node_config = self.context.nodes_config.get(node_name, {}) or {}
         raw_out = node_config.get("output", [])
         outputs = list(raw_out.values()) if isinstance(raw_out, dict) else list(raw_out or [])

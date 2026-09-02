@@ -26,11 +26,12 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from ducta.console.core import VALID_NAME_RE, ExitCode
-from ducta.console.ux.formatters import create_table, get_console
+from ducta.console.ux.formatters import create_table, get_console, require_table
 from ducta.core.certificate import (
     DEFAULT_CERTIFICATE_DIR,
     diff_certificates,
     find_certificate_dir,
+    fingerprints_comparable,
     iter_certificate_dirs,
     load_certificate,
     logical_fingerprint,
@@ -274,7 +275,7 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
 
     nodes = data.get("nodes", []) or []
     if nodes:
-        nodes_table = create_table(title="Nodes", box=box.SIMPLE_HEAD)
+        nodes_table = require_table(title="Nodes", box=box.SIMPLE_HEAD)
         nodes_table.add_column("Name")
         nodes_table.add_column("Type")
         nodes_table.add_column("Status")
@@ -296,7 +297,7 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
     for key, fp in (data.get("outputs", {}) or {}).items():
         datasets[key] = {"direction": "output", **fp}
     if datasets:
-        ds_table = create_table(title="Datasets", box=box.SIMPLE_HEAD)
+        ds_table = require_table(title="Datasets", box=box.SIMPLE_HEAD)
         ds_table.add_column("Key")
         ds_table.add_column("I/O")
         ds_table.add_column("Rows", justify="right")
@@ -314,7 +315,7 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
 
     quality = data.get("quality", []) or []
     if quality:
-        q_table = create_table(title="Quality checks", box=box.SIMPLE_HEAD)
+        q_table = require_table(title="Quality checks", box=box.SIMPLE_HEAD)
         q_table.add_column("Node")
         q_table.add_column("Phase")
         q_table.add_column("Result")
@@ -432,12 +433,32 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
 
     fresh = getattr(context, "_output_fingerprints", {}) or {}
     mismatches = []
+    incomparable = []
     for key, old_fp in recorded.items():
         new_fp = fresh.get(key)
         if not new_fp:
             mismatches.append((key, "missing in reproduction run"))
+            continue
+        ok, reason = fingerprints_comparable(new_fp, old_fp)
+        if not ok:
+            # Not a reproduction failure. The certificate was written by a
+            # different fingerprint algorithm (usually: it predates an upgrade),
+            # so nothing can be concluded about the data either way. Calling
+            # that "not reproducible" would be a false alarm on every
+            # certificate written before the upgrade.
+            incomparable.append((key, reason))
         elif logical_fingerprint(new_fp) != logical_fingerprint(old_fp):
-            mismatches.append((key, "data differs (schema/rows/sample changed)"))
+            mismatches.append((key, "data differs"))
+
+    if incomparable:
+        for key, why in incomparable:
+            logger.warning("    ? {}: not comparable — {}", key, why)
+        logger.warning(
+            "{}/{} output(s) could not be compared. Re-run the pipeline to write "
+            "a certificate with the current algorithm, then reproduce against that.",
+            len(incomparable),
+            len(recorded),
+        )
 
     if mismatches:
         for key, why in mismatches:
@@ -449,7 +470,15 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         )
         return ExitCode.VALIDATION_ERROR.value
 
-    logger.info("✓ Reproducible: all {} output(s) match the certificate", len(recorded))
+    comparable_count = len(recorded) - len(incomparable)
+    if incomparable and comparable_count == 0:
+        logger.error(
+            "✗ Nothing could be verified: none of the {} output(s) were comparable.",
+            len(recorded),
+        )
+        return ExitCode.VALIDATION_ERROR.value
+
+    logger.info("✓ Reproducible: all {} output(s) match the certificate", comparable_count)
     return ExitCode.SUCCESS.value
 
 
@@ -474,13 +503,18 @@ def _handle_diff(parsed_args) -> int:
     result = diff_certificates(cert_a, cert_b)
     console = get_console()
 
-    def _mark(ok: bool) -> str:
+    def _mark(ok: Optional[bool]) -> str:
+        # None is the third answer: the two fingerprints were measured by
+        # different algorithms, so neither "same" nor "DIFFERENT" is a claim we
+        # can honestly make.
+        if ok is None:
+            return "?" if not _USE_RICH else "[bold yellow]not comparable[/]"
         if not _USE_RICH:
             return "same" if ok else "DIFFERENT"
         return "[bold bright_green]same[/]" if ok else "[bold bright_red]DIFFERENT[/]"
 
     if console is not None and _USE_RICH:
-        head = create_table(box=box.SIMPLE_HEAD)
+        head = require_table(box=box.SIMPLE_HEAD)
         head.add_column(str(result["run_a"])[:12])
         head.add_column(str(result["run_b"])[:12])
         head.add_column("")
@@ -496,22 +530,25 @@ def _handle_diff(parsed_args) -> int:
         )
 
         if result["outputs"]:
-            out_table = create_table(title="Outputs", box=box.SIMPLE_HEAD)
+            out_table = require_table(title="Outputs", box=box.SIMPLE_HEAD)
             out_table.add_column("Key")
             out_table.add_column(f"In {str(result['run_a'])[:8]}", justify="center")
             out_table.add_column(f"In {str(result['run_b'])[:8]}", justify="center")
             out_table.add_column("Match")
             for row in result["outputs"]:
+                mark = _mark(row["match"])
+                if row.get("not_comparable_reason"):
+                    mark = f"{mark} [dim]({row['not_comparable_reason']})[/]"
                 out_table.add_row(
                     row["key"],
                     "✓" if row["in_a"] else "—",
                     "✓" if row["in_b"] else "—",
-                    _mark(row["match"]),
+                    mark,
                 )
             console.print(out_table)
 
         if result["quality"]:
-            q_table = create_table(title="Quality", box=box.SIMPLE_HEAD)
+            q_table = require_table(title="Quality", box=box.SIMPLE_HEAD)
             q_table.add_column("Node")
             q_table.add_column("Phase")
             q_table.add_column(f"Passed ({str(result['run_a'])[:8]})", justify="center")

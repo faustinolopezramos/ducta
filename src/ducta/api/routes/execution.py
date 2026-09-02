@@ -138,7 +138,9 @@ async def get_execution(
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
     try:
-        return exec_manager.get_execution(execution_id, user_id=user_id)
+        # Durable read: falls back to the database and the on-disk run store, so
+        # an execution older than the in-memory retention window still resolves.
+        return await exec_manager.load_execution(execution_id, user_id=user_id)
     except ExecutionNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
 
@@ -157,7 +159,7 @@ async def get_execution_logs(
     """Get execution logs, optionally filtered since a timestamp (ISO format)."""
     user_id = current_user.id if current_user else None
     try:
-        all_logs = exec_manager.get_logs(execution_id, user_id=user_id)
+        all_logs = await exec_manager.load_logs(execution_id, user_id=user_id)
 
         if since:
             try:

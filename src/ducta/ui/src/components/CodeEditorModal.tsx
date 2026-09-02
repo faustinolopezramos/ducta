@@ -1,6 +1,6 @@
 import { useState, useRef, lazy, Suspense } from "react";
 const CodeEditor = lazy(() => import("./CodeEditor").then(m => ({ default: m.CodeEditor })));
-import { colors } from "../theme/tokens";
+import { colors, styles } from "../theme/tokens";
 import { useDialogA11y } from "../hooks/useDialogA11y";
 
 interface FileNode {
@@ -70,10 +70,26 @@ export function CodeEditorModal({
     setExpandedFolders(newExpanded);
   };
 
+  const tintDanger = (e: { currentTarget: HTMLElement }) => {
+    e.currentTarget.style.color = colors.danger;
+  };
+  const tintDefault = (e: { currentTarget: HTMLElement }) => {
+    e.currentTarget.style.color = colors.text;
+  };
+  const hoverOn = (e: { currentTarget: HTMLElement }) => {
+    e.currentTarget.style.backgroundColor = colors.surface;
+  };
+  const hoverOff = (e: { currentTarget: HTMLElement }, isSelected: boolean) => {
+    e.currentTarget.style.backgroundColor = isSelected
+      ? colors.surfaceElevated
+      : "transparent";
+  };
+
   const renderFileTree = (nodes: FileNode[], level = 0) => {
     return nodes.map((node) => (
       <div key={node.id}>
-        <div
+        <button
+          type="button"
           onClick={() => {
             if (node.type === "folder") {
               toggleFolder(node.id);
@@ -81,10 +97,12 @@ export function CodeEditorModal({
               setSelectedFile(node.path);
             }
           }}
+          aria-expanded={node.type === "folder" ? expandedFolders.has(node.id) : undefined}
+          aria-current={selectedFile === node.path ? "true" : undefined}
           style={{
+            ...styles.resetButton,
             paddingLeft: `${level * 16 + 8}px`,
             padding: `6px ${level * 16 + 8}px`,
-            cursor: "pointer",
             backgroundColor:
               selectedFile === node.path ? colors.surfaceElevated : "transparent",
             color: selectedFile === node.path ? colors.primary : colors.text,
@@ -98,13 +116,12 @@ export function CodeEditorModal({
             transition: "all 0.15s",
             userSelect: "none",
           }}
-          onMouseOver={(e) => {
-            e.currentTarget.style.backgroundColor = colors.surface;
-          }}
-          onMouseOut={(e) => {
-            e.currentTarget.style.backgroundColor =
-              selectedFile === node.path ? colors.surfaceElevated : "transparent";
-          }}
+          // Focus mirrors hover: a row that highlights for the mouse must
+          // highlight for the keyboard too.
+          onMouseOver={hoverOn}
+          onFocus={hoverOn}
+          onMouseOut={(e) => hoverOff(e, selectedFile === node.path)}
+          onBlur={(e) => hoverOff(e, selectedFile === node.path)}
         >
           {node.type === "folder" ? (
             <>
@@ -119,7 +136,7 @@ export function CodeEditorModal({
               <span>📄 {node.name}</span>
             </>
           )}
-        </div>
+        </button>
         {node.type === "folder" && expandedFolders.has(node.id) && node.children && (
           <div>{renderFileTree(node.children, level + 1)}</div>
         )}
@@ -128,7 +145,11 @@ export function CodeEditorModal({
   };
 
   return (
+    // Backdrop: a redundant convenience next to Escape (bound by
+    // `useDialogA11y`) and the ✕ control, so it needs no key handler of its
+    // own. `role="presentation"` marks it as scenery rather than a control.
     <div
+      role="presentation"
       style={{
         position: "fixed",
         top: 0,
@@ -202,12 +223,10 @@ export function CodeEditorModal({
               justifyContent: "center",
               transition: "color 0.2s",
             }}
-            onMouseOver={(e) => {
-              e.currentTarget.style.color = colors.danger;
-            }}
-            onMouseOut={(e) => {
-              e.currentTarget.style.color = colors.text;
-            }}
+            onMouseOver={tintDanger}
+            onFocus={tintDanger}
+            onMouseOut={tintDefault}
+            onBlur={tintDefault}
           >
             ✕
           </button>

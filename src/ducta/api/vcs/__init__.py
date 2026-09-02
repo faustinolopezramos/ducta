@@ -16,13 +16,20 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
+
+Adapters for the hosted git forges a workspace can be backed by.
+
+Named ``vcs`` rather than ``repository`` because ``ducta.api.repositories``
+already exists and means something entirely different — the data-access layer
+over configs, nodes, pipelines and projects. Two packages one plural apart, with
+no overlap in purpose, is a typo that imports cleanly and fails somewhere else.
 """
 
-from ducta.api.repository.aws import AWSAdapter
-from ducta.api.repository.azure import AzureAdapter
-from ducta.api.repository.base import RepositoryAdapter
-from ducta.api.repository.github import GitHubAdapter
-from ducta.api.repository.local import LocalAdapter
+from ducta.api.vcs.aws import AWSAdapter
+from ducta.api.vcs.azure import AzureAdapter
+from ducta.api.vcs.base import RepositoryAdapter
+from ducta.api.vcs.github import GitHubAdapter
+from ducta.api.vcs.local import LocalAdapter
 
 __all__ = [
     "RepositoryAdapter",

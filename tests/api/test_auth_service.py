@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import jwt
 import pytest
-from jose import jwt
 
 from ducta.api.auth.service import AuthService
 from ducta.api.exceptions import ExpiredTokenError, InvalidTokenError

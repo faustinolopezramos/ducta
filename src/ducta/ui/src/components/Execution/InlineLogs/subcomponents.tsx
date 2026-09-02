@@ -64,8 +64,24 @@ export function ResizeHandle({ onResize }: { onResize: (delta: number) => void }
   };
 
   return (
-    <div className="ilog__resize-handle" onMouseDown={onMouseDown}>
+    <button
+      type="button"
+      className="ilog__resize-handle"
+      aria-label="Resize log panel"
+      onMouseDown={onMouseDown}
+      onKeyDown={(e) => {
+        // Dragging is mouse-only otherwise; the arrows give the same control
+        // in 16px steps.
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          onResize(16);
+        } else if (e.key === "ArrowDown") {
+          e.preventDefault();
+          onResize(-16);
+        }
+      }}
+    >
       <div className="ilog__resize-handle-bar" />
-    </div>
+    </button>
   );
 }

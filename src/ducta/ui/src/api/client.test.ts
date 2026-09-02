@@ -52,6 +52,32 @@ async function withAdapter<T>(adapter: AxiosAdapter, fn: () => Promise<T>): Prom
   }
 }
 
+/**
+ * Run `fn` with only `setTimeout` faked, driving the clock so the interceptor's
+ * exponential backoff resolves without real waiting.
+ *
+ * That backoff is genuine wall-clock time — 1s for a single retry, 1+2+4=7s to
+ * exhaust the budget — and these two tests alone were 8 of the suite's 9
+ * seconds. `Date` is deliberately left real (`toFake` names setTimeout only):
+ * the auth interceptor reads token `exp` through `Date.now()`, and freezing it
+ * would couple these tests to logic they are not exercising.
+ */
+async function withFakeBackoff<T>(fn: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+  try {
+    const pending = fn();
+    // Mark it handled while we drive the clock; the caller still sees the
+    // rejection through the `await` below.
+    pending.catch(() => {});
+    // advanceTimersByTimeAsync flushes microtasks between timer callbacks,
+    // which is what lets axios actually re-enter the adapter on each retry.
+    await vi.advanceTimersByTimeAsync(10_000);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("client.ts interceptors", () => {
   beforeEach(() => {
     useAuthStore.setState({ token: VALID(), user: null });
@@ -205,13 +231,13 @@ describe("client.ts interceptors", () => {
         return ok(config);
       });
 
-      const response = await withAdapter(adapter as unknown as AxiosAdapter, () =>
-        client.get("/rate-limited"),
+      const response = await withFakeBackoff(() =>
+        withAdapter(adapter as unknown as AxiosAdapter, () => client.get("/rate-limited")),
       );
 
       expect(response.status).toBe(200);
       expect(adapter).toHaveBeenCalledTimes(2);
-    }, 10_000);
+    });
 
     it("gives up after the retry budget and rejects", async () => {
       const adapter = vi.fn(async (config) => {
@@ -219,12 +245,14 @@ describe("client.ts interceptors", () => {
       });
 
       await expect(
-        withAdapter(adapter as unknown as AxiosAdapter, () => client.get("/always-429")),
+        withFakeBackoff(() =>
+          withAdapter(adapter as unknown as AxiosAdapter, () => client.get("/always-429")),
+        ),
       ).rejects.toBeDefined();
 
       // 1 original + 3 retries (MAX_RETRIES).
       expect(adapter).toHaveBeenCalledTimes(4);
-    }, 30_000);
+    });
 
     it("does not retry other 4xx responses", async () => {
       const adapter = vi.fn(async (config) => {

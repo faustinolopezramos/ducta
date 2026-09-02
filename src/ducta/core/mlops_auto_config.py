@@ -76,8 +76,7 @@ class MLOpsAutoConfigurator:
 
     @staticmethod
     def resolve_ml_stage(node_config: Dict[str, Any]) -> str:
-        """Read a node's ML lifecycle stage, accepting both spellings in the wild.
-        """
+        """Read a node's ML lifecycle stage, accepting both spellings in the wild."""
         if not isinstance(node_config, dict):
             return ""
         flat = node_config.get("ml_stage")

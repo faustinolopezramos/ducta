@@ -77,21 +77,32 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
 # ── ExecutionManager ─────────────────────────────────────────────────────────
 
 
+#: Strong references to in-flight DB-store tasks.
+#:
+#: The event loop only holds a *weak* reference to a task, so a fire-and-forget
+#: `create_task(...)` whose only strong reference is a local variable can be
+#: garbage-collected mid-await — and what these tasks persist is the execution
+#: record itself, which would then go missing with nothing logged. Discarded by
+#: the done-callback, so the set never grows past what is actually pending.
+_DB_TASKS: "set[asyncio.Task[Any]]" = set()
+
+
 def _on_db_done(t: "asyncio.Task[Any]", label: str) -> None:
     """Callback for DB store tasks — logs failures without raising."""
+    _DB_TASKS.discard(t)
     if not t.cancelled() and (exc := t.exception()):
         logger.warning("DB store {label} failed: {exc}", label=label, exc=exc)
 
 
 def _spawn_db_task(coro: Any, label: str) -> None:
-    """Schedule a DB-store coroutine on the running loop, logging failures.
-    """
+    """Schedule a DB-store coroutine on the running loop, logging failures."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         coro.close()
         return
     task = loop.create_task(coro)
+    _DB_TASKS.add(task)
     task.add_done_callback(partial(_on_db_done, label=label))
 
 
@@ -148,7 +159,6 @@ class ExecutionManager:
         except Exception:  # noqa: BLE001
             pass
         return None
-
 
     def startup(self) -> None:
         if self._sink_id is not None:
@@ -379,6 +389,17 @@ class ExecutionManager:
                     start_date=start_date,
                     end_date=end_date,
                     project_id=project_id,
+                    user_id=user_id,
+                    model_version=model_version,
+                    # `merged` is the whole point of a sweep: without it every
+                    # combination ran the pipeline with the *same* (empty)
+                    # hyperparameters, so N runs produced N identical results
+                    # while still reporting distinct sweep indices. `user_id`
+                    # matters just as much — left None, `_get_owned` and
+                    # `list_executions` filter these runs out, and the user who
+                    # launched the sweep cannot list, tail or cancel their own
+                    # runs once auth is on.
+                    hyperparams=merged,
                     sweep_id=sweep_id,
                     sweep_index=index,
                 )
@@ -496,7 +517,6 @@ class ExecutionManager:
                 _spawn_db_task(self._db_store.update(record), "update")
             execution_id_var.reset(token)
 
-
     def _get_owned(self, execution_id: str, user_id: Optional[str]) -> ExecutionResponse:
         """Fetch an execution, enforcing ownership when *user_id* is provided."""
         execution = self._store.get(execution_id)
@@ -510,8 +530,7 @@ class ExecutionManager:
     def get_execution_errors(
         self, execution_id: str, user_id: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
-        """Return the categorized error summary for an execution, or None.
-        """
+        """Return the categorized error summary for an execution, or None."""
         self._get_owned(execution_id, user_id)
         return load_error_log_summary(execution_id)
 
@@ -590,8 +609,83 @@ class ExecutionManager:
         )
 
     def get_logs(self, execution_id: str, user_id: Optional[str] = None) -> List[LogEntry]:
+        """In-memory logs for a live execution. Raises if the run is not resident.
+
+        The durable read is `load_logs`; this is the hot path used while a run
+        is streaming, where the buffer is authoritative and always present.
+        """
         self._get_owned(execution_id, user_id)
         return self._log_manager.get_logs(execution_id)
+
+    # ── Durable reads ───────────────────────────────────────────────────────
+    #
+    # In-memory state is not the whole story, and it used to be treated as if it
+    # were. `_store` holds at most `max_executions_in_memory` records and drops
+    # terminal ones after `execution_retention_seconds`; the log buffers go with
+    # them, and everything goes on a restart. Meanwhile every run was already
+    # being written to `runs_dir` (and to the database, when configured) — the
+    # `DatabaseExecutionStore.get_logs` reader existed and had no callers, and
+    # nothing in the codebase ever opened a `logs.jsonl`.
+    #
+    # So a run older than the retention window returned 404 for its record and
+    # an empty list for its logs while both sat intact on disk. These two
+    # methods are the read path that was missing: memory first (authoritative
+    # for live runs), then the database, then the files.
+
+    async def load_execution(
+        self, execution_id: str, user_id: Optional[str] = None
+    ) -> ExecutionResponse:
+        """Return an execution record from whichever layer still has it."""
+        try:
+            return self._get_owned(execution_id, user_id)
+        except ExecutionNotFoundError:
+            pass
+
+        record = await self._load_persisted_record(execution_id)
+        if record is None:
+            raise ExecutionNotFoundError(f"Execution {execution_id} not found")
+        # Ownership still applies to a record recovered from disk.
+        if user_id and record.user_id != user_id:
+            raise ExecutionNotFoundError(f"Execution {execution_id} not found")
+        return record
+
+    async def load_logs(self, execution_id: str, user_id: Optional[str] = None) -> List[LogEntry]:
+        """Return an execution's logs from whichever layer still has them."""
+        # Resolves ownership and raises ExecutionNotFoundError for unknown ids,
+        # so a caller cannot use this to probe for other users' executions.
+        await self.load_execution(execution_id, user_id)
+
+        buffered = self._log_manager.get_logs(execution_id)
+        if buffered:
+            return buffered
+
+        if self._db_store is not None:
+            try:
+                from_db = await self._db_store.get_logs(execution_id)
+                if from_db:
+                    return from_db
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("DB log read failed for {id}: {exc}", id=execution_id, exc=exc)
+
+        if self._file_log_store is not None:
+            return self._file_log_store.read_logs(execution_id)
+
+        return []
+
+    async def _load_persisted_record(self, execution_id: str) -> Optional[ExecutionResponse]:
+        """Look up a record in the database, then on disk. None when neither has it."""
+        if self._db_store is not None:
+            try:
+                record = await self._db_store.peek(execution_id)
+                if record is not None:
+                    return record
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("DB record read failed for {id}: {exc}", id=execution_id, exc=exc)
+
+        if self._file_log_store is not None:
+            return self._file_log_store.read_meta(execution_id)
+
+        return None
 
     def register_active_engine(self, execution_id: str, engine: Any) -> None:
         with self._execution_lock:
@@ -677,8 +771,7 @@ class ExecutionManager:
             record.certificate_run_id = certificate_run_id
 
     def emit_execution_status(self, record: ExecutionResponse) -> None:
-        """Push an execution-level status update through the live log channel.
-        """
+        """Push an execution-level status update through the live log channel."""
         extra: Dict[str, Any] = {
             "type": "execution_status",
             "status": record.status.value,
@@ -718,8 +811,7 @@ class ExecutionManager:
         self._notify_log(execution_id)
 
     def _record_top_level_error(self, execution_id: str, exception: Exception) -> None:
-        """Record a whole-pipeline failure into the execution's error log.
-        """
+        """Record a whole-pipeline failure into the execution's error log."""
         try:
             from ducta.api.execution.error_recovery import ErrorContext
 
@@ -786,7 +878,6 @@ class ExecutionManager:
                     continue
             else:
                 await asyncio.sleep(0.1)
-
 
 
 @lru_cache(maxsize=1)

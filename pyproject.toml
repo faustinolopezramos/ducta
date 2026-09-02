@@ -7,7 +7,7 @@ build-backend = "poetry.core.masonry.api"
 # ==============================================================================
 [tool.poetry]
 name = "ducta"
-version = "0.1.0"
+version = "0.1.1"
 description = "A unified data-pipeline framework for batch, streaming, ML, and hybrid workflows."
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
@@ -106,7 +106,11 @@ setuptools = { version = ">=68.0.0", python = ">=3.12", optional = true }
 fastapi = { version = ">=0.104.0,<1.0.0", optional = true }
 msgpack = { version = "^1.0.0", optional = true }
 uvicorn = { version = "^0.23.0", extras = ["standard"], optional = true }
-python-jose = { version = "^3.3.0", extras = ["cryptography"], optional = true }
+# PyJWT rather than python-jose: python-jose pulls in `ecdsa`, whose Minerva
+# timing vulnerability (CVE-2024-23342) is unfixable in pure Python and has no
+# planned patch. Ducta only ever signs with HS256, so the ECDSA code was dead
+# weight that every dependency scanner flagged. PyJWT delegates to `cryptography`.
+PyJWT = { version = "^2.8.0", optional = true }
 bcrypt = { version = "^4.0.0", optional = true }
 
 # --- Database persistence (extra: database) ---
@@ -137,7 +141,7 @@ prometheus-client = { version = "^0.17.0", optional = true }
 [tool.poetry.extras]
 spark = ["pyspark", "pyarrow", "setuptools"]
 api = [
-    "fastapi", "uvicorn", "python-jose", "bcrypt", "msgpack",
+    "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
     "GitPython", "watchdog", "redis",
 ]
@@ -147,7 +151,7 @@ monitoring = ["prometheus-client"]
 databricks = ["databricks-connect"]
 all = [
     "pyspark", "pyarrow", "setuptools",
-    "fastapi", "uvicorn", "python-jose", "bcrypt", "msgpack",
+    "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
     "GitPython", "watchdog", "redis",
     "mlflow", "scikit-learn", "numpy", "scipy", "optuna",

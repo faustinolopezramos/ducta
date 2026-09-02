@@ -43,8 +43,7 @@ def _normalize_config(split_config: Any) -> Dict[str, Any]:
 
 
 def _mark_split_applied(ml_context: Any) -> None:
-    """Best-effort: set split_applied=True on ml_context, whatever its shape.
-    """
+    """Best-effort: set split_applied=True on ml_context, whatever its shape."""
     if ml_context is None:
         return
     try:
@@ -57,8 +56,7 @@ def _mark_split_applied(ml_context: Any) -> None:
 
 
 def _require_pandas(df: Any) -> None:
-    """Reject non-pandas inputs with an actionable message.
-    """
+    """Reject non-pandas inputs with an actionable message."""
     if hasattr(df, "iloc") and hasattr(df, "columns"):
         return
     type_name = f"{type(df).__module__}.{type(df).__name__}"
@@ -95,8 +93,7 @@ def split_dataframe(
     default_seed: Optional[int] = None,
     ml_context: Any = None,
 ) -> Tuple[Any, ...]:
-    """Split a pandas DataFrame according to a declarative split config.
-    """
+    """Split a pandas DataFrame according to a declarative split config."""
     parts = _split_dataframe_impl(df, split_config, default_seed)
     _mark_split_applied(ml_context)
     return parts
@@ -187,8 +184,7 @@ def _split_dataframe_impl(
 
 
 def _check_non_degenerate(parts: Tuple[Any, ...], n: int, method: str) -> None:
-    """Reject a split where a requested partition ends up with 0 rows.
-    """
+    """Reject a split where a requested partition ends up with 0 rows."""
     if n < 2:
         return
     empty = [i for i, part in enumerate(parts) if len(part) == 0]
@@ -245,8 +241,7 @@ def _kfold_splits_impl(
         raise SplitError(f"n_splits must be at least 2, got {n_splits}")
     if len(df) < n_splits:
         raise SplitError(
-            f"Cannot build {n_splits} folds from {len(df)} row(s): "
-            "use fewer folds or more data."
+            f"Cannot build {n_splits} folds from {len(df)} row(s): use fewer folds or more data."
         )
 
     seed = cfg.get("seed")
@@ -320,8 +315,7 @@ def cross_validate(
     n_splits: Optional[int] = None,
     metric_name: str = "score",
 ) -> Dict[str, float]:
-    """Run k-fold CV using ml_context's declared split/cv_folds/node_seed.
-    """
+    """Run k-fold CV using ml_context's declared split/cv_folds/node_seed."""
     from ducta.mlrun.persistence import _ctx_get
 
     if df is None:

@@ -22,8 +22,13 @@ interface ExecutionBarProps {
 }
 
 function ExecutionBar({ nodeName }: ExecutionBarProps) {
-  const [projectId, setProjectId]     = useState("");
-  const [pipelineName, setPipeline]   = useState("");
+  // The user's explicit picks, empty until they choose. What is actually in
+  // force falls back to the project/pipeline that owns this node, located
+  // below. Derived instead of written back from an effect: the search is a
+  // pure function of already-fetched data, and the effect had to list its own
+  // outputs (`projectId`, `pipelineName`) as dependencies to stop re-running.
+  const [pickedProjectId, setPickedProjectId] = useState("");
+  const [pickedPipeline, setPickedPipeline]   = useState("");
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [showLogs, setShowLogs]       = useState(false);
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
@@ -42,28 +47,28 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
     })),
   });
 
-  useEffect(() => {
-    if (projectId || pipelineName) return;
-    if (!projectsList.length) return;
-
+  /** The first project + pipeline whose spec lists this node, if any.
+   *
+   *  Computed straight through rather than memoized: `useQueries` hands back a
+   *  fresh array every render, so a `useMemo` keyed on it would recompute every
+   *  time anyway while claiming otherwise. The scan is a handful of `some()`
+   *  calls over data already in memory. */
+  const findOwner = (): { projectId: string; pipelineName: string } | null => {
     for (let i = 0; i < projectsList.length; i++) {
-      const proj = projectsList[i];
-      const queryResult = pipelinesQueries[i];
-      if (queryResult?.data?.pipelines) {
-        const rawPipelines = queryResult.data.pipelines;
-        for (const [pipeName, spec] of Object.entries(rawPipelines)) {
-          const hasNode = (spec as any).nodes?.some(
-            (nName: string) => nName === nodeName
-          );
-          if (hasNode) {
-            setProjectId(proj.id);
-            setPipeline(pipeName);
-            return;
-          }
+      const rawPipelines = pipelinesQueries[i]?.data?.pipelines;
+      if (!rawPipelines) continue;
+      for (const [pipeName, spec] of Object.entries(rawPipelines)) {
+        if ((spec as any).nodes?.some((nName: string) => nName === nodeName)) {
+          return { projectId: projectsList[i].id as string, pipelineName: pipeName };
         }
       }
     }
-  }, [projectsList, pipelinesQueries, nodeName, projectId, pipelineName]);
+    return null;
+  };
+  const owner = findOwner();
+
+  const projectId    = pickedProjectId || owner?.projectId || "";
+  const pipelineName = pickedPipeline  || owner?.pipelineName || "";
 
   const { data: pipelinesData } = useServerProjectPipelines(projectId);
   const { mutate: runNode, isPending: isRunning } = useRunNode();
@@ -131,7 +136,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
         {/* Project select */}
         <select
           value={projectId}
-          onChange={(e) => { setProjectId(e.target.value); setPipeline(""); }}
+          onChange={(e) => { setPickedProjectId(e.target.value); setPickedPipeline(""); }}
           style={{
             background: colors.bg,
             border: `1px solid ${colors.border}`,
@@ -152,7 +157,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
         {/* Pipeline select */}
         <select
           value={pipelineName}
-          onChange={(e) => setPipeline(e.target.value)}
+          onChange={(e) => setPickedPipeline(e.target.value)}
           disabled={!projectId}
           style={{
             background: colors.bg,
@@ -284,12 +289,12 @@ export function NodeCodePage() {
 
   // Derive initial file path from the node's module_path (relative to workspace root)
   const initialPath = codeData?.module_path ?? "";
-  const [selectedPath, setSelectedPath] = useState(initialPath);
-
-  // Sync once the node code data arrives
-  useEffect(() => {
-    if (initialPath && !selectedPath) setSelectedPath(initialPath);
-  }, [initialPath, selectedPath]);
+  // The user's pick, empty until they choose a file; the path actually in force
+  // falls back to the node's own module. Derived rather than synced from an
+  // effect, which needed `selectedPath` in its own dependency list to stop
+  // fighting itself.
+  const [pickedPath, setPickedPath] = useState("");
+  const selectedPath = pickedPath || initialPath;
 
   const { data: fileData, isLoading: fileLoading } = useWorkspaceFileContent(selectedPath);
   const { mutate: writeFile, isPending: isSaving }  = useWriteWorkspaceFile();
@@ -327,7 +332,7 @@ export function NodeCodePage() {
       setPendingPath(path);
       return;
     }
-    setSelectedPath(path);
+    setPickedPath(path);
   }, [isCodeDirty, selectedPath]);
 
   return (
@@ -475,7 +480,7 @@ export function NodeCodePage() {
         confirmLabel="Discard and switch"
         tone="danger"
         onConfirm={() => {
-          if (pendingPath) setSelectedPath(pendingPath);
+          if (pendingPath) setPickedPath(pendingPath);
           setPendingPath(null);
         }}
         onCancel={() => setPendingPath(null)}

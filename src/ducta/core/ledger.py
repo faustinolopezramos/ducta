@@ -59,13 +59,23 @@ class RunLedger:
     """Thread-safe record of what one pipeline run produced.
 
     Writes are safe from the worker threads the DAG coordinator runs nodes on.
-    Every method is best-effort: bookkeeping must never be the reason a pipeline
-    fails, so a failure to record is logged at debug and swallowed.
+    Every method is best-effort — bookkeeping must never be the reason a
+    pipeline fails — but a swallowed failure is still *counted*: it logs at
+    WARNING and flips :attr:`evidence_complete`, which the run certificate
+    carries. Silently dropping a node outcome and then sealing a certificate
+    that looks complete is the one failure this class exists to prevent.
     """
 
     def __init__(self, context: Any, run_id: Optional[str] = None) -> None:
         self._context = context
-        self._lock = threading.Lock()
+        # Reentrant on purpose. `_append` runs under this lock and its failure
+        # path reaches `_note_failure`, which takes it again; the paths happen
+        # not to overlap today only because the `except` sits outside the
+        # `with`. That is a one-line refactor away from a deadlock on the
+        # failure path — the path this bookkeeping exists to survive, and the
+        # one least likely to be exercised before it ships.
+        self._lock = threading.RLock()
+        self._record_failures: List[str] = []
         if run_id is not None:
             self.run_id = run_id
 
@@ -97,6 +107,11 @@ class RunLedger:
         outputs are written, so they are owned by the IO layer rather than by
         this run's bookkeeping.
         """
+        with self._lock:
+            # One executor drives several pipelines in a chain, so a failure
+            # recorded for pipeline N must not mark pipeline N+1's certificate
+            # incomplete.
+            self._record_failures.clear()
         self._set(NODE_DETAILS_ATTR, [])
         self._set(QUALITY_RESULTS_ATTR, [])
 
@@ -176,14 +191,51 @@ class RunLedger:
             return self._context.get(attr, default)
         return getattr(self._context, attr, default)
 
+    # ── Evidence completeness ────────────────────────────────────────────────
+
+    @property
+    def evidence_complete(self) -> bool:
+        """False once any write to this ledger has failed.
+
+        Recording stays best-effort — bookkeeping must never be the reason a
+        pipeline fails — but "best-effort" and "silent" are different things.
+        A certificate assembled from a ledger that dropped a node outcome is
+        missing exactly what it exists to attest, so the certificate says so
+        rather than looking indistinguishable from a complete one.
+        """
+        with self._lock:
+            return not self._record_failures
+
+    @property
+    def record_failures(self) -> List[str]:
+        """Human-readable descriptions of what failed to record, if anything."""
+        with self._lock:
+            return list(self._record_failures)
+
+    def _note_failure(self, what: str, exc: Exception) -> None:
+        with self._lock:
+            self._record_failures.append(f"{what}: {exc}")
+        logger.warning(
+            "Run evidence incomplete — could not record {what}: {exc}. The run "
+            "certificate will be marked evidence_complete=false.",
+            what=what,
+            exc=exc,
+        )
+
+    # ── Context access (dict- or attribute-shaped) ───────────────────────────
+
+    def _write(self, attr: str, value: Any) -> None:
+        """Write one attribute, leaving failure reporting to the caller."""
+        if isinstance(self._context, dict):
+            self._context[attr] = value
+        else:
+            setattr(self._context, attr, value)
+
     def _set(self, attr: str, value: Any) -> None:
         try:
-            if isinstance(self._context, dict):
-                self._context[attr] = value
-            else:
-                setattr(self._context, attr, value)
+            self._write(attr, value)
         except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
-            logger.debug("Could not set ledger field '{}': {}", attr, e)
+            self._note_failure(f"ledger field '{attr}'", e)
 
     def _append(self, attr: str, record: Dict[str, Any], *, what: str) -> None:
         try:
@@ -191,11 +243,21 @@ class RunLedger:
                 bucket = self._get(attr, None)
                 if bucket is None:
                     bucket = []
-                    self._set(attr, bucket)
+                    # `_write`, not `_set`: a failure here belongs to what the
+                    # caller was recording ("node trace for 'a'"), which is the
+                    # useful thing to read back out of `evidence_gaps` — not the
+                    # attribute name the caller never mentioned.
+                    self._write(attr, bucket)
                 if isinstance(bucket, list):
                     bucket.append(record)
+                else:
+                    # The wire format is a plain context attribute, so anything
+                    # can land in it. Appending used to silently no-op here.
+                    raise TypeError(
+                        f"ledger field '{attr}' holds {type(bucket).__name__}, not list"
+                    )
         except Exception as e:  # noqa: BLE001
-            logger.debug("Could not record {}: {}", what, e)
+            self._note_failure(what, e)
 
 
 #: Serializes ledger *creation* across every context — not the ledger's own

@@ -112,10 +112,19 @@ class BaseIO:
     ) -> Optional[Any]:
         """Compute (if enabled) and store a DataFingerprint under ``_{scope}_fingerprints``.
 
-        ``scope`` should be "input" or "output". Never raises: any failure (mlrun not
-        installed, unsupported dataframe type, etc.) is logged at debug level and this
-        returns None, matching the tolerant behavior previously duplicated across
-        input.py/output.py.
+        ``scope`` should be "input" or "output". Never raises — fingerprinting must
+        not be the reason a pipeline fails — but a failure is no longer silent: it
+        is recorded on the run ledger, which raises it to WARNING and marks the
+        certificate ``evidence_complete: false`` with the reason in
+        ``evidence_gaps``.
+
+        That distinction matters more here than almost anywhere else. A
+        certificate whose fingerprints quietly failed to compute still verifies
+        and still looks complete, while attesting to nothing — the exact failure
+        the certificate exists to rule out. (Observed in practice: a
+        ``PYSPARK_PYTHON`` version mismatch makes every Spark worker fail, and
+        the old debug-level swallow turned that into certificates full of
+        identical empty fingerprints.)
         """
         if not self.context_manager.get_nested("global_settings.enable_data_fingerprinting", True):
             return None
@@ -130,10 +139,27 @@ class BaseIO:
                 sample_rows=sample_rows,
             )
         except Exception as error:
-            logger.debug("{} fingerprinting skipped for '{}': {}", scope.capitalize(), key, error)
+            self._note_fingerprint_gap(f"{scope} fingerprint for '{key}'", error)
             return None
+
+        # A fingerprint that had to fall back to something weaker than asked for
+        # is also an evidence gap, even though nothing raised.
+        degraded = getattr(fingerprint, "degraded_reason", None)
+        if degraded:
+            self._note_fingerprint_gap(
+                f"{scope} fingerprint for '{key}' degraded", RuntimeError(degraded)
+            )
 
         store = self.context_manager.get_or_create_dict(f"_{scope}_fingerprints")
         if store is not None:
             store[key] = fingerprint.to_dict()
         return fingerprint
+
+    def _note_fingerprint_gap(self, what: str, error: Exception) -> None:
+        """Record a fingerprinting failure as a gap in the run's evidence."""
+        try:
+            from ducta.core.ledger import ledger_for
+
+            ledger_for(self._context)._note_failure(what, error)
+        except Exception:  # noqa: BLE001 — reporting a gap must not create one
+            logger.warning("Could not record {}: {}", what, error)

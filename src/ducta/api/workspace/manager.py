@@ -33,6 +33,7 @@ from ducta.api.utils.git_utils import (
     get_repo,
     is_git_repo,
     safe_path,
+    sanitize_git_remote_url,
 )
 from ducta.api.utils.platform_utils import posix_relative
 from ducta.api.workspace.loaders import load_config_file, load_environment_yaml
@@ -318,6 +319,13 @@ class WorkspaceManager:
                     git_remote = repo.remotes[0].url
             except Exception:
                 pass
+
+        # Sanitized, never raw: a remote can carry embedded credentials
+        # (https://user:token@host/repo.git), and this value is shaped for a
+        # response body. `SourceResolver.get_info` and `routes/workspace.py`
+        # already sanitize the same field; this one did not.
+        if git_remote is not None:
+            git_remote = sanitize_git_remote_url(git_remote)
 
         active_env: Optional[str] = None
         try:

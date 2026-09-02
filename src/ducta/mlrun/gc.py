@@ -30,8 +30,7 @@ from ducta.mlrun.storage import LocalStorageBackend
 
 
 class ModelGarbageCollector:
-    """Deletes old model versions based on a keep-newest-N retention policy,
-    """
+    """Deletes old model versions based on a keep-newest-N retention policy,"""
 
     def __init__(
         self,
@@ -40,7 +39,6 @@ class ModelGarbageCollector:
         registry_path: str = "model_registry",
         model_retention_days: Optional[int] = None,
     ):
-
         self.storage_path = Path(storage_path)
         self.max_versions_per_model = max_versions_per_model
         self.model_retention_days = model_retention_days
@@ -85,7 +83,6 @@ class ModelGarbageCollector:
             stats["models_processed"] += 1
 
             try:
-
                 versions = self.registry.list_model_versions_lite(name)
                 versions.sort(key=lambda v: v.get("version", 0), reverse=True)
 
@@ -111,7 +108,6 @@ class ModelGarbageCollector:
                             self.registry.delete_model_version(name, version_number)
                             logger.info(f"Deleted old model version {name} v{version_number}")
                         except ProtectedVersionError:
-
                             logger.info(
                                 f"Skipped {name} v{version_number}: promoted to Production "
                                 "since listing, no longer eligible for GC"

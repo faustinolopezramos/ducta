@@ -80,9 +80,9 @@ whether a failure warns or halts the run.
 Every execution produces verifiable evidence of what ran, against which data,
 and with what result.
 
-Each run emits a hash-chained **run certificate**: inputs and outputs
-fingerprinted, every node's outcome, every quality verdict — tamper-evident,
-and optionally HMAC-signed.
+Each run emits a self-hashed **run certificate**: inputs and outputs
+fingerprinted, every node's outcome, every quality verdict — integrity-checked,
+and tamper-evident once you configure a signing key.
 
 </td>
 </tr>
@@ -185,9 +185,9 @@ clean_sales:
   output: ["core.analytics.sales_clean"]
   data_quality:
     checks:
-      row_count: { min: 1000 }               # expect at least 1,000 rows
-      null_rate: { column: "id", max: 0.0 }  # no missing ids
-      duplicates: { columns: ["id"] }        # ids must be unique
+      row_count: { min: 1000 }                        # expect at least 1,000 rows
+      null_rate: { columns: ["id"], threshold: 0.0 }  # no missing ids
+      duplicates: { columns: ["id"] }                 # ids must be unique
     quality_gate:
       max_errors: 0                          # any error blocks downstream steps
 ```
@@ -231,11 +231,11 @@ flowchart LR
     C -->|fail| E["run halted<br/>downstream skipped"]
 ```
 
-**What Ducta produced** — `.ducta/runs/<run-id>/certificate.json`:
+**What Ducta produced** — `.ducta/runs/<env>/<run-id>/certificate.json`:
 
 ```jsonc
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -243,7 +243,7 @@ flowchart LR
   "started_at": "2026-01-01T09:00:00+00:00",
   "ended_at": "2026-01-01T09:01:12+00:00",
   "duration_seconds": 72.418,
-  "ducta_version": "0.1.0",
+  "ducta_version": "0.1.1",
   "config_fingerprint": "sha256:6c1f…",     // the config this ran with
   "environment": {                           // where it ran
     "python_version": "3.12.4", "os_info": "Linux 6.8.0",
@@ -255,19 +255,27 @@ flowchart LR
       "duration_seconds": 41.09, "outputs": ["core.analytics.sales_clean"],
       "error": null }
   ],
-  "inputs": {                                // which bytes went in
+  "inputs": {                                // which data went in
     "raw_sales": { "filepath": "data/sales.csv", "file_size_bytes": 48213904,
-                   "row_count": 1204331, "schema_hash": "sha256:9ab0…",
+                   "engine": "spark", "algorithm": "xxhash64-multiset/v2",
+                   "mode": "exact", "row_count": 1204331,
+                   "schema_hash": "sha256:9ab0…",
+                   "content_hash": "sha256:31de…",
                    "fingerprint": "sha256:31de…" }
   },
-  "outputs": {                               // which bytes came out
-    "core.analytics.sales_clean": { "row_count": 1198677,
+  "outputs": {                               // which data came out
+    "core.analytics.sales_clean": { "engine": "spark",
+                                    "algorithm": "xxhash64-multiset/v2",
+                                    "mode": "exact", "row_count": 1198677,
+                                    "content_hash": "sha256:7c42…",
                                     "fingerprint": "sha256:7c42…" }
   },
   "quality": [                               // every verdict, not just failures
     { "node": "clean_sales", "phase": "data_quality", "passed": true,
       "score": 1.0, "errors": 0, "warnings": 0, "checks": 3 }
   ],
+  "evidence_complete": true,                 // did the run record everything it was asked to?
+  "evidence_gaps": [],                       // and if not, what it could not record
   "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
   "signature": "hmac-sha256:44c9…"           // optional, when a key is configured
 }
@@ -283,11 +291,18 @@ ducta certify verify --run-id 9f3c1a70 --reproduce \
   --start-date 2026-01-01 --end-date 2026-01-31       # re-run, compare every output
 ```
 
-The hash covers every other field, so any edit to the file is detectable. Set
-`DUCTA_CERTIFICATE_KEY` and the certificate is HMAC-signed too, which adds
-attribution on top of tamper-evidence. `--reproduce` goes further than
-tamper-evidence: it re-runs the pipeline and confirms each output fingerprint
-still matches what the certificate claims.
+**What the two levels actually prove.** `certificate_hash` is a plain SHA-256
+over every other field, computed with no secret. It detects *corruption* — a
+truncated file, a botched merge, a hand-edit someone forgot to cover their
+tracks on — but it is not, on its own, evidence against a motivated editor:
+anyone who changes a field can recompute the hash and `verify` will pass.
+
+Set `DUCTA_CERTIFICATE_KEY` and the certificate is HMAC-signed over that hash.
+*That* is what makes it tamper-evident: forging it requires the key, and
+`key_id` records which key signed. **Configure a key for any certificate you
+intend to rely on as evidence later.** `--reproduce` is a third, stronger
+level: it re-runs the pipeline and confirms each output fingerprint still
+matches what the certificate claims.
 
 ---
 
@@ -304,12 +319,22 @@ it ran correctly.** An honest comparison:
 | **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
 | **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
 | **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
-| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.1.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.1.1`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
 
 **Where Ducta is genuinely different:** the run certificate. Most tools can
-tell you a job succeeded. Ducta gives you a portable, hash-chained file
-attesting *which config, which input bytes, which output bytes, and which
-quality verdicts* — verifiable months later by someone who was not there.
+tell you a job succeeded. Ducta gives you a portable, self-hashed and
+signable file attesting *which config, which data went in, which data came
+out, and which quality verdicts* — verifiable months later by someone who was
+not there.
+
+By default every dataset is fingerprinted with an **order-independent digest
+over every row**, so a single changed cell anywhere — first row or last —
+produces a different fingerprint, while a re-export that merely reorders rows
+does not. Each fingerprint records the `algorithm` that produced it, so
+comparing certificates written by different Ducta versions reports *not
+comparable* rather than inventing a data change. Set
+`fingerprint_mode: sample` (first N rows) or `schema` if a full scan is too
+expensive for a given project — the certificate then says exactly that.
 
 ---
 
@@ -356,6 +381,26 @@ flowchart TD
 | [`core`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md) | Turns a `Context` into running work — dependency graph, parallel nodes, gates, run certificate. | Execution engine |
 | [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
 | [`api`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/api/README.md) | REST + WebSocket over the engine; serves the bundled web app. | Service |
+
+### The public API
+
+Everything Ducta promises not to move without a deprecation is re-exported from
+the top-level package:
+
+```python
+import ducta
+
+ducta.PipelineExecutor, ducta.Context
+ducta.RunCertificate, ducta.verify_certificate, ducta.load_certificate, ducta.build_certificate
+ducta.register_check, ducta.CheckResult, ducta.QualityReport   # data quality
+ducta.ReaderFactory, ducta.WriterFactory                       # I/O extension points
+ducta.DuctaError                                               # base of every Ducta exception
+```
+
+`dir(ducta)` lists the full set. Anything reached through a deeper path —
+`ducta.core.executors.batch`, `ducta.check.engine` — is internal and may move
+between releases. These names resolve lazily, so `import ducta` costs nothing
+and stays usable on a bare `pip install ducta` with no Spark present.
 
 **Two design decisions worth knowing:**
 

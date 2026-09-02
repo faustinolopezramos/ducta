@@ -34,6 +34,17 @@ from ducta.check.core import (
 )
 
 
+def _format_bounds(low: Any, high: Any) -> str:
+    """Render an inclusive ``[low, high]`` interval, unset bounds as infinities.
+
+    An explicit ``0`` is a real bound, but the previous ``low or '-∞'`` treated
+    it as absent: ``min: 0`` printed ``-∞``, and ``row_count`` used ``'∞'`` for
+    *both* ends, so a ``max: 0`` fell the same way. The check logic was right in
+    every case — only the message named a bound it was not enforcing.
+    """
+    return f"[{'-∞' if low is None else low}, {'+∞' if high is None else high}]"
+
+
 @register_check("empty_dataset")
 class EmptyDatasetCheck(BaseQualityCheck):
     """Check if dataset is empty (0 rows)."""
@@ -235,7 +246,7 @@ class RowCountCheck(BaseQualityCheck):
 
             return self._create_result(
                 True,
-                f"Row count {count} within [{min_rows or '∞'}, {max_rows or '∞'}]",
+                f"Row count {count} within {_format_bounds(min_rows, max_rows)}",
                 {"count": count},
             )
         except Exception as e:
@@ -306,10 +317,21 @@ class DuplicateCheck(BaseQualityCheck):
                     },
                 )
 
+            # Report the measured rate even on a pass. This branch used to say
+            # "No duplicate rows found" and drop the count it had just computed,
+            # so a dataset passing *within tolerance* was indistinguishable from
+            # one with no duplicates at all — and the persisted report carried
+            # nothing to trend the rate against over time.
             return self._create_result(
                 True,
-                f"No duplicate rows found by columns {columns}",
-                {"columns": columns},
+                f"{int(dup_count)} duplicate row(s) ({dup_rate:.2%}) by columns {columns}, "
+                f"within threshold {max_duplicate_rate:.2%}",
+                {
+                    "duplicates_count": int(dup_count),
+                    "duplicate_rate": float(dup_rate),
+                    "max_duplicate_rate": float(max_duplicate_rate),
+                    "columns": columns,
+                },
             )
         except Exception as e:
             logger.exception(f"Error executing duplicate check: {e}")
@@ -383,7 +405,7 @@ class RangeCheck(BaseQualityCheck):
 
             return self._create_result(
                 True,
-                f"Column '{column}' values within range [{min_val or '-∞'}, {max_val or '+∞'}]",
+                f"Column '{column}' values within range {_format_bounds(min_val, max_val)}",
                 {
                     "actual_min": actual_min,
                     "actual_max": actual_max,

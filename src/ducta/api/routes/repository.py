@@ -36,7 +36,7 @@ from ducta.api.models.repository import (
     RepositoryConnectRequest,
     RepositoryInfo,
 )
-from ducta.api.repository.base import RepositoryAdapter
+from ducta.api.vcs.base import RepositoryAdapter
 
 router = APIRouter(prefix="/repository", tags=["Repository"])
 
@@ -309,7 +309,7 @@ def _get_adapter(workspace_root: Path, settings: Settings) -> RepositoryAdapter:
 
 
 def _local_adapter(workspace_root: Path) -> RepositoryAdapter:
-    from ducta.api.repository.local import LocalAdapter  # noqa: PLC0415
+    from ducta.api.vcs.local import LocalAdapter  # noqa: PLC0415
 
     adapter = LocalAdapter()
     adapter.set_local_path(workspace_root)

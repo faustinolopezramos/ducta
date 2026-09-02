@@ -26,7 +26,9 @@ from typing import Optional
 from uuid import uuid4
 
 import bcrypt as _bcrypt  # type: ignore
-from jose import ExpiredSignatureError, JWTError, jwt  # type: ignore
+import jwt  # PyJWT
+from jwt import ExpiredSignatureError
+from jwt import InvalidTokenError as _JWTInvalidTokenError
 
 from ducta.api.exceptions import ExpiredTokenError, InvalidTokenError
 
@@ -95,7 +97,7 @@ class AuthService:
             payload = jwt.decode(token, self._secret, algorithms=[self._algorithm])
         except ExpiredSignatureError:
             raise ExpiredTokenError("Token has expired")
-        except JWTError:
+        except _JWTInvalidTokenError:
             raise InvalidTokenError("Token is invalid or has been tampered with")
 
         if payload.get("type") != self._TOKEN_TYPE_ACCESS:

@@ -1,51 +1,39 @@
 .ilog {
-  --ilog-bg: #0f1117;
-  --ilog-surface: #161b22;
-  --ilog-border: rgba(255, 255, 255, 0.08);
-  --ilog-border-strong: rgba(255, 255, 255, 0.12);
-  --ilog-overlay: rgba(255, 255, 255, 0.04);
-  --ilog-hover: rgba(255, 255, 255, 0.06);
-  --ilog-accent: #58a6ff;
-  --ilog-text: #e1e4e8;
-  --ilog-text-dim: #8b949e;
-  --ilog-text-muted: #6e7681;
-  --ilog-red: #f85149;
-  --ilog-red-bg: rgba(248, 81, 73, 0.10);
-  --ilog-amber: #d29922;
-  --ilog-amber-bg: rgba(210, 153, 34, 0.10);
-  --ilog-green: #3fb950;
-  --ilog-green-bg: rgba(63, 185, 80, 0.10);
-  --ilog-blue: #58a6ff;
-  --ilog-blue-bg: rgba(88, 166, 255, 0.08);
+  /* ──────────────────────────────────────────────────────────────────────────
+   * These used to be a hardcoded palette of GitHub's greys and blues
+   * (#0f1117, #58a6ff, #e1e4e8) with a parallel `.ilog--light` block toggled
+   * from a React store. Two consequences: the panel rendered in a different
+   * brand from the rest of the app — which is most of why it read as pasted in
+   * from somewhere else — and it themed itself through a second mechanism that
+   * could drift from the `data-theme` attribute everything else follows.
+   *
+   * They are now aliases onto the design tokens, so the panel inherits both
+   * palettes for free and there is exactly one theming mechanism again.
+   * ────────────────────────────────────────────────────────────────────────── */
+  --ilog-bg: var(--bg);
+  --ilog-surface: var(--surface);
+  --ilog-border: var(--border);
+  --ilog-border-strong: var(--border);
+  --ilog-overlay: var(--overlay-subtle);
+  --ilog-hover: var(--surface-hover);
+  --ilog-accent: var(--primary);
+  --ilog-text: var(--text);
+  --ilog-text-dim: var(--text-dim);
+  --ilog-text-muted: var(--text-muted);
+  --ilog-red: var(--danger);
+  --ilog-red-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+  --ilog-amber: var(--warning-strong);
+  --ilog-amber-bg: color-mix(in srgb, var(--warning) 14%, transparent);
+  --ilog-green: var(--success);
+  --ilog-green-bg: color-mix(in srgb, var(--success) 12%, transparent);
+  --ilog-blue: var(--blue);
+  --ilog-blue-bg: color-mix(in srgb, var(--blue) 12%, transparent);
 
   background: var(--ilog-bg);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
-}
-
-.ilog--light {
-  --ilog-bg: #f0f2f5;
-  --ilog-surface: #ffffff;
-  --ilog-border: rgba(0, 0, 0, 0.12);
-  --ilog-border-strong: rgba(0, 0, 0, 0.18);
-  --ilog-overlay: rgba(0, 0, 0, 0.04);
-  --ilog-hover: rgba(0, 0, 0, 0.06);
-  --ilog-accent: #0969da;
-  --ilog-text: #1b1f24;
-  --ilog-text-dim: #4d5562;
-  --ilog-text-muted: #6e7781;
-  --ilog-red: #cf222e;
-  --ilog-red-bg: rgba(207, 34, 46, 0.14);
-  --ilog-amber: #7d5200;
-  --ilog-amber-bg: rgba(154, 103, 0, 0.13);
-  --ilog-green: #116329;
-  --ilog-green-bg: rgba(26, 127, 55, 0.13);
-  --ilog-blue: #0969da;
-  --ilog-blue-bg: rgba(9, 105, 218, 0.12);
-
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.10);
+  box-shadow: var(--shadow-xl);
 }
 
 .ilog--inline {
@@ -167,8 +155,8 @@
 }
 
 @keyframes ilog-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(88, 166, 255, 0.4); }
-  50% { box-shadow: 0 0 0 6px rgba(88, 166, 255, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 40%, transparent); }
+  50% { box-shadow: 0 0 0 6px transparent; }
 }
 
 .ilog__status-dot--idle {
@@ -183,7 +171,7 @@
 }
 
 .ilog__entry-count {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ilog-text-dim);
   font-weight: 400;
   letter-spacing: 0.01em;
@@ -211,7 +199,7 @@
   background: var(--ilog-overlay);
   border: 1px solid var(--ilog-border);
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   color: var(--ilog-text-dim);
   white-space: nowrap;
   flex-shrink: 0;
@@ -236,17 +224,17 @@
 
 .ilog__chip--success {
   color: var(--ilog-green);
-  border-color: rgba(63, 185, 80, 0.25);
+  border-color: color-mix(in srgb, var(--success) 25%, transparent);
 }
 
 .ilog__chip--failed {
   color: var(--ilog-red);
-  border-color: rgba(248, 81, 73, 0.25);
+  border-color: color-mix(in srgb, var(--danger) 25%, transparent);
 }
 
 .ilog__chip--running {
   color: var(--ilog-accent);
-  border-color: rgba(88, 166, 255, 0.25);
+  border-color: color-mix(in srgb, var(--primary) 25%, transparent);
 }
 
 .ilog__btn {
@@ -302,7 +290,7 @@
 }
 
 .ilog__mini-badge {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   padding: 2px 8px;
   border-radius: 12px;
@@ -406,7 +394,7 @@
 
 .ilog__level-pill {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   padding: 4px 10px;
   border-radius: 5px;
   border: none;
@@ -437,7 +425,7 @@
 }
 
 .ilog__level-badge {
-  font-size: 9px;
+  font-size: 11px;
   opacity: 0.6;
   font-weight: 400;
 }
@@ -478,12 +466,12 @@
 
 .ilog__search-input::placeholder {
   color: var(--ilog-text-muted);
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .ilog__search-input:focus {
   border-color: var(--ilog-accent);
-  box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
 }
 
 .ilog__search-clear {
@@ -535,7 +523,7 @@
 }
 
 .ilog__list-empty-hint {
-  font-size: 10px;
+  font-size: 11px;
   color: var(--ilog-text-muted);
   opacity: 0.5;
   margin-top: -4px;
@@ -554,7 +542,7 @@
 
 .ilog__scroll-btn {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   background: var(--ilog-accent);
   border: none;
   border-radius: 20px;
@@ -582,13 +570,13 @@
   padding: 5px 16px;
   background: var(--ilog-red-bg);
   color: var(--ilog-red);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
-  border-top: 1px solid rgba(248, 81, 73, 0.2);
+  border-top: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
   animation: ilog-slide-up 0.3s ease-out;
 }
 
@@ -604,7 +592,7 @@
   border: 1px solid var(--ilog-red);
   padding: 3px 10px;
   border-radius: 5px;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s;
@@ -613,94 +601,4 @@
 .ilog__reconnect-btn:hover {
   background: var(--ilog-red);
   color: white;
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   LIGHT MODE OVERRIDES — scoped under .ilog--light so dark mode is untouched.
-   ══════════════════════════════════════════════════════════════════════════════ */
-
-/* Header: stronger bottom border for visual separation */
-.ilog--light .ilog__header {
-  border-bottom: 1px solid rgba(0, 0, 0, 0.14);
-}
-
-/* Toolbar: subtle warm tint so it separates from the pure-white header */
-.ilog--light .ilog__toolbar {
-  background: #f7f8fa;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.10);
-}
-
-/* Level pill active: stronger shadow + outline for clear indication */
-.ilog--light .ilog__level-pill--active {
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12), inset 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
-  border: 1px solid rgba(0, 0, 0, 0.12);
-}
-
-/* Search input: visible border so it doesn't blend with toolbar */
-.ilog--light .ilog__search-input {
-  border-color: rgba(0, 0, 0, 0.18);
-  background: #ffffff;
-}
-
-.ilog--light .ilog__search-input:focus {
-  border-color: #0969da;
-  box-shadow: 0 0 0 3px rgba(9, 105, 218, 0.12);
-}
-
-/* Sidebar: light tint to distinguish from main content area */
-.ilog--light .ilog__sidebar {
-  background: #f5f6f8;
-  border-right: 1px solid rgba(0, 0, 0, 0.10);
-}
-
-/* Scroll-to-latest: stronger shadow for visibility on light backgrounds */
-.ilog--light .ilog__scroll-btn {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.1);
-}
-
-.ilog--light .ilog__scroll-btn:hover {
-  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.22), 0 2px 6px rgba(0, 0, 0, 0.12);
-}
-
-/* Minibar: visible border in light mode */
-.ilog--light .ilog__minibar {
-  border-color: rgba(0, 0, 0, 0.14);
-  background: #fafbfc;
-}
-
-.ilog--light .ilog__minibar:hover {
-  background: rgba(9, 105, 218, 0.04);
-  border-color: #0969da;
-}
-
-/* Log level badge: slightly stronger for readability */
-.ilog--light .ilog__level-badge {
-  opacity: 0.75;
-}
-
-/* Node chips: stronger borders */
-.ilog--light .ilog__chip {
-  border-color: rgba(0, 0, 0, 0.12);
-  background: rgba(0, 0, 0, 0.03);
-}
-
-.ilog--light .ilog__chip--success {
-  border-color: rgba(26, 127, 55, 0.30);
-  background: rgba(26, 127, 55, 0.06);
-}
-
-.ilog--light .ilog__chip--failed {
-  border-color: rgba(207, 34, 46, 0.30);
-  background: rgba(207, 34, 46, 0.06);
-}
-
-.ilog--light .ilog__chip--running {
-  border-color: rgba(9, 105, 218, 0.30);
-  background: rgba(9, 105, 218, 0.06);
-}
-
-/* Connection lost banner: stronger visibility */
-.ilog--light .ilog__footer-error {
-  background: rgba(207, 34, 46, 0.08);
-  border-top-color: rgba(207, 34, 46, 0.20);
 }

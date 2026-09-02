@@ -99,7 +99,6 @@ def get_store(context: Any) -> Optional[_HandoffStore]:
                 try:
                     setattr(context, _ATTR, store)
                 except Exception:
-
                     return None
     return store
 
@@ -121,8 +120,7 @@ def _is_pandas_dataframe(dataframe: Any) -> bool:
 
 
 def offer(context: Any, path: Any, dataframe: Any, write_mode: Optional[str]) -> None:
-    """Persist and register ``dataframe`` for handoff under ``path`` when eligible.
-    """
+    """Persist and register ``dataframe`` for handoff under ``path`` when eligible."""
     if not is_enabled(context):
         return
     mode = (write_mode or "overwrite").lower()
@@ -159,8 +157,7 @@ def offer(context: Any, path: Any, dataframe: Any, write_mode: Optional[str]) ->
 
 
 def take(context: Any, path: Any) -> Optional[Any]:
-    """Return a cached DataFrame for ``path`` if handoff is enabled and present.
-    """
+    """Return a cached DataFrame for ``path`` if handoff is enabled and present."""
     if not is_enabled(context):
         return None
     store = get_store(context)

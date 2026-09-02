@@ -1,0 +1,119 @@
+name: Release
+
+# Publishing was a manual, undocumented sequence run from a laptop, and one step
+# of it — building the web app before packaging — is invisible: `src/ducta/ui/dist`
+# is gitignored, so `poetry build` on a clean tree silently produces a wheel with
+# no UI and no error. This workflow makes the whole sequence the only way to ship.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Where to publish"
+        required: true
+        default: testpypi
+        type: choice
+        options: [testpypi, pypi]
+
+permissions:
+  contents: read
+
+env:
+  POETRY_VERSION: "1.8.3"
+
+jobs:
+  build:
+    name: Build distributions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: src/ducta/ui/package-lock.json
+      - name: Install Poetry
+        run: pipx install "poetry==$POETRY_VERSION"
+
+      - name: Refuse to release a tag that disagrees with pyproject
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(poetry version --short)"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match pyproject version $pkg"
+            exit 1
+          fi
+          echo "tag and pyproject agree on $pkg"
+
+      - name: Build the web app
+        working-directory: src/ducta/ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Build sdist and wheel
+        run: poetry build
+
+      # The failure this workflow exists to prevent. Assert it directly rather
+      # than trusting that the step above ran.
+      - name: Assert the wheel bundles the web app
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          wheel = glob.glob("dist/*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          if not any(n.endswith("ducta/ui/dist/index.html") for n in names):
+              sys.exit(f"{wheel} ships no UI — refusing to publish")
+          assets = [n for n in names if "/ui/dist/assets/" in n]
+          if not assets:
+              sys.exit(f"{wheel} has index.html but no built assets — refusing to publish")
+          print(f"{wheel} bundles the web app ({len(assets)} assets)")
+          PY
+
+      - name: Smoke-test the built wheel
+        run: |
+          python -m venv /tmp/clean
+          /tmp/clean/bin/pip install --upgrade pip
+          /tmp/clean/bin/pip install "$(ls dist/*.whl)[all]"
+          /tmp/clean/bin/ducta --version
+          /tmp/clean/bin/python - <<'PY'
+          from ducta.api.main import create_app
+          app = create_app()
+          assert "/health" in app.openapi()["paths"]
+          print("smoke OK")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to ${{ github.event.inputs.target || 'pypi' }}
+    needs: build
+    runs-on: ubuntu-latest
+    # Gate publication behind a GitHub Environment so a tag push cannot ship on
+    # its own — configure it with required reviewers under
+    # Settings → Environments. Trusted publishing (OIDC) means no API token is
+    # stored anywhere; register the publisher on PyPI for this repo/workflow.
+    environment: ${{ github.event.inputs.target || 'pypi' }}
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to TestPyPI
+        if: github.event.inputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+      - name: Publish to PyPI
+        if: github.event.inputs.target != 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1

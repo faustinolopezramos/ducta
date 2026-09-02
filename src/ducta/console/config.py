@@ -293,11 +293,6 @@ class ConfigManager:
     def get_config_directory(self) -> Path:
         if not self.active_config_dir:
             if not self.require_config:
-                # No canonical root: a flexible config form (bundle / directory
-                # convention / quickstart) resolved the project instead. Fall
-                # back to base_path — the same directory FlexibleConfigResolver
-                # searched — so callers (module resolution, PipelineExecutor)
-                # get a sensible project directory instead of an error.
                 return self.base_path
             raise ConfigurationError("No active configuration directory")
         return self.active_config_dir
@@ -308,13 +303,6 @@ class ConfigManager:
     def change_to_config_directory(self) -> None:
         if self.active_config_dir and self.active_config_dir != self.original_cwd:
             try:
-                # Confine against self.base_path (the explicit --base-path,
-                # or cwd if unset) — not original_cwd, the directory the CLI
-                # happened to be launched from. `ducta start --base-path
-                # /some/project` from an unrelated launch directory is a
-                # normal, legitimate usage; checking against original_cwd
-                # instead of the intended project root either rejects that
-                # valid case or fails to actually confine to it.
                 os.chdir(SecurityValidator.validate_path(self.base_path, self.active_config_dir))
             except SecurityError as e:
                 raise ConfigurationError(f"Failed to change directory: {e}")
@@ -327,8 +315,7 @@ class ConfigManager:
 
     @classmethod
     def from_layer_config(cls, layer_context: Dict[str, str]) -> "ConfigManager":
-        """Create ConfigManager from layered project configuration.
-        """
+        """Create ConfigManager from layered project configuration."""
         instance = cls.__new__(cls)
         instance.original_cwd = Path.cwd()
         instance.base_path = Path(layer_context.get("layer_path", "."))

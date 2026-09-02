@@ -13,7 +13,12 @@ export function ServerProjectsHydrator({ localProjects }: { localProjects: Proje
   const { data } = useServerProjects();
   const dispatch = useProjectStore((s) => s.dispatch);
   const localProjectsRef = useRef(localProjects);
-  localProjectsRef.current = localProjects;
+  // Written in an effect, not during render: the ref is only read from
+  // effects and callbacks that run later, so post-commit is soon enough,
+  // and a render-phase write is not safe under concurrent rendering.
+  useEffect(() => {
+    localProjectsRef.current = localProjects;
+  });
 
   useEffect(() => {
     if (!data?.projects?.length) return;

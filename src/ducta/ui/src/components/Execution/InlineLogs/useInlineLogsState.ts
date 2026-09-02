@@ -25,7 +25,8 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
   const toggleSection = (id: string) => {
     setCollapsedSections((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -43,9 +44,16 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
   const isConnected = useLogsStore((s) => s.isConnected);
   const bumpReconnect = useLogsStore((s) => s.bumpReconnectSignal);
   const wasEverConnected = useRef(false);
-  if (isConnected) wasEverConnected.current = true;
-  // Reset when logs are cleared (new execution starts)
-  useEffect(() => { if (currentLogs.length === 0) wasEverConnected.current = false; }, [currentLogs.length]);
+  // Both the set and the reset live here: writing a ref during render is not
+  // safe under concurrent rendering, and splitting the two halves across a
+  // render-phase write and an effect made their ordering depend on it.
+  useEffect(() => {
+    if (currentLogs.length === 0) {
+      wasEverConnected.current = false; // new execution — logs were cleared
+    } else if (isConnected) {
+      wasEverConnected.current = true;
+    }
+  }, [currentLogs.length, isConnected]);
   const setSearch = useLogsStore((s) => s.setSearchFilter);
   const setLevel = useLogsStore((s) => s.setLevelFilter);
   const setNodeFilter = useLogsStore((s) => s.setNodeFilter);
@@ -77,10 +85,13 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
 
   const sections = useMemo(() => groupIntoSections(filteredLogs), [filteredLogs]);
 
-  const t0 = useMemo(() => {
-    if (currentLogs.length === 0) return Date.now();
-    return currentLogs[0]?.timestamp ?? Date.now();
-  }, [currentLogs.length, currentLogs[0]?.timestamp]);
+  // Mount time, sampled once, as the origin used when the logs carry no
+  // timestamp of their own. Read via a lazy initialiser rather than during
+  // render: `Date.now()` in a render body (or a useMemo) is impure, and it
+  // also made the origin jump every time the memo recomputed.
+  const [mountedAt] = useState(() => Date.now());
+  const firstTimestamp = currentLogs[0]?.timestamp;
+  const t0 = firstTimestamp ?? mountedAt;
 
   const flattenedItems = useMemo<FlattenedItem[]>(() => {
     const items: FlattenedItem[] = [];
@@ -113,9 +124,15 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
   const totalCount = currentLogs.length;
   const anyFilter = searchFilter || levelFilter !== "ALL" || nodeFilter !== null;
 
-  useEffect(() => {
-    if (currentLogs.length === 0) setCollapsedSections(new Set());
-  }, [currentLogs.length]);
+  // Clearing the logs means a new run: drop the collapse state that belonged
+  // to the old one. Adjusted during render so the new run's sections never
+  // paint with the previous run's rows collapsed.
+  const [hadLogs, setHadLogs] = useState(currentLogs.length > 0);
+  const hasLogs = currentLogs.length > 0;
+  if (hasLogs !== hadLogs) {
+    setHadLogs(hasLogs);
+    if (!hasLogs) setCollapsedSections(new Set());
+  }
 
   return {
     currentLogs,

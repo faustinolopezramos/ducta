@@ -90,6 +90,9 @@ export function useWebTerminal() {
   }, []);
 
   useEffect(() => {
+    // Opening the socket is exactly what an effect is for; `connect` clears the
+    // output buffer for the new connection on its way in.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     connect();
     return () => {
       connectionIdRef.current += 1;

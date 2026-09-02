@@ -307,8 +307,8 @@ Configure and test database connections used by ingestion pipelines.
 Run Certificates (``ducta certify``)
 ------------------------------------
 
-Every terminating run writes a tamper-evident **Run Certificate** to
-``.ducta/runs/<run_id>/certificate.json``, recording inputs, outputs, config,
+Every terminating run writes a self-hashed **Run Certificate** to
+``.ducta/runs/<env>/<run_id>/certificate.json``, recording inputs, outputs, config,
 and quality-gate outcomes. Use ``certify`` to inspect and verify them.
 
 .. code-block:: bash

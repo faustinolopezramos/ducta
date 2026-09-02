@@ -23,7 +23,9 @@ export function useCanvasPanZoom(onEmptyCanvasClick: () => void) {
   // Keep the latest callback without making the pan/zoom effect re-run when
   // the caller passes a fresh inline function each render.
   const onEmptyCanvasClickRef = useRef(onEmptyCanvasClick);
-  onEmptyCanvasClickRef.current = onEmptyCanvasClick;
+  useEffect(() => {
+    onEmptyCanvasClickRef.current = onEmptyCanvasClick;
+  });
 
   // Pan the viewport so the given node lands in the middle of the canvas
   // (with an optional horizontal offset to accommodate opening sidebar drawers).

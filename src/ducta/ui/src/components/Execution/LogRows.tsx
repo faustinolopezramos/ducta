@@ -68,7 +68,7 @@ export function NodeListRow({
       }} />
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 10,
+        fontSize: 11,
         color: active ? "var(--ilog-text)" : hovered ? "var(--ilog-text)" : "var(--ilog-text-dim)",
         flex: 1,
         minWidth: 0,
@@ -83,7 +83,7 @@ export function NodeListRow({
       </span>
       {count > 0 && (
         <span style={{
-          fontFamily: "var(--font-mono)", fontSize: 9,
+          fontFamily: "var(--font-mono)", fontSize: 11,
           background: active ? "var(--ilog-hover)" : "var(--ilog-overlay)",
           color: active ? "var(--ilog-text)" : "var(--ilog-text-dim)",
           padding: "1px 6px", borderRadius: 4, flexShrink: 0,
@@ -184,7 +184,7 @@ export function NodeStatusRow({
         alignItems: "center",
         gap: 4,
         fontFamily: "var(--font-mono)",
-        fontSize: 9,
+        fontSize: 11,
         color: stateColor,
         fontWeight: 600,
         padding: "2px 8px",
@@ -201,7 +201,7 @@ export function NodeStatusRow({
 
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 9,
+        fontSize: 11,
         color: "var(--ilog-text-muted)",
         minWidth: 50,
         textAlign: "right",
@@ -271,7 +271,7 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
         <>
           <span style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 9,
+            fontSize: 11,
             color: "var(--ilog-text-muted)",
             flexShrink: 0,
             minWidth: 52,
@@ -322,7 +322,7 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
             borderRadius: 4,
             color: "var(--ilog-text-dim)",
             cursor: "pointer",
-            fontSize: 9,
+            fontSize: 11,
             fontFamily: "var(--font-mono)",
             padding: "2px 7px",
             position: "absolute",
@@ -380,7 +380,7 @@ export function SectionHeaderRow({
       }}
     >
       <span style={{
-        fontSize: 9,
+        fontSize: 11,
         color: "var(--ilog-text-dim)",
         transition: "transform 0.15s",
         transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
@@ -402,7 +402,7 @@ export function SectionHeaderRow({
       </span>
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 9,
+        fontSize: 11,
         color: "var(--ilog-text-muted)",
         flexShrink: 0,
       }}>
@@ -410,7 +410,7 @@ export function SectionHeaderRow({
       </span>
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 9,
+        fontSize: 11,
         color: "var(--ilog-text-muted)",
         background: "var(--ilog-overlay)",
         padding: "1px 6px",

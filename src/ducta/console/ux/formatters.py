@@ -276,3 +276,22 @@ def create_table(title: Optional[str] = None, **kwargs: Any) -> Optional["Table"
     if not _USE_RICH:
         return None
     return Table(title=title, **kwargs)
+
+
+def require_table(title: Optional[str] = None, **kwargs: Any) -> "Table":
+    """`create_table` for callers that have already established Rich is present.
+
+    Most render paths open with a ``if console is None or not _USE_RICH: return``
+    guard and then build several tables. `create_table`'s honest `Optional`
+    return type cannot see that guard, so each of those builders reads as
+    "might be None" and every `.add_column` after it looks like a possible
+    `AttributeError` — dozens of warnings over a branch that cannot be taken,
+    which is how a real one would go unnoticed. Past the guard, use this.
+    """
+    table = create_table(title=title, **kwargs)
+    if table is None:  # pragma: no cover — unreachable past a _USE_RICH guard
+        raise RuntimeError(
+            "require_table() called without Rich available; check _USE_RICH "
+            "(or get_console()) before building tables."
+        )
+    return table

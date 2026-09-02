@@ -1,6 +1,6 @@
 # Ducta Core
 
-> **The pipeline execution engine of Ducta.** It turns a validated `Context` into running work: resolving the node dependency graph, executing nodes in parallel in the correct order, integrating quality gates and MLOps tracking, and emitting a tamper-evident **Run Certificate** for every terminating run.
+> **The pipeline execution engine of Ducta.** It turns a validated `Context` into running work: resolving the node dependency graph, executing nodes in parallel in the correct order, integrating quality gates and MLOps tracking, and emitting a self-hashed (and, with a signing key, tamper-evident) **Run Certificate** for every terminating run.
 
 ## At a glance
 

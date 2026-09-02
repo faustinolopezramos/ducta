@@ -108,9 +108,7 @@ class TestIngestionService:
         assert "NEW_DB_USER=admin" in content
         assert "NEW_DB_PASSWORD=s3cret" in content
 
-    def test_create_connection_same_type_different_names_keep_separate_credentials(
-        self, temp_dir
-    ):
+    def test_create_connection_same_type_different_names_keep_separate_credentials(self, temp_dir):
         """Regression: two connections of the same source_type must not
         overwrite each other's credentials in .env."""
         config_dir = temp_dir / "config"

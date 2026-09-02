@@ -294,8 +294,7 @@ class MLNodeCommand(NodeCommand):
             raise
 
     def split_was_applied(self) -> bool:
-        """Whether the node called split_dataframe/kfold_splits with this ml_context.
-        """
+        """Whether the node called split_dataframe/kfold_splits with this ml_context."""
         ctx = self._last_ml_context
         if ctx is None:
             return False

@@ -75,7 +75,8 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -121,7 +122,10 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
             : lineage.downstream.has(item.id) ? "down"
             : null
             : null;
-          const lensDepth = lensDir === "up" ? lineage!.upstream.get(item.id) : lineage!?.downstream.get(item.id);
+          const lensDepth =
+            lensDir === "up"
+              ? lineage!.upstream.get(item.id)
+              : lineage?.downstream.get(item.id);
           const dimmed = lineage ? item.id !== lineage.selectedId && !lensDir : false;
           const isSelected = selectedPipeline === item.id;
           const isExpanded = expanded.has(item.id);
@@ -392,7 +396,19 @@ export function ProjectPage() {
                 <div
                   key={pipeline.id}
                   className={`pipeline-card t-card ${confirmDeleteId === pipeline.id ? "deleting" : ""}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => navigate(`/project/${projectId}/pipeline/${pipeline.id}`)}
+                  onKeyDown={(e) => {
+                    // The card holds its own buttons (delete, confirm), so it
+                    // cannot itself be a <button>; give it button semantics
+                    // and the two keys a button would answer to.
+                    if (e.target !== e.currentTarget) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(`/project/${projectId}/pipeline/${pipeline.id}`);
+                    }
+                  }}
                 >
                   <div className="card-header">
                     <div className="pipeline-icon">
@@ -415,7 +431,7 @@ export function ProjectPage() {
                   </div>
 
                   {confirmDeleteId === pipeline.id && (
-                    <div className="delete-confirm-overlay" onClick={e => e.stopPropagation()}>
+                    <div className="delete-confirm-overlay" role="presentation" onClick={e => e.stopPropagation()}>
                       <p>Delete this pipeline?</p>
                       <div className="confirm-actions">
                         <button className="confirm-yes" onClick={() => handleDeletePipeline(pipeline.id)} disabled={isDeleting}>Yes</button>

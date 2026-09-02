@@ -25,8 +25,8 @@ from typing import Any, Dict, List
 
 from loguru import logger
 
-from ducta.api.repository.base import RepositoryAdapter
 from ducta.api.utils.git_utils import GIT_AVAILABLE, format_commit, get_repo
+from ducta.api.vcs.base import RepositoryAdapter
 
 
 class LocalAdapter(RepositoryAdapter):

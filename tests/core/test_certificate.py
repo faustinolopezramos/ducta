@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 
 from ducta.core.certificate import (
     RunCertificate,
@@ -241,3 +242,135 @@ class TestFindCertificateDir:
         self._write_cert(base / "dev" / "run-a")
         assert find_certificate_dir(base, "nope") is None
         assert find_certificate_dir(tmp_path / "does-not-exist", "run-a") is None
+
+
+class TestEvidenceCompleteness:
+    """A certificate must not look complete when the run's evidence was not.
+
+    The ledger swallows recording failures on purpose — bookkeeping must never
+    fail a pipeline — but a certificate assembled from a ledger that dropped a
+    node outcome is missing exactly what it exists to attest.
+    """
+
+    def test_defaults_to_complete(self):
+        cert = _make_cert()
+        assert cert.evidence_complete is True
+        assert cert.evidence_gaps == []
+
+    def test_completeness_is_covered_by_the_hash(self):
+        complete = _make_cert()
+        partial = _make_cert(evidence_complete=False, evidence_gaps=["node trace for 'a': boom"])
+        assert complete.compute_hash() != partial.compute_hash()
+
+    def test_flipping_the_flag_is_detected_as_tampering(self, tmp_path):
+        from ducta.core.certificate import verify_certificate, write_certificate
+
+        cert = _make_cert(evidence_complete=False, evidence_gaps=["node trace for 'a': boom"])
+        path = write_certificate(cert, tmp_path)
+
+        data = json.loads(path.read_text())
+        data["evidence_complete"] = True
+        path.write_text(json.dumps(data))
+
+        result = verify_certificate(path)
+        assert result.ok is False
+        assert "hash mismatch" in result.reason
+
+    def test_build_certificate_reports_a_ledger_gap(self):
+        from ducta.core.certificate import build_certificate
+        from ducta.core.ledger import ledger_for
+
+        class _NoWrites:
+            __slots__ = ("run_ledger",)
+
+        context = _NoWrites()
+        ledger = ledger_for(context)
+        ledger.record_node("a", "success")
+        assert ledger.evidence_complete is False
+
+        cert = build_certificate(
+            context,
+            run_id="run-1",
+            pipeline="p",
+            environment_name="dev",
+            status="success",
+            started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            ended_at=datetime(2026, 1, 1, 0, 1, tzinfo=timezone.utc),
+            ducta_version="1.0.0",
+        )
+
+        assert cert.evidence_complete is False
+        assert cert.evidence_gaps
+
+
+class TestFingerprintComparability:
+    """An algorithm change must never be reported as a data change."""
+
+    def test_legacy_constant_matches_the_fingerprint_module(self):
+        # certificate.py duplicates this literal instead of importing it, because
+        # `ducta.mlrun` is an optional extra and `certify verify` must work
+        # without it. That duplication is only safe if something checks it.
+        from ducta.core.certificate import LEGACY_FINGERPRINT_ALGORITHM
+        from ducta.mlrun.fingerprint import ALGO_LEGACY
+
+        assert LEGACY_FINGERPRINT_ALGORITHM == ALGO_LEGACY
+
+    def test_algorithm_leads_the_logical_fingerprint(self):
+        from ducta.core.certificate import logical_fingerprint
+
+        same_data = {"schema_hash": "s", "row_count": 3, "content_hash": "c"}
+        assert logical_fingerprint({**same_data, "algorithm": "a/v2"}) != logical_fingerprint(
+            {**same_data, "algorithm": "b/v2"}
+        )
+
+    def test_missing_algorithm_reads_as_legacy(self):
+        from ducta.core.certificate import LEGACY_FINGERPRINT_ALGORITHM, logical_fingerprint
+
+        assert logical_fingerprint({"schema_hash": "s"})[0] == LEGACY_FINGERPRINT_ALGORITHM
+
+    def test_diff_reports_not_comparable_rather_than_different(self):
+        from ducta.core.certificate import diff_certificates
+
+        def _cert(algorithm):
+            return {
+                "run_id": "r",
+                "outputs": {
+                    "core.sales": {
+                        "algorithm": algorithm,
+                        "engine": "spark",
+                        "schema_hash": "s",
+                        "row_count": 10,
+                        "content_hash": "c",
+                    }
+                },
+            }
+
+        result = diff_certificates(_cert("legacy/v1"), _cert("xxhash64-multiset/v2"))
+        row = result["outputs"][0]
+        assert row["match"] is None, "an algorithm change is not a data change"
+        assert "algorithm differs" in row["not_comparable_reason"]
+        assert result["outputs_comparable"] is False
+        # A verdict we could not reach must not read as a failed one.
+        assert result["outputs_match"] is True
+
+    def test_same_algorithm_still_compares_normally(self):
+        from ducta.core.certificate import diff_certificates
+
+        def _cert(content_hash):
+            return {
+                "run_id": "r",
+                "outputs": {
+                    "core.sales": {
+                        "algorithm": "xxhash64-multiset/v2",
+                        "engine": "spark",
+                        "schema_hash": "s",
+                        "row_count": 10,
+                        "content_hash": content_hash,
+                    }
+                },
+            }
+
+        same = diff_certificates(_cert("c"), _cert("c"))["outputs"][0]
+        differs = diff_certificates(_cert("c"), _cert("d"))["outputs"][0]
+        assert same["match"] is True
+        assert differs["match"] is False

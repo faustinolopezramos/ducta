@@ -38,13 +38,14 @@ class SearchError(ValueError):
 
 
 class SearchStrategy(ABC):
-    """Proposes hyperparameter sets and records how each one scored.
-    """
+    """Proposes hyperparameter sets and records how each one scored."""
 
     def __init__(self, direction: str = MAXIMIZE, n_trials: int = 10) -> None:
         direction = (direction or MAXIMIZE).lower()
         if direction not in (MAXIMIZE, MINIMIZE):
-            raise SearchError(f"Unknown objective direction '{direction}'. Valid: maximize, minimize")
+            raise SearchError(
+                f"Unknown objective direction '{direction}'. Valid: maximize, minimize"
+            )
         self.direction = direction
         self.n_trials = int(n_trials)
         self._history: List[Tuple[Dict[str, Any], Optional[float]]] = []
@@ -54,8 +55,7 @@ class SearchStrategy(ABC):
         """Next hyperparameter set to try, or ``None`` when the search is done."""
 
     def tell(self, params: Dict[str, Any], score: Optional[float]) -> None:
-        """Record the objective value a proposed set achieved.
-        """
+        """Record the objective value a proposed set achieved."""
         self._history.append((params, score))
 
     @property
@@ -64,11 +64,8 @@ class SearchStrategy(ABC):
 
     @property
     def best(self) -> Optional[Tuple[Dict[str, Any], float]]:
-        """Best ``(params, score)`` seen so far, or ``None`` if nothing scored.
-        """
-        scored = [
-            (p, s) for p, s in self._history if s is not None and math.isfinite(s)
-        ]
+        """Best ``(params, score)`` seen so far, or ``None`` if nothing scored."""
+        scored = [(p, s) for p, s in self._history if s is not None and math.isfinite(s)]
         if not scored:
             return None
         pick = max if self.direction == MAXIMIZE else min
@@ -76,8 +73,7 @@ class SearchStrategy(ABC):
 
 
 class GridSearch(SearchStrategy):
-    """Exhaustive cartesian product, driven by ``build_param_grid()``.
-    """
+    """Exhaustive cartesian product, driven by ``build_param_grid()``."""
 
     def __init__(self, config: HyperparamConfig, max_trials: Optional[int] = None) -> None:
         grid = config.build_param_grid()
@@ -122,8 +118,7 @@ class GridSearch(SearchStrategy):
 
 
 class RandomSearch(SearchStrategy):
-    """Random sampling over the declared space, capped at ``n_trials``.
-    """
+    """Random sampling over the declared space, capped at ``n_trials``."""
 
     def __init__(
         self, config: HyperparamConfig, n_trials: Optional[int] = None, seed: Optional[int] = None
@@ -159,8 +154,7 @@ class RandomSearch(SearchStrategy):
 
 
 class OptunaSearch(SearchStrategy):
-    """Bayesian (TPE) search backed by an Optuna study.
-    """
+    """Bayesian (TPE) search backed by an Optuna study."""
 
     def __init__(
         self,
@@ -199,8 +193,7 @@ class OptunaSearch(SearchStrategy):
 
     @staticmethod
     def _build_pruner(optuna: Any, pruner_name: Optional[str]) -> Optional[Any]:
-        """Map a validated pruner name to an Optuna pruner instance.
-        """
+        """Map a validated pruner name to an Optuna pruner instance."""
         if pruner_name is None:
             return None
         if pruner_name == "none":
@@ -245,8 +238,7 @@ def build_search_strategy(
     max_grid_trials: Optional[int] = None,
     study_name: Optional[str] = None,
 ) -> SearchStrategy:
-    """Build the strategy ``config.algorithm`` asks for.
-    """
+    """Build the strategy ``config.algorithm`` asks for."""
     if not config.search_space:
         raise SearchError(
             "Cannot build a search strategy: 'search_space' is empty. Declare the "
@@ -266,8 +258,7 @@ def build_search_strategy(
 
 
 def resolve_objective(config: HyperparamConfig) -> Tuple[str, str]:
-    """Return ``(metric_name, direction)`` for the configured objective.
-    """
+    """Return ``(metric_name, direction)`` for the configured objective."""
     objective = config.objective or {}
     metric = (objective.get("metric") or "").strip()
     if not metric:

@@ -38,8 +38,7 @@ Distribution = Dict[str, Any]
 
 
 class HyperparamConfig:
-    """Validated hyperparameter search configuration.
-    """
+    """Validated hyperparameter search configuration."""
 
     VALID_ALGORITHMS = ("grid", "random", "bayesian")
     VALID_PRUNERS = ("median", "hyperband", "none")
@@ -68,7 +67,6 @@ class HyperparamConfig:
         self.storage = storage
         self.study_name = study_name
 
-
         self.pruner: Optional[str] = None
         if pruner is not None:
             pruner_normalized = pruner.lower()
@@ -95,7 +93,6 @@ class HyperparamConfig:
 
         self._validate_dependencies()
 
-
     @classmethod
     def from_dict(cls, data: dict) -> "HyperparamConfig":
         """Build from a dict (loaded from YAML or JSON)."""
@@ -112,8 +109,7 @@ class HyperparamConfig:
 
     @classmethod
     def from_yaml(cls, path: Union[str, Path], key: str) -> Optional["HyperparamConfig"]:
-        """Load one pipeline's hyperparameter config from a YAML file.
-        """
+        """Load one pipeline's hyperparameter config from a YAML file."""
         import yaml  # type: ignore
 
         p = Path(path)
@@ -126,7 +122,6 @@ class HyperparamConfig:
             logger.warning("Key '{}' not found in hyperparams file '{}'", key, p)
             return None
         return cls.from_dict(data[key])
-
 
     @staticmethod
     def _is_conditional(spec: Any) -> bool:
@@ -183,14 +178,12 @@ class HyperparamConfig:
                         f"Param '{name}': missing mapping for parent '{parent}' = {pv!r}"
                     )
 
-
     @staticmethod
     def _is_range_spec(v: Any) -> bool:
         return isinstance(v, dict) and "min" in v and "max" in v and "depends_on" not in v
 
     def _values_for(self, name: str) -> list:
-        """Return the discrete list of values for a parameter, expanding range specs.
-        """
+        """Return the discrete list of values for a parameter, expanding range specs."""
         spec = self.search_space.get(name)
         if spec is None:
             return []
@@ -212,8 +205,7 @@ class HyperparamConfig:
         return list(spec)
 
     def _allowed_values_for(self, name: str, parent_values: Dict[str, Any]) -> list:
-        """Return the values allowed for a conditional param given resolved parent values.
-        """
+        """Return the values allowed for a conditional param given resolved parent values."""
         spec = self.search_space.get(name)
         if not self._is_conditional(spec):
             return self._values_for(name)
@@ -246,8 +238,7 @@ class HyperparamConfig:
     # builders
     # ------------------------------------------------------------------
     def build_param_grid(self) -> Union[ParamGrid, List[ParamGrid]]:
-        """Build an sklearn-style ``param_grid``.
-        """
+        """Build an sklearn-style ``param_grid``."""
         if self.algorithm != "grid":
             logger.warning(
                 "build_param_grid() called for algorithm='{}'. "
@@ -261,8 +252,7 @@ class HyperparamConfig:
         return self._build_conditional_grids()
 
     def _build_conditional_grids(self) -> List[ParamGrid]:
-        """Build one sub-grid per parent-value combination.
-        """
+        """Build one sub-grid per parent-value combination."""
         unconditional = self._get_unconditional_params()
         conditional = self._get_conditional_params()
         parents = self._get_dependency_parents()
@@ -294,8 +284,7 @@ class HyperparamConfig:
         return grids
 
     def build_distributions(self) -> Distribution:
-        """Build a dict suitable for sklearn's ``RandomizedSearchCV``.
-        """
+        """Build a dict suitable for sklearn's ``RandomizedSearchCV``."""
         if self.has_conditional_params():
             logger.warning(
                 "build_distributions() called with conditional params (depends_on). "
@@ -325,8 +314,7 @@ class HyperparamConfig:
         return dists
 
     def build_optuna_space(self) -> Dict[str, dict]:
-        """Build an Optuna-compatible space definition.
-        """
+        """Build an Optuna-compatible space definition."""
         try:
             import optuna  # noqa: F401
         except ImportError:
@@ -382,8 +370,7 @@ class HyperparamConfig:
         return space
 
     def suggest_params(self, trial: Any) -> Dict[str, Any]:
-        """Sample a set of parameters from an Optuna trial.
-        """
+        """Sample a set of parameters from an Optuna trial."""
         params: Dict[str, Any] = {}
 
         if not self.has_conditional_params():
@@ -402,7 +389,6 @@ class HyperparamConfig:
         for name in parents:
             params[name] = self._suggest_one(trial, name, self.search_space[name])
 
-
         for name in conditional:
             allowed = self._allowed_values_for(name, params)
             params[name] = trial.suggest_categorical(name, allowed)
@@ -417,7 +403,6 @@ class HyperparamConfig:
             return trial.suggest_float(name, spec["min"], spec["max"])
 
         return trial.suggest_categorical(name, list(spec))
-
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -437,8 +422,7 @@ def expand_sweep_grid(
     params: Dict[str, Any],
     max_runs: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Expand a flat config into a cartesian product of hyperparameter combos.
-    """
+    """Expand a flat config into a cartesian product of hyperparameter combos."""
     cleaned = dict(params)
     max_runs = int(cleaned.pop("max_runs", max_runs or 50))
 
@@ -471,8 +455,7 @@ def load_hyperparams_config(
     source: Union[str, Path, Dict[str, Any]],
     pipeline_key: Optional[str] = None,
 ) -> Optional["HyperparamConfig"]:
-    """Load a hyperparameter configuration from a YAML file or dict.
-    """
+    """Load a hyperparameter configuration from a YAML file or dict."""
     if isinstance(source, dict):
         data = source
     else:

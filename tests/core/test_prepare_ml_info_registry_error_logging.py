@@ -41,9 +41,7 @@ class TestModelRegistryErrorIsLogged:
         import ducta.core.executors.base as base_module
 
         warnings = []
-        monkeypatch.setattr(
-            base_module.logger, "warning", lambda *a, **k: warnings.append((a, k))
-        )
+        monkeypatch.setattr(base_module.logger, "warning", lambda *a, **k: warnings.append((a, k)))
 
         registry = MagicMock()
         registry.get_model.side_effect = RuntimeError("registry unreachable")

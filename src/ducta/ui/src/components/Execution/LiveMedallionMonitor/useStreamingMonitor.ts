@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import client from "../../../api/client";
 import { useToastStack } from "../../../hooks/useModalStack";
-import type { StreamingStatus, PerformanceMetrics, MonitorState } from "./types";
+import type { StreamingStatus, PerformanceMetrics, MonitorState, RateSample } from "./types";
 import { TERMINAL_EXEC_STATUSES } from "./types";
+import { appendSample, classifyThroughput, rateScale, sumRates } from "./helpers";
 
 /**
  * All stateful/polling logic for the Live Stream Monitor, separated from
@@ -23,8 +24,11 @@ export function useStreamingMonitor(executionId?: string | null, executionStatus
   const [isClearingCheckpoints, setIsClearingCheckpoints] = useState(false);
   const toast = useToastStack();
 
-  // Dynamic max rate for Gauge scaling — grows with observed peaks, never shrinks
-  const maxRateRef = useRef<number>(10);
+  // A rolling window of throughput samples — the trend line, and the source of
+  // the shared scale. This replaces a high-water mark that only ever grew: one
+  // spike used to pin the scale for the rest of the session, flattening every
+  // subsequent reading into an unreadable sliver.
+  const [history, setHistory] = useState<RateSample[]>([]);
 
   // Last successful /streaming/data fetch. A ref (not state) so the 8s gate is
   // independent of the status/metrics cadence and doesn't destabilise fetchAll.
@@ -76,6 +80,10 @@ export function useStreamingMonitor(executionId?: string | null, executionStatus
       setStatus(statusRes.value.data);
       setMonitorState("running");
       setErrorMsg(null);
+      // Functional updater on purpose: `fetchAll` must not close over state, or
+      // the polling effect below tears its interval down after every response.
+      const rates = sumRates(statusRes.value.data);
+      setHistory((prev) => appendSample(prev, { t: now, ...rates }));
     } else if (statusRes.reason?.response?.status !== 404) {
       const msg = statusRes.reason?.response?.data?.message ?? statusRes.reason?.message ?? "Error fetching stream status";
       setErrorMsg(msg);
@@ -93,36 +101,24 @@ export function useStreamingMonitor(executionId?: string | null, executionStatus
 
   // Performance metrics derived from the status snapshot (same computation the
   // /streaming/metrics endpoint performs server-side).
+  // `health_score` used to live here as (total - failed) / total. That is not a
+  // health score, it is the "Failed Queries" tile expressed as a percentage —
+  // the same fact twice — and with zero queries it reported a confident 100%.
+  // Removed rather than reworked; the failure count already says it.
   const pm = useMemo<PerformanceMetrics | null>(() => {
-    const qs = status?.query_statuses;
-    if (!qs) return null;
-
-    let input = 0;
-    let processed = 0;
-    for (const q of Object.values(qs)) {
-      const p = q?.isActive ? q.lastProgress : null;
-      if (p) {
-        input += Number(p.inputRowsPerSecond ?? 0) || 0;
-        processed += Number(p.processedRowsPerSecond ?? 0) || 0;
-      }
-    }
-
-    const total = status?.total_queries ?? 0;
-    const failed = status?.failed_queries ?? 0;
-
-    // Keep maxRate growing — never shrink so the gauge scale stays consistent
-    const observed = Math.max(input, processed);
-    if (observed > maxRateRef.current) maxRateRef.current = observed * 1.2; // 20% headroom
-
+    if (!status?.query_statuses) return null;
+    const { input, processed } = sumRates(status);
     return {
       total_input_rate: input,
       total_processing_rate: processed,
-      processing_efficiency: input > 0 ? (processed / input) * 100 : 0,
-      health_score: total > 0
-        ? Math.round(Math.max(0, Math.min(100, ((total - failed) / total) * 100)) * 100) / 100
-        : 100,
+      // Undefined, not 0, when nothing is arriving: there is no ratio to report
+      // for an idle stream, and 0 read as a failure.
+      processing_efficiency: input > 0 ? (processed / input) * 100 : undefined,
     };
   }, [status]);
+
+  const scale = useMemo(() => rateScale(history), [history]);
+  const verdict = classifyThroughput(pm?.total_input_rate ?? 0, pm?.total_processing_rate ?? 0);
 
   const handleRestartNode = async (nodeName: string) => {
     try {
@@ -245,6 +241,8 @@ export function useStreamingMonitor(executionId?: string | null, executionStatus
     uptime,
     isLoading,
     pm,
-    maxRateRef,
+    history,
+    scale,
+    verdict,
   };
 }

@@ -15,7 +15,6 @@ import {
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { colors } from "../../../theme/tokens";
 import { type LogLevel, type LogEntry } from "../../../store/logsStore";
-import { useUIStore } from "../../../store/uiStore";
 import { NodeListRow, NodeStatusRow, LogRow, SectionHeaderRow } from "../LogRows";
 import { EXEC_STATE_COLOR, LEVELS } from "../logUtils";
 import { NodeChip, StatusLabel, ResizeHandle } from "./subcomponents";
@@ -43,7 +42,6 @@ export function InlineLogs({
   const [size, setSize] = useState<LogSize>("normal");
   const [minimized, setMinimized] = useState(false);
   const [customHeight, setCustomHeight] = useState<number | null>(null);
-  const theme = useUIStore((s) => s.theme);
 
   const {
     searchFilter,
@@ -148,7 +146,6 @@ export function InlineLogs({
   const rootClass = [
     "ilog",
     variant === "inline" && "ilog--inline",
-    theme === "light" && "ilog--light",
     isFullscreen && "ilog--fullscreen",
   ]
     .filter(Boolean)
@@ -158,7 +155,7 @@ export function InlineLogs({
     const errorCount = levelCounts.ERROR ?? 0;
     const warnCount = levelCounts.WARNING ?? 0;
     return (
-      <div className={`ilog ilog--minimized${theme === "light" ? " ilog--light" : ""}${variant === "inline" ? " ilog--inline" : ""}`}>
+      <div className={`ilog ilog--minimized${variant === "inline" ? " ilog--inline" : ""}`}>
         <button
           className="ilog__minibar"
           onClick={() => setMinimized(false)}
@@ -180,7 +177,13 @@ export function InlineLogs({
   return (
     <>
       {isFullscreen && (
-        <div className="ilog__backdrop" onClick={() => setSize("expanded")} />
+        // Click-outside to leave fullscreen; the header keeps an explicit
+        // control for it, so the backdrop is scenery.
+        <div
+          className="ilog__backdrop"
+          role="presentation"
+          onClick={() => setSize("expanded")}
+        />
       )}
       <div className={rootClass}>
         {/* Resize handle — only in expanded or footer mode, not in fullscreen */}

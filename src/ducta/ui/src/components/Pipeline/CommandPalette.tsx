@@ -50,7 +50,14 @@ export function CommandPalette({ nodes, pipelines, onSelectNode, onOpenPipeline,
     return [...matchedNodes, ...matchedPipelines];
   }, [query, nodes, pipelines]);
 
-  useEffect(() => { setActiveIndex(0); }, [query]);
+  // Reset the highlight when the query changes, adjusted during render rather
+  // than in an effect: React re-runs this component before committing, so the
+  // list never paints with a stale selection and there is no second pass.
+  const [lastQuery, setLastQuery] = useState(query);
+  if (query !== lastQuery) {
+    setLastQuery(query);
+    setActiveIndex(0);
+  }
 
   useEffect(() => {
     listRef.current
@@ -82,13 +89,17 @@ export function CommandPalette({ nodes, pipelines, onSelectNode, onOpenPipeline,
   };
 
   return (
-    <div className="cmdk-overlay" onClick={onClose}>
+    <div
+      className="cmdk-overlay"
+      role="presentation"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div
         className="cmdk"
         role="dialog"
         aria-label="Find nodes and pipelines"
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={onKeyDown}
       >
         <div className="cmdk-input-row">
           <IconSearch size={15} stroke={1.75} className="cmdk-search-icon" />
@@ -99,6 +110,7 @@ export function CommandPalette({ nodes, pipelines, onSelectNode, onOpenPipeline,
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Find a node or pipeline…"
             spellCheck={false}
+            onKeyDown={onKeyDown}
           />
           <kbd className="cmdk-kbd">esc</kbd>
         </div>

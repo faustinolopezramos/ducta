@@ -21,7 +21,7 @@ interface ExecutionListResponse {
   limit?: number;
 }
 
-interface ExecutionDetailResponse extends Execution {}
+type ExecutionDetailResponse = Execution;
 
 // ─────────────────────────────────────────────
 // SOURCE QUERIES — TanStack Query hooks for

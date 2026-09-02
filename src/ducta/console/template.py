@@ -213,67 +213,94 @@ class MedallionBasicTemplate:
         }
 
     def generate_nodes_config(self) -> Dict[str, Any]:
-        """Three nodes demonstrating Ducta's core capabilities."""
+        """Three nodes whose checks actually assert what the code just did.
+
+        The checks are deliberately not decoration. Silver's ``null_rate`` and
+        ``duplicates`` pass only because `transform` dropped nulls and
+        duplicates; break that function and the ``quality_gate`` blocks the run
+        before gold is ever written. That is the behaviour worth seeing on a
+        first run, and the previous template never showed it: five spotless rows
+        against ``row_count: {min: 1}`` can only ever pass.
+        """
         return {
             "extract": {
-                "description": "Extract: Load data from source",
+                "description": "Bronze: land the source exactly as it arrived",
                 "module": PIPELINES_ETL_MODULE,
                 "function": "extract",
                 "input": ["source_data"],
                 "output": ["bronze.etl.raw_data"],
                 "dependencies": [],
-                "sanity_checks": {
-                    "enabled": True,
-                    "fail_fast": True,
-                    "profile": "default",
-                    "checks": {
-                        "null_rate": {
-                            "enabled": True,
-                            "threshold": 0.10,
-                        },
-                    },
-                },
-            },
-            "transform": {
-                "description": "Transform: Validate and clean data",
-                "module": PIPELINES_ETL_MODULE,
-                "function": "transform",
-                "input": ["bronze.etl.raw_data"],
-                "output": ["silver.etl.clean_data"],
-                "dependencies": ["extract"],
+                # Checks on the INPUT, before the node runs: fail early if the
+                # source is not what this pipeline was written against.
                 "sanity_checks": {
                     "enabled": True,
                     "fail_fast": True,
                     "checks": {
                         "empty_dataset": {"enabled": True},
                         "schema": {
-                            "enabled": False,
-                            "expected_columns": [],
-                        },
-                    },
-                },
-                "data_quality": {
-                    "enabled": True,
-                    "fail_fast": False,
-                    "checks": {
-                        "row_count": {
                             "enabled": True,
-                            "min": 1,
-                        },
-                        "drift_detection": {
-                            "enabled": False,
-                            "columns": [],
+                            "expected_columns": [
+                                "order_id",
+                                "category",
+                                "amount",
+                                "order_date",
+                            ],
                         },
                     },
                 },
             },
+            "transform": {
+                "description": "Silver: deduplicate and drop incomplete rows",
+                "module": PIPELINES_ETL_MODULE,
+                "function": "transform",
+                "input": ["bronze.etl.raw_data"],
+                "output": ["silver.etl.clean_data"],
+                "dependencies": ["extract"],
+                # Checks on the OUTPUT, after the node runs and BEFORE the write.
+                # A blocking gate here means bad data never reaches storage.
+                "data_quality": {
+                    "enabled": True,
+                    "fail_fast": False,
+                    "checks": {
+                        # `columns` (a list) and `threshold`, not `column`/`max`.
+                        "null_rate": {
+                            "enabled": True,
+                            "columns": ["amount"],
+                            "threshold": 0.0,
+                        },
+                        "duplicates": {
+                            "enabled": True,
+                            "columns": ["order_id"],
+                            "max_duplicate_rate": 0.0,
+                        },
+                        # A floor, not a ceiling: catches a transform that
+                        # silently drops most of the data.
+                        "row_count": {"enabled": True, "min": 400},
+                    },
+                    "quality_gate": {
+                        "enabled": True,
+                        "max_errors": 0,
+                        # skip_downstream: gold is skipped, the run reports the
+                        # block, and nothing bad is written. Use `stop_all` to
+                        # abort the whole run instead.
+                        "behavior": "skip_downstream",
+                    },
+                },
+            },
             "load": {
-                "description": "Load: Persist processed data",
+                "description": "Gold: aggregate into one row per category",
                 "module": PIPELINES_ETL_MODULE,
                 "function": "load",
                 "input": ["silver.etl.clean_data"],
                 "output": ["gold.etl.final_output"],
                 "dependencies": ["transform"],
+                "data_quality": {
+                    "enabled": True,
+                    "checks": {
+                        "empty_dataset": {"enabled": True},
+                        "row_count": {"enabled": True, "min": 1},
+                    },
+                },
             },
         }
 
@@ -330,16 +357,44 @@ class MedallionBasicTemplate:
             },
         }
 
+    #: Rows whose ``amount`` is blank, so `transform` has real nulls to drop and
+    #: the silver null_rate check has something to have actually verified.
+    _NULL_ROWS = frozenset({37, 88, 145, 190, 233, 271, 318, 366, 402, 447, 480, 495})
+    #: Orders repeated verbatim at the end of the file, so deduplication is a
+    #: visible step rather than a claim.
+    _DUPLICATED_ORDERS = (12, 74, 155, 219, 288, 341, 409, 468)
+    _CATEGORIES = ("electronics", "grocery", "apparel", "home", "toys")
+
     def get_sample_data(self) -> str:
-        """CSV seeded into data/input.csv. Overridden per template for its node code."""
-        return (
-            "id,name,value,date\n"
-            "1,Product A,150,2025-01-01\n"
-            "2,Product B,200,2025-01-02\n"
-            "3,Product C,180,2025-01-03\n"
-            "4,Product D,220,2025-01-04\n"
-            "5,Product E,195,2025-01-05\n"
-        )
+        """A deliberately dirty CSV, so the medallion layers have work to do.
+
+        The previous sample was five spotless rows, which meant every quality
+        check passed trivially and bronze, silver and gold came out byte-for-byte
+        identical — a "medallion" demo with no refinement in it, and a quality
+        demo where nothing was ever caught.
+
+        This one carries 12 rows with a missing ``amount`` and 8 verbatim
+        duplicates, so the run tells a story you can read straight off the
+        certificate: 508 rows in bronze, 488 in silver once `transform` cleans
+        them, 5 in gold after aggregation. The silver checks then pass *because*
+        the transform did its job — break the transform and the gate blocks.
+
+        Deterministic on purpose: the same scaffold must produce the same
+        fingerprints, or the certificate demo is not reproducible.
+        """
+        header = "order_id,category,amount,order_date"
+        rows = []
+        for order_id in range(1, 501):
+            category = self._CATEGORIES[order_id % len(self._CATEGORIES)]
+            # Blank (not 0) — a missing amount, which is what null_rate is about.
+            amount = "" if order_id in self._NULL_ROWS else f"{50 + (order_id * 7) % 450}.00"
+            day = (order_id % 28) + 1
+            rows.append(f"{order_id},{category},{amount},2025-01-{day:02d}")
+
+        by_id = {int(r.split(",", 1)[0]): r for r in rows}
+        rows.extend(by_id[order_id] for order_id in self._DUPLICATED_ORDERS)
+
+        return "\n".join([header, *rows]) + "\n"
 
 
 class MLReadyTemplate(MedallionBasicTemplate):
@@ -408,8 +463,34 @@ class MLReadyTemplate(MedallionBasicTemplate):
             rows.append(f"{0.9 + i * 0.03:.2f},{1.0 + i * 0.05:.2f},{0.9 + i * 0.02:.2f},1")
         return "\n".join(rows) + "\n"
 
+    #: The columns of this template's own sample CSV, which is numeric and
+    #: already clean — nothing like the medallion sales data.
+    _ML_COLUMNS = ("feature_1", "feature_2", "feature_3", "target")
+
     def generate_nodes_config(self) -> Dict[str, Any]:
         nodes = super().generate_nodes_config()
+
+        # The `train` pipeline reuses medallion's `extract` and `transform`
+        # nodes, but not its data. Their inherited checks assert the medallion
+        # schema (order_id/category/amount) against this template's numeric
+        # feature table, so every one of them would fail here and the gate would
+        # block the run on the very first scaffold. Retune them to this dataset.
+        nodes["extract"]["sanity_checks"]["checks"]["schema"]["expected_columns"] = list(
+            self._ML_COLUMNS
+        )
+        transform_dq = nodes["transform"]["data_quality"]
+        transform_dq["checks"] = {
+            # A missing label makes a row untrainable, so this is the one that
+            # matters before a split.
+            "null_rate": {
+                "enabled": True,
+                "columns": list(self._ML_COLUMNS),
+                "threshold": 0.0,
+            },
+            "row_count": {"enabled": True, "min": 10},
+        }
+        nodes["load"]["data_quality"]["checks"]["row_count"]["min"] = 1
+
         nodes["train_model"] = {
             "description": "Train ML model",
             "module": "pipelines.ml",
@@ -1058,15 +1139,33 @@ def train(
     def _generate_etl_sample_code(self) -> None:
         """Generate a single, focused ETL pipeline module."""
         etl_code = '''"""
-ETL Pipeline: Extract → Transform → Load
-Demonstrates Ducta's core capabilities:
-- Multi-format I/O (CSV, Parquet, JSON)
-- Data validation and transformation
-- Dependency management between nodes
-- Structured logging with loguru
+Medallion ETL: bronze -> silver -> gold
+
+Each layer does real work, and the quality checks in ``config/nodes.yaml``
+verify that it did. The sample data ships deliberately dirty (12 rows with a
+missing amount, 8 verbatim duplicates), so:
+
+    bronze  508 rows   raw, exactly as it arrived
+    silver  488 rows   deduplicated and missing amounts dropped
+    gold      5 rows   one row per category
+
+The silver checks (null_rate, duplicates) pass *because* `transform` cleaned the
+data. Break `transform` and the quality gate blocks the run before anything is
+written -- that is the point of the demo, and you can try it: comment out the
+dropna() below and re-run.
 """
 from typing import Any, Optional
+
 from loguru import logger
+
+#: Gold aggregates by this column. Change both to match your own data.
+GROUP_COLUMN = "category"
+VALUE_COLUMN = "amount"
+
+
+def _row_count(df: Any) -> int:
+    """Row count for a Spark or pandas DataFrame."""
+    return df.count() if hasattr(df, "rdd") else len(df)
 
 
 def extract(
@@ -1074,28 +1173,20 @@ def extract(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> Any:
+    """Bronze: land the source exactly as it arrived.
+
+    Deliberately does not clean anything. The bronze layer's job is to be a
+    faithful, replayable copy of the source -- if you clean here, you can never
+    prove what the source actually said.
+
+    Ducta has already loaded ``source_data`` per ``config/input.yaml`` (format,
+    header, inferSchema), and will write the return value per
+    ``config/output.yaml``. You only write the transformation.
     """
-    Extract: Load and validate raw data from source.
-
-    Ducta automatically loads data based on config:
-    - Format: CSV, Parquet, JSON, Delta
-    - Options: header, inferSchema, encoding, etc.
-
-    Args:
-        source_data: Loaded DataFrame from input config
-
-    Returns:
-        Raw data ready for transformation
-    """
-    logger.info("📥 Extracting data from source")
-
     if source_data is None:
         raise ValueError("No data provided from source")
 
-    # Get record count
-    records = source_data.count() if hasattr(source_data, "count") else len(source_data)
-    logger.info("✓ Extracted {:,} records", records)
-
+    logger.info("Bronze: landed {:,} raw rows", _row_count(source_data))
     return source_data
 
 
@@ -1104,45 +1195,39 @@ def transform(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> Any:
+    """Silver: make the data trustworthy.
+
+    Two operations, both schema-agnostic so this node also serves the `train`
+    pipeline in the ml_ready template:
+
+      1. drop exact duplicate rows
+      2. drop rows with a missing value in any column
+
+    The ``data_quality`` checks on this node assert the result: null_rate 0 and
+    no duplicate order_id. They are not decoration -- they fail if this function
+    stops doing its job, and the gate stops the run before gold is written.
     """
-    Transform: Validate and clean data.
-
-    Demonstrates:
-    - Input validation
-    - Data quality checks
-    - Schema validation
-
-    Args:
-        raw_data: Raw DataFrame from extract node
-
-    Returns:
-        Clean, validated DataFrame
-    """
-    logger.info("⚙️  Transforming data")
-
     if raw_data is None:
         raise ValueError("raw_data cannot be None")
 
-    # Check for required columns
-    if hasattr(raw_data, "columns"):
-        columns = set(raw_data.columns)
-        logger.debug("Available columns: {}", columns)
+    before = _row_count(raw_data)
 
-    # Check for null values — only when the column actually exists, so this
-    # boilerplate stays quiet on datasets without an 'id' column.
-    if hasattr(raw_data, "filter") and "id" in getattr(raw_data, "columns", []):
-        null_records = raw_data.filter("id IS NULL").count()
-        if null_records > 0:
-            logger.warning("Found {} records with NULL id", null_records)
-            # Optionally remove: raw_data = raw_data.filter("id IS NOT NULL")
+    deduplicated = (
+        raw_data.dropDuplicates() if hasattr(raw_data, "dropDuplicates") else raw_data.drop_duplicates()
+    )
+    after_dedup = _row_count(deduplicated)
 
-    # Add any transformation logic here
-    # Example (PySpark):
-    # from pyspark.sql.functions import upper, trim
-    # raw_data = raw_data.withColumn("name", trim(upper(col("name"))))
+    cleaned = deduplicated.dropna()
+    after = _row_count(cleaned)
 
-    logger.info("✓ Data transformation complete")
-    return raw_data
+    logger.info(
+        "Silver: {:,} -> {:,} rows ({:,} duplicates, {:,} incomplete)",
+        before,
+        after,
+        before - after_dedup,
+        after_dedup - after,
+    )
+    return cleaned
 
 
 def load(
@@ -1150,33 +1235,54 @@ def load(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
 ) -> Any:
+    """Gold: aggregate into something a consumer would actually query.
+
+    One row per ``GROUP_COLUMN`` with the order count and the total/average
+    ``VALUE_COLUMN``. This is where the medallion pattern pays off: gold is
+    small, stable and shaped for reading, while silver stays row-level.
     """
-    Load: Persist processed data to output destination.
-
-    Ducta handles output based on config:
-    - Format: CSV, Parquet, JSON, Delta
-    - Write mode: overwrite, append, etc.
-    - Automatic path creation
-
-    Args:
-        clean_data: Cleaned DataFrame from transform node
-
-    Returns:
-        The same data (for potential chaining)
-    """
-    logger.info("💾 Loading data to output")
-
     if clean_data is None:
         raise ValueError("clean_data cannot be None")
 
-    # Get final record count
-    records = clean_data.count() if hasattr(clean_data, "count") else len(clean_data)
-    logger.info("✓ Loaded {:,} records to output destination", records)
+    columns = list(getattr(clean_data, "columns", []))
+    if GROUP_COLUMN not in columns or VALUE_COLUMN not in columns:
+        # Keeps the node working when the template is pointed at other data
+        # (the ml_ready sample, or your own) before you have adjusted the two
+        # constants at the top of this file.
+        logger.warning(
+            "Gold: no '{}'/'{}' columns in {}; passing silver through unaggregated. "
+            "Set GROUP_COLUMN/VALUE_COLUMN in pipelines/etl.py to aggregate.",
+            GROUP_COLUMN,
+            VALUE_COLUMN,
+            columns,
+        )
+        return clean_data
 
-    # Ducta automatically writes the data based on output config
-    # No need to call write() yourself - just return the DataFrame
-    return clean_data
+    if hasattr(clean_data, "rdd"):  # Spark
+        from pyspark.sql import functions as F
+
+        aggregated = (
+            clean_data.groupBy(GROUP_COLUMN)
+            .agg(
+                F.count(F.lit(1)).alias("order_count"),
+                F.round(F.sum(VALUE_COLUMN), 2).alias("total_amount"),
+                F.round(F.avg(VALUE_COLUMN), 2).alias("avg_amount"),
+            )
+            .orderBy(GROUP_COLUMN)
+        )
+    else:  # pandas
+        aggregated = (
+            clean_data.groupby(GROUP_COLUMN)[VALUE_COLUMN]
+            .agg(order_count="count", total_amount="sum", avg_amount="mean")
+            .round(2)
+            .reset_index()
+            .sort_values(GROUP_COLUMN)
+        )
+
+    logger.info("Gold: aggregated into {:,} rows by '{}'", _row_count(aggregated), GROUP_COLUMN)
+    return aggregated
 '''
+
         etl_file = self.output_path / "pipelines" / "etl.py"
         self._write_text_file(etl_file, etl_code)
 
@@ -1195,20 +1301,29 @@ Steps to activate a custom check
 1. Define a class that inherits from ``BaseQualityCheck`` and decorate it with
    ``@register_check("your_check_name")``.
 2. Implement the ``run()`` method and return a ``CheckResult``.
-3. Add the module path to ``global_settings.quality.extensions``:
+3. Add the module path to ``quality.extensions`` in
+   ``config/global_settings.yaml``:
 
-   .. code-block:: toml
+   .. code-block:: yaml
 
-       [quality]
-       extensions = ["pipelines.checks.custom_checks"]
+       quality:
+         extensions:
+           - pipelines.checks.custom_checks
 
-4. Reference the check in any node config:
+4. Reference the check in any node in ``config/nodes.yaml``:
 
-   .. code-block:: toml
+   .. code-block:: yaml
 
-       [nodes.my_node.sanity_checks.checks.positive_prices]
-       enabled = true
-       column = "price"
+       my_node:
+         data_quality:
+           enabled: true
+           checks:
+             positive_values:
+               enabled: true
+               column: amount
+
+(Scaffolds generated with ``--format toml`` or ``--format json`` use the same
+keys in that format.)
 """
 from ducta.check import (
     BaseQualityCheck,
@@ -1248,7 +1363,7 @@ class PositiveValuesCheck(BaseQualityCheck):
 
         try:
             # Works with Pandas, Polars, and Spark via DFAdapter helpers
-            neg_count = adapter.count_where(f"{column} <= 0")
+            neg_count = adapter.filter_where(f"{column} <= 0")
             if neg_count > 0:
                 return CheckResult(
                     check_name=self.name,
@@ -1304,121 +1419,100 @@ class PositiveValuesCheck(BaseQualityCheck):
         # README.md
         readme_content = f"""# {template.project_name}
 
-A production-ready ETL pipeline built with **Ducta**.
+A medallion ETL pipeline built with **Ducta**.
 
-## What's Ducta?
+## Run it
 
-Ducta is a data pipeline framework that provides:
-- ✅ **Multi-format I/O**: CSV, JSON, Parquet, Delta, etc.
-- ✅ **Data Validation**: Schema checks, null handling, transformations
-- ✅ **Dependency Management**: Automatic node sequencing
-- ✅ **Multi-Environment Support**: dev, sandbox, prod configurations
-- ✅ **Structured Logging**: Professional terminal output with loguru
-- ✅ **Error Handling**: Retry logic, detailed error diagnostics
-
-## Quick Start
-
-### 1. Install dependencies
 ```bash
 pip install -r requirements.txt
+ducta start --env dev --pipeline etl
 ```
 
-### 2. View available pipelines
+The sample data is **deliberately dirty** — 12 rows with a missing `amount` and
+8 verbatim duplicates — so the run has something real to do:
+
+```
+bronze  508 rows   raw, exactly as it arrived
+silver  488 rows   deduplicated, incomplete rows dropped
+gold      5 rows   one row per category
+```
+
+## Then prove what happened
+
 ```bash
-ducta config list-pipelines --env dev
+ducta certify list                       # every run recorded here
+ducta certify show   --run-id <run-id>   # what ran, on which data
+ducta certify verify --run-id <run-id>   # tamper check
 ```
 
-### 3. Run the ETL pipeline
-```bash
-# Full pipeline
-ducta start -e dev -p etl
+The certificate records a content fingerprint and row count for every dataset at
+every layer, so the three row counts above are evidence, not log output. Compare
+two runs with `ducta certify diff <run-a> <run-b>`.
 
-# Specific node
-ducta start -e dev -p etl -n extract
+## See the quality gate work
 
-# Validate configuration
-ducta start -e dev -p etl --validate-only
+`config/nodes.yaml` asserts on the silver layer that `amount` has no nulls and
+`order_id` has no duplicates, with `quality_gate.max_errors: 0`. Those checks
+pass because `transform` cleaned the data. To watch them fail:
 
-# Debug mode
-ducta start -e dev -p etl --log-level DEBUG
-```
+1. Open `pipelines/etl.py` and comment out the `.dropna()` line in `transform`.
+2. Re-run `ducta start --env dev --pipeline etl`.
 
-## Project Structure
+The gate blocks, `load` is skipped, and **gold is never written** — the checks
+run before the write, so bad data does not reach storage. Undo the change to go
+back to a passing run.
+
+## Project structure
 
 ```
 {template.project_name}/
-├── config/                    # Configuration files
-│   ├── global_settings.yaml  # Project settings
-│   ├── pipelines.yaml        # Pipeline definitions
-│   ├── nodes.yaml            # Node implementations
-│   ├── input.yaml            # Input sources
-│   ├── output.yaml           # Output destinations
-│   ├── dev/                  # Dev environment overrides
-│   ├── sandbox/              # Sandbox environment overrides
-│   └── prod/                 # Prod environment overrides
-├── pipelines/                 # Implementation
-│   └── etl.py                # Extract-Transform-Load functions
-├── data/                      # Data directories
-│   ├── input.csv             # Sample input
-│   ├── raw/                  # Raw extracted data
-│   ├── processed/            # Transformed data
-│   └── output.csv            # Final output
-└── requirements.txt          # Dependencies
+├── config/
+│   ├── global_settings.yaml  # project settings, quality profiles
+│   ├── pipelines.yaml        # which nodes make up which pipeline
+│   ├── nodes.yaml            # per-node I/O, checks and gates
+│   ├── input.yaml            # where data is read from
+│   ├── output.yaml           # where data is written to
+│   └── dev/ sandbox/ prod/   # per-environment overrides
+├── pipelines/
+│   ├── etl.py                # your transformations (plain functions)
+│   └── checks/custom_checks.py
+├── data/
+│   ├── input.csv             # sample source
+│   └── dev/                  # bronze/ silver/ gold/ written per environment
+└── .ducta/runs/              # run certificates
 ```
 
-## Pipeline Flow
+## What to change first
 
+1. Point `config/input.yaml` at your own data.
+2. Rewrite the three functions in `pipelines/etl.py`. They are ordinary Python
+   taking a DataFrame and returning one — no decorators, no framework types.
+3. Update the checks in `config/nodes.yaml` to assert what *your* transform
+   guarantees, and set `GROUP_COLUMN`/`VALUE_COLUMN` at the top of `etl.py`.
+
+## Useful commands
+
+```bash
+ducta config list-pipelines                  # what is defined here
+ducta start --env dev --pipeline etl --validate-only   # config check, no Spark
+ducta start --env dev --pipeline etl --log-level DEBUG
+ducta server start --port 8000               # web UI (needs the `api` extra)
 ```
-source_data (CSV)
-     ↓
-[extract] → raw_data (Parquet)
-     ↓
-[transform] → clean_data (Parquet)
-     ↓
-[load] → final_output (CSV)
-```
 
-## Key Features Demonstrated
+Ducta is alpha — see the
+[CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md)
+before depending on it. Docs: https://github.com/faustinolopezramos/ducta
 
-1. **Multi-Format Support**: Reads CSV, outputs CSV (Parquet intermediate)
-2. **Automatic Data Loading**: Ducta loads source_data based on input config
-3. **Automatic Data Saving**: Ducta saves outputs based on output config
-4. **Dependency Chain**: extract → transform → load (automatic sequencing)
-5. **Validation & Logging**: Built-in data quality checks and structured logging
-6. **Environment Config**: Override settings per environment (dev/sandbox/prod)
-
-## Configuration Highlights
-
-- **inputs**: Define data sources with format & validation rules
-- **outputs**: Define destinations with write modes & auto-creation
-- **nodes**: Map functions to data inputs/outputs with dependencies
-- **pipelines**: Compose nodes into executable workflows
-
-## Next Steps
-
-1. Replace `data/input.csv` with your actual data
-2. Customize `pipelines/etl.py` functions for your use case
-3. Update `config/input.yaml` and `config/output.yaml` for your data sources
-4. Add environment-specific configs in `config/dev/`, `config/prod/`, etc.
-5. Extend with additional pipelines as needed
-
-## For More Information
-
-- Run `Ducta --help` for all CLI options
-- Check Ducta docs: https://github.com/faustinolopezramos/ducta
-
-Generated on: {template.timestamp}
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 """
         readme_file = self.output_path / "README.md"
         self._write_text_file(readme_file, readme_content)
 
         # requirements.txt - minimal but complete
-        requirements = """Ducta>=0.1.0
-pyspark>=3.4.0
-pandas>=1.5.0
-loguru>=0.7.0
-pyyaml>=6.0
-pytest>=7.4.0
+        # `ducta[spark]` rather than ducta + a loose pyspark pin: the extra is
+        # what the project actually declares as compatible, and pinning pyspark
+        # separately invites a combination Ducta was never tested against.
+        requirements = """ducta[spark]>=0.1.1
 """
         requirements_file = self.output_path / "requirements.txt"
         self._write_text_file(requirements_file, requirements)

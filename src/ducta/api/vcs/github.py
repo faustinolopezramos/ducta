@@ -26,13 +26,13 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ducta.api.exceptions import RepositoryAdapterError
-from ducta.api.repository.base import RepositoryAdapter
 from ducta.api.utils.git_utils import (
     GIT_AVAILABLE,
     get_repo,
     http_auth_env,
     redact_git_credentials,
 )
+from ducta.api.vcs.base import RepositoryAdapter
 
 
 class GitHubAdapter(RepositoryAdapter):

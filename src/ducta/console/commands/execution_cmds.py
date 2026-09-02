@@ -31,11 +31,47 @@ from ducta.console.core import CLIConfig, ExitCode
 
 
 class ExecutionCommands:
-    """Pipeline execution commands (ducta start)."""
+    """Pipeline execution commands (ducta start).
+
+    ``config`` and ``config_manager`` are populated by the entry points
+    (:meth:`handle_start` and friends) before anything else runs, and every
+    method below assumes that. They were plain ``Optional`` attributes, which
+    meant ~100 accesses that a type checker could only read as "might be None"
+    — so the one place where it genuinely might be got no more attention than
+    the ninety-nine where it could not. Exposing them through properties that
+    raise states the invariant once and turns a violation into a named error
+    instead of ``AttributeError: 'NoneType' object has no attribute 'pipeline'``.
+    """
 
     def __init__(self):
-        self.config: Optional[CLIConfig] = None
-        self.config_manager: Optional[ConfigManager] = None
+        self._config: Optional[CLIConfig] = None
+        self._config_manager: Optional[ConfigManager] = None
+
+    @property
+    def config(self) -> CLIConfig:
+        if self._config is None:
+            raise RuntimeError(
+                "ExecutionCommands.config read before it was parsed — call "
+                "handle_start() (or another entry point) first."
+            )
+        return self._config
+
+    @config.setter
+    def config(self, value: CLIConfig) -> None:
+        self._config = value
+
+    @property
+    def config_manager(self) -> ConfigManager:
+        if self._config_manager is None:
+            raise RuntimeError(
+                "ExecutionCommands.config_manager read before it was built — call "
+                "handle_start() (or another entry point) first."
+            )
+        return self._config_manager
+
+    @config_manager.setter
+    def config_manager(self, value: ConfigManager) -> None:
+        self._config_manager = value
 
     def handle_start(self, parsed_args) -> int:
         from ducta.setting import detect_and_prepare_layered_execution
@@ -57,20 +93,11 @@ class ExecutionCommands:
         self._try_print_header()
 
         self.config_manager = ConfigManager(
-            base_path=getattr(
-                parsed_args, "base_path", self.config.base_path if self.config else None
-            ),
-            layer_name=getattr(
-                parsed_args, "layer_name", self.config.layer_name if self.config else None
-            ),
-            use_case=getattr(
-                parsed_args, "use_case_name", self.config.use_case_name if self.config else None
-            ),
-            config_type=getattr(
-                parsed_args, "config_type", self.config.config_type if self.config else None
-            ),
-            interactive=getattr(parsed_args, "interactive", False)
-            or (self.config.interactive if self.config else False),
+            base_path=getattr(parsed_args, "base_path", self.config.base_path),
+            layer_name=getattr(parsed_args, "layer_name", self.config.layer_name),
+            use_case=getattr(parsed_args, "use_case_name", self.config.use_case_name),
+            config_type=getattr(parsed_args, "config_type", self.config.config_type),
+            interactive=getattr(parsed_args, "interactive", False) or self.config.interactive,
             require_config=False,
         )
         self.config_manager.change_to_config_directory()
@@ -86,8 +113,7 @@ class ExecutionCommands:
 
     @staticmethod
     def _resolve_sweep_parallel(parsed_args) -> int:
-        """Cap --sweep-parallel at the number of available CPU cores.
-        """
+        """Cap --sweep-parallel at the number of available CPU cores."""
         import os
 
         requested = max(1, int(getattr(parsed_args, "sweep_parallel", 1) or 1))
@@ -534,8 +560,7 @@ class ExecutionCommands:
         }
 
     def _run_trials_parallel(self, exec_obj, trials, search_id: str, workers: int):
-        """Run pre-generated trials concurrently, one process each.
-        """
+        """Run pre-generated trials concurrently, one process each."""
         import multiprocessing
         from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -603,9 +628,7 @@ class ExecutionCommands:
         )
 
         with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as pool:
-            futures = {
-                pool.submit(run_trial_in_process, payload): payload for payload in payloads
-            }
+            futures = {pool.submit(run_trial_in_process, payload): payload for payload in payloads}
             for future in as_completed(futures):
                 payload = futures[future]
                 try:
@@ -624,8 +647,7 @@ class ExecutionCommands:
         return sorted(outcomes, key=lambda o: o.get("index") or 0)
 
     def _run_trial(self, exec_obj, hyperparams: Dict[str, Any], trial_index: int):
-        """Execute one sweep/search trial.
-        """
+        """Execute one sweep/search trial."""
         if not self.config.sweep_reuse_upstream:
             return exec_obj.run_pipeline(
                 pipeline_name=self.config.pipeline,
@@ -649,8 +671,7 @@ class ExecutionCommands:
         )
 
     def _execute_search(self, exec_obj, base_hyperparams) -> int:
-        """Drive a real search strategy from the pipeline's hyperparams_config.
-        """
+        """Drive a real search strategy from the pipeline's hyperparams_config."""
         from ducta.core.sweep import new_search_id, run_search
         from ducta.mlrun.hyperparams import HyperparamConfigError
         from ducta.mlrun.search import SearchError, build_search_strategy, resolve_objective
@@ -674,7 +695,6 @@ class ExecutionCommands:
                 hp_config,
                 n_trials=self.config.search_trials,
                 seed=self._resolve_seed(exec_obj),
-
                 study_name=hp_config.study_name,
             )
         except (SearchError, HyperparamConfigError) as e:
@@ -762,8 +782,7 @@ class ExecutionCommands:
     def _run_search_parallel(
         self, exec_obj, strategy, metric: str, base_hyperparams, search_id: str, workers: int
     ):
-        """Run a grid/random search with concurrent trials.
-        """
+        """Run a grid/random search with concurrent trials."""
         from ducta.core.sweep import SearchOutcome, TrialOutcome, run_search
 
         proposals = []
@@ -804,9 +823,7 @@ class ExecutionCommands:
 
             return run_search(_Replay(), metric, run_trial, search_id=search_id)
 
-        outcome = SearchOutcome(
-            search_id=search_id, metric=metric, direction=strategy.direction
-        )
+        outcome = SearchOutcome(search_id=search_id, metric=metric, direction=strategy.direction)
         for result in results:
             params = result["params"]
             metrics = result["metrics"] or {}
@@ -862,8 +879,7 @@ class ExecutionCommands:
 
     @staticmethod
     def _warn_if_parallel_spark(exec_obj, parallel: int) -> None:
-        """Warn when Spark-backed pipelines run sweep/search trials in parallel.
-        """
+        """Warn when Spark-backed pipelines run sweep/search trials in parallel."""
         spark = getattr(exec_obj.context, "spark", None)
         if spark is not None:
             logger.warning(

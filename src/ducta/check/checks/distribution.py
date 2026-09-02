@@ -88,9 +88,7 @@ class DriftDetectionCheck(BaseQualityCheck):
             # compared on its top `min_categories` most frequent ones,
             # biasing drift detection toward frequent categories and hiding
             # drift in the long tail.
-            topk_categories = (
-                config.topk_categories if hasattr(config, "topk_categories") else 100
-            )
+            topk_categories = config.topk_categories if hasattr(config, "topk_categories") else 100
             # value_counts() is itself topk-limited, so fetch at least
             # min_categories rows — otherwise "fewer than min_categories
             # rows came back" could mean "the fetch was capped low", not

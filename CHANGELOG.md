@@ -7,6 +7,232 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The `medallion_basic` scaffold now demonstrates the product instead of
+  describing it.** `extract`, `transform` and `load` were all pass-throughs
+  (`return source_data` / `return raw_data` / `return clean_data`), so a
+  "medallion" template produced three byte-identical layers — verified: bronze,
+  silver and gold came out with the same fingerprint. The five-row sample was
+  spotless and the checks were `row_count: {min: 1}` and a null_rate against
+  data with no nulls, so nothing could ever be caught, and **`quality_gate`
+  appeared nowhere in the 1,763-line generator** — the headline feature was not
+  demonstrated by any template.
+
+  The sample data is now deliberately dirty (500 orders, 12 with a missing
+  `amount`, 8 verbatim duplicates) and each layer does real work, so a first run
+  reads: 508 rows in bronze, 488 in silver after deduplication and dropping
+  incomplete rows, 5 in gold after aggregation — all three visible as separate
+  row counts and fingerprints in the certificate. Silver's `null_rate` and
+  `duplicates` checks pass *because* `transform` cleaned the data, backed by
+  `quality_gate: {max_errors: 0}`; the generated README shows how to break the
+  transform and watch the gate block the run with gold never written.
+
+### Fixed
+
+- **Quality checks decided correctly and then misreported the decision.** Three
+  separate defects, none of them in the check logic, all of them in the only
+  part a reader of a persisted report ever sees:
+
+  `min: 0` printed as `-∞`. The bounds were formatted with `min_val or '-∞'`,
+  and `0` is falsy, so a range check pinned at zero advertised a bound it was
+  not enforcing. `row_count` additionally used `'∞'` for *both* ends, so a
+  `max: 0` fell the same way and the lower bound read as positive infinity.
+  Both now go through `_format_bounds`, which only substitutes an infinity for
+  a genuinely absent (`None`) bound.
+
+  `DuplicateCheck` said "No duplicate rows found" on every pass — including a
+  pass *within tolerance* — and discarded the count and rate it had just
+  computed, so `details` carried nothing to trend against. The official demo hit
+  this on real data: **15 duplicates in 907 rows, reported as none**, and had to
+  carry a nine-line comment in its node config warning readers not to believe
+  the line. The pass branch now reports the measured count and rate against the
+  threshold, with the same four `details` fields the failure branch already
+  emitted.
+
+  `severity: "warning"` on a node's check was accepted by the config object and
+  read by nothing: `_create_result` resolves `severity or self.severity`, the
+  check's *class* default. The check stayed an ERROR and still counted against
+  `quality_gate.max_errors` — the opposite of what the key asks for. It is now
+  applied, before `fail_fast` is consulted, so a downgraded check no longer
+  aborts the run. An invalid value (`severity: "wrning"`) raises
+  `QualityConfigError` rather than silently meaning ERROR, and is resolved
+  before the check runs so it is reported as the config error it is instead of
+  surfacing as "check execution failed".
+
+  **Compatibility:** the severity fix can change gate outcomes. A config that
+  already carries `severity: "warning"` was being counted as an error and is now
+  counted as a warning, so gates that blocked on it will start passing. Nothing
+  that previously passed can begin to fail.
+
+- Renaming a named check instance for the report reset its `executed_at` to the
+  rename time, so every aliased check reported when it was relabelled rather
+  than when it ran.
+- **The example custom check in every scaffold called a method that does not
+  exist.** `adapter.count_where(...)` is not part of `DFAdapter` (the method is
+  `filter_where`), and the resulting `AttributeError` was caught by the check's
+  own `except` and returned as a *failed* `CheckResult` — so anyone activating
+  the documented extension point would have concluded their data was bad.
+- Scaffolded `custom_checks.py` documented activation in TOML while the
+  generator defaults to YAML.
+- The generated project README described a directory layout the pipeline never
+  creates (`data/raw/`, `data/processed/`), never mentioned run certificates or
+  quality gates at all, called an alpha scaffold "production-ready", and wrote
+  `Ducta --help` for an executable named `ducta`.
+- Generated `requirements.txt` asked for `Ducta>=0.1.0` plus a loose `pyspark`
+  pin; it now asks for `ducta[spark]>=0.1.1`, the combination the project
+  actually declares.
+- The `ml_ready` template reuses medallion's `extract`/`transform` nodes on its
+  own numeric feature table, so it now retunes the inherited schema and quality
+  checks to its own columns rather than inheriting assertions about
+  `order_id`/`amount`.
+- README: the flagship node example used `null_rate: {column, max}`; the check
+  reads `columns` (a list) and `threshold`, so the written example silently
+  checked every column at the default 5% threshold instead of what it said.
+
+### Security
+
+- **Run certificates measured far less than they claimed on Spark.** The
+  fingerprint module was written for pandas (`df.shape[0]`, `len(df)`,
+  `df.iloc[...]`, `df.to_json()`), none of which exists in Spark — the only
+  engine that executes a pipeline. Verified against Spark 3.5.9 on 5,000 rows:
+  `row_count` was always `null`; `fast` (the default) silently degraded from
+  head+middle+tail sampling to `head(100)`, so a corrupted *last* row produced
+  an identical fingerprint; and `full` hashed `str(df)` — the schema repr —
+  making any two datasets sharing a schema indistinguishable, i.e. `full` was
+  strictly weaker than `fast` while the docs presented it as the deeper option.
+  `--reproduce` and `certify diff` were therefore comparing
+  `(schema, null, first 100 rows)`.
+
+  Fingerprinting is now engine-native. Spark uses an order-independent multiset
+  digest — `xxhash64` per row, aggregated by `count`/`sum`/`bit_xor` — which
+  detects a changed cell anywhere, a duplicated row, or a deleted row, and is
+  correctly insensitive to physical row order and partitioning. (`bit_xor` alone
+  would be wrong: identical rows XOR to zero, so an even number of a duplicate
+  would cancel out.) `row_count` is real. Modes are now `exact` (default),
+  `sample` and `schema`; `fast`/`full` still parse, mapping to `sample`/`exact`.
+
+  **Every fingerprint value changes.** Each one now records the `engine` and
+  `algorithm` that produced it, and comparisons across algorithms return *not
+  comparable* instead of reporting a data change that never happened — so the
+  first run after upgrading does not trip `fingerprint_policy` or fail
+  `--reproduce`. Certificate `schema_version` is now 1.2.
+
+  Root cause: both fingerprint test modules had zero Spark coverage, and one
+  test asserted the tail-corruption guarantee *on pandas* and passed. The suite
+  validated an engine that pipelines never run on. Guarantees are now written
+  once and parametrized over engines
+  (`tests/integration/test_fingerprint_engines.py`).
+- **A failed fingerprint is no longer silent.** `_record_fingerprint` swallowed
+  every failure at debug level, so a certificate whose fingerprints never
+  computed still verified and still looked complete while attesting to nothing.
+  Failures (and silent degradations to a weaker mode) now go through the run
+  ledger, which raises them to WARNING and marks the certificate
+  `evidence_complete: false` with the reason in `evidence_gaps`.
+
+### Performance
+
+- **Node outputs are cached before the quality phase.** Every structural check
+  ran its own `count()` with no memoization, and nothing was cached between the
+  checks and the write, so the README's own three-check example recomputed the
+  node's whole lineage about four times. The output is now materialized once and
+  shared by the checks, the fingerprint and the write, reusing the existing
+  `resource_context` lifecycle for the `unpersist`.
+
+- **`python-jose` replaced with `PyJWT`.** python-jose pulls in `ecdsa`, whose
+  Minerva timing vulnerability (CVE-2024-23342) is unfixable in pure Python and
+  has no planned patch, so it would have shown up as an unresolvable *high* in
+  every dependency scan of a Ducta install. Ducta only ever signs with HS256,
+  so the ECDSA code was dead weight; PyJWT delegates to `cryptography`. Token
+  encode/decode, expiry and revocation behaviour are unchanged.
+- **UI dependencies with known advisories upgraded.** `react-router-dom` (open
+  redirect, XSS via `RSCErrorHandler`, CSRF on document requests, DoS via route
+  matching) and `axios` (SSRF via `NO_PROXY` bypass, several prototype-pollution
+  gadgets). `dompurify` is pinned through an override because it reaches us via
+  `monaco-editor`, which still allows a vulnerable range. Shipped UI
+  dependencies now audit clean.
+- **The web terminal signalled only the shell on disconnect.** `os.kill(pid, 9)`
+  left everything the shell had started — a build, a `tail -f`, any background
+  job — orphaned and running on the host after the browser tab closed, because
+  `pty.fork()` makes the shell a session leader and its children live in its
+  process group. Now signals the group.
+- Added `SECURITY.md`: private reporting, supported versions, an explicit threat
+  model (what the CLI's config-is-code model puts out of scope), and the
+  production checklist that `api/main.py` and `docs/server_api.rst` had been
+  pointing at for some time without it existing.
+
+### Fixed
+
+- **CI was red in three jobs, and had been silently.**
+  - `install-matrix` smoke-tested `from ducta.core.executor import
+    PipelineExecutor`; that module became the `ducta.core.executors` package in
+    an earlier refactor, so the job that exists to prove the published artifact
+    is importable had been failing on its own import.
+  - `ruff check` is a blocking gate and had four outstanding errors.
+  - `tests/integration/test_pipeline_e2e.py` still assumed the flat
+    `.ducta/runs/<run_id>/` certificate layout after it became
+    `.ducta/runs/<env>/<run_id>/`, so it picked the `dev` directory and failed
+    on a missing file. It now discovers runs via `iter_certificate_dirs`, so it
+    no longer encodes a layout it should not know about.
+- **A released wheel could ship without the web app.** `pyproject.toml` bundles
+  `src/ducta/ui/dist`, which is gitignored — it exists only after the UI is
+  built. `poetry build` on a clean checkout therefore produced a wheel with no
+  UI and no error, and `ducta server start` would 404 on `/`. CI now builds the
+  UI before packaging and asserts the wheel contains it, and a new `release.yml`
+  makes that sequence the only path to publishing.
+- **Fire-and-forget database writes could be garbage-collected mid-flight.**
+  `_spawn_db_task` kept no strong reference to the task it created, and the
+  event loop holds only a weak one. What those tasks persist is the execution
+  record itself, so a collected task meant a run silently missing from the
+  database with nothing logged.
+
+### Added
+
+- **A declared public API.** The top-level `ducta` package now re-exports the
+  27 names that are supported — executor, context, certificates, the quality
+  and I/O extension points, and every error type — resolved lazily so
+  `import ducta` still costs nothing on a bare install with no Spark. Anything
+  reached through a deeper path is internal. This is the prerequisite for
+  "declare the configuration schema and the public Python API stable", which is
+  the gate to leaving alpha: without a façade, declaring stability would have
+  meant freezing every internal module path anyone happened to import from.
+- **Run certificates report their own completeness** (`schema_version` 1.1).
+  `RunLedger` swallows recording failures on purpose — bookkeeping must never
+  be the reason a pipeline fails — but it swallowed them at DEBUG, so a
+  certificate assembled from a ledger that had dropped a node outcome was
+  sealed looking exactly like a complete one, which is the failure the ledger
+  exists to prevent. Failures now log at WARNING and surface as
+  `evidence_complete: false` plus an `evidence_gaps` list, both covered by the
+  certificate hash. Older certificates verify unchanged.
+- Dependency audit job in CI: `npm audit --omit=dev` is blocking for the
+  packages that ship in the browser; `pip-audit` and the build toolchain are
+  advisory with the specific backlog named in the workflow.
+- `scripts/dump_openapi.py`, which `npm run spec:generate` had always invoked
+  but which was never committed.
+
+### Changed
+
+- `ducta.api.repository` (adapters for hosted git forges) renamed to
+  `ducta.api.vcs`. It sat one plural away from `ducta.api.repositories` (the
+  data-access layer over configs, nodes, pipelines and projects) while meaning
+  something entirely unrelated — a typo that imports cleanly and fails
+  elsewhere. Internal module; no public API change.
+- `ruff format` is now a blocking CI gate (the backlog reached zero).
+- Roughly 170 fewer mypy errors, and `union-attr` down from 230 to 59. Three
+  hotspots accounted for most of them, all the same shape: an attribute typed
+  `Optional` but guaranteed non-None past an initialisation or availability
+  check, so ~100 accesses read as "might be None" and the one place it genuinely
+  might got no more attention than the ninety-nine where it could not. Each is
+  now a property that states the invariant and raises a named error.
+
+## [0.1.1] - 2026-08-29
+
+Ships every security fix below to users of `0.1.0`, which is why it went out as
+a patch rather than waiting for `0.2.0`. **It is not a pure patch release:** it
+also carries behavioural changes (the per-environment certificate layout, the
+CORS default) and new features. Ducta is alpha and the API is explicitly not
+declared stable yet — read *Changed* before upgrading.
+
 ### Security
 
 - **A web page could drive the local API.** The defaults combined
@@ -443,5 +669,6 @@ with data quality, MLOps, and run governance built in.
   `linux/arm64`, including Apple Silicon).
 - Unit test suites and coverage configuration.
 
-[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/faustinolopezramos/ducta/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/faustinolopezramos/ducta/releases/tag/v0.1.0

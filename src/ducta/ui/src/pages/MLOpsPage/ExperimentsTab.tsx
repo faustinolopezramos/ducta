@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { colors } from "../../theme/tokens";
+import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { ActionButton } from "../../components/ui/ActionButton";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
@@ -222,13 +222,15 @@ function ExperimentRow({
 
   return (
     <Panel>
-      <div
+      <button
+        type="button"
         onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
         style={{
+          ...styles.resetButton,
           display: "flex",
           alignItems: "center",
           gap: 10,
-          cursor: "pointer",
           userSelect: "none",
         }}
       >
@@ -244,7 +246,7 @@ function ExperimentRow({
         <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
           {String(exp.experiment_id ?? "").slice(0, 8)}
         </span>
-      </div>
+      </button>
 
       {expanded && (
         <div style={{ marginTop: "var(--space-3)" }}>
