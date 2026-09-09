@@ -8,6 +8,7 @@ Tutorials
    batch_etl
    streaming
    mlops
+   certificates
    airflow_integration
    fastapi_integration
 
@@ -57,6 +58,21 @@ Topics covered:
 - Pipeline automation
 
 :doc:`mlops`
+
+Run Certificates
+~~~~~~~~~~~~~~~~~
+
+Prove what a pipeline run actually did: what ran, against which data, with
+what result — and how to tell a real guarantee from a weaker one.
+
+Topics covered:
+
+- Certificate anatomy and the three levels of proof (hash, signature, ``--reproduce``)
+- Configuring signing and fingerprint modes
+- The ``ducta certify`` CLI: ``list``, ``show``, ``verify``, ``diff``
+- Comparing certificates written by different fingerprint algorithms
+
+:doc:`certificates`
 
 Airflow Integration
 ~~~~~~~~~~~~~~~~~~~

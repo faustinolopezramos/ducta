@@ -24,7 +24,7 @@ from __future__ import annotations
 import pytest
 
 from ducta.check.core import DFAdapter
-from ducta.console.template import MedallionBasicTemplate, MLReadyTemplate
+from ducta.console.template import MedallionBasicTemplate
 
 
 @pytest.fixture
@@ -126,29 +126,3 @@ class TestGeneratedCodeCallsRealAPIs:
 
         # The scaffold defaults to YAML; the instructions used to be TOML.
         assert "code-block:: yaml" in source
-
-
-class TestMLReadyDoesNotInheritTheWrongAssertions:
-    """`ml_ready` reuses medallion's nodes over an entirely different table."""
-
-    def test_schema_check_matches_its_own_columns(self):
-        nodes = MLReadyTemplate("mldemo").generate_nodes_config()
-        expected = nodes["extract"]["sanity_checks"]["checks"]["schema"]["expected_columns"]
-        header = MLReadyTemplate("mldemo").get_sample_data().splitlines()[0].split(",")
-        assert set(expected) == set(header)
-
-    def test_quality_checks_reference_columns_that_exist(self):
-        template = MLReadyTemplate("mldemo")
-        header = set(template.get_sample_data().splitlines()[0].split(","))
-        checks = template.generate_nodes_config()["transform"]["data_quality"]["checks"]
-        for name, check in checks.items():
-            for column in check.get("columns", []):
-                assert column in header, f"{name} checks '{column}', absent from the sample data"
-
-    def test_row_count_floor_fits_its_own_sample(self):
-        template = MLReadyTemplate("mldemo")
-        rows = len(_rows(template.get_sample_data()))
-        floor = template.generate_nodes_config()["transform"]["data_quality"]["checks"][
-            "row_count"
-        ]["min"]
-        assert floor <= rows, "the inherited floor would block ml_ready's own first run"

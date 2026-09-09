@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`certify show`/`certify verify` used to hide the one thing that most
+  affects how much a certificate can be trusted.** A dataset fingerprinted in
+  `sample` or `schema` mode looked identical, in the default pretty view, to
+  one fingerprinted `exact` — the difference only appeared under `--json`.
+  Concretely: a project running `fingerprint_mode: "fast"` (which maps to
+  `sample`, a 100-row head hash) produced certificates whose CLI-rendered
+  summary was indistinguishable from a full-table guarantee, unless someone
+  went and read the raw JSON. `certify show` now prints a `Fingerprint`
+  column on every dataset (`exact`, or `sample (100 rows)`/`schema-only` in
+  yellow), and `certify verify` — the command run specifically to decide
+  whether to trust a certificate — now warns by name when any input or
+  output was measured in a non-`exact` mode. The summary panel also surfaces
+  `evidence_complete: false` (with its `evidence_gaps`) as a visible warning
+  row instead of only in `--json`, and an unsigned certificate now reads *"no
+  — hash only, not tamper-evident"* rather than a bare *"no"* that reads as
+  neutral when it is not.
+
 - **The `medallion_basic` scaffold now demonstrates the product instead of
   describing it.** `extract`, `transform` and `load` were all pass-throughs
   (`return source_data` / `return raw_data` / `return clean_data`), so a
@@ -209,6 +226,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisory with the specific backlog named in the workflow.
 - `scripts/dump_openapi.py`, which `npm run spec:generate` had always invoked
   but which was never committed.
+- A dedicated Run Certificates tutorial (`docs/tutorials/certificates.rst`):
+  certificate anatomy, the three levels of proof (hash, signature,
+  `--reproduce`), fingerprint modes and their trade-offs, and the full
+  `ducta certify` CLI walkthrough. Certificates previously had no doc of
+  their own — everything about them lived in the top-level README and the
+  source.
 
 ### Changed
 

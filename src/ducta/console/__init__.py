@@ -86,10 +86,7 @@ from ducta.console.parser import UnifiedArgumentParser
 # Template
 # ---------------------------------------------------------------------------
 from ducta.console.template import (
-    HybridTemplate,
     MedallionBasicTemplate,
-    MLReadyTemplate,
-    StreamingCoreTemplate,
     TemplateCommand,
     TemplateError,
     TemplateFactory,
@@ -180,10 +177,7 @@ __all__ = [
     "load_context",
     "run_streaming_pipeline_cli",
     "stop_streaming_pipeline_cli",
-    "HybridTemplate",
-    "MLReadyTemplate",
     "MedallionBasicTemplate",
-    "StreamingCoreTemplate",
     "TemplateCommand",
     "TemplateError",
     "TemplateFactory",

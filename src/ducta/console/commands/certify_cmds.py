@@ -102,6 +102,29 @@ def _status_label(status: str) -> str:
     return f"[{color}]{icon} {status}[/]"
 
 
+def _fingerprint_label(fp: Dict[str, Any]) -> str:
+    """'exact' / 'sample (100 rows)' / 'schema-only' — visible without --json.
+
+    Sample and schema fingerprints only cover part of the data (or none of it),
+    so a corrupted row outside what was hashed goes undetected. That distinction
+    used to be invisible in the pretty view — only ``--json`` showed ``mode`` —
+    which is exactly how a project can end up presenting a degraded fingerprint
+    as if it were the full-table guarantee the certificate implies.
+    """
+    mode = fp.get("mode")
+    if not mode:
+        return "[dim]?[/]" if _USE_RICH else "?"
+    if mode == "exact":
+        return "[bold bright_green]exact[/]" if _USE_RICH else "exact"
+    if mode == "sample":
+        rows = (fp.get("details") or {}).get("sample_rows_covered")
+        label = f"sample ({rows} rows)" if rows is not None else "sample"
+        return f"[yellow]{label}[/]" if _USE_RICH else label
+    if mode == "schema":
+        return "[yellow]schema-only[/]" if _USE_RICH else "schema-only"
+    return f"[yellow]{mode}[/]" if _USE_RICH else str(mode)
+
+
 def _quality_summary_label(quality: list) -> str:
     """'3/3 passed' or '2/3 passed (1 failed)' summarizing a certificate's checks."""
     if not quality:
@@ -267,8 +290,15 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
     signature = data.get("signature")
     summary.add_row(
         "Signed",
-        f"🔏 yes (key {data.get('key_id')})" if signature else "no",
+        f"🔏 yes (key {data.get('key_id')})"
+        if signature
+        else "[yellow]no — hash only, not tamper-evident[/]",
     )
+    evidence_complete = data.get("evidence_complete", True)
+    evidence_gaps = data.get("evidence_gaps") or []
+    if not evidence_complete or evidence_gaps:
+        gap_text = "; ".join(str(g) for g in evidence_gaps) or "reason not recorded"
+        summary.add_row("Evidence", f"[bold yellow]⚠ incomplete[/] — {gap_text}")
     if data.get("error"):
         summary.add_row("Error", f"[bold bright_red]{data['error']}[/]")
     console.print(Panel(summary, title="Run Certificate", border_style="cyan"))
@@ -302,6 +332,7 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
         ds_table.add_column("I/O")
         ds_table.add_column("Rows", justify="right")
         ds_table.add_column("Schema hash")
+        ds_table.add_column("Fingerprint")
         for key, fp in sorted(datasets.items()):
             row_count = fp.get("row_count")
             schema_hash = fp.get("schema_hash")
@@ -310,6 +341,7 @@ def _print_certificate_human(data: Dict[str, Any]) -> None:
                 fp["direction"],
                 str(row_count) if row_count is not None else "?",
                 str(schema_hash)[:16] + "…" if schema_hash else "?",
+                _fingerprint_label(fp),
             )
         console.print(ds_table)
 
@@ -378,10 +410,40 @@ def _handle_verify(parsed_args) -> int:
         result.reason,
         result.signature,
     )
+    _warn_degraded_fingerprints(path)
 
     if getattr(parsed_args, "reproduce", False):
         return _reproduce(parsed_args, path)
     return ExitCode.SUCCESS.value
+
+
+def _warn_degraded_fingerprints(path: Path) -> None:
+    """Flag any dataset whose fingerprint is not ``exact`` after a successful verify.
+
+    ``verify`` only checks that the certificate wasn't altered — it says nothing
+    about how thoroughly the data itself was fingerprinted. A ``sample`` or
+    ``schema`` mode certificate can pass verification cleanly while covering
+    only part of the data (or none of it), which is easy to miss because the
+    integrity check above is the headline result. Surfacing it here, not just
+    in ``--json``, is the point: this is the command someone runs specifically
+    to decide whether to trust the certificate.
+    """
+    try:
+        data = load_certificate(path)
+    except Exception:  # noqa: BLE001
+        return
+    degraded = []
+    for direction in ("inputs", "outputs"):
+        for key, fp in (data.get(direction, {}) or {}).items():
+            mode = fp.get("mode")
+            if mode and mode != "exact":
+                degraded.append(f"{key} ({mode})")
+    if degraded:
+        logger.warning(
+            "  fingerprint mode is not 'exact' for: {} — a change outside what was "
+            "hashed would not be detected",
+            ", ".join(sorted(degraded)),
+        )
 
 
 def _reproduce(parsed_args, cert_path: Path) -> int:

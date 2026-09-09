@@ -48,9 +48,6 @@ class TemplateType(Enum):
     """Available template types for project generation."""
 
     MEDALLION_BASIC = "medallion_basic"
-    ML_READY = "ml_ready"
-    STREAMING_CORE = "streaming_core"
-    HYBRID = "hybrid"
 
 
 class TemplateError(DuctaError):
@@ -72,12 +69,6 @@ class TemplateFactory:
         """Create a template instance based on the given type."""
         if template_type == TemplateType.MEDALLION_BASIC:
             return MedallionBasicTemplate(project_name, config_format)
-        if template_type == TemplateType.ML_READY:
-            return MLReadyTemplate(project_name, config_format)
-        if template_type == TemplateType.STREAMING_CORE:
-            return StreamingCoreTemplate(project_name, config_format)
-        if template_type == TemplateType.HYBRID:
-            return HybridTemplate(project_name, config_format)
         raise TemplateError(f"Unknown template type: {template_type}")
 
     @staticmethod
@@ -88,21 +79,6 @@ class TemplateFactory:
                 "type": "medallion_basic",
                 "name": "Medallion Basic",
                 "description": "Functional Medallion template: minimal, clean, and production-ready",
-            },
-            {
-                "type": "ml_ready",
-                "name": "ML Ready",
-                "description": "Medallion + ML: Integrated experiment tracking and model registry",
-            },
-            {
-                "type": "streaming_core",
-                "name": "Streaming Core",
-                "description": "Real-time Ready: file-stream → Parquet streaming orchestration",
-            },
-            {
-                "type": "hybrid",
-                "name": "Hybrid",
-                "description": "Batch + Streaming: a batch stage feeds a streaming stage",
             },
         ]
 
@@ -366,22 +342,7 @@ class MedallionBasicTemplate:
     _CATEGORIES = ("electronics", "grocery", "apparel", "home", "toys")
 
     def get_sample_data(self) -> str:
-        """A deliberately dirty CSV, so the medallion layers have work to do.
-
-        The previous sample was five spotless rows, which meant every quality
-        check passed trivially and bronze, silver and gold came out byte-for-byte
-        identical — a "medallion" demo with no refinement in it, and a quality
-        demo where nothing was ever caught.
-
-        This one carries 12 rows with a missing ``amount`` and 8 verbatim
-        duplicates, so the run tells a story you can read straight off the
-        certificate: 508 rows in bronze, 488 in silver once `transform` cleans
-        them, 5 in gold after aggregation. The silver checks then pass *because*
-        the transform did its job — break the transform and the gate blocks.
-
-        Deterministic on purpose: the same scaffold must produce the same
-        fingerprints, or the certificate demo is not reproducible.
-        """
+        """A deliberately dirty CSV, so the medallion layers have work to do."""
         header = "order_id,category,amount,order_date"
         rows = []
         for order_id in range(1, 501):
@@ -395,301 +356,6 @@ class MedallionBasicTemplate:
         rows.extend(by_id[order_id] for order_id in self._DUPLICATED_ORDERS)
 
         return "\n".join([header, *rows]) + "\n"
-
-
-class MLReadyTemplate(MedallionBasicTemplate):
-    """Medallion + ML: Integrated experiment tracking and model registry."""
-
-    def get_common_global_settings(self) -> Dict[str, Any]:
-        settings = super().get_common_global_settings()
-        settings.update(
-            {
-                "template_type": "ml_ready",
-                # Reproducibility: seeds random/numpy/torch globally and provides
-                # a deterministic per-node seed via ml_context["node_seed"].
-                "random_seed": 42,
-                "mlops": {
-                    "experiment_name": self.project_name,
-                    "tracking_uri": "sqlite:///mlflow.db",
-                    "registry_uri": "sqlite:///registry.db",
-                },
-            }
-        )
-        return settings
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        config = super().generate_pipelines_config()
-        config["train"] = {
-            "description": "Model Training Pipeline",
-            # The "ml" pipeline type delivers ml_context (seed/split/hyperparams) to every node.
-            "type": "ml",
-            # The sample training run is not incremental — runs without --start-date/--end-date.
-            "requires_dates": False,
-            "nodes": ["extract", "transform", "train_model"],
-            "inputs": ["source_data"],
-            # The model is self-persisted by the node via ducta.mlrun.persist_model
-            # (versioned in the model registry, or a stamped local file as fallback),
-            # so there is no model output in the I/O catalog.
-            "outputs": [],
-            # Versioned hyperparameters: delivered to nodes via ml_context
-            "hyperparams": {"n_estimators": 100, "max_depth": 5},
-            # Declarative split, delivered via ml_context["split"]. val_size is
-            # what keeps model selection off the test set: candidates are
-            # compared on validation, and test is scored once at the end.
-            "split": {
-                "method": "stratified",
-                "stratify_col": "target",
-                "test_size": 0.2,
-                "val_size": 0.2,
-            },
-            # Average the selection metric over this many folds instead of one
-            # validation split (delivered via ml_context["cv_folds"]).
-            "cv_folds": 3,
-        }
-        return config
-
-    def get_sample_data(self) -> str:
-        """Numeric, binary-labeled dataset the sample `train` node can fit directly.
-
-        Purely numeric features (RandomForest fits them without encoding) and a
-        balanced binary `target` column so the stratified split has both classes.
-        Features are separable so the model beats the trivial baseline.
-        """
-        rows = ["feature_1,feature_2,feature_3,target"]
-        # 10 rows per class, class 0 low / class 1 high on feature_1 & feature_3.
-        for i in range(10):
-            rows.append(f"{0.1 + i * 0.03:.2f},{1.0 + i * 0.05:.2f},{0.2 + i * 0.02:.2f},0")
-        for i in range(10):
-            rows.append(f"{0.9 + i * 0.03:.2f},{1.0 + i * 0.05:.2f},{0.9 + i * 0.02:.2f},1")
-        return "\n".join(rows) + "\n"
-
-    #: The columns of this template's own sample CSV, which is numeric and
-    #: already clean — nothing like the medallion sales data.
-    _ML_COLUMNS = ("feature_1", "feature_2", "feature_3", "target")
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        nodes = super().generate_nodes_config()
-
-        # The `train` pipeline reuses medallion's `extract` and `transform`
-        # nodes, but not its data. Their inherited checks assert the medallion
-        # schema (order_id/category/amount) against this template's numeric
-        # feature table, so every one of them would fail here and the gate would
-        # block the run on the very first scaffold. Retune them to this dataset.
-        nodes["extract"]["sanity_checks"]["checks"]["schema"]["expected_columns"] = list(
-            self._ML_COLUMNS
-        )
-        transform_dq = nodes["transform"]["data_quality"]
-        transform_dq["checks"] = {
-            # A missing label makes a row untrainable, so this is the one that
-            # matters before a split.
-            "null_rate": {
-                "enabled": True,
-                "columns": list(self._ML_COLUMNS),
-                "threshold": 0.0,
-            },
-            "row_count": {"enabled": True, "min": 10},
-        }
-        nodes["load"]["data_quality"]["checks"]["row_count"]["min"] = 1
-
-        nodes["train_model"] = {
-            "description": "Train ML model",
-            "module": "pipelines.ml",
-            "function": "train",
-            "input": ["silver.etl.clean_data"],
-            # No catalog output: the node persists the model itself and returns its
-            # artifact URI (see pipelines/ml.py:train -> persist_model).
-            "output": [],
-            "dependencies": ["transform"],
-            "ml_stage": "training",
-            # Node-level hyperparams override pipeline-level ones
-            "hyperparams": {},
-            # val_f1 is the selection metric (computed on validation/CV folds);
-            # test_f1 is the unbiased estimate, reported but never selected on.
-            "metrics": ["val_f1", "baseline_f1", "test_f1"],
-        }
-        return nodes
-
-
-class StreamingCoreTemplate(MedallionBasicTemplate):
-    """Real-time Ready: a file-stream → Parquet streaming pipeline.
-
-    Uses a file-stream source (a watched directory) with an ``availableNow``
-    trigger, so the sample runs to completion locally and in CI without a Kafka
-    broker. The generated README shows how to swap in Kafka for a live source.
-
-    Streaming nodes follow the streaming engine's config model (different from
-    batch): the ``input``/``output`` are declared **inline** (format + options +
-    schema), and the transform is referenced as ``function: {module, key}`` and
-    registered by ``register_transforms(registry)`` in ``pipelines/streaming.py``.
-    """
-
-    STREAM_SOURCE = "data/stream_source"
-    STREAM_OUT = "data/stream_out"
-    STREAM_CHECKPOINT = "data/checkpoints/stream_ingest"
-    STREAM_SCHEMA = "id INT, value DOUBLE, event_ts STRING"
-
-    def get_common_global_settings(self) -> Dict[str, Any]:
-        settings = super().get_common_global_settings()
-        settings.update({"template_type": "streaming_core"})
-        return settings
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        return {
-            "ingest_stream": {
-                "description": "File-stream ingestion (JSON → Parquet), terminates via availableNow",
-                "type": "streaming",
-                "nodes": ["stream_ingest"],
-            }
-        }
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        return {
-            "stream_ingest": self._stream_ingest_node(),
-        }
-
-    def _stream_ingest_node(self) -> Dict[str, Any]:
-        """A single streaming node: read a JSON file stream, enrich, write Parquet."""
-        return {
-            "description": "Consume a JSON file stream and write enriched rows to Parquet",
-            "type": "streaming",
-            # Inline input: a watched directory of JSON files with an explicit schema
-            # (streaming file sources require a schema).
-            "input": {
-                "format": "file_stream",
-                "file_format": "json",
-                "schema": self.STREAM_SCHEMA,
-                "options": {
-                    "path": self.STREAM_SOURCE,
-                    "maxFilesPerTrigger": "1",
-                },
-            },
-            # Transform resolved from the registry populated by register_transforms().
-            "function": {
-                "module": "pipelines.streaming",
-                "key": "enrich",
-            },
-            "output": {
-                "format": "parquet",
-                "path": self.STREAM_OUT,
-            },
-            "streaming": {
-                "checkpoint_location": self.STREAM_CHECKPOINT,
-                "output_mode": "append",
-                # available_now: process all data currently available, then stop —
-                # so `ducta stream run --mode sync` terminates on its own.
-                "trigger": {"type": "available_now"},
-            },
-        }
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        # Streaming nodes carry their input inline; no I/O catalog needed.
-        return {}
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        # Streaming nodes carry their output inline; no I/O catalog needed.
-        return {}
-
-
-class HybridTemplate(MedallionBasicTemplate):
-    """Batch + Streaming in one pipeline: a batch stage feeds a streaming stage.
-
-    ``prepare`` (batch) lands the source rows as Parquet in the bronze layer;
-    ``stream_ingest`` (streaming) reads that same directory as a file stream and
-    writes enriched rows to Parquet, terminating via an ``available_now`` trigger.
-    Exercises the HybridExecutor's batch→streaming cross-stage flow.
-    """
-
-    # Where the batch stage writes (schema.sub_folder.table → this local path) and
-    # where the streaming stage reads from.
-    BRONZE_PATH = "data/base/bronze/hybrid/events"
-    STREAM_OUT = "data/hybrid_out"
-    STREAM_CHECKPOINT = "data/checkpoints/hybrid_stream"
-    STREAM_SCHEMA = "id INT, value DOUBLE, event_ts STRING"
-
-    def get_common_global_settings(self) -> Dict[str, Any]:
-        settings = super().get_common_global_settings()
-        settings.update({"template_type": "hybrid"})
-        return settings
-
-    def get_sample_data(self) -> str:
-        """Rows matching the streaming schema (id INT, value DOUBLE, event_ts STRING).
-
-        ``event_ts`` is a plain label (not an ISO timestamp) so CSV inferSchema
-        keeps it as a string — the batch stage writes Parquet with a string column
-        and the streaming stage reads it back with the same declared schema.
-        """
-        rows = ["id,value,event_ts"]
-        for i in range(1, 6):
-            rows.append(f"{i},{i * 10.0:.1f},evt_{i}")
-        return "\n".join(rows) + "\n"
-
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        return {
-            "flow": {
-                "description": "Hybrid: batch prepare (Parquet) → streaming enrich (Parquet)",
-                "type": "hybrid",
-                "requires_dates": False,
-                "nodes": ["prepare", "stream_ingest"],
-            }
-        }
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        return {
-            "prepare": {
-                "description": "Batch stage: land source rows in the bronze layer",
-                "module": "pipelines.hybrid",
-                "function": "prepare",
-                "input": ["source_data"],
-                "output": ["bronze.hybrid.events"],
-                "dependencies": [],
-            },
-            "stream_ingest": {
-                "description": "Streaming stage: read the bronze dir as a file stream",
-                "type": "streaming",
-                "dependencies": ["prepare"],
-                "input": {
-                    "format": "file_stream",
-                    "file_format": "parquet",
-                    "schema": self.STREAM_SCHEMA,
-                    "options": {
-                        "path": self.BRONZE_PATH,
-                        "maxFilesPerTrigger": "1",
-                    },
-                },
-                "function": {
-                    "module": "pipelines.hybrid",
-                    "key": "enrich",
-                },
-                "output": {
-                    "format": "parquet",
-                    "path": self.STREAM_OUT,
-                },
-                "streaming": {
-                    "checkpoint_location": self.STREAM_CHECKPOINT,
-                    "output_mode": "append",
-                    "trigger": {"type": "available_now"},
-                },
-            },
-        }
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        return {
-            "source_data": {
-                "description": "Source dataset for the batch stage",
-                "format": "csv",
-                "filepath": "data/input.csv",
-                "options": {"header": True, "inferSchema": True},
-            },
-        }
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        return {
-            "bronze.hybrid.events": {
-                "description": "Batch-prepared events (bronze layer), read by the stream",
-                "format": "parquet",
-                "write_mode": "overwrite",
-            },
-        }
 
 
 class TemplateGenerator:
@@ -737,7 +403,7 @@ class TemplateGenerator:
 
         # Generate sample code if requested
         if create_sample_code:
-            self._generate_sample_code(template_type)
+            self._generate_sample_code()
 
         # Generate additional project files
         self._generate_project_files(template)
@@ -840,301 +506,9 @@ class TemplateGenerator:
         with open(file_path, "wb") as f:
             tomli_w.dump(data, f)
 
-    def _generate_sample_code(self, template_type: Optional[TemplateType] = None) -> None:
-        """Generate the sample pipeline modules for the chosen template type."""
-        if template_type == TemplateType.STREAMING_CORE:
-            self._generate_streaming_sample_code()
-            return
-        if template_type == TemplateType.HYBRID:
-            self._generate_hybrid_sample_code()
-            return
-        if template_type == TemplateType.ML_READY:
-            self._generate_ml_sample_code()
+    def _generate_sample_code(self) -> None:
+        """Generate the sample pipeline modules."""
         self._generate_etl_sample_code()
-
-    def _seed_json_stream_source(self, rel_dir: str) -> None:
-        """Seed a directory with sample JSON records for the file-stream source.
-
-        The ``availableNow`` trigger processes exactly what is present at start, so
-        these files make the streaming sample produce output on the first run.
-        """
-        source_dir = self.output_path / rel_dir
-        source_dir.mkdir(parents=True, exist_ok=True)
-        rows = [
-            {"id": 1, "value": 10.5, "event_ts": "2025-01-01T00:00:00"},
-            {"id": 2, "value": 20.0, "event_ts": "2025-01-01T00:01:00"},
-            {"id": 3, "value": 30.25, "event_ts": "2025-01-01T00:02:00"},
-        ]
-        for i, row in enumerate(rows):
-            (source_dir / f"events_{i}.json").write_text(json.dumps(row) + "\n", encoding="utf-8")
-
-    def _generate_streaming_sample_code(self) -> None:
-        """Write pipelines/streaming.py (transform registry) and seed the stream source."""
-        streaming_code = '''"""
-Streaming transforms for the file-stream → Parquet demo.
-
-Streaming transforms are looked up by key on a TransformationRegistry. Ducta
-calls ``register_transforms(registry)`` at runtime, then resolves each streaming
-node's ``function: {module: pipelines.streaming, key: <key>}`` against it. Each
-transform takes a streaming DataFrame and returns a streaming DataFrame.
-
-To use a live Kafka source instead of the file stream, change the node's input in
-config/nodes.yaml to ``format: kafka`` with ``options.kafka.bootstrap.servers`` and
-``options.subscribe``; the transform below is unchanged.
-"""
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
-
-
-def enrich(df: DataFrame) -> DataFrame:
-    """Add a processing timestamp to each streamed row (passthrough otherwise)."""
-    return df.withColumn("ingested_at", F.current_timestamp())
-
-
-def register_transforms(registry) -> None:
-    """Register this module's streaming transforms (called by Ducta at runtime)."""
-    registry.register("enrich", enrich)
-'''
-        self._write_text_file(self.output_path / "pipelines" / "streaming.py", streaming_code)
-        self._seed_json_stream_source(StreamingCoreTemplate.STREAM_SOURCE)
-
-    def _generate_hybrid_sample_code(self) -> None:
-        """Write pipelines/hybrid.py: a batch prepare node + a streaming enrich transform."""
-        hybrid_code = '''"""
-Hybrid pipeline sample: a batch stage feeds a streaming stage.
-
-- ``prepare`` is a normal batch node (called with the loaded input DataFrame plus
-  start_date/end_date) that lands rows as Parquet in the bronze layer.
-- ``enrich`` is a streaming transform (registered via register_transforms) that a
-  streaming node applies to a file stream reading that same bronze directory.
-"""
-from typing import Any, Optional
-
-from pyspark.sql import DataFrame
-from pyspark.sql import functions as F
-
-
-def prepare(
-    source_data: Any,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-) -> Any:
-    """Batch stage: pass the source rows through to the bronze layer."""
-    return source_data
-
-
-def enrich(df: DataFrame) -> DataFrame:
-    """Streaming stage: add a processing timestamp to each streamed row."""
-    return df.withColumn("ingested_at", F.current_timestamp())
-
-
-def register_transforms(registry) -> None:
-    """Register the streaming transform used by the hybrid pipeline's stream node."""
-    registry.register("enrich", enrich)
-'''
-        self._write_text_file(self.output_path / "pipelines" / "hybrid.py", hybrid_code)
-
-    def _generate_ml_sample_code(self) -> None:
-        """Generate a best-practice ML training module for the ml_ready template."""
-        ml_code = '''"""
-ML Training Pipeline (best-practice skeleton)
-
-This sample encodes the habits every Ducta training node should keep:
-
-1. Declarative split: the criteria (method, sizes, columns) live versioned
-   in the pipeline config and arrive via ml_context["split"]; the node only
-   applies them with ducta.mlrun.split.split_dataframe. Code never
-   hardcodes how data is partitioned.
-2. Reproducible seed: random_state comes from ml_context["node_seed"]
-   (derived from global_settings.random_seed), never unseeded.
-3. No leakage: anything that LEARNS from data (imputers, scalers,
-   encoders) is fit on train only, then applied to the other splits.
-4. Hyperparameters from versioned config (ml_context["hyperparams"]),
-   never hardcoded.
-5. Selection on validation, NEVER on test. Model choice and hyperparameter
-   comparison use the validation split (or cross-validation folds when
-   ml_context["cv_folds"] is set). The test set is touched exactly once,
-   at the end, to report an unbiased estimate — using it to choose
-   anything silently invalidates that estimate.
-6. Baseline comparison: metrics are reported relative to a trivial
-   baseline (majority class), and any registration gate is relative
-   (f1 > baseline_f1 + margin), not an absolute threshold.
-
-Requires scikit-learn: pip install scikit-learn
-"""
-from typing import TYPE_CHECKING, Any, Optional
-
-from loguru import logger
-
-if TYPE_CHECKING:
-    # Typed context for autocompletion (ml_context.node_seed, .hyperparams, .split…).
-    # MLNodeContext is also a Mapping, so ml_context["split"] / .get(...) still work.
-    from ducta.core.ml_context import MLNodeContext
-
-TARGET_COLUMN = "target"  # change to your label column
-
-
-def _fit_and_score(train_df, eval_df, params, seed):
-    """Fit on train_df, score on eval_df. Returns (model, f1, baseline_f1).
-
-    Every learned transformation is fit on train_df only — that is what keeps
-    eval_df an honest estimate rather than a number the model already saw.
-    """
-    from sklearn.dummy import DummyClassifier
-    from sklearn.ensemble import RandomForestClassifier
-    from sklearn.metrics import f1_score
-
-    X_train = train_df.drop(TARGET_COLUMN, axis=1)
-    y_train = train_df[TARGET_COLUMN]
-    X_eval = eval_df.drop(TARGET_COLUMN, axis=1)
-    y_eval = eval_df[TARGET_COLUMN]
-
-    # Anti-leakage: fill values are LEARNED from train only, then applied
-    # everywhere. Same rule for scalers, encoders and feature selection.
-    fill_values = X_train.median(numeric_only=True)
-    X_train = X_train.fillna(fill_values)
-    X_eval = X_eval.fillna(fill_values)
-
-    baseline = DummyClassifier(strategy="most_frequent").fit(X_train, y_train)
-    baseline_f1 = f1_score(y_eval, baseline.predict(X_eval))
-
-    model = RandomForestClassifier(**params, random_state=seed).fit(X_train, y_train)
-    f1 = f1_score(y_eval, model.predict(X_eval))
-    return model, f1, baseline_f1
-
-
-def train(
-    clean_data: Any,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
-    ml_context: "Optional[MLNodeContext]" = None,
-) -> Any:
-    """Train a model with declarative split, config-driven params and baseline gate."""
-    from ducta.mlrun import kfold_splits, persist_model, split_dataframe
-
-    ml_context = ml_context or {}
-
-    # Hyperparameters: versioned config first, safe defaults for local runs
-    params = {"n_estimators": 100, "max_depth": 5, **(ml_context.get("hyperparams") or {})}
-    seed = ml_context.get("node_seed", 42)
-
-    df = clean_data.toPandas() if hasattr(clean_data, "toPandas") else clean_data
-
-    # Split criteria from the pipeline config ('split' block); the fallback
-    # only covers local runs without one. Ask for a validation split so
-    # selection never touches test.
-    split_cfg = ml_context.get("split") or {
-        "method": "stratified",
-        "stratify_col": TARGET_COLUMN,
-        "test_size": 0.2,
-        "val_size": 0.2,
-    }
-    parts = split_dataframe(df, split_cfg, default_seed=seed)
-
-    # (train, val, test) when the config sets val_size, else (train, test).
-    if len(parts) == 3:
-        train_df, val_df, test_df = parts
-    else:
-        train_df, test_df = parts
-        val_df = None
-        logger.warning(
-            "split has no 'val_size': falling back to selecting on test, which "
-            "invalidates the final estimate. Add 'val_size' to the pipeline's "
-            "split block."
-        )
-
-    # --- Selection phase: validation or cross-validation, never test --------
-    cv_folds = ml_context.get("cv_folds")
-    if cv_folds and val_df is not None:
-        # Averaging over folds makes selection far less sensitive to one
-        # lucky partition. Folds come from train+val so test stays untouched.
-        import pandas as pd
-
-        selection_pool = pd.concat([train_df, val_df])
-        scores, baseline_scores = [], []
-        for fold_train, fold_val in kfold_splits(
-            selection_pool, split_cfg, n_splits=int(cv_folds), default_seed=seed
-        ):
-            _, fold_f1, fold_baseline_f1 = _fit_and_score(fold_train, fold_val, params, seed)
-            scores.append(fold_f1)
-            baseline_scores.append(fold_baseline_f1)
-        val_f1 = sum(scores) / len(scores)
-        baseline_f1 = sum(baseline_scores) / len(baseline_scores)
-        logger.info(
-            "{}-fold CV f1={:.4f} (per fold: {})",
-            cv_folds,
-            val_f1,
-            ", ".join(f"{s:.4f}" for s in scores),
-        )
-    elif val_df is not None:
-        _, val_f1, baseline_f1 = _fit_and_score(train_df, val_df, params, seed)
-        logger.info("validation f1={:.4f} | baseline_f1={:.4f}", val_f1, baseline_f1)
-    else:
-        _, val_f1, baseline_f1 = _fit_and_score(train_df, test_df, params, seed)
-
-    # --- Final model: refit on everything except test, score on test once ---
-    if val_df is not None:
-        import pandas as pd
-
-        fit_df = pd.concat([train_df, val_df])
-    else:
-        fit_df = train_df
-    model, test_f1, test_baseline_f1 = _fit_and_score(fit_df, test_df, params, seed)
-
-    logger.info(
-        "val_f1={:.4f} | test_f1={:.4f} | baseline_f1={:.4f} | lift={:.4f}",
-        val_f1,
-        test_f1,
-        baseline_f1,
-        val_f1 - baseline_f1,
-    )
-
-    # Log to the pipeline-level experiment run if MLOps is configured
-    mlops = ml_context.get("mlops_context")
-    run_id = ml_context.get("mlops_run_id")
-    if mlops and run_id and getattr(mlops, "experiment_tracker", None):
-        tracker = mlops.experiment_tracker
-        split_params = {f"split_{k}": v for k, v in dict(split_cfg).items() if v is not None}
-        for key, value in {**params, "seed": seed, **split_params}.items():
-            tracker.log_parameter(run_id, key, value)
-        # val_f1 is the selection metric: point sweeps and promotion policies
-        # at it. test_f1 is reported for the record, never to choose with.
-        tracker.log_metric(run_id, "val_f1", val_f1)
-        tracker.log_metric(run_id, "baseline_f1", baseline_f1)
-        tracker.log_metric(run_id, "val_f1_lift", val_f1 - baseline_f1)
-        tracker.log_metric(run_id, "test_f1", test_f1)
-
-    if val_f1 <= baseline_f1:
-        logger.warning(
-            "Model does NOT beat the trivial baseline ({:.4f} <= {:.4f}) - "
-            "it adds no value yet. Review features/hyperparams before promoting.",
-            val_f1,
-            baseline_f1,
-        )
-
-    # Persist the model reproducibly: the registry versions it by design, with a
-    # run/version-stamped local file as fallback. Passing X= records the feature
-    # contract on the version, so the promotion gate can detect schema drift
-    # against whatever is currently in Production. Returning the artifact dict
-    # makes the executor record the URI and skip the standard output save.
-    return persist_model(
-        model,
-        ml_context,
-        name="demo_model",
-        framework="sklearn",
-        metrics={
-            "val_f1": val_f1,
-            "baseline_f1": baseline_f1,
-            "test_f1": test_f1,
-            "test_baseline_f1": test_baseline_f1,
-        },
-        hyperparameters=params,
-        X=fit_df.drop(TARGET_COLUMN, axis=1),
-        y=fit_df[TARGET_COLUMN],
-    )
-'''
-        ml_file = self.output_path / "pipelines" / "ml.py"
-        self._write_text_file(ml_file, ml_code)
 
     def _generate_etl_sample_code(self) -> None:
         """Generate a single, focused ETL pipeline module."""
@@ -1197,8 +571,8 @@ def transform(
 ) -> Any:
     """Silver: make the data trustworthy.
 
-    Two operations, both schema-agnostic so this node also serves the `train`
-    pipeline in the ml_ready template:
+    Two operations, both schema-agnostic, so this node keeps working when you
+    point the pipeline at your own table:
 
       1. drop exact duplicate rows
       2. drop rows with a missing value in any column
@@ -1246,9 +620,8 @@ def load(
 
     columns = list(getattr(clean_data, "columns", []))
     if GROUP_COLUMN not in columns or VALUE_COLUMN not in columns:
-        # Keeps the node working when the template is pointed at other data
-        # (the ml_ready sample, or your own) before you have adjusted the two
-        # constants at the top of this file.
+        # Keeps the node working when the template is pointed at your own data
+        # before you have adjusted the two constants at the top of this file.
         logger.warning(
             "Gold: no '{}'/'{}' columns in {}; passing silver through unaggregated. "
             "Set GROUP_COLUMN/VALUE_COLUMN in pipelines/etl.py to aggregate.",
@@ -1416,6 +789,9 @@ class PositiveValuesCheck(BaseQualityCheck):
 
     def _generate_project_files(self, template: MedallionBasicTemplate) -> None:
         """Generate essential project files only."""
+        # The scaffold honours --format, so the README must name the files that
+        # actually exist on disk: config/input.json, not config/input.yaml.
+        ext = self._file_extension
         # README.md
         readme_content = f"""# {template.project_name}
 
@@ -1451,7 +827,7 @@ two runs with `ducta certify diff <run-a> <run-b>`.
 
 ## See the quality gate work
 
-`config/nodes.yaml` asserts on the silver layer that `amount` has no nulls and
+`config/nodes{ext}` asserts on the silver layer that `amount` has no nulls and
 `order_id` has no duplicates, with `quality_gate.max_errors: 0`. Those checks
 pass because `transform` cleaned the data. To watch them fail:
 
@@ -1467,11 +843,11 @@ back to a passing run.
 ```
 {template.project_name}/
 ├── config/
-│   ├── global_settings.yaml  # project settings, quality profiles
-│   ├── pipelines.yaml        # which nodes make up which pipeline
-│   ├── nodes.yaml            # per-node I/O, checks and gates
-│   ├── input.yaml            # where data is read from
-│   ├── output.yaml           # where data is written to
+│   ├── global_settings{ext}  # project settings, quality profiles
+│   ├── pipelines{ext}        # which nodes make up which pipeline
+│   ├── nodes{ext}            # per-node I/O, checks and gates
+│   ├── input{ext}            # where data is read from
+│   ├── output{ext}           # where data is written to
 │   └── dev/ sandbox/ prod/   # per-environment overrides
 ├── pipelines/
 │   ├── etl.py                # your transformations (plain functions)
@@ -1484,10 +860,10 @@ back to a passing run.
 
 ## What to change first
 
-1. Point `config/input.yaml` at your own data.
+1. Point `config/input{ext}` at your own data.
 2. Rewrite the three functions in `pipelines/etl.py`. They are ordinary Python
    taking a DataFrame and returning one — no decorators, no framework types.
-3. Update the checks in `config/nodes.yaml` to assert what *your* transform
+3. Update the checks in `config/nodes{ext}` to assert what *your* transform
    guarantees, and set `GROUP_COLUMN`/`VALUE_COLUMN` at the top of `etl.py`.
 
 ## Useful commands
