@@ -555,25 +555,12 @@ def run_pipeline_sync(
                             reuse_upstream=reuse_upstream,
                             rerun_all=rerun_all,
                         )
-                        # An atomic --node run whose inputs were not available is
-                        # reported on the result, not dug out of the batch
-                        # executor's private state. A blocked quality gate is the
-                        # other outcome that returns instead of raising — without
-                        # it, a run that rejected its data was recorded as a
-                        # success.
-                        if run_result.skipped:
-                            node, reason = next(iter(run_result.skipped.items()))
-                            outcome = {"status": "skipped", "node": node, "reason": reason}
-                        elif run_result.gate_blocked:
-                            node, info = next(iter(run_result.gate_blocked.items()))
-                            reason = (
-                                info.get("error", "blocked") if isinstance(info, dict) else info
-                            )
-                            outcome = {
-                                "status": "gate_blocked",
-                                "node": node,
-                                "reason": str(reason),
-                            }
+                        # Skipped nodes and a blocked quality gate both let
+                        # run_pipeline return instead of raising, so without this
+                        # a run that rejected or could not read its data was
+                        # recorded as a success. The classification lives on the
+                        # result itself, shared with the CLI's report_run_outcome.
+                        outcome = run_result.outcome() or outcome
                 finally:
                     # Link the Run Certificate this run emitted (the executor facade
                     # stamps its run_id on the context).

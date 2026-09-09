@@ -45,6 +45,18 @@ jobs:
   test:
     name: Tests (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    env:
+      # Several tests chdir into a temporary project and spawn worker processes
+      # (`run_in_process`, the sweep workers, the template smoke tests).
+      # pytest-cov's .pth hook starts coverage inside those children, but from a
+      # cwd where this pyproject.toml is not discoverable — so they record
+      # statement-only data while the parent records branch data
+      # (`[tool.coverage.run] branch = true`). The run then dies in the final
+      # combine with "Can't combine statement coverage data with branch data",
+      # *after* every test has already passed, which is why the failure reads as
+      # a coverage crash rather than a test failure. Pointing every process at
+      # the same config file is what makes parent and children agree.
+      COVERAGE_RCFILE: ${{ github.workspace }}/pyproject.toml
     strategy:
       fail-fast: false
       matrix:
@@ -106,6 +118,18 @@ jobs:
         run: |
           npm ci
           npm run build
+      # Poetry asks *git* what to ignore, and `src/ducta/ui/dist` is gitignored
+      # because it is a build artifact. In Poetry 1.8 that veto beats the
+      # explicit `include` in pyproject.toml, so `poetry build` silently emits a
+      # wheel with no web app — precisely the failure the assertion below exists
+      # to catch, and the reason this job has been red. Staging the freshly
+      # built assets takes them out of git's ignore set for the rest of this
+      # ephemeral checkout; nothing is committed.
+      # Delete this step once POETRY_VERSION moves to 2.x, where an explicit
+      # `include` wins over the VCS ignore on its own.
+      - name: Make the built UI visible to Poetry
+        run: git add --force src/ducta/ui/dist
+
       - name: Build wheel
         run: poetry build
       - name: Assert the wheel bundles the web app

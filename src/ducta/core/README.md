@@ -62,7 +62,8 @@ Core does not define its own config files — it consumes the `Context` produced
 *   **`certificate_signing_key`** / `Ducta_CERTIFICATE_KEY` env: Optional HMAC key for certificate attribution.
 *   **`mlops_enabled` / `mlops_required`**: Toggle experiment tracking and whether its failure aborts the run.
 *   **`random_seed`**: Global reproducibility seed applied at pipeline start.
-*   **`chain.reuse_materialized` / `chain.staleness_check`**: Skip already-materialized upstream pipelines in a `depends_on` chain.
+*   **`chain.reuse_materialized` / `chain.staleness_check`**: Skip already-materialized upstream pipelines in a `depends_on` chain. Reuse is refused unless the dates, the config fingerprint, the node modules and (with `staleness_check`, on by default) the input mtimes all still match what produced those outputs.
+*   **`chain.on_gate_blocked`** (`stop` | `continue`, default `stop`): What a blocked quality gate in an *upstream* chain step does to the rest of the chain. `stop` aborts it; `continue` runs on, which means the downstream pipelines read whatever an earlier run left on disk.
 
 Per-node quality is configured through the `sanity_checks` (pre-execution) and `data_quality` (post-execution) blocks; ML behavior through the pipeline `split` and `hyperparams` blocks (all validated in `ducta.setting.schemas`).
 
@@ -80,7 +81,8 @@ run_certificate_dir: ".Ducta/runs"
 random_seed: 42
 chain:
   reuse_materialized: true      # skip up-to-date upstream pipelines
-  staleness_check: true         # also require outputs newer than inputs
+  staleness_check: true         # also require outputs newer than inputs (default)
+  on_gate_blocked: stop         # a blocked gate upstream aborts the chain (default)
 
 # nodes.yaml — a node with quality gates
 clean_sales:

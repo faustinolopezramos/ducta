@@ -227,11 +227,25 @@ class PipelineExecutionError(ExecutionError):
             self.__cause__ = cause
 
 
+class ChainStepNotRefreshedError(ExecutionError):
+    """A chain step returned without refreshing its outputs.
+
+    Raised as the *cause* of a :class:`ChainExecutionError` when an ancestor
+    pipeline was blocked by a quality gate or skipped its nodes. Neither of
+    those raises on its own — they are recorded on the result — so the chain
+    needs a named reason to carry.
+    """
+
+
 class ChainExecutionError(ExecutionError):
     """A pipeline chain stopped at one of its steps.
 
     Names the pipelines that were cancelled as a consequence, which is the part
-    a user needs in order to know what state their data is in.
+    a user needs in order to know what state their data is in — and states the
+    *cause* inline. The CLI's top-level handler logs ``str(e)`` and shows the
+    traceback only under ``--verbose``, so a cause left in ``__cause__`` alone
+    reached the user as "Pipeline chain failed at 'x' (step 2/2)." and nothing
+    else: no reason at all, on the one path where a chain is most confusing.
     """
 
     def __init__(
@@ -243,6 +257,8 @@ class ChainExecutionError(ExecutionError):
         cause: Optional[BaseException] = None,
     ) -> None:
         message = f"Pipeline chain failed at '{failed_pipeline}' (step {step}/{total})."
+        if cause is not None:
+            message += f" {type(cause).__name__}: {cause}"
         if cancelled:
             message += f" Cancelled: {cancelled}."
         super().__init__(
@@ -307,6 +323,7 @@ class SanityCheckFailedError(DataError):
 
 __all__ = [
     "ChainExecutionError",
+    "ChainStepNotRefreshedError",
     "ConfigurationError",
     "DataError",
     "DependencyCycleError",

@@ -36,14 +36,30 @@ class TestLifecycle:
         assert second.node_details == []
         assert second.run_id == "run-2"
 
-    def test_reset_leaves_fingerprints_alone(self):
-        # Fingerprints are written by ducta.gate as IO happens, not by the run's
-        # own bookkeeping.
+    def test_start_clears_the_previous_runs_fingerprints(self):
+        # Regression: these used to survive a reset because ducta.gate writes
+        # them. One executor drives every pipeline in a chain and the gate
+        # accumulates into the same context dicts, so pipeline N+1's certificate
+        # claimed N's inputs and outputs as its own — and `certify verify`
+        # passed on it, because the hash covers the wrong answer just as
+        # happily as the right one.
         context = _ctx(_input_fingerprints={"in": "sha1"}, _output_fingerprints={"out": "sha2"})
-        ledger = RunLedger.start(context, "run-1")
 
-        assert ledger.input_fingerprints == {"in": "sha1"}
-        assert ledger.output_fingerprints == {"out": "sha2"}
+        ledger = RunLedger.start(context, "run-2")
+
+        assert ledger.input_fingerprints == {}
+        assert ledger.output_fingerprints == {}
+
+    def test_start_leaves_the_previous_runs_input_fingerprints_alone(self):
+        # A different attribute with a different owner: the *previous*
+        # successful run's fingerprints, loaded by core.mlops_integration and
+        # read by gate.input's fingerprint_policy. Clearing it would silently
+        # disable that policy.
+        context = _ctx(_previous_input_fingerprints={"in": {"fingerprint": "sha1"}})
+
+        ledger = RunLedger.start(context, "run-2")
+
+        assert ledger.previous_input_fingerprints == {"in": {"fingerprint": "sha1"}}
 
 
 class TestNodeTrace:

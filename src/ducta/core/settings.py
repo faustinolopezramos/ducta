@@ -43,7 +43,7 @@ absorbed by a ``.get(key, default)`` deep inside an execution path.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -60,6 +60,12 @@ DEFAULT_NODE_TIMEOUT_SECONDS = 1_800
 DEFAULT_MAX_PARALLEL_NODES = 4
 DEFAULT_MAX_STREAMING_PIPELINES = 5
 DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
+
+#: ``chain.on_gate_blocked`` values. "stop" aborts the chain when a blocked
+#: quality gate stops an upstream pipeline from refreshing its outputs.
+CHAIN_ON_GATE_BLOCKED_STOP = "stop"
+CHAIN_ON_GATE_BLOCKED_CONTINUE = "continue"
+CHAIN_ON_GATE_BLOCKED_CHOICES = (CHAIN_ON_GATE_BLOCKED_STOP, CHAIN_ON_GATE_BLOCKED_CONTINUE)
 
 
 def coerce_bool(name: str, raw: Any, *, default: bool) -> bool:
@@ -92,6 +98,30 @@ def coerce_bool(name: str, raw: Any, *, default: bool) -> bool:
         "Setting '{}' has unexpected type {}; expected a boolean. Falling back to default={}.",
         name,
         type(raw).__name__,
+        default,
+    )
+    return default
+
+
+def coerce_choice(name: str, raw: Any, *, choices: Tuple[str, ...], default: str) -> str:
+    """Coerce a settings value to one of ``choices``, warning on anything else.
+
+    Fails closed on purpose: an unrecognized value falls back to *default*
+    rather than to the most permissive option, the same way
+    ``ducta.check.gate`` resolves an unknown ``behavior``.
+    """
+    if raw is None:
+        return default
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in choices:
+            return normalized
+    logger.warning(
+        "Setting '{}' has unrecognized value {!r}; expected one of {}. "
+        "Falling back to default={!r}.",
+        name,
+        raw,
+        ", ".join(choices),
         default,
     )
     return default
@@ -202,7 +232,14 @@ class CoreSettings:
 
     # ── Chain reuse ──────────────────────────────────────────────────────────
     chain_reuse_materialized: bool = False
-    chain_staleness_check: bool = False
+    #: On by default: reuse itself is opt-in, so once a user asks for it the
+    #: freshness check is the part that keeps the reuse honest.
+    chain_staleness_check: bool = True
+    #: What a blocked quality gate in a *non-target* step of a chain does to
+    #: the rest of the chain. "stop" (default) aborts; "continue" runs on,
+    #: which means downstream pipelines read whatever the blocked one left on
+    #: disk from an earlier run.
+    chain_on_gate_blocked: str = CHAIN_ON_GATE_BLOCKED_STOP
 
     # ── Nested sections kept as-is (consumed by ducta.check / ducta.gate) ─────
     quality: Dict[str, Any] = field(default_factory=dict)
@@ -284,7 +321,13 @@ class CoreSettings:
                 "chain.reuse_materialized", chain_section.get("reuse_materialized"), default=False
             ),
             chain_staleness_check=coerce_bool(
-                "chain.staleness_check", chain_section.get("staleness_check"), default=False
+                "chain.staleness_check", chain_section.get("staleness_check"), default=True
+            ),
+            chain_on_gate_blocked=coerce_choice(
+                "chain.on_gate_blocked",
+                chain_section.get("on_gate_blocked"),
+                choices=CHAIN_ON_GATE_BLOCKED_CHOICES,
+                default=CHAIN_ON_GATE_BLOCKED_STOP,
             ),
             quality=_as_mapping(gs.get("quality")),
             ingestion=_as_mapping(gs.get("ingestion")),

@@ -176,3 +176,51 @@ class TestImmutability:
     def test_to_dict_round_trips_every_field(self):
         s = CoreSettings.from_context(_ctx({"max_parallel_nodes": 7}))
         assert s.to_dict()["max_parallel_nodes"] == 7
+
+
+class TestSchemaDefaultsDoNotDrift:
+    """Regression: a Pydantic default silently overrode the engine's default.
+
+    ``Context._validate_all_configs_with_pydantic`` replaces ``global_settings``
+    with ``ConfigSchema.to_dicts()``, whose ``model_dump(exclude_none=True)``
+    drops ``None`` but *not* ``False``. So a schema field defaulting to ``False``
+    is materialized into the dict that ``CoreSettings.from_context`` then reads
+    as an explicit user choice. ``chain.staleness_check`` defaulted to ``True``
+    in the engine and ``False`` in the schema, which meant every project that
+    wrote a ``chain:`` block to turn reuse *on* lost the freshness check that
+    keeps reuse honest — the exact class of defect ``core/settings.py``'s module
+    docstring was written to end ("the same key read with *different* defaults
+    in different places").
+    """
+
+    @staticmethod
+    def _dumped_global_settings(**chain):
+        from ducta.setting.schemas import GlobalSettingsSchema
+
+        return GlobalSettingsSchema(input_path="data", output_path="data", chain=chain).model_dump(
+            exclude_none=True
+        )
+
+    def test_a_chain_block_does_not_silently_disable_the_staleness_check(self):
+        dumped = self._dumped_global_settings(reuse_materialized=True)
+
+        assert CoreSettings.from_context(dumped).chain_staleness_check is True
+
+    def test_an_explicit_false_is_still_honoured(self):
+        dumped = self._dumped_global_settings(reuse_materialized=True, staleness_check=False)
+
+        assert CoreSettings.from_context(dumped).chain_staleness_check is False
+
+    def test_every_chain_field_agrees_between_the_schema_and_the_engine(self):
+        # Field-by-field rather than one assertion per key, so a field added to
+        # ChainReuseConfig later is covered the day it appears.
+        from ducta.setting.schemas import ChainReuseConfig
+
+        engine = CoreSettings.from_context({})
+        for name, field in ChainReuseConfig.model_fields.items():
+            engine_value = getattr(engine, f"chain_{name}")
+            assert field.default == engine_value, (
+                f"ChainReuseConfig.{name} defaults to {field.default!r} but "
+                f"CoreSettings.chain_{name} resolves to {engine_value!r}. The schema "
+                f"default wins at runtime, so these must agree."
+            )

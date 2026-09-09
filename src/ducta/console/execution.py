@@ -44,7 +44,7 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
     """Log what a finished run actually did and return the matching exit code.
 
     Not every unsuccessful outcome raises. A ``skip_downstream`` quality gate and
-    an atomic ``--node`` run with absent inputs both let ``run_pipeline`` return
+    a run whose nodes had absent inputs both let ``run_pipeline`` return
     normally, so a caller that only wraps the call in ``try/except`` reports exit
     0 for a run that did not do its work.
 
@@ -61,11 +61,9 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
             ", ".join(result.reused_pipelines),
         )
 
-    if result.skipped:
-        for node_name, reason in result.skipped.items():
-            logger.warning("Node '{}' was skipped (missing dependencies): {}", node_name, reason)
-        return ExitCode.SUCCESS.value
-
+    # Gate before skip, matching PipelineRunResult.resolve_status. A blocking
+    # gate cascades skips onto its descendants, so both collections are
+    # populated and only one of them names the *cause*.
     if result.gate_blocked:
         for node_name, info in result.gate_blocked.items():
             logger.warning(
@@ -73,7 +71,21 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
                 node_name,
                 info.get("error", "blocked") if isinstance(info, dict) else info,
             )
+        for node_name, reason in result.skipped.items():
+            logger.warning("Node '{}' was skipped as a consequence: {}", node_name, reason)
         return ExitCode.EXECUTION_ERROR.value
+
+    if result.skipped:
+        for node_name, reason in result.skipped.items():
+            logger.warning("Node '{}' was skipped (missing dependencies): {}", node_name, reason)
+        logger.error(
+            "Pipeline '{}' did not complete: {} node(s) skipped for missing inputs",
+            name,
+            len(result.skipped),
+        )
+        # Used to be SUCCESS. A run that skipped its work is not a run that did
+        # it, and exit 0 meant no script wrapping `ducta` could tell them apart.
+        return ExitCode.DEPENDENCY_ERROR.value
 
     if _RICH_AVAILABLE:
         try:

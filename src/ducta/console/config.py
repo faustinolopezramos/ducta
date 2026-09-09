@@ -398,6 +398,32 @@ class AppConfigManager:
         env_gs = env_specific.get("global_settings_path")
         if env != "base" and base_gs and env_gs and base_gs != env_gs:
             merged["base_global_settings_path"] = base_gs
+
+        # Only global_settings is deep-merged over base (see
+        # ContextLoader.load_from_paths); every other document the environment
+        # supplies *replaces* its base counterpart wholesale. That asymmetry is
+        # invisible in the config files, and the scaffolds ship a full copy of
+        # the catalog per environment — so adding a dataset to the base
+        # input.yaml silently does nothing for any env that has its own. Say
+        # which file actually wins.
+        if env != "base":
+            for key, label in (
+                ("input_config_path", "input"),
+                ("output_config_path", "output"),
+                ("nodes_config_path", "nodes"),
+                ("pipelines_config_path", "pipelines"),
+            ):
+                base_path_value = base.get(key)
+                env_path_value = env_specific.get(key)
+                if base_path_value and env_path_value and base_path_value != env_path_value:
+                    logger.info(
+                        "Environment '{}' supplies its own {} config: '{}' replaces "
+                        "'{}' entirely (only global_settings is merged with base).",
+                        env,
+                        label,
+                        env_path_value,
+                        base_path_value,
+                    )
         return merged
 
     def _validate_and_build_paths(self, merged: Dict[str, str]) -> Dict[str, str]:

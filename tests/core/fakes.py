@@ -90,7 +90,9 @@ class FakeInputLoader:
         self.datasets = datasets if datasets is not None else {}
         self.loaded: List[str] = []
 
-    def load_inputs(self, node_config: Dict[str, Any]) -> List[FakeFrame]:
+    def load_inputs(
+        self, node_config: Dict[str, Any], node_name: Optional[str] = None
+    ) -> List[FakeFrame]:
         from ducta.gate.exceptions import MissingDependencyError
 
         frames = []
@@ -98,7 +100,9 @@ class FakeInputLoader:
             self.loaded.append(key)
             if key not in self.datasets:
                 if node_config.get("skip_missing_deps"):
-                    raise MissingDependencyError(f"dataset '{key}' is not available")
+                    raise MissingDependencyError(
+                        f"Node '{node_name or 'unnamed'}' has missing input(s): {key}"
+                    )
                 frames.append(FakeFrame(name=key))
             else:
                 frames.append(self.datasets[key])

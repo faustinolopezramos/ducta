@@ -153,6 +153,15 @@ def validate_model_arguments(args: argparse.Namespace) -> None:
         raise ValidationError("A model subcommand is required (e.g., promote, gc)")
 
 
+def validate_profile_arguments(args: argparse.Namespace) -> None:
+    validate_required_field(args.input, "input")
+    validate_enum_field(args.format, ["parquet", "csv", "json"], "format")
+    validate_enum_field(args.strictness, ["strict", "balanced", "lax"], "strictness")
+    sample_rows = getattr(args, "sample_rows", None)
+    if sample_rows is not None:
+        validate_positive_number(sample_rows, field_name="sample-rows")
+
+
 def validate_init_arguments(args: argparse.Namespace) -> None:
     if not getattr(args, "init_command", None):
         raise ValidationError("An init subcommand is required (e.g., ingestion)")
@@ -214,6 +223,7 @@ class UnifiedCLI:
             "model": (validate_model_arguments, self._handle_model_command),
             "init": (validate_init_arguments, self._handle_init_command),
             "certify": (None, self._handle_certify_command),
+            "profile": (validate_profile_arguments, self._handle_profile_command),
         }
 
     def _dispatch_subcommand(self, parsed_args: argparse.Namespace) -> int:
@@ -354,6 +364,11 @@ class UnifiedCLI:
         from ducta.console.commands.ingestion_cmds import InitCommands
 
         return InitCommands.handle(parsed_args)
+
+    def _handle_profile_command(self, parsed_args: argparse.Namespace) -> int:
+        from ducta.console.commands.profile_cmds import handle_profile
+
+        return handle_profile(parsed_args)
 
     def _handle_certify_command(self, parsed_args: argparse.Namespace) -> int:
         from ducta.console.commands.certify_cmds import handle_certify

@@ -427,6 +427,50 @@ class UnifiedArgumentParser:
 
     @staticmethod
     def _add_quality_subcommand(subparsers):
+        profile_parser = subparsers.add_parser(
+            "profile",
+            help="Assay a dataset and propose the quality spec it already satisfies",
+            description=(
+                "Measure a dataset and emit a reviewable spec derived from what is "
+                "actually in it, instead of requiring the thresholds to be known in "
+                "advance. Runs standalone on a file: no project, no DAG, no Spark."
+            ),
+        )
+        profile_parser.add_argument("--input", "-i", required=True, help="Path to the data file")
+        profile_parser.add_argument(
+            "--format",
+            "-f",
+            default="parquet",
+            choices=["parquet", "csv", "json"],
+            help="Input file format (default: parquet)",
+        )
+        profile_parser.add_argument(
+            "--output",
+            "-o",
+            help="Write the proposed spec here (default: print it to stdout)",
+        )
+        profile_parser.add_argument(
+            "--strictness",
+            default="balanced",
+            choices=["strict", "balanced", "lax"],
+            help="How close the proposed bounds sit to what was observed (default: balanced)",
+        )
+        profile_parser.add_argument(
+            "--sample-rows",
+            type=int,
+            help="Measure columns from a sample of at most N rows (row count stays exact)",
+        )
+        profile_parser.add_argument(
+            "--dataset-name",
+            help="Name for the dataset in the spec (default: the file stem)",
+        )
+        profile_parser.add_argument(
+            "--output-format",
+            default="rich",
+            choices=["rich", "json"],
+            help="How to render the profile (default: rich)",
+        )
+
         quality_parser = subparsers.add_parser(
             "quality",
             help="Manage data quality checks",

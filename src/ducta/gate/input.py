@@ -39,21 +39,27 @@ class InputLoader(BaseIO):
         self.reader_factory = ReaderFactory(context)
         self._register_custom_formats()
 
-    def load_inputs(self, node: Dict[str, Any]) -> List[Any]:
-        """Load all inputs defined for a processing node."""
+    def load_inputs(self, node: Dict[str, Any], node_name: Optional[str] = None) -> List[Any]:
+        """Load all inputs defined for a processing node.
+
+        ``node_name`` is passed explicitly by callers that know it. A node's own
+        config does not carry a ``name`` key — the name is the key it is filed
+        under — so falling back to ``node.get("name")`` produced "Node
+        'unnamed' has missing input(s): …", which named nothing and reached
+        users in the run certificate.
+        """
+        resolved_name = node_name or node.get("name") or "unnamed"
         input_keys = self._get_input_keys(node)
         if not input_keys:
-            node_name = node.get("name", "unnamed")
-            logger.warning("Node '{}' has no defined inputs", node_name)
+            logger.warning("Node '{}' has no defined inputs", resolved_name)
             return []
 
         fail_fast = node.get("fail_fast", True)
         if fail_fast:
             available, missing = self._inputs_available(node)
             if not available:
-                node_name = node.get("name", "unnamed")
                 raise MissingDependencyError(
-                    f"Node '{node_name}' has missing input(s): {', '.join(missing)}"
+                    f"Node '{resolved_name}' has missing input(s): {', '.join(missing)}"
                 )
 
         return self._load_inputs_parallel(input_keys, fail_fast)

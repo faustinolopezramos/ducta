@@ -137,9 +137,10 @@ class TestGateBlockedReportsNonZeroExit:
 
         assert result == ExitCode.SUCCESS.value
 
-    def test_missing_deps_skip_still_takes_priority_and_reports_success(self):
-        # Unchanged existing behavior: an atomic --node skip (missing deps)
-        # is reported as success.
+    def test_missing_deps_skip_reports_a_dependency_error(self):
+        # A skip used to exit 0, so no script wrapping `ducta` could tell a run
+        # that did its work from one that skipped it. DEPENDENCY_ERROR names the
+        # reason and stays distinct from a gate block's EXECUTION_ERROR.
         exec_obj = _executor_returning(
             PipelineRunResult(
                 pipeline="my_pipeline",
@@ -150,7 +151,23 @@ class TestGateBlockedReportsNonZeroExit:
 
         result = _cmd_with_fake_executor(exec_obj)
 
-        assert result == ExitCode.SUCCESS.value
+        assert result == ExitCode.DEPENDENCY_ERROR.value
+
+    def test_a_gate_block_outranks_the_skips_it_caused(self):
+        # A blocking gate cascades skips onto every descendant, so both
+        # collections are populated. Only the gate names the cause; reporting
+        # the consequence instead labelled a rejected-data run "missing
+        # dependencies" and exited 5 rather than 4.
+        exec_obj = _executor_returning(
+            PipelineRunResult(
+                pipeline="my_pipeline",
+                status=RunStatus.GATE_BLOCKED,
+                gate_blocked={"n2": {"error": "blocked"}},
+                skipped={"n3": "skipped: upstream quality gate blocked at 'n2'"},
+            )
+        )
+
+        assert _cmd_with_fake_executor(exec_obj) == ExitCode.EXECUTION_ERROR.value
 
     def test_reused_upstream_pipelines_are_reported(self):
         exec_obj = _executor_returning(

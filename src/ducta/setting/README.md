@@ -134,7 +134,9 @@ log_level = "DEBUG"
 ## 4. Python Quickstart
 
 ### Step 1: Build a Context
-`Context` loads all five sources (in parallel when they are files), interpolates `${VAR}` placeholders, applies environment overrides, and validates everything through Pydantic:
+`Context` loads all five sources (in parallel when they are files), interpolates `${VAR}` placeholders, applies environment overrides, and validates everything through Pydantic.
+
+**Environment overrides are not uniform.** `global_settings` is deep-merged over the base file, so an environment only states the keys it changes. The other four documents — `input`, `output`, `nodes`, `pipelines` — *replace* their base counterpart entirely when the environment supplies its own. Adding a dataset to the base `input.yaml` therefore has no effect in an environment that ships its own copy; declare it in that environment's file too. Ducta logs which file wins at startup:
 
 ```python
 from pathlib import Path

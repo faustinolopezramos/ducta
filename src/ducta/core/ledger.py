@@ -101,11 +101,24 @@ class RunLedger:
         return ledger
 
     def reset(self) -> None:
-        """Clear the per-run collections, leaving fingerprints alone.
+        """Clear every per-run collection, fingerprints included.
 
-        Fingerprints are written by ``ducta.gate`` as inputs are read and
-        outputs are written, so they are owned by the IO layer rather than by
-        this run's bookkeeping.
+        Fingerprints are *written* by ``ducta.gate`` as inputs are read and
+        outputs are written, but they describe one run, so they are cleared
+        here like everything else. They used to survive a reset on the grounds
+        that the IO layer owned them — which held for a single pipeline and
+        broke for a chain: one executor drives every pipeline in it and
+        ``ducta.gate`` accumulates into the same context dicts, so pipeline
+        N+1's certificate claimed N's inputs and outputs as its own. That is
+        the one thing a run certificate exists to say, and ``certify verify``
+        passed on the wrong answer because the hash covers it just as happily.
+        ``certify verify --reproduce`` then flagged outputs the reproduction
+        never wrote as "diverged".
+
+        ``_previous_input_fingerprints`` is deliberately left alone: it belongs
+        to the *previous* successful run, is loaded by
+        ``core.mlops_integration`` and read by ``gate.input``'s
+        ``fingerprint_policy``, so clearing it here would disable that policy.
         """
         with self._lock:
             # One executor drives several pipelines in a chain, so a failure
@@ -114,6 +127,8 @@ class RunLedger:
             self._record_failures.clear()
         self._set(NODE_DETAILS_ATTR, [])
         self._set(QUALITY_RESULTS_ATTR, [])
+        self._set(INPUT_FINGERPRINTS_ATTR, {})
+        self._set(OUTPUT_FINGERPRINTS_ATTR, {})
 
     # ── Run identity ─────────────────────────────────────────────────────────
 

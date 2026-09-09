@@ -64,7 +64,7 @@ This is the main command - it executes your pipelines.
 - ``--validate-only`` - Check config and DAG without running code
 - ``--dry-run`` - Log all actions without executing the pipeline
 - ``--sanity-only`` - Run sanity checks on all node inputs without executing the pipeline
-- ``--reuse-upstream`` - In a ``depends_on`` chain, skip upstream pipelines whose outputs already exist (read them from disk instead of recomputing)
+- ``--reuse-upstream`` - In a ``depends_on`` chain, skip upstream pipelines that are still up to date and read their outputs from disk instead of recomputing. A pipeline is only reused when its outputs exist *and* the run dates, the configuration, the node modules and the input files are all unchanged since those outputs were written; otherwise it re-runs and says which of them changed
 - ``--rerun-all`` - Force the full ``depends_on`` chain to re-run, ignoring any chain-reuse configuration
 - ``--log-level LEVEL`` - Logging verbosity: ``DEBUG``, ``INFO``, ``WARNING``, ``ERROR``, ``CRITICAL`` (default: ``INFO``)
 - ``--verbose`` - Shortcut for ``--log-level DEBUG``

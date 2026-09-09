@@ -412,7 +412,11 @@ class ParallelCoordinator:
         """
         reason = f"skipped: missing inputs — {missing_deps}"
         execution_state.mark_skipped(node_name, reason)
-        self._record_trace(node_name, "skipped", reason)
+        # No _record_trace for node_name itself: execute_single_node already
+        # recorded it as "skipped" on its way out. Recording it again put two
+        # entries for one node in the run certificate — and the other said
+        # "failed". Same division of labour as _handle_gate_block: the node's
+        # own trace belongs to the runner, the cascade below belongs here.
 
         descendants = self._transitive_descendants(node_name, dag)
         for dep in descendants:

@@ -105,6 +105,51 @@ class QualityService:
         return report_dict
 
     @staticmethod
+    def profile(
+        input_path: str,
+        format: str = "parquet",
+        strictness: str = "balanced",
+        sample_rows: Optional[int] = None,
+        dataset_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Assay a local file and return its profile plus a proposed spec.
+
+        Deliberately loads with pandas, exactly as :meth:`run_checks` does: the
+        standalone path must work on a bare ``pip install ducta`` with no JVM,
+        because its whole point is to be useful before anyone has adopted the
+        framework.
+        """
+        import pandas as pd  # type: ignore
+
+        from ducta.check.profiling import infer_spec, profile_dataset, spec_to_yaml
+
+        loaders = {
+            "parquet": pd.read_parquet,
+            "csv": pd.read_csv,
+            "json": pd.read_json,
+        }
+        loader = loaders.get(format.lower())
+        if loader is None:
+            raise ValueError(f"Unsupported format '{format}'. Use parquet, csv, or json.")
+
+        df = loader(input_path)
+        name = dataset_name or Path(input_path).stem
+        profile = profile_dataset(df, dataset_name=name, sample_rows=sample_rows)
+        spec = infer_spec(profile, strictness)
+
+        return {
+            "profile": profile.to_dict(),
+            "spec": spec,
+            "yaml": spec_to_yaml(profile, spec, strictness),
+            "source": {
+                "input_path": input_path,
+                "format": format,
+                "strictness": strictness,
+                "sample_rows": sample_rows,
+            },
+        }
+
+    @staticmethod
     def get_report(
         dataset: str,
         workspace: str = ".",

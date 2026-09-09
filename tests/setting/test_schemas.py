@@ -244,7 +244,13 @@ class TestChainReuseConfig:
     def test_defaults(self):
         s = ChainReuseConfig()
         assert s.reuse_materialized is False
-        assert s.staleness_check is False
+        # Reuse is opt-in, so once a user asks for it the freshness check that
+        # keeps it honest is on. Must match CoreSettings.chain_staleness_check:
+        # Context replaces global_settings with this schema's model_dump, and
+        # exclude_none does not drop a False, so a disagreeing default here
+        # silently overrides the engine's. See
+        # tests/core/test_settings.py::TestSchemaDefaultsDoNotDrift.
+        assert s.staleness_check is True
 
 
 class TestSplitConfig:

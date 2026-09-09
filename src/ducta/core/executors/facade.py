@@ -31,6 +31,7 @@ from loguru import logger  # type: ignore
 
 from ducta.core.errors import (
     ChainExecutionError,
+    ChainStepNotRefreshedError,
     PipelineExecutionError,
     PreflightError,
 )
@@ -40,7 +41,7 @@ from ducta.core.executors.streaming import StreamingExecutor
 from ducta.core.ledger import RunLedger
 from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.results import PipelineRunResult, RunStatus
-from ducta.core.settings import CoreSettings
+from ducta.core.settings import CHAIN_ON_GATE_BLOCKED_CONTINUE, CoreSettings
 from ducta.core.utils import extract_pipeline_nodes
 from ducta.gate.constants import WriteMode
 from ducta.setting.contexts import Context
@@ -196,6 +197,11 @@ class PipelineExecutor:
         node_executor = getattr(batch, "node_executor", None)
         gate_blocked = getattr(node_executor, "gate_blocked", None) or {}
         result.gate_blocked.update(gate_blocked)
+
+        # Nodes the DAG coordinator skipped. Only the atomic `--node` case used
+        # to reach the result, so a run that skipped half its graph for missing
+        # inputs was reported as a clean success.
+        result.skipped.update(getattr(node_executor, "skipped", None) or {})
 
         skipped = getattr(batch, "_skipped_atomic_node", None)
         if skipped:
@@ -478,7 +484,6 @@ class PipelineExecutor:
                     hyperparams=hyperparams if is_target else None,
                     execution_mode=execution_mode,
                 )
-                logger.info("Pipeline '{}' completed successfully", current_pipeline)
             except Exception as e:
                 raise ChainExecutionError(
                     failed_pipeline=current_pipeline,
@@ -488,8 +493,74 @@ class PipelineExecutor:
                     cause=e,
                 ) from e
 
+            if last_result.ok:
+                logger.info("Pipeline '{}' completed successfully", current_pipeline)
+            else:
+                logger.warning(
+                    "Pipeline '{}' finished with status '{}'",
+                    current_pipeline,
+                    last_result.status.value,
+                )
+
+            if not is_target:
+                self._enforce_chain_step_outcome(
+                    last_result, step=step, chain=chain, pipeline=current_pipeline
+                )
+
         last_result.reused_pipelines = list(self.reused_pipelines)
         return last_result
+
+    def _enforce_chain_step_outcome(
+        self,
+        result: PipelineRunResult,
+        *,
+        step: int,
+        chain: List[str],
+        pipeline: str,
+    ) -> None:
+        """Decide whether an unsuccessful *ancestor* step lets the chain go on.
+
+        ``run_pipeline`` only raises for a ``failed`` run: a blocked quality
+        gate and a skipped node both return normally (see ``run_pipeline`` and
+        ``PipelineRunResult.failed``). That is right for one pipeline — the
+        caller gets a result describing what happened — and wrong for a chain,
+        where "this pipeline did not refresh its outputs" means every pipeline
+        after it reads whatever an earlier run left on disk. Left unchecked, a
+        gate that rejected its data ended with the chain logging success and
+        exiting 0, which is the opposite of what a gate is for.
+
+        ``chain.on_gate_blocked = "continue"`` restores the old behavior for
+        anyone who relies on it, but says out loud what it is doing.
+        """
+        if result.ok or result.status is RunStatus.RUNNING:
+            return
+
+        blocked = ", ".join(sorted(result.gate_blocked)) or "-"
+        skipped = ", ".join(sorted(result.skipped)) or "-"
+        detail = (
+            f"upstream pipeline '{pipeline}' did not refresh its outputs "
+            f"(status={result.status.value}, gate-blocked nodes: {blocked}, "
+            f"skipped nodes: {skipped})"
+        )
+        cancelled = chain[step:]
+
+        if self.settings.chain_on_gate_blocked == CHAIN_ON_GATE_BLOCKED_CONTINUE:
+            logger.warning(
+                "{}. chain.on_gate_blocked=continue, so {} will run on whatever "
+                "an earlier run left on disk: {}",
+                detail,
+                "the remaining pipeline(s)" if cancelled else "the chain",
+                cancelled or "-",
+            )
+            return
+
+        raise ChainExecutionError(
+            failed_pipeline=pipeline,
+            step=step,
+            total=len(chain),
+            cancelled=cancelled,
+            cause=ChainStepNotRefreshedError(detail),
+        )
 
     def _reuse_enabled_for(self, pipeline_cfg: Any) -> bool:
         """Whether chain reuse is enabled for a given ancestor pipeline."""
@@ -523,13 +594,17 @@ class PipelineExecutor:
         if not self._is_skip_eligible(pipeline):
             return False
 
+        state = self._load_chain_state(pipeline_name)
+
         if pipeline.get("requires_dates", True):
-            state = self._load_chain_state(pipeline_name)
             if not state:
                 return False
             eff_start, eff_end = self._effective_dates(start_date, end_date)
             if state.get("start_date") != eff_start or state.get("end_date") != eff_end:
                 return False
+
+        if not self._provenance_still_matches(pipeline_name, state):
+            return False
 
         out_keys = self._resolve_pipeline_output_keys(pipeline)
         if not out_keys:
@@ -549,6 +624,48 @@ class PipelineExecutor:
                 if oldest_output is None or oldest_output < newest_input:
                     return False
 
+        return True
+
+    def _provenance_still_matches(
+        self, pipeline_name: str, state: Optional[Dict[str, Any]]
+    ) -> bool:
+        """Whether the recorded outputs were produced by today's config and code.
+
+        Whether the outputs exist is not the same question as whether reusing
+        them still means anything. Reuse used to answer only the first, so
+        editing a node's transformation and re-running with ``--reuse-upstream``
+        skipped the ancestor and fed its stale output downstream — a silent
+        wrong answer in a tool whose whole pitch is reproducible runs.
+
+        Fails closed when the marker predates this check: one recomputation is
+        cheaper than one unnoticed stale result.
+        """
+        if state is None:
+            logger.info(
+                "Not reusing '{}': no chain-state marker records what produced its outputs.",
+                pipeline_name,
+            )
+            return False
+
+        for label, recorded, current in (
+            ("configuration", state.get("config_fingerprint"), self._config_fingerprint()),
+            ("node code", state.get("code_fingerprint"), self._code_fingerprint(pipeline_name)),
+        ):
+            if recorded is None:
+                logger.info(
+                    "Not reusing '{}': its chain-state marker records no {} fingerprint "
+                    "(written by an older Ducta). Re-running once will record one.",
+                    pipeline_name,
+                    label,
+                )
+                return False
+            if current is None or current != recorded:
+                logger.info(
+                    "Not reusing '{}': its {} changed since those outputs were written.",
+                    pipeline_name,
+                    label,
+                )
+                return False
         return True
 
     def _is_skip_eligible(self, pipeline: Dict[str, Any]) -> bool:
@@ -638,6 +755,62 @@ class PipelineExecutor:
             str(eff_end) if eff_end is not None else None,
         )
 
+    def _config_fingerprint(self) -> Optional[str]:
+        """Hash of the five config documents, or None if it cannot be computed."""
+        try:
+            from ducta.core.certificate import config_fingerprint
+
+            return config_fingerprint(self.context)
+        except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
+            logger.debug("Could not fingerprint the configuration: {}", e)
+            return None
+
+    def _code_fingerprint(self, pipeline_name: str) -> Optional[str]:
+        """Newest mtime among the module files backing a pipeline's nodes.
+
+        The config fingerprint covers YAML, not the Python a node points at, so
+        without this a changed transformation was invisible to the reuse check:
+        an ancestor pipeline whose function had been rewritten was skipped as
+        "up to date" and its downstream ran on data the current code would
+        never produce. Resolving each module without importing it keeps this
+        cheap and free of side effects.
+        """
+        try:
+            import importlib.util
+
+            from ducta.gate.output.paths import _newest_mtime
+
+            nodes_config = getattr(self.context, "nodes_config", {}) or {}
+            pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
+            modules = {
+                (nodes_config.get(node) or {}).get("module")
+                for node in extract_pipeline_nodes(pipeline)
+            }
+            modules.discard(None)
+            if not modules:
+                return None
+
+            loader = self.batch_executor.node_executor._function_loader
+            importer = loader.secure_importer
+            search_paths = [str(path) for path in loader._gather_search_paths()]
+
+            newest: Optional[float] = None
+            with importer.temporary_sys_path(search_paths):
+                for module_path in sorted(modules):
+                    spec = importlib.util.find_spec(str(module_path))
+                    origin = getattr(spec, "origin", None) if spec else None
+                    if not origin:
+                        # A module we cannot locate is one we cannot vouch for;
+                        # say so rather than reporting a partial hash.
+                        return None
+                    mtime = _newest_mtime(Path(origin))
+                    if mtime is not None and (newest is None or mtime > newest):
+                        newest = mtime
+            return f"mtime:{newest:.6f}" if newest is not None else None
+        except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
+            logger.debug("Could not fingerprint node code for '{}': {}", pipeline_name, e)
+            return None
+
     def _record_chain_state(
         self,
         pipeline_name: str,
@@ -662,6 +835,10 @@ class PipelineExecutor:
                         "start_date": eff_start,
                         "end_date": eff_end,
                         "recorded_at": datetime.now(timezone.utc).isoformat(),
+                        # What produced these outputs, so a later run can tell
+                        # whether reusing them still means the same thing.
+                        "config_fingerprint": self._config_fingerprint(),
+                        "code_fingerprint": self._code_fingerprint(pipeline_name),
                     },
                     indent=2,
                 ),

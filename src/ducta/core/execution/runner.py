@@ -76,6 +76,10 @@ class NodeExecutor:
         self.is_ml_layer = getattr(context, "is_ml_layer", False)
         self.pipeline_name: Optional[str] = None
         self.gate_blocked: Dict[str, Any] = {}
+        #: Nodes the coordinator skipped (missing inputs, or an upstream skip
+        #: cascading down). Surfaced next to gate_blocked so the run result can
+        #: say the pipeline did not do all of its work.
+        self.skipped: Dict[str, str] = {}
         self.node_timeout = (
             clamp_timeout("node_timeout_seconds", timeout)
             if timeout
@@ -160,7 +164,7 @@ class NodeExecutor:
                     return
 
                 function = self._function_loader.load(node_config)
-                input_dfs = self.input_loader.load_inputs(node_config)
+                input_dfs = self.input_loader.load_inputs(node_config, node_name)
                 input_param_names = self.input_loader.get_input_param_names(node_config)
 
                 sanity_report = self._quality_executor.run_sanity_checks(
@@ -273,18 +277,38 @@ class NodeExecutor:
 
             except Exception as e:
                 from ducta.check.core import QualityGateBlocked
+                from ducta.gate.exceptions import MissingDependencyError
 
-                node_status = "gate_blocked" if isinstance(e, QualityGateBlocked) else "failed"
+                # This trace is the node's one entry in the run certificate, so
+                # the status has to be what the run actually means. A node whose
+                # inputs were not there is *skipped*, not failed — the
+                # coordinator's _handle_missing_deps_skip treats it that way and
+                # says so ("Never a failure"). Recording "failed" here put two
+                # contradictory entries for one node in the certificate and
+                # flipped the whole run to failed. Classifying it here also gets
+                # the atomic `--node` path right, where no coordinator runs.
+                if isinstance(e, QualityGateBlocked):
+                    node_status = "gate_blocked"
+                elif isinstance(e, MissingDependencyError):
+                    node_status = "skipped"
+                else:
+                    node_status = "failed"
                 node_error = str(e)
                 logger.info("[node_status] node_id={} status={}", node_name, node_status)
-                try:
-                    from ducta.console.ux.error_analyzer import format_error_for_developer
-                    from ducta.console.ux.rich_logger import RichLoggerManager
+                if node_status == "skipped":
+                    # A skip is an expected outcome; the caller logs it. Running
+                    # it through the developer error formatter would print a
+                    # failure box for something that did not fail.
+                    logger.debug("Node '{}' skipped: {}", node_name, e)
+                else:
+                    try:
+                        from ducta.console.ux.error_analyzer import format_error_for_developer
+                        from ducta.console.ux.rich_logger import RichLoggerManager
 
-                    console = RichLoggerManager.get_console()
-                    format_error_for_developer(e, node_name, console)
-                except Exception:
-                    logger.error("Failed to execute node '{}': {}", node_name, e)
+                        console = RichLoggerManager.get_console()
+                        format_error_for_developer(e, node_name, console)
+                    except Exception:
+                        logger.error("Failed to execute node '{}': {}", node_name, e)
                 raise
             finally:
                 duration = time.perf_counter() - start_time
@@ -453,6 +477,7 @@ class NodeExecutor:
             self.shutdown()
 
         self.gate_blocked = dict(execution_state.gate_blocked)
+        self.skipped = dict(execution_state.skipped)
 
     def _initialize_execution_state(
         self,

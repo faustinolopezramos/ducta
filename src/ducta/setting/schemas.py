@@ -154,11 +154,15 @@ class ChainReuseConfig(BaseModel):
         ),
     )
     staleness_check: bool = Field(
-        default=False,
+        default=True,
         description=(
             "Additionally require outputs to be newer than the pipeline's file "
             "inputs before skipping. No effect unless reuse_materialized is true; "
-            "sources without a file mtime (DB/Kafka/cloud) fall back to existence."
+            "sources without a file mtime (DB/Kafka/cloud) fall back to existence. "
+            "Must stay in step with CoreSettings.chain_staleness_check: Context "
+            "replaces global_settings with this schema's model_dump, and "
+            "exclude_none does not drop a False, so a default that disagrees here "
+            "silently overrides the one the engine resolves."
         ),
     )
 

@@ -142,7 +142,7 @@ def _sha256(text: str) -> str:
     return _HASH_PREFIX + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _config_fingerprint(context: Any) -> str:
+def config_fingerprint(context: Any) -> str:
     """Hash the five config documents so a config change is visible in the certificate."""
     configs = {
         name: _ctx_get(context, name, {}) or {}
@@ -155,6 +155,12 @@ def _config_fingerprint(context: Any) -> str:
         )
     }
     return _sha256(_canonical_json(configs))
+
+
+#: Kept so existing internal callers keep working; the public spelling is
+#: `config_fingerprint`, which core.executors.facade reads to decide whether a
+#: materialized pipeline may still be reused.
+_config_fingerprint = config_fingerprint
 
 
 def _quality_summary(context: Any) -> List[Dict[str, Any]]:

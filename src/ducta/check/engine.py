@@ -619,7 +619,7 @@ class SanityPhaseRunner:
                 continue
 
             try:
-                dfs = loader.load_inputs(node_config)
+                dfs = loader.load_inputs(node_config, node_name)
             except MissingDependencyError as e:
                 logger.info(
                     f"Skipping preflight for node '{node_name}': input not yet available ({e})"

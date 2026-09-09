@@ -184,13 +184,17 @@ def _check_io_keys(
         if key not in input_config:
             report.error(
                 f"Node '{node_name}': input '{key}' is not registered in the input catalog. "
-                f"Intermediate datasets consumed downstream must be declared under 'input'."
+                f"Intermediate datasets consumed downstream must be declared under 'input'. "
+                f"If this environment has its own input config, that file replaces the base "
+                f"one rather than extending it — declare '{key}' there."
             )
 
     for key in _output_keys(node_config):
         if key not in output_config:
             report.error(
-                f"Node '{node_name}': output '{key}' is not registered in the output catalog."
+                f"Node '{node_name}': output '{key}' is not registered in the output catalog. "
+                f"If this environment has its own output config, that file replaces the base "
+                f"one rather than extending it — declare '{key}' there."
             )
             continue
 
@@ -237,7 +241,9 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
             if dep not in node_configs:
                 report.error(
                     f"Node '{node_name}': dependency '{dep}' is not a node in pipeline "
-                    f"'{pipeline_name}'."
+                    f"'{pipeline_name}'. Node-level 'dependencies' cannot cross pipelines; "
+                    f"to order one pipeline after another use pipeline-level 'depends_on' "
+                    f"(or just let Ducta infer it from the datasets they share)."
                 )
 
     requires_dates = bool(pipeline.get("requires_dates", True))

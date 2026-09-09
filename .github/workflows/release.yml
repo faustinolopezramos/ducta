@@ -56,6 +56,16 @@ jobs:
           npm ci
           npm run build
 
+      # Poetry asks *git* what to ignore, and `src/ducta/ui/dist` is gitignored
+      # because it is a build artifact. In Poetry 1.8 that veto beats the
+      # explicit `include` in pyproject.toml, so the step above builds the web
+      # app and `poetry build` then leaves it out anyway. Without this the
+      # assertion below would block every release — which is the workflow doing
+      # its job, but for a reason nothing here explained.
+      # Delete this step once POETRY_VERSION moves to 2.x.
+      - name: Make the built UI visible to Poetry
+        run: git add --force src/ducta/ui/dist
+
       - name: Build sdist and wheel
         run: poetry build
 
