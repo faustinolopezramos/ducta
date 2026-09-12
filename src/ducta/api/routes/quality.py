@@ -242,8 +242,8 @@ async def validate_config(
     try:
         config_abs = safe_path(manager.root, body.config_path)
         gs_abs = (
-            str(safe_path(manager.root, body.global_settings_path))
-            if body.global_settings_path
+            str(safe_path(manager.root, body.global_config_path))
+            if body.global_config_path
             else None
         )
     except ValueError as exc:
@@ -252,6 +252,6 @@ async def validate_config(
     result = QualityService.validate_node_config(
         node_name=body.node_name,
         config_path=str(config_abs),
-        global_settings_path=gs_abs,
+        global_config_path=gs_abs,
     )
     return ValidateConfigResponse(**result)

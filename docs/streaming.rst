@@ -103,7 +103,7 @@ local runs, and CI:
 
 .. code-block:: bash
 
-   ducta stream run --config config/global_settings.yaml -p ingest_stream --mode sync
+   ducta stream run --config config/global_config.yaml -p ingest_stream --mode sync
 
 The ``streaming_core`` starter template (``ducta template --template streaming_core``)
 is exactly this: a file-stream source with an ``available_now`` trigger that runs

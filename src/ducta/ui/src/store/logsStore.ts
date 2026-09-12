@@ -1,5 +1,5 @@
 import { create, type StateCreator } from "zustand";
-import { devtools } from "zustand/middleware";
+import { withDevtools } from "./createStore";
 
 export type LogLevel = "DEBUG" | "INFO" | "SUCCESS" | "WARNING" | "ERROR";
 
@@ -59,8 +59,6 @@ interface LogsState {
 
 const MAX_CURRENT_LOGS = 10000;
 const MAX_EXECUTION_HISTORY = 50; // Keep last 50 executions
-
-const isDev = import.meta.env.DEV;
 
 const storeCreator: StateCreator<LogsState> = (set, get) => ({
   currentLogs: [],
@@ -198,9 +196,7 @@ const storeCreator: StateCreator<LogsState> = (set, get) => ({
   },
 });
 
-export const useLogsStore = create<LogsState>()(
-  (isDev ? devtools(storeCreator, { name: "LogsStore" }) : storeCreator) as any
-);
+export const useLogsStore = create<LogsState>()(withDevtools(storeCreator, "LogsStore") as any);
 
 // Selector hooks for optimal performance
 export const useCurrentLogs = () => useLogsStore((s) => s.currentLogs);

@@ -52,9 +52,9 @@ Ducta Gate acts as the physical layer of the Ducta ecosystem, implementing:
 Ducta Gate configurations are parsed and validated via Pydantic schemas in the `ducta.setting.schemas` module.
 
 ### Global I/O Settings
-Configure the engine's behavior under the `global_settings` block:
+Configure the engine's behavior under the `global_config` block:
 *   **`mode`** (*local* | *distributed*): Controls local directory creation vs. cloud storage defaults.
-*   **`in_memory_handoff`** (*boolean*): Enables memory caching for sequential nodes.
+*   **`in_memory_handoff`** (*boolean*, default `false`): Enables memory caching for sequential nodes. **Mind the memory profile, which differs by engine:** Spark frames are persisted `MEMORY_AND_DISK`, so they spill rather than exhaust the heap. Pandas frames have no such valve — each handed-off frame is held as a deep copy for the whole run (and `take()` returns another copy per read), with no eviction once the last consumer has read it. Peak memory therefore grows with the number of handed-off nodes, so enable it for pandas pipelines only when the working set comfortably fits in RAM.
 *   **`max_input_workers`** (*integer*): Concurrency limit for parallel reading.
 *   **`enable_data_fingerprinting`** (*boolean*): Generates dataset hashes for data quality auditing.
 *   **`fingerprint_policy`** (*record* | *warn* | *fail*): Severity policy when data drift is detected.
@@ -67,11 +67,11 @@ Configure the engine's behavior under the `global_settings` block:
 
 ## 3. Configuration Examples
 
-Below is how the configurations are structured. Notice that `input_path` and `output_path` are defined under `global_settings` (as required by `GlobalSettingsSchema`) and are automatically interpolated into dataset filepaths using the `${input_path}` and `${output_path}` variables.
+Below is how the configurations are structured. Notice that `input_path` and `output_path` are defined under `global_config` (as required by `GlobalConfigSchema`) and are automatically interpolated into dataset filepaths using the `${input_path}` and `${output_path}` variables.
 
-### YAML (`global_settings.yaml` & configs)
+### YAML (`global_config.yaml` & configs)
 ```yaml
-# global_settings.yaml
+# global_config.yaml
 input_path: "data/raw"
 output_path: "data/processed"
 mode: "local"
@@ -100,7 +100,7 @@ core.analytics.cleaned_users:
 
 ### TOML
 ```toml
-# global_settings.toml
+# global_config.toml
 input_path = "data/raw"
 output_path = "data/processed"
 mode = "local"
@@ -128,7 +128,7 @@ table_name = "users_clean"
 ### JSON
 ```json
 {
-  "global_settings": {
+  "global_config": {
     "input_path": "data/raw",
     "output_path": "data/processed",
     "mode": "local",
@@ -175,7 +175,7 @@ from ducta.gate import InputLoader, DataOutputManager
 
 # Load and validate configs
 context = Context(
-    global_settings=Path("config/global_settings.yaml"),
+    global_config=Path("config/global_config.yaml"),
     pipelines_config=Path("config/pipelines.yaml"),
     nodes_config=Path("config/nodes.yaml"),
     input_config=Path("config/inputs.yaml"),
@@ -194,7 +194,13 @@ Load inputs concurrently for a pipeline processing node:
 node = {
     "name": "prepare_analytics",
     "input": ["user_records", "sales_data"],
-    "fail_fast": True
+    # Check every input resolves before loading any of them.
+    "fail_fast": True,
+    # ...and what that check means when one does not. "skip" (the default)
+    # raises MissingDependencyError, which the DAG coordinator treats as a skip
+    # and cascades onto this node's descendants; "fail" aborts the run instead.
+    # `fail_fast` only decides *whether* to pre-check — it never decided this.
+    "on_missing_input": "skip",
 }
 
 # Concurrently loaded and validated

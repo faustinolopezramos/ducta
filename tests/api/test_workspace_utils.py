@@ -5,7 +5,7 @@ workspace's own `environment.yaml` with plain `(base / rel_path).resolve()`.
 `environment.yaml` is content a cloned repo controls (see
 `api/workspace/manager.py::load_context`), and pathlib's `Path.__truediv__`
 silently discards the left operand when the right one is absolute — so
-`global_settings_path: "/etc/passwd"` (or a `base_path` of `/etc`) escaped the
+`global_config_path: "/etc/passwd"` (or a `base_path` of `/etc`) escaped the
 workspace with no `..` required.
 """
 
@@ -27,7 +27,7 @@ class TestFindConfigFilesRejectsEscapingRelPath:
     def test_absolute_path_in_env_config_is_rejected(self, tmp_path):
         _write_environment_yaml(
             tmp_path,
-            {"base": {"global_settings_path": "/etc/passwd"}},
+            {"base": {"global_config_path": "/etc/passwd"}},
         )
         try:
             find_config_files(tmp_path, "base")
@@ -39,7 +39,7 @@ class TestFindConfigFilesRejectsEscapingRelPath:
     def test_dotdot_in_env_config_is_rejected(self, tmp_path):
         _write_environment_yaml(
             tmp_path,
-            {"base": {"global_settings_path": "../../../etc/passwd"}},
+            {"base": {"global_config_path": "../../../etc/passwd"}},
         )
         try:
             find_config_files(tmp_path, "base")
@@ -53,7 +53,7 @@ class TestFindConfigFilesRejectsEscapingBasePath:
     def test_absolute_base_path_is_rejected(self, tmp_path):
         _write_environment_yaml(
             tmp_path,
-            {"base": {"global_settings_path": "global_settings.yaml"}},
+            {"base": {"global_config_path": "global_config.yaml"}},
             base_path="/etc",
         )
         try:
@@ -67,20 +67,20 @@ class TestFindConfigFilesRejectsEscapingBasePath:
 class TestFindConfigFilesAllowsLegitimatePaths:
     def test_ordinary_relative_paths_resolve_within_workspace(self, tmp_path):
         (tmp_path / "config").mkdir()
-        (tmp_path / "config" / "global_settings.yaml").write_text("mode: local\n")
+        (tmp_path / "config" / "global_config.yaml").write_text("mode: local\n")
         _write_environment_yaml(
             tmp_path,
-            {"base": {"global_settings_path": "config/global_settings.yaml"}},
+            {"base": {"global_config_path": "config/global_config.yaml"}},
         )
         result = find_config_files(tmp_path, "base")
-        assert result["global_settings"] == (tmp_path / "config" / "global_settings.yaml").resolve()
+        assert result["global_config"] == (tmp_path / "config" / "global_config.yaml").resolve()
 
     def test_default_base_path_dot_resolves_to_workspace_root(self, tmp_path):
-        (tmp_path / "global_settings.yaml").write_text("mode: local\n")
+        (tmp_path / "global_config.yaml").write_text("mode: local\n")
         _write_environment_yaml(
             tmp_path,
-            {"base": {"global_settings_path": "global_settings.yaml"}},
+            {"base": {"global_config_path": "global_config.yaml"}},
             base_path=".",
         )
         result = find_config_files(tmp_path, "base")
-        assert result["global_settings"] == (tmp_path / "global_settings.yaml").resolve()
+        assert result["global_config"] == (tmp_path / "global_config.yaml").resolve()

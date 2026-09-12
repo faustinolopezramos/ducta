@@ -188,7 +188,12 @@ ducta = "ducta.console.wrapper:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --import-mode=importlib --strict-markers"
-pythonpath = ["src"]
+# "src" puts the package under test on the path; "." puts the repo root there so
+# `tests.core.fakes` — the shared fake Context/DataFrame several core tests import
+# — resolves as a namespace package. Without it, only `python -m pytest` works
+# (it adds the cwd itself); the bare `pytest` console script that CI runs fails
+# collection with "No module named 'tests.core'".
+pythonpath = ["src", "."]
 filterwarnings = [
     "ignore::DeprecationWarning",
 ]

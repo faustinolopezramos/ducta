@@ -6,18 +6,18 @@ import pytest
 from ducta.setting.context_loader import ContextLoader
 from ducta.setting.exceptions import ConfigLoadError
 
-_GLOBAL_SETTINGS = {"input_path": "/in", "output_path": "/out", "mode": "local"}
+_GLOBAL_CONFIG = {"input_path": "/in", "output_path": "/out", "mode": "local"}
 
 
-def _config_by_path(global_settings=None, **overrides):
+def _config_by_path(global_config=None, **overrides):
     """Build a load_config side effect that answers according to the file asked for.
 
     Every config file has its own schema (PipelineSchema, NodeSchema, ...), so a
-    mock that returns one global-settings-shaped dict for *every* path makes
+    mock that returns one global-config-shaped dict for *every* path makes
     ConfigSchema validation fail on the four catalog sections. Keyed on the
     filename stem, each section gets a payload its own schema accepts.
     """
-    settings = dict(global_settings or _GLOBAL_SETTINGS)
+    settings = dict(global_config or _GLOBAL_CONFIG)
 
     def _side_effect(path):
         name = Path(str(path)).name
@@ -65,7 +65,7 @@ class TestContextLoader:
         loader = ContextLoader(allow_python_config=False)
         ctx = loader.load_from_paths(
             {
-                "global_settings_path": "/path/global.yaml",
+                "global_config_path": "/path/global.yaml",
                 "pipelines_config_path": "/path/pipelines.yaml",
                 "nodes_config_path": "/path/nodes.yaml",
                 "input_config_path": "/path/input.yaml",
@@ -87,7 +87,7 @@ class TestContextLoader:
         loader = ContextLoader()
         ctx = loader.load_from_paths(
             {
-                "global_settings_path": "/path/global.yaml",
+                "global_config_path": "/path/global.yaml",
                 "pipelines_config_path": "/path/pipelines.yaml",
                 "nodes_config_path": "/path/nodes.yaml",
                 "input_config_path": "/path/input.yaml",
@@ -103,7 +103,7 @@ class TestContextLoader:
         loader = ContextLoader()
         with pytest.raises(ValueError, match="Missing config paths"):
             loader.load_from_paths(
-                {"global_settings_path": "/path/global.yaml"},
+                {"global_config_path": "/path/global.yaml"},
                 env="dev",
             )
 
@@ -121,7 +121,7 @@ class TestContextLoader:
         base_settings = {"input_path": "/base/in", "output_path": "/base/out", "mode": "local"}
         env_settings = {"mode": "distributed"}
 
-        side_effect = _config_by_path(global_settings=env_settings, base_global=base_settings)
+        side_effect = _config_by_path(global_config=env_settings, base_global=base_settings)
         mock_loader = MagicMock()
         mock_loader.load_config.side_effect = side_effect
         mock_ctx_loader_cls.return_value = mock_loader
@@ -130,8 +130,8 @@ class TestContextLoader:
         loader = ContextLoader()
         ctx = loader.load_from_paths(
             {
-                "global_settings_path": "/env/global.yaml",
-                "base_global_settings_path": "/base/base_global.yaml",
+                "global_config_path": "/env/global.yaml",
+                "base_global_config_path": "/base/base_global.yaml",
                 "pipelines_config_path": "/path/pipelines.yaml",
                 "nodes_config_path": "/path/nodes.yaml",
                 "input_config_path": "/path/input.yaml",
@@ -174,13 +174,13 @@ class TestContextLoader:
         }
 
         mock_loader = MagicMock()
-        mock_loader.load_config.side_effect = _config_by_path(global_settings=settings_with_quality)
+        mock_loader.load_config.side_effect = _config_by_path(global_config=settings_with_quality)
         mock_ctx_loader_cls.return_value = mock_loader
 
         loader = ContextLoader()
         ctx = loader.load_from_paths(
             {
-                "global_settings_path": "/path/global.yaml",
+                "global_config_path": "/path/global.yaml",
                 "pipelines_config_path": "/path/pipelines.yaml",
                 "nodes_config_path": "/path/nodes.yaml",
                 "input_config_path": "/path/input.yaml",
@@ -211,13 +211,13 @@ class TestContextLoader:
         }
 
         mock_loader = MagicMock()
-        mock_loader.load_config.side_effect = _config_by_path(global_settings=settings_with_quality)
+        mock_loader.load_config.side_effect = _config_by_path(global_config=settings_with_quality)
         mock_ctx_loader_cls.return_value = mock_loader
 
         loader = ContextLoader(allow_python_config=False)
         ctx = loader.load_from_paths(
             {
-                "global_settings_path": "/path/global.yaml",
+                "global_config_path": "/path/global.yaml",
                 "pipelines_config_path": "/path/pipelines.yaml",
                 "nodes_config_path": "/path/nodes.yaml",
                 "input_config_path": "/path/input.yaml",

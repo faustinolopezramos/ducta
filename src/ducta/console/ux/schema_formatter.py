@@ -51,6 +51,41 @@ def parse_spark_schema_line(line: str) -> Optional[Tuple[str, str, str, int]]:
     return None
 
 
+def _build_schema_table(title: str, source_label: str, field_count: int) -> Table:
+    """Build the (empty) elegant schema table shared by the Spark and pandas
+    formatters, which differ only in *source_label* and their rows."""
+    table = Table(
+        title=f"[{PRIMARY_BOLD}]🔧 {title}[/] [{PRIMARY_DIM}]{source_label} • {field_count} fields[/]",
+        box=box.ROUNDED,
+        border_style="white",
+        header_style="bold white on black",
+        show_lines=False,
+        padding=(0, 1),
+    )
+    table.add_column("№", style=PRIMARY_DIM, width=4, justify="right")
+    table.add_column("Field Name", style="white", no_wrap=True, min_width=20)
+    table.add_column("Data Type", style=PRIMARY_DIM, justify="center", width=15)
+    table.add_column("Nullable", style="white", justify="center", width=10)
+    return table
+
+
+def _nullable_display(is_nullable: bool) -> str:
+    icon = "✓" if is_nullable else "✗"
+    style = "white" if is_nullable else PRIMARY_DIM
+    return f"[{style}]{icon}[/]"
+
+
+def _render_schema_footer(console: Console, table: Table, field_count: int) -> None:
+    footer = Text()
+    footer.append("Total Fields: ", style="dim")
+    footer.append(f"{field_count}", style=BOLD_WHITE)
+
+    console.print()
+    console.print(table)
+    console.print("  ", footer)
+    console.print()
+
+
 def print_spark_schema(
     schema_text: str, title: str = "DataFrame Schema", console: Console = None
 ) -> None:
@@ -73,45 +108,20 @@ def print_spark_schema(
         console.print("[yellow]No schema fields found to display[/]")
         return
 
-    # Create elegant table
-    table = Table(
-        title=f"[{PRIMARY_BOLD}]🔧 {title}[/] [{PRIMARY_DIM}]Apache Spark DataFrame • {len(fields)} fields[/]",
-        box=box.ROUNDED,
-        border_style="white",
-        header_style="bold white on black",
-        show_lines=False,
-        padding=(0, 1),
-    )
+    table = _build_schema_table(title, "Apache Spark DataFrame", len(fields))
 
-    table.add_column("№", style=PRIMARY_DIM, width=4, justify="right")
-    table.add_column("Field Name", style="white", no_wrap=True, min_width=20)
-    table.add_column("Data Type", style=PRIMARY_DIM, justify="center", width=15)
-    table.add_column("Nullable", style="white", justify="center", width=10)
-
-    # Add rows
     for idx, (field_name, data_type, nullable, indent_level) in enumerate(fields, 1):
         # Add indentation for nested fields
         display_name = "  " * indent_level + field_name
-
-        # Format nullable with icon
-        nullable_icon = "✓" if nullable == "true" else "✗"
-        nullable_style = "white" if nullable == "true" else PRIMARY_DIM
-        nullable_display = f"[{nullable_style}]{nullable_icon}[/]"
-
-        # Color code data types
         type_style = _get_type_color(data_type)
-        type_display = f"[{type_style}]{data_type}[/]"
+        table.add_row(
+            str(idx),
+            display_name,
+            f"[{type_style}]{data_type}[/]",
+            _nullable_display(nullable == "true"),
+        )
 
-        table.add_row(str(idx), display_name, type_display, nullable_display)
-
-    footer = Text()
-    footer.append("Total Fields: ", style="dim")
-    footer.append(f"{len(fields)}", style=BOLD_WHITE)
-
-    console.print()
-    console.print(table)
-    console.print("  ", footer)
-    console.print()
+    _render_schema_footer(console, table, len(fields))
 
 
 def print_pandas_schema(
@@ -132,19 +142,7 @@ def print_pandas_schema(
         console.print("[yellow]No schema fields found to display[/]")
         return
 
-    table = Table(
-        title=f"[{PRIMARY_BOLD}]🔧 {title}[/] [{PRIMARY_DIM}]Pandas DataFrame • {len(columns)} fields[/]",
-        box=box.ROUNDED,
-        border_style="white",
-        header_style="bold white on black",
-        show_lines=False,
-        padding=(0, 1),
-    )
-
-    table.add_column("№", style=PRIMARY_DIM, width=4, justify="right")
-    table.add_column("Field Name", style="white", no_wrap=True, min_width=20)
-    table.add_column("Data Type", style=PRIMARY_DIM, justify="center", width=15)
-    table.add_column("Nullable", style="white", justify="center", width=10)
+    table = _build_schema_table(title, "Pandas DataFrame", len(columns))
 
     for idx, col in enumerate(columns, 1):
         data_type = (
@@ -155,25 +153,15 @@ def print_pandas_schema(
         except Exception:
             has_nulls = True
 
-        nullable_icon = "✓" if has_nulls else "✗"
-        nullable_style = "white" if has_nulls else PRIMARY_DIM
         type_style = _get_type_color(data_type)
-
         table.add_row(
             str(idx),
             str(col),
             f"[{type_style}]{data_type}[/]",
-            f"[{nullable_style}]{nullable_icon}[/]",
+            _nullable_display(has_nulls),
         )
 
-    footer = Text()
-    footer.append("Total Fields: ", style="dim")
-    footer.append(f"{len(columns)}", style=BOLD_WHITE)
-
-    console.print()
-    console.print(table)
-    console.print("  ", footer)
-    console.print()
+    _render_schema_footer(console, table, len(columns))
 
 
 def _get_type_color(data_type: str = "") -> str:

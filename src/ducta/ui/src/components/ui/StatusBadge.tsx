@@ -1,17 +1,20 @@
-import type { ComponentType } from "react";
-import {
-  IconCircle,
-  IconClock,
-  IconLoader2,
-  IconCircleCheck,
-  IconAlertTriangle,
-  IconCircleX,
-  IconBan,
-  IconPlayerSkipForward,
-} from "@tabler/icons-react";
+import { cx } from "../../utils/classNames";
+import { STATUS_META, type Status } from "./statusMeta";
 import "./StatusBadge.css";
 
-export type Status =
+// Re-export so existing `import { type Status } from "./StatusBadge"` consumers
+// keep working — the canonical status domain now lives in ./statusMeta.
+export type { Status };
+
+/**
+ * The subset of the shared status domain that StatusBadge actually renders as
+ * a pill: each has a dedicated `--status-*` CSS token block in StatusBadge.css.
+ * Everything else in the shared `Status` union (e.g. "error", "starting") is a
+ * raw value other consumers (the log viewer, the streaming monitor) see
+ * directly; StatusBadge folds those down to one of these eight via aliasing
+ * rather than growing new CSS for every raw backend string.
+ */
+type BadgeStatus =
   | "idle"
   | "pending"
   | "running"
@@ -21,33 +24,22 @@ export type Status =
   | "cancelled"
   | "skipped";
 
-// Tabler icon components are forwardRef exotics; ComponentType<any> avoids the
-// ref-typing friction while keeping a single shared shape for the mapping.
-type IconComponent = ComponentType<any>;
+const BADGE_STATUSES = new Set<BadgeStatus>([
+  "idle", "pending", "running", "success", "warning", "failed", "cancelled", "skipped",
+]);
 
-interface StatusMeta {
-  label: string;
-  Icon: IconComponent;
-  /** Spin the icon (running). */
-  spin?: boolean;
+function isBadgeStatus(key: string): key is BadgeStatus {
+  return BADGE_STATUSES.has(key as BadgeStatus);
 }
 
-/** Canonical mapping: one source of truth for status presentation. */
-const STATUS_META: Record<Status, StatusMeta> = {
-  idle:      { label: "Idle",      Icon: IconCircle },
-  pending:   { label: "Pending",   Icon: IconClock },
-  running:   { label: "Running",   Icon: IconLoader2, spin: true },
-  success:   { label: "Success",   Icon: IconCircleCheck },
-  warning:   { label: "Warning",   Icon: IconAlertTriangle },
-  failed:    { label: "Failed",    Icon: IconCircleX },
-  cancelled: { label: "Cancelled", Icon: IconBan },
-  skipped:   { label: "Skipped",   Icon: IconPlayerSkipForward },
-};
-
-/** Map common backend aliases onto the canonical status set. */
-const STATUS_ALIASES: Record<string, Status> = {
+/** Map backend aliases (and the shared domain's non-pill statuses) onto the
+ *  eight canonical badge statuses. */
+const STATUS_ALIASES: Record<string, BadgeStatus> = {
   active: "running",
+  starting: "running",
   error: "failed",
+  partial_failure: "warning",
+  stopped: "cancelled",
   succeeded: "success",
   ok: "success",
   done: "success",
@@ -55,10 +47,10 @@ const STATUS_ALIASES: Record<string, Status> = {
   skip: "skipped",
 };
 
-export function normalizeStatus(raw: string | null | undefined): Status {
+export function normalizeStatus(raw: string | null | undefined): BadgeStatus {
   if (!raw) return "idle";
   const key = raw.toLowerCase();
-  if (key in STATUS_META) return key as Status;
+  if (isBadgeStatus(key)) return key;
   return STATUS_ALIASES[key] ?? "idle";
 }
 
@@ -91,15 +83,13 @@ export function StatusBadge({
   const text = label ?? meta.label;
   const { Icon } = meta;
 
-  const classes = [
+  const classes = cx(
     "tui-status",
     `tui-status--${canonical}`,
     `tui-status--${size}`,
     `tui-status--${variant}`,
-    className ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+    className,
+  );
 
   if (variant === "dot") {
     return (

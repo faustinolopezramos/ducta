@@ -194,7 +194,7 @@ def dict_context(spark_session):
         "spark": spark_session,
         "execution_mode": "local",
         "output_path": "/tmp/output",
-        "global_settings": {
+        "global_config": {
             "checkpoints_base": "/tmp/checkpoints",
             "max_streaming_pipelines": 5,
         },
@@ -215,7 +215,7 @@ def obj_context(spark_session):
         output_path="/tmp/output",
         env="test",
         format_policy=None,
-        global_settings={
+        global_config={
             "checkpoints_base": "/tmp/checkpoints",
             "max_streaming_pipelines": 5,
         },

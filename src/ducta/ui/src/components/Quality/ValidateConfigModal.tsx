@@ -47,8 +47,8 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
   const resolvedConfigPath: string =
     (configs?.nodes?.path as string | undefined) ?? "";
   const resolvedGlobalPath: string =
+    (configs?.global_config?.path as string | undefined) ??
     (configs?.global?.path as string | undefined) ??
-    (configs?.global_settings?.path as string | undefined) ??
     "";
 
   const configPath = advanced && manualConfigPath ? manualConfigPath : resolvedConfigPath;
@@ -58,7 +58,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
     validate.mutate({
       node_name: nodeName,
       config_path: configPath,
-      global_settings_path: globalPath || undefined,
+      global_config_path: globalPath || undefined,
     });
   };
 

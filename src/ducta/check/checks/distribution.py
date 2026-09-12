@@ -21,7 +21,7 @@ Distribution quality checks.
 """
 
 from functools import lru_cache
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, Optional
 
 from loguru import logger  # type: ignore
 
@@ -54,10 +54,14 @@ def _scipy_available() -> bool:
 class DriftDetectionCheck(BaseQualityCheck):
     """Detects distribution drift comparing current vs baseline using Jensen-Shannon divergence."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
+        {"columns", "jensen_shannon_threshold", "min_categories", "topk_categories", "use_scipy"}
+    )
+
     def __init__(self) -> None:
         super().__init__("drift_detection", CheckSeverity.WARNING)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -65,125 +69,114 @@ class DriftDetectionCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute drift detection check."""
-        try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
 
-            columns = config.columns if hasattr(config, "columns") else []
-            if not columns:
-                return self._create_result(True, "No columns configured for drift detection", {})
+        columns = config.columns if hasattr(config, "columns") else []
+        if not columns:
+            return self._create_result(True, "No columns configured for drift detection", {})
 
-            threshold = (
-                config.jensen_shannon_threshold
-                if hasattr(config, "jensen_shannon_threshold")
-                else 0.1
-            )
-            use_scipy = config.use_scipy if hasattr(config, "use_scipy") else True
-            min_categories = config.min_categories if hasattr(config, "min_categories") else 5
-            # How many categories to actually fetch per column for the
-            # Jensen-Shannon comparison — independent of min_categories,
-            # which is a *minimum* category-count gate, not a cap on how
-            # many categories get compared. Reusing min_categories as both
-            # meant a column with e.g. 50 real categories only ever got
-            # compared on its top `min_categories` most frequent ones,
-            # biasing drift detection toward frequent categories and hiding
-            # drift in the long tail.
-            topk_categories = config.topk_categories if hasattr(config, "topk_categories") else 100
-            # value_counts() is itself topk-limited, so fetch at least
-            # min_categories rows — otherwise "fewer than min_categories
-            # rows came back" could mean "the fetch was capped low", not
-            # "the column really has fewer than min_categories categories."
-            fetch_topk = max(topk_categories, min_categories)
+        threshold = (
+            config.jensen_shannon_threshold if hasattr(config, "jensen_shannon_threshold") else 0.1
+        )
+        use_scipy = config.use_scipy if hasattr(config, "use_scipy") else True
+        min_categories = config.min_categories if hasattr(config, "min_categories") else 5
+        # How many categories to actually fetch per column for the
+        # Jensen-Shannon comparison — independent of min_categories,
+        # which is a *minimum* category-count gate, not a cap on how
+        # many categories get compared. Reusing min_categories as both
+        # meant a column with e.g. 50 real categories only ever got
+        # compared on its top `min_categories` most frequent ones,
+        # biasing drift detection toward frequent categories and hiding
+        # drift in the long tail.
+        topk_categories = config.topk_categories if hasattr(config, "topk_categories") else 100
+        # value_counts() is itself topk-limited, so fetch at least
+        # min_categories rows — otherwise "fewer than min_categories
+        # rows came back" could mean "the fetch was capped low", not
+        # "the column really has fewer than min_categories categories."
+        fetch_topk = max(topk_categories, min_categories)
 
-            if use_scipy and not _scipy_available():
-                return self._create_result(
-                    False,
-                    "SciPy is required for drift detection (use_scipy=True) but is not "
-                    "installed. Run `pip install scipy`, or set use_scipy=false to use "
-                    "the chi-square distance instead.",
-                    {},
-                    severity=CheckSeverity.WARNING,
-                )
-
-            # Load baseline
-            baseline = getattr(config, "_baseline", None)
-            if not baseline:
-                return self._create_result(
-                    True, "No baseline available, first run creates baseline", {}
-                )
-
-            drifts = []
-            details = {}
-            columns_evaluated = 0
-
-            for column in columns:
-                try:
-                    current_counts = adapter.value_counts(column, topk=fetch_topk)
-                    if len(current_counts) < min_categories:
-                        logger.debug(
-                            f"Skipping drift check for column '{column}': only "
-                            f"{len(current_counts)} categor{'y' if len(current_counts) == 1 else 'ies'} "
-                            f"found, need at least {min_categories}"
-                        )
-                        continue
-
-                    baseline_counts = baseline.get(column, {}).get("value_counts", {})
-
-                    if not baseline_counts:
-                        continue
-
-                    drift_distance = self._compute_distribution_distance(
-                        current_counts,
-                        baseline_counts,
-                        use_scipy,
-                    )
-                    columns_evaluated += 1
-
-                    details[column] = {
-                        "drift_distance": float(drift_distance),
-                        "threshold": float(threshold),
-                        "current_categories": len(current_counts),
-                        "baseline_categories": len(baseline_counts),
-                    }
-
-                    if drift_distance > threshold:
-                        drifts.append(
-                            f"Column '{column}': drift {drift_distance:.3f} > {threshold}"
-                        )
-
-                except Exception as e:
-                    logger.exception(f"Error detecting drift in column '{column}': {e}")
-
-            details["_columns_evaluated"] = columns_evaluated
-            details["_columns_configured"] = len(columns)
-
-            if drifts:
-                return self._create_result(
-                    False,
-                    f"Distribution drift detected in {len(drifts)} column(s): {'; '.join(drifts)}",
-                    details,
-                )
-
-            if columns_evaluated == 0:
-                # See temporal.py's AnomalyDetectionCheck for why this is
-                # `passed=False`: a clean pass with zero columns evaluated is
-                # indistinguishable from a real pass to report.passed/
-                # errors_count, so a missing baseline silently looked fine.
-                return self._create_result(
-                    False,
-                    f"No columns could be evaluated (0/{len(columns)} had a usable baseline) "
-                    "— inconclusive, not a pass",
-                    details,
-                    severity=CheckSeverity.WARNING,
-                )
-
-            return self._create_result(True, "No distribution drift detected", details)
-
-        except Exception as e:
-            logger.exception(f"Error executing drift detection check: {e}")
+        if use_scipy and not _scipy_available():
             return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+                False,
+                "SciPy is required for drift detection (use_scipy=True) but is not "
+                "installed. Run `pip install scipy`, or set use_scipy=false to use "
+                "the chi-square distance instead.",
+                {},
+                severity=CheckSeverity.WARNING,
             )
+
+        # Load baseline
+        baseline = getattr(config, "_baseline", None)
+        if not baseline:
+            return self._create_result(
+                True, "No baseline available, first run creates baseline", {}
+            )
+
+        drifts = []
+        details = {}
+        columns_evaluated = 0
+
+        for column in columns:
+            try:
+                current_counts = adapter.value_counts(column, topk=fetch_topk)
+                if len(current_counts) < min_categories:
+                    logger.debug(
+                        f"Skipping drift check for column '{column}': only "
+                        f"{len(current_counts)} categor{'y' if len(current_counts) == 1 else 'ies'} "
+                        f"found, need at least {min_categories}"
+                    )
+                    continue
+
+                baseline_counts = baseline.get(column, {}).get("value_counts", {})
+
+                if not baseline_counts:
+                    continue
+
+                drift_distance = self._compute_distribution_distance(
+                    current_counts,
+                    baseline_counts,
+                    use_scipy,
+                )
+                columns_evaluated += 1
+
+                details[column] = {
+                    "drift_distance": float(drift_distance),
+                    "threshold": float(threshold),
+                    "current_categories": len(current_counts),
+                    "baseline_categories": len(baseline_counts),
+                }
+
+                if drift_distance > threshold:
+                    drifts.append(f"Column '{column}': drift {drift_distance:.3f} > {threshold}")
+
+            except Exception as e:
+                logger.exception(f"Error detecting drift in column '{column}': {e}")
+
+        details["_columns_evaluated"] = columns_evaluated
+        details["_columns_configured"] = len(columns)
+
+        if drifts:
+            return self._create_result(
+                False,
+                f"Distribution drift detected in {len(drifts)} column(s): {'; '.join(drifts)}",
+                details,
+            )
+
+        if columns_evaluated == 0:
+            # See temporal.py's AnomalyDetectionCheck for why this is
+            # `passed=False`: a clean pass with zero columns evaluated is
+            # indistinguishable from a real pass to report.passed/
+            # errors_count, so a missing baseline silently looked fine.
+            return self._create_result(
+                False,
+                f"No columns could be evaluated (0/{len(columns)} had a usable baseline) "
+                "— inconclusive, not a pass",
+                details,
+                severity=CheckSeverity.WARNING,
+            )
+
+        return self._create_result(True, "No distribution drift detected", details)
 
     @staticmethod
     def _compute_distribution_distance(
@@ -247,10 +240,14 @@ class DriftDetectionCheck(BaseQualityCheck):
 class StatisticalCheck(BaseQualityCheck):
     """Executes statistical hypothesis tests (normality, distribution, correlation)."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
+        {"alpha", "columns", "max_rows", "min_samples", "test_type"}
+    )
+
     def __init__(self) -> None:
         super().__init__("statistical", CheckSeverity.WARNING)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -258,89 +255,82 @@ class StatisticalCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute statistical check."""
-        try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
 
-            test_type = config.test_type if hasattr(config, "test_type") else "shapiro"
-            columns = config.columns if hasattr(config, "columns") else []
-            alpha = config.alpha if hasattr(config, "alpha") else 0.05
-            min_samples = config.min_samples if hasattr(config, "min_samples") else 30
+        test_type = config.test_type if hasattr(config, "test_type") else "shapiro"
+        columns = config.columns if hasattr(config, "columns") else []
+        alpha = config.alpha if hasattr(config, "alpha") else 0.05
+        min_samples = config.min_samples if hasattr(config, "min_samples") else 30
 
-            if not columns:
-                return self._create_result(True, "No columns configured for statistical test", {})
+        if not columns:
+            return self._create_result(True, "No columns configured for statistical test", {})
 
-            if not _scipy_available():
-                return self._create_result(
-                    False,
-                    f"SciPy is required for statistical tests ('{test_type}') but is not "
-                    "installed. Run `pip install scipy`.",
-                    {},
-                    severity=CheckSeverity.WARNING,
-                )
-
-            # Sample data for driver-side statistical tests to avoid OOM
-            max_rows = config.max_rows if hasattr(config, "max_rows") else 100000
-            pdf = adapter.sample(max_rows=max_rows)
-            details = {}
-            columns_evaluated = 0
-
-            for column in columns:
-                try:
-                    if column not in pdf.columns:
-                        continue
-
-                    data = pdf[column].dropna().values
-                    if len(data) < min_samples:
-                        continue
-
-                    # Execute test based on type
-                    if test_type == "shapiro":
-                        self._test_shapiro(data, alpha, column, details)
-                    elif test_type == "ks":
-                        self._test_ks(data, alpha, column, details)
-                    elif test_type == "chi_square":
-                        self._test_chi_square(data, alpha, column, details)
-                    columns_evaluated += 1
-
-                except Exception as e:
-                    logger.warning(
-                        f"Error in statistical test '{test_type}' for column '{column}': {e}"
-                    )
-
-            details["_columns_evaluated"] = columns_evaluated
-            details["_columns_configured"] = len(columns)
-
-            # Check if any test failed
-            failed_tests = [
-                k for k, v in details.items() if isinstance(v, dict) and not v.get("passed", True)
-            ]
-
-            if failed_tests:
-                return self._create_result(
-                    False,
-                    f"Statistical tests failed for {len(failed_tests)} column(s)",
-                    details,
-                )
-
-            if columns_evaluated == 0:
-                # See AnomalyDetectionCheck in temporal.py for why this is
-                # `passed=False` rather than a clean pass.
-                return self._create_result(
-                    False,
-                    f"No columns could be evaluated (0/{len(columns)} had enough samples) "
-                    "— inconclusive, not a pass",
-                    details,
-                    severity=CheckSeverity.WARNING,
-                )
-
-            return self._create_result(True, f"All statistical tests passed (α={alpha})", details)
-
-        except Exception as e:
-            logger.exception(f"Error executing statistical check: {e}")
+        if not _scipy_available():
             return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+                False,
+                f"SciPy is required for statistical tests ('{test_type}') but is not "
+                "installed. Run `pip install scipy`.",
+                {},
+                severity=CheckSeverity.WARNING,
             )
+
+        # Sample data for driver-side statistical tests to avoid OOM
+        max_rows = config.max_rows if hasattr(config, "max_rows") else 100000
+        pdf = adapter.sample(max_rows=max_rows)
+        details = {}
+        columns_evaluated = 0
+
+        for column in columns:
+            try:
+                if column not in pdf.columns:
+                    continue
+
+                data = pdf[column].dropna().values
+                if len(data) < min_samples:
+                    continue
+
+                # Execute test based on type
+                if test_type == "shapiro":
+                    self._test_shapiro(data, alpha, column, details)
+                elif test_type == "ks":
+                    self._test_ks(data, alpha, column, details)
+                elif test_type == "chi_square":
+                    self._test_chi_square(data, alpha, column, details)
+                columns_evaluated += 1
+
+            except Exception as e:
+                logger.warning(
+                    f"Error in statistical test '{test_type}' for column '{column}': {e}"
+                )
+
+        details["_columns_evaluated"] = columns_evaluated
+        details["_columns_configured"] = len(columns)
+
+        # Check if any test failed
+        failed_tests = [
+            k for k, v in details.items() if isinstance(v, dict) and not v.get("passed", True)
+        ]
+
+        if failed_tests:
+            return self._create_result(
+                False,
+                f"Statistical tests failed for {len(failed_tests)} column(s)",
+                details,
+            )
+
+        if columns_evaluated == 0:
+            # See AnomalyDetectionCheck in temporal.py for why this is
+            # `passed=False` rather than a clean pass.
+            return self._create_result(
+                False,
+                f"No columns could be evaluated (0/{len(columns)} had enough samples) "
+                "— inconclusive, not a pass",
+                details,
+                severity=CheckSeverity.WARNING,
+            )
+
+        return self._create_result(True, f"All statistical tests passed (α={alpha})", details)
 
     @staticmethod
     def _test_shapiro(data: Any, alpha: float, column: str, details: Dict) -> None:

@@ -5,14 +5,8 @@ import { Button } from "../ui/Button";
 import { useSelectSource, apiErrorMessage } from "../../api/mutations";
 import { useWorkspaceSelection } from "../../hooks/useWorkspaceSelection";
 import { StorageService } from "../../utils/storage";
+import { sourceLabel } from "../../utils/sourceLabel";
 import "./ConnectWorkspaceForm.css";
-
-/** Friendly short label for a source path or git URL, same rule as SourceSwitcher. */
-function sourceLabel(src: string): string {
-  const cleaned = src.replace(/\.git$/, "").replace(/\/+$/, "");
-  const seg = cleaned.split(/[/\\]/).filter(Boolean).pop();
-  return seg || cleaned;
-}
 
 /**
  * The first real screen a "cold" user sees when no workspace source is

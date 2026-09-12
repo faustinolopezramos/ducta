@@ -29,7 +29,7 @@ Each task in the DAG corresponds to a Ducta pipeline. When a task runs, it invok
    PROJECT_PATH = "/path/to/your/ducta_project"
 
    CONFIG_PATHS = {
-       "global_settings": f"{PROJECT_PATH}/config/base/global_settings.toml",
+       "global_config": f"{PROJECT_PATH}/config/base/global_config.toml",
        "pipelines": f"{PROJECT_PATH}/config/base/pipelines.toml",
        "nodes": f"{PROJECT_PATH}/config/base/nodes.toml",
        "input": f"{PROJECT_PATH}/config/base/input.toml",

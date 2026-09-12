@@ -29,13 +29,33 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from ducta.api.db.models import ExecutionLogRow, ExecutionRow
-from ducta.api.db.session import get_session_factory
+from ducta.api.db.session import get_session_factory, require_session
 from ducta.api.exceptions import ExecutionNotFoundError
 from ducta.api.models.execution import ExecutionResponse, ExecutionStatus, LogEntry
 
 _TERMINAL_STATUSES = frozenset(
     {ExecutionStatus.SUCCESS, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED}
 )
+
+
+def _response_to_row(record: ExecutionResponse) -> ExecutionRow:
+    return ExecutionRow(
+        id=record.id,
+        pipeline_name=record.pipeline_name,
+        user_id=record.user_id,
+        env=record.env,
+        status=record.status.value,
+        dry_run=record.dry_run,
+        submitted_at=record.started_at,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        exit_code=record.exit_code,
+        duration_secs=record.duration_seconds,
+        error_message=record.error_message,
+        model_version=record.model_version,
+        sweep_id=record.sweep_id,
+        sweep_index=record.sweep_index,
+    )
 
 
 def _row_to_response(row: ExecutionRow) -> ExecutionResponse:
@@ -69,85 +89,42 @@ class DatabaseExecutionStore:
 
     # ------------------------------------------------------------------ write
 
-    async def add(self, record: ExecutionResponse) -> None:
-        factory = get_session_factory()
-        if factory is None:
-            return
-        async with factory() as session:
-            row = ExecutionRow(
-                id=record.id,
-                pipeline_name=record.pipeline_name,
-                user_id=record.user_id,
-                env=record.env,
-                status=record.status.value,
-                dry_run=record.dry_run,
-                submitted_at=record.started_at,
-                started_at=record.started_at,
-                finished_at=record.finished_at,
-                exit_code=record.exit_code,
-                duration_secs=record.duration_seconds,
-                error_message=record.error_message,
-                model_version=record.model_version,
-                sweep_id=record.sweep_id,
-                sweep_index=record.sweep_index,
-            )
-            await session.merge(row)
-            try:
-                await session.commit()
-            except Exception as exc:
-                await session.rollback()
-                logger.warning(
-                    "DbExecutionStore.add merge failed for {id}: {exc}", id=record.id, exc=exc
-                )
-
-    async def update(self, record: ExecutionResponse) -> None:
-        """Upsert a record (called when status transitions happen)."""
-        factory = get_session_factory()
-        if factory is None:
-            return
-        async with factory() as session:
-            result = await session.get(ExecutionRow, record.id)
-            if result is None:
-                row = ExecutionRow(
-                    id=record.id,
-                    pipeline_name=record.pipeline_name,
-                    user_id=record.user_id,
-                    env=record.env,
-                    status=record.status.value,
-                    dry_run=record.dry_run,
-                    submitted_at=record.started_at,
-                    started_at=record.started_at,
-                    finished_at=record.finished_at,
-                    exit_code=record.exit_code,
-                    duration_secs=record.duration_seconds,
-                    error_message=record.error_message,
-                    model_version=record.model_version,
-                    sweep_id=record.sweep_id,
-                    sweep_index=record.sweep_index,
-                )
-                await session.merge(row)
-            else:
-                result.status = record.status.value
-                result.started_at = record.started_at
-                result.finished_at = record.finished_at
-                result.exit_code = record.exit_code
-                result.duration_secs = record.duration_seconds
-                result.error_message = record.error_message
-            try:
-                await session.commit()
-            except Exception as exc:
-                await session.rollback()
-                logger.warning(
-                    "DbExecutionStore.update failed for {id}: {exc}", id=record.id, exc=exc
-                )
-
-    async def delete(self, execution_id: str) -> None:
-        factory = get_session_factory()
-        if factory is None:
-            return
-        async with factory() as session:
-            await session.execute(delete(ExecutionRow).where(ExecutionRow.id == execution_id))
+    @require_session()
+    async def add(self, session, record: ExecutionResponse) -> None:
+        row = _response_to_row(record)
+        await session.merge(row)
+        try:
             await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            logger.warning(
+                "DbExecutionStore.add merge failed for {id}: {exc}", id=record.id, exc=exc
+            )
+
+    @require_session()
+    async def update(self, session, record: ExecutionResponse) -> None:
+        """Upsert a record (called when status transitions happen)."""
+        result = await session.get(ExecutionRow, record.id)
+        if result is None:
+            row = _response_to_row(record)
+            await session.merge(row)
+        else:
+            result.status = record.status.value
+            result.started_at = record.started_at
+            result.finished_at = record.finished_at
+            result.exit_code = record.exit_code
+            result.duration_secs = record.duration_seconds
+            result.error_message = record.error_message
+        try:
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            logger.warning("DbExecutionStore.update failed for {id}: {exc}", id=record.id, exc=exc)
+
+    @require_session()
+    async def delete(self, session, execution_id: str) -> None:
+        await session.execute(delete(ExecutionRow).where(ExecutionRow.id == execution_id))
+        await session.commit()
 
     async def append_log(self, execution_id: str, entry: LogEntry) -> None:
         """Buffer log line and flush to DB in batches."""
@@ -180,13 +157,10 @@ class DatabaseExecutionStore:
         if batch:
             await self._flush_rows(batch)
 
-    async def _flush_rows(self, rows: List[ExecutionLogRow]) -> None:
-        factory = get_session_factory()
-        if factory is None:
-            return
-        async with factory() as session:
-            session.add_all(rows)
-            await session.commit()
+    @require_session()
+    async def _flush_rows(self, session, rows: List[ExecutionLogRow]) -> None:
+        session.add_all(rows)
+        await session.commit()
 
     # ------------------------------------------------------------------ read
 
@@ -215,30 +189,26 @@ class DatabaseExecutionStore:
     async def contains(self, execution_id: str) -> bool:
         return await self.peek(execution_id) is not None
 
+    @require_session(default=list)
     async def list_all(
         self,
+        session,
         pipeline_name: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> List[ExecutionResponse]:
-        factory = get_session_factory()
-        if factory is None:
-            return []
         stmt = select(ExecutionRow).order_by(ExecutionRow.started_at.desc())
         if pipeline_name:
             stmt = stmt.where(ExecutionRow.pipeline_name == pipeline_name)
         stmt = stmt.limit(limit).offset(offset)
-        async with factory() as session:
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
         return [_row_to_response(r) for r in rows]
 
+    @require_session(default=list)
     async def get_logs(
-        self, execution_id: str, limit: int = 500, offset: int = 0
+        self, session, execution_id: str, limit: int = 500, offset: int = 0
     ) -> List[LogEntry]:
-        factory = get_session_factory()
-        if factory is None:
-            return []
         stmt = (
             select(ExecutionLogRow)
             .where(ExecutionLogRow.execution_id == execution_id)
@@ -246,9 +216,8 @@ class DatabaseExecutionStore:
             .limit(limit)
             .offset(offset)
         )
-        async with factory() as session:
-            result = await session.execute(stmt)
-            rows = result.scalars().all()
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
         return [
             LogEntry(
                 timestamp=r.ts,
@@ -261,22 +230,19 @@ class DatabaseExecutionStore:
 
     # ------------------------------------------------------------------ maintenance
 
-    async def prune_stale(self, retention_seconds: float) -> int:
+    @require_session(default=int)
+    async def prune_stale(self, session, retention_seconds: float) -> int:
         """Delete terminal executions (and their logs via cascade) older than *retention_seconds*."""
         cutoff = datetime.now(tz=timezone.utc) - timedelta(seconds=retention_seconds)
         terminal_values = [s.value for s in _TERMINAL_STATUSES]
-        factory = get_session_factory()
-        if factory is None:
-            return 0
-        async with factory() as session:
-            result = await session.execute(
-                delete(ExecutionRow).where(
-                    ExecutionRow.status.in_(terminal_values),
-                    ExecutionRow.finished_at < cutoff,
-                )
+        result = await session.execute(
+            delete(ExecutionRow).where(
+                ExecutionRow.status.in_(terminal_values),
+                ExecutionRow.finished_at < cutoff,
             )
-            await session.commit()
-            deleted = result.rowcount
+        )
+        await session.commit()
+        deleted = result.rowcount
         if deleted:
             logger.debug("Pruned {n} stale execution records from DB", n=deleted)
         return deleted

@@ -23,7 +23,7 @@ HybridExecutor: a batch phase followed by a streaming phase.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -144,7 +144,7 @@ class HybridExecutor(BaseExecutor):
         node_configs: Dict[str, Dict[str, Any]],
     ) -> None:
         """Register all nodes in unified state."""
-        from ducta.core.dependency_inference import resolve_node_dependencies
+        from ducta.setting.dependency_inference import resolve_node_dependencies
 
         all_nodes = list(batch_nodes) + list(streaming_nodes)
         resolved = resolve_node_dependencies(all_nodes, node_configs)
@@ -222,6 +222,18 @@ class HybridExecutor(BaseExecutor):
                 streaming_nodes, node_configs, execution_mode
             )
             execution_result["streaming_execution_ids"] = streaming_execution_ids
+
+            # The batch phase was clean and there were streaming nodes to start,
+            # so starting none of them is a failure. This used to report success:
+            # `_execute_streaming_phase` marked every node completed the moment
+            # `start_pipeline` returned an id, which proves only that the startup
+            # work was queued.
+            if streaming_nodes and not streaming_execution_ids:
+                execution_result["status"] = "failed"
+                execution_result["errors"].append(
+                    "Streaming phase started no queries; see the log for the per-node "
+                    f"reason. Nodes: {sorted(streaming_nodes)}"
+                )
 
         except Exception as e:
             execution_result["status"] = "failed"
@@ -316,37 +328,105 @@ class HybridExecutor(BaseExecutor):
 
         return results
 
+    #: How long to wait for the streaming manager's startup pass before giving up
+    #: on learning what started. Generous: a node whose source is still warming up
+    #: retries for `streaming_node_start_retries` attempts by design.
+    STREAMING_STARTUP_TIMEOUT_SECONDS = 300.0
+
     def _execute_streaming_phase(
         self,
         streaming_nodes: List[str],
         node_configs: Dict[str, Dict[str, Any]],
         execution_mode: str,
     ) -> List[str]:
-        """Start the streaming nodes as a sub-pipeline and manage their lifecycle."""
+        """Start the streaming nodes as a sub-pipeline and record what happened.
+
+        Two things here used to be taken on faith. First, the batch nodes this
+        phase depends on are not part of the sub-pipeline handed to the manager,
+        so a streaming node declaring ``depends_on: [<a batch node>]`` had that
+        name rejected as undefined — before any query was created, taking the
+        whole phase down with it. ``satisfied_dependencies`` tells the manager
+        which predecessors are already done.
+
+        Second, ``start_pipeline`` is asynchronous: the execution id it returns
+        means the startup work was *queued*, not that any query exists. Marking
+        every node completed on the strength of that id reported a clean success
+        for runs in which nothing started. Now the phase waits for the startup
+        pass and reads the real per-node outcome.
+        """
         execution_ids: List[str] = []
         startable = [n for n in streaming_nodes if self.unified_state.start_node_execution(n)]
         if not startable:
             return execution_ids
 
+        satisfied = self._completed_batch_nodes()
         stream_pipeline_name = f"{self._mlops_pipeline_name or 'hybrid'}__streaming"
         try:
             execution_id = self.streaming_manager.start_pipeline(
-                stream_pipeline_name, {"nodes": startable}
+                stream_pipeline_name,
+                {"nodes": startable, "satisfied_dependencies": sorted(satisfied)},
             )
-            execution_ids.append(execution_id)
-            for node in startable:
-                self.unified_state.register_streaming_query(node, execution_id)
-                self.unified_state.complete_node_execution(node)
         except Exception as e:
             logger.error("Failed to start streaming nodes {}: {}", startable, e)
             for node in startable:
                 self.unified_state.fail_node_execution(node, str(e))
             raise
 
-        if execution_mode == "sync":
+        started = self._record_streaming_startup(execution_id, startable)
+        if started:
+            execution_ids.append(execution_id)
+
+        if execution_mode == "sync" and execution_ids:
             self._wait_for_streaming_completion(execution_ids)
 
         return execution_ids
+
+    def _completed_batch_nodes(self) -> Set[str]:
+        """Batch nodes that finished, so the streaming phase can declare them met."""
+        from ducta.core.pipeline_state import NodeStatus
+
+        completed: Set[str] = set()
+        for name in self.unified_state.list_nodes(NodeType.BATCH):
+            if self.unified_state.get_node_status(name) is NodeStatus.COMPLETED:
+                completed.add(name)
+        return completed
+
+    def _record_streaming_startup(self, execution_id: str, startable: List[str]) -> List[str]:
+        """Wait for the startup pass and mirror its real outcome per node."""
+        self.streaming_manager.wait_for_pipeline_started(
+            execution_id, timeout=self.STREAMING_STARTUP_TIMEOUT_SECONDS
+        )
+        status = self.streaming_manager.get_pipeline_status(execution_id) or {}
+        skipped = status.get("skipped_nodes") or {}
+        failed = status.get("failed_nodes") or {}
+        # `query_statuses`, not `queries`: get_pipeline_status strips the live
+        # query handles and reports their names under this key instead.
+        running = set(status.get("query_statuses") or {})
+
+        started: List[str] = []
+        for node in startable:
+            if node in skipped:
+                self.unified_state.fail_node_execution(node, f"not started: {skipped[node]}")
+            elif node in failed:
+                self.unified_state.fail_node_execution(node, f"failed to start: {failed[node]}")
+            elif node in running:
+                self.unified_state.register_streaming_query(node, execution_id)
+                self.unified_state.complete_node_execution(node)
+                started.append(node)
+            else:
+                # Neither started nor accounted for: say so rather than assume.
+                self.unified_state.fail_node_execution(
+                    node, "the streaming manager reported no outcome for this node"
+                )
+
+        if len(started) != len(startable):
+            logger.error(
+                "Streaming phase started {}/{} node(s); not started: {}",
+                len(started),
+                len(startable),
+                sorted(set(startable) - set(started)),
+            )
+        return started
 
     def _wait_for_streaming_completion(self, execution_ids: List[str], timeout_minutes=60):
         """Wait for all streaming executions to reach a terminal state."""

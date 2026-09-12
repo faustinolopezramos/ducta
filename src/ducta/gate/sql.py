@@ -73,14 +73,6 @@ class SQLSanitizer:
         r"benchmark\s*\(",  # Benchmark attacks
     ]
 
-    # AST node types that may sit at the root of an accepted query.
-    #
-    # The set operators are read-only combinations of SELECTs, but sqlglot puts
-    # them at the root (`Union`, not `Select`), so `SELECT a FROM t UNION SELECT
-    # b FROM u` — an ordinary analytics query — was rejected outright. Admitting
-    # them costs nothing: the lexical and keyword layers still see the whole
-    # statement, and `_check_ast_for_dangerous_operations` walks *every* Select
-    # in the tree, so a dangerous branch inside a UNION is still caught.
     ALLOWED_AST_TYPES: ClassVar[Set[str]] = {
         "Select",
         "CTE",
@@ -93,15 +85,7 @@ class SQLSanitizer:
 
     @classmethod
     def sanitize_query(cls, query: str) -> str:
-        """Validate a read-only SQL query through three independent layers.
-
-        Lexical checks and structural (AST) checks are complementary, so both run
-        whenever sqlglot is installed. They used to be alternatives — the AST path
-        replaced the lexical one entirely — which made having sqlglot present
-        *weaker* than having it absent, because the injection tells it does not
-        model (hex literals, ``char()``/``ascii()`` obfuscation, payloads smuggled
-        through comments) stopped being checked at all.
-        """
+        """Validate a read-only SQL query through three independent layers."""
         if not query or not isinstance(query, str):
             raise ConfigurationError("Query must be a non-empty string") from None
 
@@ -114,8 +98,6 @@ class SQLSanitizer:
         normalized_query = re.sub(r"\s+", " ", query)
         masked_for_checks = cls._mask_string_literals(normalized_query)
 
-        # Layer 1 — lexical. Cheap, dialect-independent, and runs first so that a
-        # stacked statement is reported as such rather than as a strange AST type.
         cls._check_comment_safety(normalized_query)
         cls._check_multiple_statements(normalized_query)
         cls._check_suspicious_patterns(masked_for_checks)
@@ -132,10 +114,6 @@ class SQLSanitizer:
                     "Query must start with SELECT or WITH."
                 ) from None
 
-        # Layer 3 — keyword denylist, last so that a structural rejection produces
-        # the more precise message ("forbidden operation: Drop", not "keyword
-        # 'drop'"). It still earns its place: `information_schema`, `pg_`, `sys.`
-        # and `into outfile` are all legal inside a well-formed SELECT.
         cls._check_dangerous_keywords(masked_for_checks)
 
         return original_query
@@ -168,11 +146,6 @@ class SQLSanitizer:
         cls._check_ast_for_dangerous_operations(parsed)
         logger.debug("Query validated successfully using sqlglot AST parser")
 
-    # Expression classes scanned for inside an otherwise well-formed SELECT.
-    # Resolved by name at call time, never captured eagerly: sqlglot renames and
-    # drops expression classes across majors (``Truncate`` disappeared in 30.x),
-    # and the previous code built this as a tuple of attributes, so a single
-    # missing name raised AttributeError before the loop and disabled the whole
     # scan behind a warning.
     DANGEROUS_EXPRESSIONS: ClassVar[List[str]] = [
         "Drop",
@@ -191,14 +164,6 @@ class SQLSanitizer:
         """Check AST for dangerous SQL operations using sqlglot.expressions."""
         from sqlglot import expressions  # type: ignore
 
-        # `SELECT ... INTO new_table FROM ...` (SQL Server/Sybase/Postgres) creates
-        # and populates a table, but sqlglot parses it with a `Select` root and
-        # models the INTO target as a separate `Into` node attached to the Select
-        # — not as Create/Insert — so the dangerous-expression scan below never
-        # sees it, and the lexical DANGEROUS_KEYWORDS list only has "into outfile"/
-        # "into dumpfile", not bare "into". Checked on every Select node (not just
-        # the root) so a CTE-wrapped `WITH x AS (...) SELECT * INTO t FROM x` is
-        # caught too.
         for select_node in parsed.find_all(expressions.Select):
             if select_node.args.get("into"):
                 raise ConfigurationError(
@@ -247,13 +212,7 @@ class SQLSanitizer:
 
     @classmethod
     def _mask_string_literals(cls, query: str) -> str:
-        """Replaces the content of string literals with spaces, preserving the quotes.
-
-        Understands the SQL-standard doubled-quote escape (``'it''s'``). Treating
-        the second quote of the pair as a terminator left the rest of the literal
-        looking like bare SQL, so ``WHERE note = 'it''s a drop-in'`` tripped the
-        keyword denylist on the word inside the user's own data.
-        """
+        """Replaces the content of string literals with spaces, preserving the quotes."""
         result: List[str] = []
         in_string = False
         quote_char = None
@@ -395,13 +354,7 @@ class SQLSanitizer:
 
     @classmethod
     def _count_semicolons_outside_strings(cls, query: str) -> int:
-        """Count semicolons that appear outside string literals.
-
-        Handles both escape conventions: a backslash-escaped quote and the
-        SQL-standard doubled quote. Without the latter, ``'a'';'`` looked like a
-        closed literal followed by a bare statement separator, and a legitimate
-        query was rejected as "multiple SQL statements".
-        """
+        """Count semicolons that appear outside string literals."""
         in_string = False
         quote_char = None
         count = 0
@@ -458,13 +411,7 @@ class SqlSafetyMixin:
 
 
 class UnityCatalogDDL:
-    """Builds the fixed set of DDL/maintenance statements UnityCatalogManager needs.
-
-    Not a general-purpose SQL builder — only covers the statement shapes that
-    already existed in output.py. Identifiers/values passed in are raw (unescaped);
-    every method escapes them via SqlSafetyMixin, so there is a single place that
-    decides how identifiers and string literals are quoted for Unity Catalog DDL.
-    """
+    """Builds the fixed set of DDL/maintenance statements UnityCatalogManager needs."""
 
     _safety = SqlSafetyMixin()
 
@@ -521,9 +468,6 @@ class UnityCatalogDDL:
 
     @classmethod
     def vacuum(cls, quoted_table_name: str, hours: int) -> str:
-        # The only value in this class that is not an escaped identifier or
-        # string literal, so it needs its own guard: coerced to int rather than
-        # interpolated as whatever the caller happened to pass.
         try:
             retain_hours = int(hours)
         except (TypeError, ValueError) as error:

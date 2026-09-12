@@ -63,19 +63,22 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
 
     def __init__(self, context: Any):
         super().__init__(context)
-        self._enabled = self._check_enabled()
+        #: Resolved on first `is_enabled()`, not here — see that method.
+        self._enabled: Optional[bool] = None
         self._catalog_cache: Dict[str, bool] = {}
         self._schema_cache: Dict[tuple, bool] = {}
 
     def _check_enabled(self) -> bool:
-        """Check if Unity Catalog is enabled."""
+        """Ask the session whether Unity Catalog is on."""
         spark = self._ctx_spark()
         if not spark:
             return False
         return spark.conf.get("spark.databricks.unityCatalog.enabled", "false").lower() == "true"
 
     def is_enabled(self) -> bool:
-        """Public check for UC availability."""
+        """Whether Unity Catalog is available, resolved lazily and cached."""
+        if self._enabled is None:
+            self._enabled = self._check_enabled()
         return self._enabled
 
     def clear_metadata_cache(self) -> None:

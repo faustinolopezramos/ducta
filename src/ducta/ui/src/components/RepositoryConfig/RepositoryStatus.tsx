@@ -5,21 +5,12 @@ import { ICONS } from "../icons";
 import { useRepository } from "../../api/queries";
 import { useRepositoryPush, useRepositoryPull, apiErrorMessage } from "../../api/mutations";
 import { useToastStack } from "../../hooks/useModalStack";
-
-
-const TYPE_META = {
-  local:  { label: "Local",  color: colors.textMuted,  bg: colors.surface },
-  github: { label: "GitHub", color: colors.green,      bg: colors.greenA12 },
-  azure:  { label: "Azure",  color: colors.blue,       bg: colors.blueA12 },
-  aws:    { label: "AWS",    color: colors.amber,      bg: colors.amberA15 },
-};
-
-type RepositoryType = keyof typeof TYPE_META;
+import { PROVIDER_META, type RepositoryProviderType } from "./providerMeta";
 
 function TypeBadge({ type }: { type?: string | null }) {
-  const safeType: RepositoryType =
-    type && type in TYPE_META ? (type as RepositoryType) : "local";
-  const meta = TYPE_META[safeType];
+  const safeType: RepositoryProviderType =
+    type && type in PROVIDER_META ? (type as RepositoryProviderType) : "local";
+  const meta = PROVIDER_META[safeType];
   return (
     <span
       style={{
@@ -28,7 +19,7 @@ function TypeBadge({ type }: { type?: string | null }) {
         padding: "2px 8px",
         background: meta.bg,
         color: meta.color,
-        border: `1px solid ${meta.color}33`,
+        border: `1px solid ${meta.border}`,
         borderRadius: 4,
         userSelect: "none",
       }}

@@ -45,6 +45,7 @@ from ducta.core.settings import (
     CoreSettings,
 )
 from ducta.core.split_validator import document_split_semantics
+from ducta.core.utils import extract_pipeline_nodes
 from ducta.gate.input import InputLoader
 from ducta.gate.output import DataOutputManager
 from ducta.setting.contexts import Context
@@ -77,9 +78,6 @@ class BaseExecutor:
         self.context = context
         self.settings = settings or CoreSettings.from_context(context)
 
-        self._mlops_context = None
-        self._mlops_auto_config = MLOpsAutoConfigurator()
-        self._mlops_init_attempted = False
         self._mlops_pipeline_name: Optional[str] = None
         self.input_loader = InputLoader(self.context)
         self.output_manager = DataOutputManager(self.context)
@@ -147,62 +145,28 @@ class BaseExecutor:
             return False
         return self.settings.mlflow_enabled
 
-    def _should_init_mlops(self) -> bool:
+    def _should_init_mlops(self, pipeline: Dict[str, Any]) -> bool:
+        """Whether *this pipeline* warrants experiment tracking.
+
+        Scoped to the pipeline's own nodes. It used to be handed
+        ``self.context.nodes_config`` — every node in the project — which made
+        the answer "yes" for a plain ETL as soon as any ML node existed anywhere
+        in the same configuration. In practice it did not matter, because
+        nothing on the execution path called this at all: the only caller was a
+        lazily-initialising ``mlops_context`` property that no production code
+        read, so ``_start_mlops_integration`` opened a tracking run for every
+        pipeline regardless. That is why a scaffolded batch ETL created an
+        ``experiment_tracking/`` tree and logged "Ended MLOps run".
         """
-        Determine if MLOps should be initialized for this execution.
-        """
-        gs = getattr(self.context, "global_settings", {}) or {}
-
-        return self._mlops_auto_config.should_init_mlops_for_pipeline(self.context.nodes_config, gs)
-
-    def _init_mlops_if_needed(self, pipeline_name: Optional[str] = None) -> None:
-        """
-        Initialize MLOps lazily if needed.
-        """
-        if self._mlops_init_attempted:
-            return
-
-        self._mlops_init_attempted = True
-
-        if not self._should_init_mlops():
-            logger.debug("MLOps initialization skipped (not needed for this pipeline)")
-            return
-
-        try:
-            active_env = getattr(self.context, "env", None)
-            if active_env:
-                logger.debug("MLOps will use active environment from context: '{}'", active_env)
-            else:
-                active_env = getattr(self.context, "environment", None)
-                if active_env:
-                    logger.debug("MLOps will use environment attribute: '{}'", active_env)
-
-            from ducta.mlrun.config import MLOpsContext
-
-            self._mlops_context = MLOpsContext.from_context(
-                self.context,
-                pipeline_name=pipeline_name,
-            )
-            logger.info(
-                "MLOps initialized successfully (auto-detected ML workload{})",
-                f", pipeline: {pipeline_name}" if pipeline_name else "",
-            )
-        except Exception as e:
-            if self._mlflow_required:
-                raise MLOpsRequiredError(str(e)) from e
-            logger.warning("MLOps initialization failed (non-critical): {}", e)
-            self._mlops_context = None
-
-    @property
-    def mlops_context(self):
-        """Get MLOps context (lazy initialization, preferring pipeline-specific config if available)."""
-        if not self._mlops_init_attempted:
-            pipeline_name = self._mlops_pipeline_name
-            if pipeline_name:
-                logger.debug("Initializing MLOps with pipeline-specific config: {}", pipeline_name)
-            self._init_mlops_if_needed(pipeline_name=pipeline_name)
-
-        return self._mlops_context
+        gs = getattr(self.context, "global_config", {}) or {}
+        nodes_config = getattr(self.context, "nodes_config", {}) or {}
+        pipeline_nodes = {
+            name: (nodes_config.get(name) or {}) for name in extract_pipeline_nodes(pipeline)
+        }
+        # Called on the class: every MLOpsAutoConfigurator method is a
+        # classmethod, so holding an instance bought nothing but one more piece
+        # of per-executor state to keep alive.
+        return MLOpsAutoConfigurator.should_init_mlops_for_pipeline(pipeline_nodes, gs)
 
     def _prepare_ml_info(
         self,
@@ -215,6 +179,8 @@ class BaseExecutor:
         pipeline_ml_config: Dict[str, Any] = {}
         merged_hyperparams = dict(hyperparams or {})
         final_model_version = model_version or getattr(self.context, "default_model_version", None)
+        pipeline_name_lower = pipeline_name.lower()
+        is_experiment = "experiment" in pipeline_name_lower or "tuning" in pipeline_name_lower
 
         if hasattr(self.context, "get_pipeline_ml_config"):
             pipeline_ml_config = self.context.get_pipeline_ml_config(pipeline_name) or {}
@@ -249,8 +215,7 @@ class BaseExecutor:
                     "hyperparams": merged_hyperparams,
                     "pipeline_config": pipeline_ml_config,
                     "project_name": getattr(self.context, "project_name", ""),
-                    "is_experiment": "experiment" in pipeline_name.lower()
-                    or "tuning" in pipeline_name.lower(),
+                    "is_experiment": is_experiment,
                 }
             )
 
@@ -262,8 +227,7 @@ class BaseExecutor:
                 "model_version": final_model_version,
                 "hyperparams": merged_hyperparams,
                 "pipeline_config": pipeline_ml_config,
-                "is_experiment": "experiment" in pipeline_name.lower()
-                or "tuning" in pipeline_name.lower(),
+                "is_experiment": is_experiment,
             }
 
         if ml_info:
@@ -338,7 +302,7 @@ class BaseExecutor:
             if self._resolve_global_seed() is None:
                 logger.warning(
                     "ML pipeline '{}' is running WITHOUT random_seed: results will "
-                    "not be reproducible. Set global_settings.random_seed.",
+                    "not be reproducible. Set global_config.random_seed.",
                     pipeline_name,
                 )
 
@@ -461,7 +425,7 @@ class BaseExecutor:
         try:
             from ducta.check.profiles import load_profiles as _load_profiles
 
-            _gs = getattr(self.context, "global_settings", {}) or {}
+            _gs = getattr(self.context, "global_config", {}) or {}
             _profiles = _load_profiles(_gs) if isinstance(_gs, dict) else {}
         except Exception:
             _profiles = {}
@@ -580,7 +544,15 @@ class BaseExecutor:
         experiment_id: Optional[str] = None
 
         if not self.settings.mlops_enabled:
-            logger.debug("MLOps tracking disabled via global settings (mlops_enabled: false)")
+            logger.debug("MLOps tracking disabled via global config (mlops_enabled: false)")
+            return None, None
+
+        if not self._should_init_mlops(pipeline):
+            logger.debug(
+                "MLOps tracking skipped for '{}': no ML nodes in this pipeline. "
+                "Set mlops_enabled: true to track it anyway.",
+                pipeline_name,
+            )
             return None, None
 
         try:

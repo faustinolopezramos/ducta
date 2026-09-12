@@ -80,6 +80,35 @@ def _guarded_to_pandas(dfs: List[Any], node_name: str, max_rows: Optional[int]) 
     return converted
 
 
+def _maybe_convert_vectorized_result(
+    result: Any,
+    is_vectorized: bool,
+    spark: Any,
+    input_dfs: List[Any],
+    node_name: str,
+) -> Any:
+    """If a vectorized (toPandas) node returned a pandas-like result, convert
+    it back to Spark using *spark* — falling back to scanning *input_dfs* for
+    a DataFrame carrying a session if *spark* wasn't given.
+
+    Shared by ``NodeCommand.execute()`` and ``MLNodeCommand.execute()``,
+    which previously each carried an independent copy of this check; the ML
+    version lacked the ``input_dfs`` fallback the plain version had.
+    """
+    if not (is_vectorized and hasattr(result, "to_dict") and not hasattr(result, "sparkSession")):
+        return result
+
+    logger.debug(f"Converting vectorized result back to Spark for node '{node_name}'")
+    if not spark:
+        for df in input_dfs:
+            if hasattr(df, "sparkSession"):
+                spark = df.sparkSession
+                break
+    if spark:
+        result = spark.createDataFrame(result)
+    return result
+
+
 class NodeFunction(Protocol):
     def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any: ...
 
@@ -146,18 +175,9 @@ class NodeCommand(Command):
                 *args, **input_kwargs, start_date=self.start_date, end_date=self.end_date
             )
 
-            if is_vectorized and hasattr(result, "to_dict") and not hasattr(result, "sparkSession"):
-                logger.debug(
-                    f"Converting vectorized result back to Spark for node '{self.node_name}'"
-                )
-                spark = getattr(self, "spark", None)
-                if not spark:
-                    for df in self.input_dfs:
-                        if hasattr(df, "sparkSession"):
-                            spark = df.sparkSession
-                            break
-                if spark:
-                    result = spark.createDataFrame(result)
+            result = _maybe_convert_vectorized_result(
+                result, is_vectorized, getattr(self, "spark", None), self.input_dfs, self.node_name
+            )
 
             logger.debug(f"Node '{self.node_name}' executed successfully")
             return result
@@ -252,17 +272,9 @@ class MLNodeCommand(NodeCommand):
 
             try:
                 result = self._execute_with_ml_context()
-
-                if (
-                    is_vectorized
-                    and hasattr(result, "to_dict")
-                    and not hasattr(result, "sparkSession")
-                ):
-                    logger.debug(
-                        f"Converting vectorized ML result back to Spark for node '{self.node_name}'"
-                    )
-                    if self.spark:
-                        result = self.spark.createDataFrame(result)
+                result = _maybe_convert_vectorized_result(
+                    result, is_vectorized, self.spark, original_inputs, self.node_name
+                )
             finally:
                 self.input_dfs = original_inputs
 

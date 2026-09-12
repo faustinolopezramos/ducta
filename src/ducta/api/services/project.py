@@ -37,43 +37,10 @@ from ducta.api.models.project import (
 )
 from ducta.api.repositories.project_repository import ProjectRepository
 from ducta.api.utils.git_utils import commit_files
+from ducta.api.utils.pagination import paginate
 from ducta.api.workspace.loaders import load_config_file, write_config_file
 
-_PROJECT_SETTINGS_FILE = "project_settings.yaml"
-_PROJECTS_DIR = "projects"
-_PIPELINES_FILE = "pipelines.yaml"
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_\-]*$")
-
-
-def _projects_root(workspace_path: Path) -> Path:
-    return workspace_path / _PROJECTS_DIR
-
-
-def _project_dir(workspace_path: Path, project_id: str) -> Path:
-    # A standalone workspace is exposed as a project under its own directory name
-    # (or the legacy "." id); both resolve to the workspace root, mirroring
-    # ProjectRepository.project_dir so pipeline_count / settings paths stay correct.
-    if project_id == "." or project_id == workspace_path.name:
-        return workspace_path
-    return _projects_root(workspace_path) / project_id
-
-
-def _settings_path(workspace_path: Path, project_id: str) -> Path:
-    config_dir = _project_dir(workspace_path, project_id) / "config"
-    for ext in ["yml", "yaml", "toml", "json"]:
-        candidate = config_dir / f"project_settings.{ext}"
-        if candidate.exists():
-            return candidate
-    return config_dir / _PROJECT_SETTINGS_FILE
-
-
-def _pipelines_path(workspace_path: Path, project_id: str) -> Path:
-    config_dir = _project_dir(workspace_path, project_id) / "config"
-    for ext in ["yml", "yaml", "toml", "json"]:
-        candidate = config_dir / f"pipelines.{ext}"
-        if candidate.exists():
-            return candidate
-    return config_dir / _PIPELINES_FILE
 
 
 def _now_iso() -> str:
@@ -111,13 +78,13 @@ def _migrate_config_file(workspace_config_dir: Path, target_name: str, candidate
             return
 
 
-def _migrate_global_settings(source: Path, workspace_config_dir: Path) -> None:
+def _migrate_global_config(source: Path, workspace_config_dir: Path) -> None:
     _migrate_config_file(
         workspace_config_dir,
-        "global_settings.yaml",
+        "global_config.yaml",
         [
-            source / "base" / "global_settings.yml",
-            source / "config" / "global_settings.yaml",
+            source / "base" / "global_config.yml",
+            source / "config" / "global_config.yaml",
         ],
     )
     _migrate_config_file(
@@ -147,7 +114,7 @@ def _migrate_workspace_configs(source: Path, project_id: str, workspace_config_d
         workspace_config_dir / "output.yaml",
         label=f"output catalog for '{project_id}'",
     )
-    _migrate_global_settings(source, workspace_config_dir)
+    _migrate_global_config(source, workspace_config_dir)
 
 
 def _build_response(
@@ -206,8 +173,7 @@ class ProjectService:
     def list_projects_paginated(self, skip: int = 0, limit: int = 50) -> ProjectListResponse:
         items: List[ProjectResponse] = []
         all_ids = list(self._repo.list_ids())
-        total = len(all_ids)
-        paginated_ids = all_ids[skip : skip + limit] if limit > 0 else all_ids[skip:]
+        paginated_ids, total = paginate(all_ids, skip, limit)
         for project_id in paginated_ids:
             try:
                 settings = self._repo.get_settings(project_id)
@@ -334,7 +300,7 @@ class ProjectService:
             )
         project_id = raw_name.lower()
 
-        projects_root = _projects_root(self._workspace_path).resolve()
+        projects_root = self._repo.projects_root().resolve()
         expected_location = projects_root / project_id
         if source.resolve() != expected_location:
             raise ValidationError(
@@ -343,7 +309,13 @@ class ProjectService:
                 detail={"expected": str(expected_location), "actual": str(source)},
             )
 
-        settings_file = _settings_path(self._workspace_path, project_id)
+        # Created up front (idempotent) so ProjectRepository.settings_path/pipelines_path
+        # resolve into config/ below rather than falling back to the project root, which
+        # is what they'd do if config/ didn't exist yet at resolution time.
+        config_dir = source / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        settings_file = self._repo.settings_path(project_id)
         if settings_file.exists():
             _migrate_workspace_configs(source, project_id, self._workspace_path / "config")
             settings = load_config_file(settings_file)
@@ -359,11 +331,9 @@ class ProjectService:
             "updated_at": now,
         }
 
-        config_dir = source / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
         write_config_file(settings_file, settings)
 
-        pipelines_file = _pipelines_path(self._workspace_path, project_id)
+        pipelines_file = self._repo.pipelines_path(project_id)
         if not pipelines_file.exists():
             legacy_pipelines = source / "base" / "pipeline" / "pipelines.yml"
             if legacy_pipelines.exists():

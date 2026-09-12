@@ -19,11 +19,32 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
 from ducta.console.core import ExitCode
+
+
+def _render_check_results_table(console, table, results: List[dict], header_text: str) -> None:
+    """Render a list of check results into *table* (Check/Status/Severity/
+    Message) and print it under *header_text*. Shared by ``_run`` and
+    ``_report``, which build the same table from two differently-shaped
+    service responses."""
+    console.print(header_text)
+    table.add_column("Check", style="cyan")
+    table.add_column("Status")
+    table.add_column("Severity")
+    table.add_column("Message", style="white")
+    for result in results:
+        ok = result.get("passed", False)
+        table.add_row(
+            result.get("check_name", ""),
+            "[green]✓ PASS[/green]" if ok else "[red]✗ FAIL[/red]",
+            result.get("severity", ""),
+            str(result.get("message", ""))[:80],
+        )
+    console.print(table)
 
 
 def _resolve_storage_from_env(parsed_args) -> Optional[Any]:
@@ -135,20 +156,9 @@ class QualityCommands:
             if console and table:
                 passed = report.get("passed", False)
                 status = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-                console.print(f"\nQuality Check Report — {status}")
-                table.add_column("Check", style="cyan")
-                table.add_column("Status")
-                table.add_column("Severity")
-                table.add_column("Message", style="white")
-                for result in report.get("results", []):
-                    ok = result.get("passed", False)
-                    table.add_row(
-                        result.get("check_name", ""),
-                        "[green]✓ PASS[/green]" if ok else "[red]✗ FAIL[/red]",
-                        result.get("severity", ""),
-                        str(result.get("message", ""))[:80],
-                    )
-                console.print(table)
+                _render_check_results_table(
+                    console, table, report.get("results", []), f"\nQuality Check Report — {status}"
+                )
             else:
                 print(json.dumps(report, indent=2, default=str))
 
@@ -201,20 +211,12 @@ class QualityCommands:
             if console and table:
                 passed = result.get("passed", False)
                 status_str = "[green]PASS[/green]" if passed else "[red]FAIL[/red]"
-                console.print(f"\nReport [cyan]{dataset}[/cyan] — {status_str}\n")
-                table.add_column("Check", style="cyan")
-                table.add_column("Status")
-                table.add_column("Severity")
-                table.add_column("Message", style="white")
-                for check_result in result.get("results", []):
-                    ok = check_result.get("passed", False)
-                    table.add_row(
-                        check_result.get("check_name", ""),
-                        "[green]✓ PASS[/green]" if ok else "[red]✗ FAIL[/red]",
-                        check_result.get("severity", ""),
-                        str(check_result.get("message", ""))[:80],
-                    )
-                console.print(table)
+                _render_check_results_table(
+                    console,
+                    table,
+                    result.get("results", []),
+                    f"\nReport [cyan]{dataset}[/cyan] — {status_str}\n",
+                )
             else:
                 print(json.dumps(result, indent=2, default=str))
 
@@ -226,13 +228,13 @@ class QualityCommands:
 
         node_name = parsed_args.node
         config_path = parsed_args.config
-        global_settings_path = getattr(parsed_args, "global_settings", None)
+        global_config_path = getattr(parsed_args, "global_config", None)
 
         try:
             result = QualityService.validate_node_config(
                 node_name=node_name,
                 config_path=config_path,
-                global_settings_path=global_settings_path,
+                global_config_path=global_config_path,
             )
         except Exception as e:
             logger.error("Validation failed: {}", e)

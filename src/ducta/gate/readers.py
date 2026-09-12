@@ -309,5 +309,7 @@ class QueryReader(BaseIO):
 
         except ConfigurationError as error:
             raise ReadOperationError(str(error)) from error
+        except ReadOperationError:
+            raise
         except Exception as error:
             raise ReadOperationError(f"Failed to execute query: {error}") from error

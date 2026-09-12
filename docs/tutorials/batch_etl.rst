@@ -37,7 +37,7 @@ This creates the following structure:
    sales_etl/
    ├── environment.toml       # Maps environments to config files
    ├── config/                # Shared (base) configuration
-   │   ├── global_settings.toml
+   │   ├── global_config.toml
    │   ├── pipelines.toml
    │   ├── nodes.toml
    │   ├── input.toml
@@ -459,7 +459,7 @@ Create ``run_pipeline.py``:
    logger = logging.getLogger(__name__)
 
    CONFIG_PATHS = {
-       "global_settings": "config/global_settings.toml",
+       "global_config": "config/global_config.toml",
        "pipelines": "config/pipelines.toml",
        "nodes": "config/nodes.toml",
        "input": "config/input.toml",
@@ -565,7 +565,7 @@ Create ``airflow_dag.py``:
    }
 
    CONFIG_PATHS = {
-       "global_settings": "config/global_settings.toml",
+       "global_config": "config/global_config.toml",
        "pipelines": "config/pipelines.toml",
        "nodes": "config/nodes.toml",
        "input": "config/input.toml",

@@ -140,15 +140,20 @@ class ConfigDiscovery:
         except OSError:
             pass
 
+    def _ensure_discovered(self) -> bool:
+        """Run discovery if it hasn't happened yet; return whether any
+        configuration was found."""
+        if not self.discovered_configs:
+            self.discover()
+        return bool(self.discovered_configs)
+
     def find_best_match(
         self,
         layer_name: Optional[str] = None,
         use_case: Optional[str] = None,
         config_type: Optional[str] = None,
     ) -> Optional[Tuple[Path, str]]:
-        if not self.discovered_configs:
-            self.discover()
-        if not self.discovered_configs:
+        if not self._ensure_discovered():
             return None
         scored = []
         for config_dir, config_file in self.discovered_configs:
@@ -170,18 +175,14 @@ class ConfigDiscovery:
         return (best[1], best[2])
 
     def list_all(self) -> None:
-        if not self.discovered_configs:
-            self.discover()
-        if not self.discovered_configs:
+        if not self._ensure_discovered():
             logger.warning("No configurations found")
             return
         for i, (config_dir, config_file) in enumerate(self.discovered_configs, 1):
             logger.info("  {}. {}", i, config_dir / config_file)
 
     def select_interactive(self) -> Optional[Tuple[Path, str]]:
-        if not self.discovered_configs:
-            self.discover()
-        if not self.discovered_configs:
+        if not self._ensure_discovered():
             return None
         if len(self.discovered_configs) == 1:
             return self.discovered_configs[0]
@@ -320,9 +321,9 @@ class ConfigManager:
         instance.original_cwd = Path.cwd()
         instance.base_path = Path(layer_context.get("layer_path", "."))
 
-        config_dir = Path(layer_context.get("global_settings", ".")).parent
+        config_dir = Path(layer_context.get("global_config", ".")).parent
         instance.active_config_dir = config_dir.resolve()
-        instance.active_config_file = Path(layer_context.get("global_settings", "global.yaml")).name
+        instance.active_config_file = Path(layer_context.get("global_config", "global.yaml")).name
 
         instance.active_format = None
         instance._detect_format_from_filename(instance.active_config_file)
@@ -365,13 +366,12 @@ class AppConfigManager:
 
     def _normalize_env(self, env: str) -> str:
         norm_env = normalize_environment(env)
+        available = list(self.settings.get("env_config", {}).keys())
         if not norm_env:
-            available = list(self.settings.get("env_config", {}).keys())
             raise ConfigurationError(
                 f"Environment '{env}' is invalid or empty. Available: {available}"
             )
         if not is_allowed_environment(norm_env):
-            available = list(self.settings.get("env_config", {}).keys())
             raise ConfigurationError(
                 f"Environment '{env}' not found or not allowed. Available: {available}"
             )
@@ -394,12 +394,12 @@ class AppConfigManager:
         base = env_configs.get("base", {})
         env_specific = env_configs.get(env, {})
         merged = {**base, **env_specific}
-        base_gs = base.get("global_settings_path")
-        env_gs = env_specific.get("global_settings_path")
+        base_gs = base.get("global_config_path")
+        env_gs = env_specific.get("global_config_path")
         if env != "base" and base_gs and env_gs and base_gs != env_gs:
-            merged["base_global_settings_path"] = base_gs
+            merged["base_global_config_path"] = base_gs
 
-        # Only global_settings is deep-merged over base (see
+        # Only global_config is deep-merged over base (see
         # ContextLoader.load_from_paths); every other document the environment
         # supplies *replaces* its base counterpart wholesale. That asymmetry is
         # invisible in the config files, and the scaffolds ship a full copy of
@@ -418,7 +418,7 @@ class AppConfigManager:
                 if base_path_value and env_path_value and base_path_value != env_path_value:
                     logger.info(
                         "Environment '{}' supplies its own {} config: '{}' replaces "
-                        "'{}' entirely (only global_settings is merged with base).",
+                        "'{}' entirely (only global_config is merged with base).",
                         env,
                         label,
                         env_path_value,

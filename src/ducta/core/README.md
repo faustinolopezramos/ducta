@@ -53,7 +53,7 @@ Ducta Core is the orchestration layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Core does not define its own config files — it consumes the `Context` produced by `ducta.setting`. Its behavior is driven by keys within `global_settings` and per-node/per-pipeline blocks:
+Core does not define its own config files — it consumes the `Context` produced by `ducta.setting`. Its behavior is driven by keys within `global_config` and per-node/per-pipeline blocks:
 
 *   **`max_parallel_nodes`**: Thread-pool width for parallel node execution.
 *   **`execution_timeout_seconds` / `node_timeout_seconds`**: Whole-pipeline and per-node time limits (capped at 24h).
@@ -72,7 +72,7 @@ Per-node quality is configured through the `sanity_checks` (pre-execution) and `
 ## 3. Configuration Examples
 
 ```yaml
-# global_settings.yaml — core-relevant keys
+# global_config.yaml — core-relevant keys
 max_parallel_nodes: 4
 node_timeout_seconds: 1800
 preflight_enabled: true
@@ -115,7 +115,7 @@ from ducta.setting import Context
 from ducta.core import PipelineExecutor
 
 context = Context(
-    global_settings=Path("config/global.yaml"),
+    global_config=Path("config/global.yaml"),
     pipelines_config=Path("config/pipelines.yaml"),
     nodes_config=Path("config/nodes.yaml"),
     input_config=Path("config/input.yaml"),

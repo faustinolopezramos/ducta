@@ -20,9 +20,9 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import contextlib
-import os
 from typing import Any, Dict, Optional
+
+from ducta.core.worker_bootstrap import bootstrap_worker_context, silence_output
 
 OUTCOME_SUCCESS = "success"
 OUTCOME_GATE_BLOCKED = "gate_blocked"
@@ -40,41 +40,16 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
         "node_trace": None,
     }
 
-    devnull = None
-    silence: Any = contextlib.ExitStack()
-    if payload.get("quiet", True):
-        devnull = open(os.devnull, "w")
-        silence.enter_context(contextlib.redirect_stdout(devnull))
-        silence.enter_context(contextlib.redirect_stderr(devnull))
-
     try:
-        with silence:
+        with silence_output(payload.get("quiet", True)):
             from ducta.check.core import QualityGateBlocked
-            from ducta.console.config import ConfigManager
-            from ducta.console.execution import ContextInitializer
             from ducta.core.execution.runner import NodeExecutor
             from ducta.core.ledger import ledger_for
             from ducta.gate.exceptions import MissingDependencyError
             from ducta.gate.input import InputLoader
             from ducta.gate.output import DataOutputManager
 
-            config_manager = ConfigManager(
-                base_path=payload.get("base_path"),
-                layer_name=payload.get("layer_name"),
-                use_case=payload.get("use_case_name"),
-                config_type=payload.get("config_type"),
-                interactive=False,
-                require_config=False,
-            )
-            config_manager.change_to_config_directory()
-            context = ContextInitializer(config_manager).initialize(payload["env"])
-
-            output_path = payload.get("output_path")
-            if output_path:
-                context.output_path = output_path
-                settings = getattr(context, "global_settings", None)
-                if isinstance(settings, dict):
-                    settings["output_path"] = output_path
+            _config_manager, context = bootstrap_worker_context(payload)
 
             node_executor = NodeExecutor(
                 context,
@@ -117,9 +92,6 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
         outcome["status"] = OUTCOME_FAILED
         outcome["error"] = f"{type(e).__name__}: {e}"
         outcome["error_type"] = type(e).__name__
-    finally:
-        if devnull is not None:
-            devnull.close()
 
     return outcome
 

@@ -106,12 +106,6 @@ class DataValidator:
             try:
                 is_empty = dataframe.isEmpty()  # type: ignore[attr-defined]
             except Exception as e:
-                # A real Spark failure here (lost executor, bad query, ...)
-                # used to be swallowed and fall through to the pandas/polars
-                # checks below (which this object isn't), silently returning
-                # as if the DataFrame were validated — we genuinely don't
-                # know whether it's empty, which is not the same as "it's
-                # not empty".
                 raise DataValidationError(f"Could not determine if DataFrame is empty: {e}") from e
             if is_empty:
                 raise DataValidationError(DATAFRAME_EMPTY)

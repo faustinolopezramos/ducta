@@ -31,10 +31,10 @@ _LOCK = threading.Lock()
 
 
 def is_enabled(context: Any) -> bool:
-    """True when in-memory handoff is turned on in global_settings."""
+    """True when in-memory handoff is turned on in global_config."""
     if context is None:
         return False
-    return bool(ContextManager(context).get_nested("global_settings.in_memory_handoff", False))
+    return bool(ContextManager(context).get_nested("global_config.in_memory_handoff", False))
 
 
 def normalize_key(path: Any) -> str:

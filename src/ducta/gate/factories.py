@@ -54,12 +54,7 @@ class BaseFactory(ABC):
         return self._instances[format_key]
 
     def register(self, name: str, handler_cls: Any) -> None:
-        """Register (or override) a handler class for `name` on this factory instance.
-
-        Instance-scoped: does not affect other factory instances. If `name` was
-        already registered, the cached instance is dropped so the next
-        get_handler() call re-instantiates using the new class.
-        """
+        """Register (or override) a handler class for `name` on this factory instance."""
         key = name.lower()
         self._registry[key] = handler_cls
         self._instances.pop(key, None)

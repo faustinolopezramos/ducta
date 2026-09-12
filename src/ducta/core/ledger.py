@@ -46,10 +46,13 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta.core.context_utils import get_context_value, set_context_value
+
 #: The context attributes that make up the ledger's wire format.
 RUN_ID_ATTR = "_run_id"
 NODE_DETAILS_ATTR = "_run_node_details"
 QUALITY_RESULTS_ATTR = "_quality_results"
+CODE_FINGERPRINTS_ATTR = "_code_fingerprints"
 INPUT_FINGERPRINTS_ATTR = "_input_fingerprints"
 OUTPUT_FINGERPRINTS_ATTR = "_output_fingerprints"
 PREVIOUS_INPUT_FINGERPRINTS_ATTR = "_previous_input_fingerprints"
@@ -127,6 +130,7 @@ class RunLedger:
             self._record_failures.clear()
         self._set(NODE_DETAILS_ATTR, [])
         self._set(QUALITY_RESULTS_ATTR, [])
+        self._set(CODE_FINGERPRINTS_ATTR, {})
         self._set(INPUT_FINGERPRINTS_ATTR, {})
         self._set(OUTPUT_FINGERPRINTS_ATTR, {})
 
@@ -168,6 +172,37 @@ class RunLedger:
         with self._lock:
             return list(self._get(NODE_DETAILS_ATTR, []) or [])
 
+    # ── Code evidence ────────────────────────────────────────────────────────
+
+    def record_code(self, node: str, fingerprint: Dict[str, Any]) -> None:
+        """Record the hash of the code one node ran. Idempotent per node.
+
+        Keyed by node name so the certificate's ``code`` block lines up with its
+        ``nodes`` block one to one. Re-recording the same node overwrites rather
+        than appends: ``FunctionLoader`` re-records on cache hits by design, and
+        a node that runs twice in a chain ran the same source both times.
+        """
+        try:
+            with self._lock:
+                bucket = self._get(CODE_FINGERPRINTS_ATTR, None)
+                if bucket is None:
+                    bucket = {}
+                    self._write(CODE_FINGERPRINTS_ATTR, bucket)
+                if not isinstance(bucket, dict):
+                    raise TypeError(
+                        f"ledger field '{CODE_FINGERPRINTS_ATTR}' holds "
+                        f"{type(bucket).__name__}, not dict"
+                    )
+                bucket[node] = fingerprint
+        except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
+            self._note_failure(f"code fingerprint for '{node}'", e)
+
+    @property
+    def code_fingerprints(self) -> Dict[str, Any]:
+        """The recorded per-node code hashes, as a snapshot copy."""
+        with self._lock:
+            return dict(self._get(CODE_FINGERPRINTS_ATTR, {}) or {})
+
     # ── Quality ──────────────────────────────────────────────────────────────
 
     def record_quality(self, entry: Dict[str, Any]) -> None:
@@ -202,9 +237,7 @@ class RunLedger:
     # ── Context access (dict- or attribute-shaped) ───────────────────────────
 
     def _get(self, attr: str, default: Any) -> Any:
-        if isinstance(self._context, dict):
-            return self._context.get(attr, default)
-        return getattr(self._context, attr, default)
+        return get_context_value(self._context, attr, default)
 
     # ── Evidence completeness ────────────────────────────────────────────────
 
@@ -227,6 +260,24 @@ class RunLedger:
         with self._lock:
             return list(self._record_failures)
 
+    def note_gap(self, reason: str) -> None:
+        """Record that the run could not produce a piece of evidence it owed.
+
+        Distinct from :meth:`_note_failure`, which is for the ledger failing to
+        *write* something: this is for the run legitimately not having it — an
+        output skipped because the node produced no rows, a node still running
+        when the certificate was sealed. Either way the certificate must not
+        claim to be complete.
+        """
+        with self._lock:
+            if reason not in self._record_failures:
+                self._record_failures.append(reason)
+        logger.warning(
+            "Run evidence incomplete — {reason}. The run certificate will be "
+            "marked evidence_complete=false.",
+            reason=reason,
+        )
+
     def _note_failure(self, what: str, exc: Exception) -> None:
         with self._lock:
             self._record_failures.append(f"{what}: {exc}")
@@ -241,10 +292,7 @@ class RunLedger:
 
     def _write(self, attr: str, value: Any) -> None:
         """Write one attribute, leaving failure reporting to the caller."""
-        if isinstance(self._context, dict):
-            self._context[attr] = value
-        else:
-            setattr(self._context, attr, value)
+        set_context_value(self._context, attr, value)
 
     def _set(self, attr: str, value: Any) -> None:
         try:
@@ -284,30 +332,54 @@ class RunLedger:
 _ledger_creation_lock = threading.Lock()
 
 
+#: Where the cached ledger lives on the context. A dict-shaped context stores it
+#: under this key; an object stores it as this attribute.
+LEDGER_ATTR = "run_ledger"
+
+
+def _cached_ledger(context: Any) -> Optional["RunLedger"]:
+    """The ledger already attached to *context*, if any."""
+    if isinstance(context, dict):
+        existing = context.get(LEDGER_ATTR)
+    else:
+        existing = getattr(context, LEDGER_ATTR, None)
+    return existing if isinstance(existing, RunLedger) else None
+
+
 def ledger_for(context: Any) -> RunLedger:
     """Return the run's ledger, creating (and caching) one if absent.
 
     Components deep in the execution path receive only the context, so this is
     how they reach the ledger without every constructor growing an argument.
+
+    Dict-shaped contexts are cached too. They used to fall through both the
+    ``getattr`` lookup and the ``setattr`` store (which raises on a dict and was
+    swallowed), so every call built a *fresh* ledger — and ``_record_failures``
+    lives per instance, so ``evidence_complete`` was permanently True and every
+    evidence gap was discarded. That is the exact failure this class exists to
+    prevent, on the one context shape where it silently did not apply.
     """
-    existing = getattr(context, "run_ledger", None)
-    if isinstance(existing, RunLedger):
+    existing = _cached_ledger(context)
+    if existing is not None:
         return existing
 
     with _ledger_creation_lock:
         # Re-check: another thread may have created and cached one while
         # this one waited for the lock (double-checked locking, same
         # pattern as storage/base.py's get_storage_backend()).
-        existing = getattr(context, "run_ledger", None)
-        if isinstance(existing, RunLedger):
+        existing = _cached_ledger(context)
+        if existing is not None:
             return existing
 
         ledger = RunLedger(context)
         try:
-            setattr(context, "run_ledger", ledger)
+            if isinstance(context, dict):
+                context[LEDGER_ATTR] = ledger
+            else:
+                setattr(context, LEDGER_ATTR, ledger)
         except Exception:  # noqa: BLE001 — a read-only context still gets a working ledger
             pass
         return ledger
 
 
-__all__ = ["RunLedger", "ledger_for"]
+__all__ = ["RunLedger", "ledger_for", "LEDGER_ATTR"]

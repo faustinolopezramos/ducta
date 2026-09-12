@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
+from loguru import logger  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -160,7 +161,7 @@ class ChainReuseConfig(BaseModel):
             "inputs before skipping. No effect unless reuse_materialized is true; "
             "sources without a file mtime (DB/Kafka/cloud) fall back to existence. "
             "Must stay in step with CoreSettings.chain_staleness_check: Context "
-            "replaces global_settings with this schema's model_dump, and "
+            "replaces global_config with this schema's model_dump, and "
             "exclude_none does not drop a False, so a default that disagrees here "
             "silently overrides the one the engine resolves."
         ),
@@ -169,8 +170,53 @@ class ChainReuseConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-class GlobalSettingsSchema(BaseModel):
-    """Validated global settings configuration."""
+#: Keys the framework itself writes into `global_config` at runtime (after the
+#: user's file has been validated). They are not typos and must never be warned
+#: about, even if a future refactor makes validation see them.
+_RUNTIME_GLOBAL_CONFIG_KEYS = frozenset({"environment", "pipeline_name", "layer", "mlops"})
+
+
+def _warn_unknown_keys(model: BaseModel, block: str) -> None:
+    """Log a warning for keys the schema does not declare, with a near-match hint.
+
+    Every config schema here sets ``extra="allow"``, which is load-bearing: it is
+    how forward-compatible and third-party keys survive a round-trip through
+    validation. The cost is that a misspelling is indistinguishable from an
+    intentional extra — `max_paralel_nodes` validated clean and the pipeline ran
+    on the default of 4, with nothing said. Warning (rather than rejecting)
+    keeps the escape hatch open while making the typo visible.
+    """
+    extras = getattr(model, "model_extra", None)
+    if not extras:
+        return
+    unknown = sorted(set(extras) - _RUNTIME_GLOBAL_CONFIG_KEYS)
+    if not unknown:
+        return
+
+    import difflib
+
+    known = list(type(model).model_fields)
+    for key in unknown:
+        close = difflib.get_close_matches(key, known, n=1, cutoff=0.8)
+        if close:
+            logger.warning(
+                "Unknown key '{}' in {} — did you mean '{}'? It is being kept as-is "
+                "and ignored by Ducta.",
+                key,
+                block,
+                close[0],
+            )
+        else:
+            logger.warning(
+                "Unknown key '{}' in {} — Ducta does not read it. Remove it, or "
+                "ignore this if it is consumed by your own code.",
+                key,
+                block,
+            )
+
+
+class GlobalConfigSchema(BaseModel):
+    """Validated global config configuration."""
 
     input_path: str = Field(..., description="Base input directory path", min_length=1)
     output_path: str = Field(..., description="Base output directory path", min_length=1)
@@ -179,6 +225,22 @@ class GlobalSettingsSchema(BaseModel):
     )
     max_parallel_nodes: int = Field(
         default=4, ge=1, le=128, description="Maximum parallel node execution (1-128)"
+    )
+    max_input_workers: Optional[int] = Field(
+        default=None, ge=1, le=64, description="Concurrency limit for parallel input reads"
+    )
+    in_memory_handoff: bool = Field(
+        default=False,
+        description=(
+            "Pass a node's output to its dependants in memory instead of re-reading "
+            "it from disk. Spark frames are persisted MEMORY_AND_DISK and spill; "
+            "pandas frames are held as deep copies for the whole run, so peak memory "
+            "grows with the number of handed-off nodes."
+        ),
+    )
+    fill_none_on_error: bool = Field(
+        default=False,
+        description="Yield None for an input that fails to load instead of raising",
     )
     execution_timeout_seconds: int = Field(
         default=3600,
@@ -197,6 +259,12 @@ class GlobalSettingsSchema(BaseModel):
     format_policy: Optional[Dict[str, Any]] = Field(
         default=None, description="Format policy for inputs/outputs"
     )
+
+    @model_validator(mode="after")
+    def _flag_unknown_keys(self) -> "GlobalConfigSchema":
+        _warn_unknown_keys(self, "global_config")
+        return self
+
     ml_info: Optional[Union[str, Dict[str, Any]]] = Field(
         default=None,
         description="ML info configuration: inline dict or path to a YAML/JSON/TOML file",
@@ -278,11 +346,18 @@ class GlobalSettingsSchema(BaseModel):
         ),
     )
 
-    mlops_enabled: bool = Field(
-        default=True,
+    mlops_enabled: Optional[bool] = Field(
+        default=None,
         description=(
             "Enable MLOps tracking/registry/experiment-tracking integration. "
-            "Accepts a real boolean; strings are coerced (true/false/yes/no/1/0)."
+            "Accepts a real boolean; strings are coerced (true/false/yes/no/1/0). "
+            "Unset (the default) means 'decide per pipeline': tracking is wired "
+            "up for pipelines that contain ML nodes and skipped for those that "
+            "do not. Set it explicitly to force tracking on or off everywhere. "
+            "None rather than True on purpose — model_dump(exclude_none=True) "
+            "keeps a default but drops a None, so a True default here would "
+            "reach the engine indistinguishable from a value the user typed, "
+            "and every plain batch pipeline would be tracked as if asked for."
         ),
     )
 
@@ -399,10 +474,21 @@ class QualityGateSchema(BaseModel):
         description="Maximum WARNING-level failures; -1 = unlimited (→WARN if exceeded)",
     )
     min_pass_rate: float = Field(
-        default=1.0,
+        default=0.0,
         ge=0.0,
         le=1.0,
-        description="Minimum fraction of checks that must pass (→BLOCK if below); 0.0 disables",
+        description=(
+            "Minimum fraction of checks that must pass (→BLOCK if below); "
+            "0.0 (the default) disables the rule. Off by default on purpose: the "
+            "pass rate counts every failed check regardless of severity, so any "
+            "non-zero default contradicts 'max_warnings: -1' sitting next to it "
+            "and blocks on the very warnings that key declares tolerable. This "
+            "must stay in step with QualityGateEvaluator.from_config, which "
+            "reads the same key with the same default — a node's gate config "
+            "reaches it through model_dump(exclude_none=True), which keeps "
+            "defaults, so a default written here is a value the evaluator acts "
+            "on exactly as if the user had typed it."
+        ),
     )
     required_checks: List[str] = Field(
         default_factory=list,
@@ -441,7 +527,7 @@ class QualityGateSchema(BaseModel):
 
 
 class QualityGlobalConfig(BaseModel):
-    """Quality module configuration block inside ``global_settings``."""
+    """Quality module configuration block inside ``global_config``."""
 
     extensions: List[str] = Field(
         default_factory=list,
@@ -465,7 +551,7 @@ class QualityGlobalConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 
-GlobalSettingsSchema.model_rebuild()
+GlobalConfigSchema.model_rebuild()
 
 
 class SanityChecksSchema(BaseModel):
@@ -486,7 +572,7 @@ class SanityChecksSchema(BaseModel):
     profile: Optional[str] = Field(
         default=None,
         description=(
-            "Name of a quality profile from ``global_settings.quality.profiles``. "
+            "Name of a quality profile from ``global_config.quality.profiles``. "
             "Profile defaults are merged with node-level ``checks``; node always wins."
         ),
     )
@@ -529,7 +615,7 @@ class DataQualitySchema(BaseModel):
     profile: Optional[str] = Field(
         default=None,
         description=(
-            "Name of a quality profile from ``global_settings.quality.profiles``. "
+            "Name of a quality profile from ``global_config.quality.profiles``. "
             "Profile defaults are merged with node-level ``checks``; node always wins."
         ),
     )
@@ -657,7 +743,7 @@ class SplitConfig(BaseModel):
     )
     seed: Optional[int] = Field(
         default=None,
-        description="Split seed for reproducibility. If None, falls back to global_settings.random_seed. Set explicitly for CV reproducibility.",
+        description="Split seed for reproducibility. If None, falls back to global_config.random_seed. Set explicitly for CV reproducibility.",
     )
 
     @model_validator(mode="after")
@@ -706,7 +792,7 @@ class PipelineSchema(BaseModel):
         default=None,
         description=(
             "Hyperparameter search configuration for this pipeline. "
-            "String: key name inside the file at global_settings.hyperparams_config_path. "
+            "String: key name inside the file at global_config.hyperparams_config_path. "
             "Dict: {path, key} to specify an explicit file path and key."
         ),
     )
@@ -785,7 +871,7 @@ class OutputSchema(BaseModel):
 class ConfigSchema(BaseModel):
     """Complete configuration schema with validation."""
 
-    global_settings: GlobalSettingsSchema
+    global_config: GlobalConfigSchema
     pipelines_config: Dict[str, PipelineSchema]
     nodes_config: Dict[str, NodeSchema]
     input_config: Dict[str, InputSchema]
@@ -799,7 +885,7 @@ class ConfigSchema(BaseModel):
     def to_dicts(self) -> Dict[str, Any]:
         """Convert validated schema back to plain dictionaries."""
         return {
-            "global_settings": self.global_settings.model_dump(exclude_none=True),
+            "global_config": self.global_config.model_dump(exclude_none=True),
             "pipelines_config": {
                 k: v.model_dump(exclude_none=True) for k, v in self.pipelines_config.items()
             },

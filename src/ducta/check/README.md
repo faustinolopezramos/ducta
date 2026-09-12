@@ -54,7 +54,7 @@ Ducta Check is the validation layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Checks are configured per node via the `sanity_checks` (pre) and `data_quality` (post) blocks (validated in `ducta.setting.schemas`). A gate can be attached at either level or globally under `global_settings.quality.gate`.
+Checks are configured per node via the `sanity_checks` (pre) and `data_quality` (post) blocks (validated in `ducta.setting.schemas`). A gate can be attached at either level or globally under `global_config.quality.gate`.
 
 *   **`sanity_checks`**: `enabled`, `fail_fast`, `input_index`, `profile`, `checks: {name: config}`, optional `sanity_gate`.
 *   **`data_quality`**: `enabled`, `fail_fast`, `dataset_name`, `profile`, `checks: {name: config}`, optional `quality_gate`, `output`.
@@ -68,7 +68,7 @@ Precedence: node-level config always wins over profile defaults, which win over 
 ## 3. Configuration Examples
 
 ```yaml
-# global_settings.yaml — reusable profiles + a default gate
+# global_config.yaml — reusable profiles + a default gate
 quality:
   extensions: ["myproject.custom_checks"]   # auto-loaded @register_check modules
   profiles:
@@ -144,14 +144,29 @@ print(gate.action, gate.behavior, gate.triggered_rules)   # e.g. GateAction.BLOC
 
 ### Step 4: Register a custom check
 ```python
+from typing import ClassVar, FrozenSet
+
 from ducta.check import register_check, BaseQualityCheck
 
 @register_check("positive_amounts")
 class PositiveAmountsCheck(BaseQualityCheck):
+    # Optional, but worth declaring: preflight uses it to reject a misspelled
+    # parameter before the run. Without it, `positive_amounts: {colum: amount}`
+    # validates clean and the check then runs against a column that is None.
+    # `enabled`, `type` and `severity` are always accepted; omit CONFIG_PARAMS
+    # entirely and only the check's *name* is validated.
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset({"column"})
+
     def run(self, df, config, adapter, context_datasets=None):
         bad = adapter.filter_where(f"{config['column']} < 0")
         return self._create_result(passed=bad == 0, message=f"{bad} negative rows")
 ```
+
+`ducta config validate` reports, before anything runs and without a Spark
+session: check names that are not in the registry, parameters a check does not
+accept, and a `quality_gate.behavior` that would silently fall back. A check
+name typo used to surface at runtime as *"Quality gate blocked"* — a verdict
+about your data, for a mistake in your config.
 
 ### Step 5: Run + persist against a file (service facade)
 ```python

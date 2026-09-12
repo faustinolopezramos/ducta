@@ -25,7 +25,7 @@ from __future__ import annotations
 import gc
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -104,10 +104,14 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
     ) -> PipelineRunResult:
         """Execute one pipeline and return a typed description of what happened."""
+        # Preflight first, before anything constructs an executor. Reading the
+        # pipeline config through `self.batch_executor` builds the whole output
+        # stack as a side effect, so a config error was being reported *after*
+        # the cost of standing that stack up. Preflight needs only the Context.
+        self._run_preflight(pipeline_name)
+
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
-
-        self._run_preflight(pipeline_name)
 
         if pipeline_type in [
             PipelineType.BATCH.value,
@@ -130,6 +134,10 @@ class PipelineExecutor:
                 pipeline=pipeline_name,
                 status=RunStatus.RUNNING,
                 streaming_execution_ids=[execution_id] if execution_id else [],
+                # A continuous query has no end, so nothing here can seal a
+                # certificate over it. Said out loud rather than left as an
+                # unexplained `certificate_path is None`.
+                certificate_error=("asynchronous streaming runs do not emit a run certificate"),
             )
 
         import uuid
@@ -165,7 +173,7 @@ class PipelineExecutor:
                 result.resolve_status()
             except Exception as bookkeeping_exc:  # noqa: BLE001 — never mask the real error
                 logger.debug("Could not fold the run trace into the result: {}", bookkeeping_exc)
-            result.certificate_path = self._emit_run_certificate(
+            cert_path, cert_error = self._emit_run_certificate(
                 pipeline_name=pipeline_name,
                 run_id=run_id,
                 started_at=started_at,
@@ -173,6 +181,15 @@ class PipelineExecutor:
                 status=result.status.value,
                 error=result.primary_error,
             )
+            result.certificate_path = cert_path
+            result.certificate_error = cert_error
+            if cert_error and self.settings.require_run_certificate and result.ok:
+                # Escalate only on an otherwise-successful run. This block is a
+                # `finally`: on the failing path an exception is already in
+                # flight, and replacing the real error with a bookkeeping one
+                # would hide the thing the user actually needs to see. The
+                # ERROR log and `certificate_error` still carry it there.
+                result.add_error(f"run certificate required but not written: {cert_error}")
             if result.ok and node_name is None:
                 self._record_chain_state(pipeline_name, pipeline_type, start_date, end_date)
 
@@ -247,13 +264,37 @@ class PipelineExecutor:
         ended_at: Any,
         status: str,
         error: Optional[str],
-    ) -> Optional[str]:
-        """Assemble and persist the Run Certificate. Best-effort — never raises."""
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Assemble and persist the Run Certificate.
+
+        Returns ``(path, reason_not_written)`` — exactly one of the two is set.
+        Still never raises: the caller runs it from a ``finally`` where an
+        exception would mask the run's real error. What changed is that a
+        failure is no longer *silent*. It used to land on ``logger.debug`` and
+        return ``None``, which made "the certificate could not be written"
+        indistinguishable from "this run produced no evidence because it never
+        happened" — the easiest failure mode to induce in the one artifact the
+        whole trust story rests on.
+        """
         try:
             from ducta.core import certificate as cert_mod
 
             if not cert_mod.is_enabled(self.context):
-                return None
+                if self.settings.require_run_certificate:
+                    # A contradiction worth naming rather than resolving
+                    # silently in either direction.
+                    reason = (
+                        "require_run_certificate is true but enable_run_certificate "
+                        "is false — no certificate can be written"
+                    )
+                    logger.error(reason)
+                    return None, reason
+                logger.warning(
+                    "Run Certificate disabled by configuration "
+                    "(enable_run_certificate=false); run {} leaves no evidence behind.",
+                    run_id,
+                )
+                return None, "disabled by configuration (enable_run_certificate=false)"
             try:
                 from ducta import __version__ as ducta_version
             except Exception:  # noqa: BLE001
@@ -278,10 +319,17 @@ class PipelineExecutor:
             run_dir = cert_mod.certificate_dir(self.context, run_id)
             path = cert_mod.write_certificate(cert, run_dir)
             logger.info("Run Certificate written: {} (run_id={}, status={})", path, run_id, status)
-            return str(path)
+            return str(path), None
         except Exception as e:  # noqa: BLE001 — a certificate must never break a run
-            logger.debug("Run Certificate emission skipped: {}", e)
-            return None
+            logger.opt(exception=True).error(
+                "Run Certificate could NOT be written for run {} (pipeline '{}'): {}. "
+                "This run has left no verifiable evidence. Set "
+                "require_run_certificate: true to make this fail the run.",
+                run_id,
+                pipeline_name,
+                e,
+            )
+            return None, f"certificate emission failed: {e}"
 
     def _run_preflight(self, pipeline_name: str) -> None:
         """Validate the pipeline's configuration before executing it."""
@@ -305,6 +353,36 @@ class PipelineExecutor:
         if not report.ok:
             raise PreflightError(pipeline_name, report.errors)
 
+    def wait_for_streaming_startup(
+        self, execution_id: str, timeout: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """Block until the startup pass finishes, then report what actually ran.
+
+        ``run_streaming_pipeline`` returns as soon as the work is queued, so its
+        execution id says nothing about whether any query exists. A caller that
+        has to decide an exit code needs this instead.
+
+        Returns ``{"started": [...], "skipped": {...}, "failed": {...},
+        "status": str}``. Never raises: a manager that cannot answer yields an
+        empty report rather than taking the CLI down with it.
+        """
+        report: Dict[str, Any] = {"started": [], "skipped": {}, "failed": {}, "status": "unknown"}
+        if not execution_id:
+            return report
+        try:
+            manager = self.streaming_executor.streaming_manager
+            manager.wait_for_pipeline_started(execution_id, timeout=timeout)
+            status = manager.get_pipeline_status(execution_id) or {}
+            # `query_statuses`, not `queries`: get_pipeline_status deliberately
+            # strips the live query handles and exposes their names here instead.
+            report["started"] = sorted(status.get("query_statuses") or {})
+            report["skipped"] = dict(status.get("skipped_nodes") or {})
+            report["failed"] = dict(status.get("failed_nodes") or {})
+            report["status"] = str(status.get("status") or "unknown")
+        except Exception as e:  # noqa: BLE001 — reporting must not break the run
+            logger.debug("Could not read streaming startup status: {}", e)
+        return report
+
     def get_active_streaming_execution_id(self) -> Optional[str]:
         """Return the internal execution_id of the running streaming pipeline."""
         if self._streaming_executor is None:
@@ -322,42 +400,53 @@ class PipelineExecutor:
             pass
         return None
 
+    @staticmethod
+    def _safe_streaming(fn: Callable[[], Any], default: Any) -> Any:
+        """Call ``fn()``, returning ``default`` if the streaming manager raises.
+
+        Shared by the streaming-status/control wrappers below, which
+        previously each carried an identical try/except-return-default shape.
+        """
+        try:
+            return fn()
+        except Exception:
+            return default
+
     def get_streaming_pipeline_status(self, execution_id: str) -> Dict[str, Any]:
         """Return status info for a streaming pipeline execution."""
-        try:
-            return self.streaming_executor.streaming_manager.get_pipeline_status(execution_id) or {}
-        except Exception:
-            return {}
+        return self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.get_pipeline_status(execution_id)
+            or {},
+            {},
+        )
 
     def list_streaming_pipelines(self) -> List[Dict[str, Any]]:
         """List running streaming pipelines."""
-        try:
-            return self.streaming_executor.streaming_manager.list_running_pipelines()
-        except Exception:
-            return []
+        return self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.list_running_pipelines(), []
+        )
 
     def stop_streaming_pipeline(self, execution_id: str, graceful: bool = True) -> bool:
         """Stop a running streaming pipeline."""
-        try:
-            return self.streaming_executor.streaming_manager.stop_pipeline(execution_id, graceful)
-        except Exception:
-            return False
+        return self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.stop_pipeline(execution_id, graceful),
+            False,
+        )
 
     def restart_streaming_node(self, execution_id: str, node_name: str) -> bool:
         """Restart a specific node in a running streaming pipeline."""
-        try:
-            return self.streaming_executor.streaming_manager.restart_node(execution_id, node_name)
-        except Exception:
-            return False
+        return self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.restart_node(execution_id, node_name),
+            False,
+        )
 
     def get_streaming_pipeline_metrics(self, execution_id: str) -> Dict[str, Any]:
         """Get metrics for a streaming pipeline."""
-        try:
-            return (
-                self.streaming_executor.streaming_manager.get_pipeline_metrics(execution_id) or {}
-            )
-        except Exception:
-            return {}
+        return self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.get_pipeline_metrics(execution_id)
+            or {},
+            {},
+        )
 
     def run_streaming_pipeline(
         self,
@@ -409,11 +498,10 @@ class PipelineExecutor:
 
     def get_running_execution_ids(self) -> List[str]:
         """Get list of running execution IDs from streaming manager."""
-        try:
-            pipelines = self.streaming_executor.streaming_manager.list_running_pipelines()
-            return [p.get("execution_id") for p in pipelines if p.get("execution_id")]
-        except Exception:
-            return []
+        pipelines = self._safe_streaming(
+            lambda: self.streaming_executor.streaming_manager.list_running_pipelines(), []
+        )
+        return [p.get("execution_id") for p in pipelines if p.get("execution_id")]
 
     def run_pipeline_chain(
         self,
@@ -428,8 +516,8 @@ class PipelineExecutor:
         rerun_all: bool = False,
     ) -> PipelineRunResult:
         """Execute *pipeline_name* and its transitive dependencies in topological order."""
-        from ducta.core.dependency_inference import merge_pipeline_depends_on
-        from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
+        from ducta.setting.dependency_inference import merge_pipeline_depends_on
+        from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver
 
         self._force_reuse = bool(reuse_upstream)
         self._force_rerun_all = bool(rerun_all)
@@ -766,7 +854,7 @@ class PipelineExecutor:
             return None
 
     def _code_fingerprint(self, pipeline_name: str) -> Optional[str]:
-        """Newest mtime among the module files backing a pipeline's nodes.
+        """SHA-256 over the source of the modules backing a pipeline's nodes.
 
         The config fingerprint covers YAML, not the Python a node points at, so
         without this a changed transformation was invisible to the reuse check:
@@ -774,11 +862,27 @@ class PipelineExecutor:
         "up to date" and its downstream ran on data the current code would
         never produce. Resolving each module without importing it keeps this
         cheap and free of side effects.
+
+        This is the *reuse* hash, not the evidence one. It must resolve modules
+        without importing them, so it can only ever be module-granular and has
+        no callable to attribute a hash to; the certificate's per-node ``code``
+        block comes from ``ducta.core.code_fingerprint`` instead, recorded at
+        load time. Both hash raw file bytes, so "the module changed" means the
+        same thing to both.
+
+        Hashes content, not mtime. An mtime is a property of the filesystem, not
+        of the code: it does not survive a clone, a container rebuild or a
+        ``git archive``, and — the case that actually matters — anything that
+        restores timestamps (``rsync -t``, ``tar -p``, a restored backup) can
+        put *different* code on disk under a timestamp the marker still
+        recognises, which reuses outputs the code on disk would not produce.
+        Markers written by the older ``mtime:`` scheme simply stop matching, so
+        the first run after upgrading recomputes once and re-records — the same
+        fail-closed direction ``_provenance_still_matches`` already takes.
         """
         try:
+            import hashlib
             import importlib.util
-
-            from ducta.gate.output.paths import _newest_mtime
 
             nodes_config = getattr(self.context, "nodes_config", {}) or {}
             pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
@@ -794,7 +898,8 @@ class PipelineExecutor:
             importer = loader.secure_importer
             search_paths = [str(path) for path in loader._gather_search_paths()]
 
-            newest: Optional[float] = None
+            digest = hashlib.sha256()
+            hashed_any = False
             with importer.temporary_sys_path(search_paths):
                 for module_path in sorted(modules):
                     spec = importlib.util.find_spec(str(module_path))
@@ -803,10 +908,18 @@ class PipelineExecutor:
                         # A module we cannot locate is one we cannot vouch for;
                         # say so rather than reporting a partial hash.
                         return None
-                    mtime = _newest_mtime(Path(origin))
-                    if mtime is not None and (newest is None or mtime > newest):
-                        newest = mtime
-            return f"mtime:{newest:.6f}" if newest is not None else None
+                    source = Path(origin)
+                    if not source.is_file():
+                        return None
+                    # The module name is part of the digest so that moving a
+                    # node's function to a different module counts as a change
+                    # even when the bytes are identical.
+                    digest.update(str(module_path).encode("utf-8"))
+                    digest.update(b"\0")
+                    digest.update(source.read_bytes())
+                    digest.update(b"\0")
+                    hashed_any = True
+            return f"sha256:{digest.hexdigest()}" if hashed_any else None
         except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
             logger.debug("Could not fingerprint node code for '{}': {}", pipeline_name, e)
             return None
@@ -874,7 +987,23 @@ class PipelineExecutor:
         return list(self.context.pipelines.keys())
 
     def get_pipeline_info(self, pipeline_name: str) -> Dict[str, Any]:
-        """Get information about a specific pipeline."""
+        """Describe a pipeline for a human: its description and its node *names*.
+
+        ``nodes`` is a list of strings. It used to be whatever
+        ``Context.pipelines`` happened to hold, which is the expanded form — a
+        list of entire node config dicts. Every caller wants names: they join
+        them into a line, print them, or test ``--node`` membership against
+        them. So each one had grown its own ``n if isinstance(n, str) else
+        n.get("name")`` coercion, three of them, and the ones that had not
+        grown it were broken: ``ducta config pipeline-info`` raised
+        ``TypeError: sequence item 0: expected str instance, dict found`` on
+        every project, and the ``--node`` membership test never matched a real
+        node.
+
+        ``extract_pipeline_nodes`` already normalizes all three shapes this can
+        arrive in (plain string, single-key dict, dict with ``name``), so the
+        normalization lives once, here, where the shape is known.
+        """
         if pipeline_name not in self.context.pipelines:
             return {
                 "exists": False,
@@ -883,18 +1012,20 @@ class PipelineExecutor:
             }
 
         pipeline = self.context.pipelines[pipeline_name]
+        if not isinstance(pipeline, dict):
+            return {"exists": True, "description": None, "nodes": []}
 
-        nodes = []
-        if isinstance(pipeline, dict):
-            pipeline_nodes = pipeline.get("nodes", [])
-            if isinstance(pipeline_nodes, dict):
-                nodes = list(pipeline_nodes.keys())
-            elif isinstance(pipeline_nodes, list):
-                nodes = pipeline_nodes
+        try:
+            nodes = extract_pipeline_nodes(pipeline)
+        except ValueError as e:  # a node entry no shape rule matches
+            logger.warning(
+                "Pipeline '{}' has a node entry that could not be named: {}", pipeline_name, e
+            )
+            nodes = []
 
         return {
             "exists": True,
-            "description": pipeline.get("description", "") if isinstance(pipeline, dict) else None,
+            "description": pipeline.get("description", ""),
             "nodes": nodes,
         }
 

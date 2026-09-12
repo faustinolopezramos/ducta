@@ -55,12 +55,7 @@ class ContextManager:
         return self._safe_get(self._context, key, default)
 
     def get_nested(self, path: str, default: Optional[Any] = None) -> Any:
-        """Safe get by dot-separated path, resolving dict-vs-object at every level.
-
-        Each segment of ``path`` may live on a dict or an attribute-holding object,
-        independent of what the previous segment resolved to (e.g. ``global_settings``
-        can be a dict even when the root context is an object, and vice versa).
-        """
+        """Safe get by dot-separated path, resolving dict-vs-object at every level."""
         node: Any = self._context
         for segment in path.split("."):
             if node is None:

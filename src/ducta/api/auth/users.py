@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
+from ducta.api.auth.security import probe_or_verify, resolve_admin_password
 from ducta.api.auth.service import AuthService, get_auth_service
 from ducta.api.config import get_settings
 from ducta.api.models.auth import User
@@ -52,20 +53,10 @@ class UserStore:
     def seed_from_env(self) -> None:
         """Create the admin user from DUCTA_ADMIN_PASSWORD (or use 'admin' as default)."""
         settings = get_settings()
-        admin_password = os.environ.get("DUCTA_ADMIN_PASSWORD")
-
-        if settings.is_production():
-            if not admin_password:
-                raise RuntimeError(
-                    "DUCTA_ADMIN_PASSWORD must be set in production when auth is enabled."
-                )
-            if admin_password == "admin":
-                raise RuntimeError(
-                    "DUCTA_ADMIN_PASSWORD cannot use insecure default value in production."
-                )
-
-        if not admin_password:
-            admin_password = "admin"
+        admin_password = resolve_admin_password(
+            os.environ.get("DUCTA_ADMIN_PASSWORD"),
+            is_production=settings.is_production(),
+        )
 
         self._add_user(
             id="admin",
@@ -103,10 +94,13 @@ class UserStore:
         """Return the User if credentials are valid, otherwise None."""
         with self._store_lock:
             stored = self._by_username.get(username.lower())
-        if stored is None:
-            self._svc.verify_password("__dummy_probe__", self._dummy_hash)
-            return None
-        password_valid = self._svc.verify_password(password, stored.hashed_password)
+        password_valid = probe_or_verify(
+            username_found=stored is not None,
+            password=password,
+            stored_hash=stored.hashed_password if stored else None,
+            dummy_hash=self._dummy_hash,
+            verify_fn=self._svc.verify_password,
+        )
         if not password_valid or not stored.user.is_active:
             return None
         return stored.user

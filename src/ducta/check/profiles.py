@@ -35,8 +35,8 @@ class QualityProfile:
     auto_tune: bool = False
 
 
-def load_profiles(global_settings: Dict[str, Any]) -> Dict[str, QualityProfile]:
-    quality_cfg = (global_settings or {}).get("quality") or {}
+def load_profiles(global_config: Dict[str, Any]) -> Dict[str, QualityProfile]:
+    quality_cfg = (global_config or {}).get("quality") or {}
     raw_profiles = quality_cfg.get("profiles") or {}
     profiles = {}
     for name, data in raw_profiles.items():
@@ -96,14 +96,14 @@ def apply_auto_tune(
     ``score_threshold`` overridden is returned (the input is never mutated).
     A ``None`` *gate_cfg* (no per-node ``quality_gate`` block) is treated as an
     empty dict for this purpose, so auto_tune still works when gating relies
-    solely on ``global_settings.quality.gate``.
+    solely on ``global_config.quality.gate``.
     """
     if not profile or not profile.auto_tune or not dataset_name or storage is None:
         return gate_cfg
     if gate_cfg is not None and not isinstance(gate_cfg, dict):
         return gate_cfg
     # A node without its own quality_gate block (gate_cfg=None) is the common case
-    # when gating relies solely on global_settings.quality.gate — auto_tune must
+    # when gating relies solely on global_config.quality.gate — auto_tune must
     # still be able to propose a score_threshold in that case, not silently no-op.
     gate_cfg = gate_cfg or {}
 

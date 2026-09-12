@@ -68,11 +68,11 @@ class CheckpointManager:
 
         checkpoints_base = None
         try:
-            gs = get_context_value(self.context, "global_settings", {}) or {}
+            gs = get_context_value(self.context, "global_config", {}) or {}
             if isinstance(gs, dict):
                 checkpoints_base = gs.get("checkpoints_base")
         except Exception as e:
-            logger.debug(f"Could not read global_settings.checkpoints_base: {e}")
+            logger.debug(f"Could not read global_config.checkpoints_base: {e}")
             checkpoints_base = None
 
         if checkpoints_base:
@@ -83,10 +83,10 @@ class CheckpointManager:
             raise StreamingConfigurationError(
                 "No checkpoint base directory is configured. "
                 "Set one of: node 'streaming.checkpoint', "
-                "global_settings.checkpoints_base, or context.output_path. "
+                "global_config.checkpoints_base, or context.output_path. "
                 "Falling back to a system temp directory is not allowed in production "
                 "because checkpoints may be lost on OS restart.",
-                config_section="streaming.checkpoint / global_settings.checkpoints_base",
+                config_section="streaming.checkpoint / global_config.checkpoints_base",
             )
         return str(Path(output_path) / "streaming_checkpoints")
 

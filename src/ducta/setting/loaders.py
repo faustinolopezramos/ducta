@@ -206,11 +206,7 @@ class ConfigLoaderFactory:
             JsonConfigLoader(),
             TomlConfigLoader(),
         ]
-        # `PythonConfigLoader` executes arbitrary code on load. Any path that
-        # can be reached from a cloned repo or a project workspace (config
-        # paths declared inside an `environment.yaml` the caller didn't
-        # write) must not have it available — a `.py` there should hit the
-        # generic "No supported loader" error instead of running.
+
         if allow_python:
             self._loaders.append(PythonConfigLoader())
 

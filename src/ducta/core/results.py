@@ -95,6 +95,7 @@ class PipelineRunResult:
     skipped: Dict[str, str] = field(default_factory=dict)
     reused_pipelines: List[str] = field(default_factory=list)
     certificate_path: Optional[str] = None
+    certificate_error: Optional[str] = None
     errors: List[str] = field(default_factory=list)
     mlops_run_id: Optional[str] = None
     metrics: Dict[str, float] = field(default_factory=dict)
@@ -140,35 +141,17 @@ class PipelineRunResult:
         return self
 
     def resolve_status(self) -> "PipelineRunResult":
-        """Derive the run status from what was recorded, unless already failed.
-
-        Precedence: an explicit failure wins, then a gate block, then a skip.
-        A gate block outranks a skip because it means data was rejected, while
-        a skip means data was merely absent.
-        """
+        """Derive the run status from what was recorded, unless already failed."""
         if self.status is RunStatus.FAILED or self.errors or self.failed_nodes:
             self.status = RunStatus.FAILED
         elif self.gate_blocked:
             self.status = RunStatus.GATE_BLOCKED
         elif self.skipped:
-            # Any skip at all, not only a run where *nothing* executed. The old
-            # `and not self.nodes` guard caught only the atomic `--node` case,
-            # so a pipeline that ran three nodes and skipped four for missing
-            # inputs still resolved to SUCCESS.
             self.status = RunStatus.SKIPPED
         return self
 
     def outcome(self) -> Optional[Dict[str, str]]:
-        """The one unsuccessful-but-non-raising outcome to report, if any.
-
-        ``run_pipeline`` returns normally for a blocked quality gate and for a
-        skipped node — only a failure raises. Both the CLI and the API have to
-        turn that into something a caller can act on, and each used to carry its
-        own copy of this logic. Gate before skip, matching
-        :meth:`resolve_status`: a blocking gate cascades skips onto every
-        descendant, so both collections fill up and only the gate names the
-        cause.
-        """
+        """The one unsuccessful-but-non-raising outcome to report, if any."""
         if self.gate_blocked:
             node, info = next(iter(self.gate_blocked.items()))
             reason = info.get("error", "blocked") if isinstance(info, dict) else info
@@ -190,6 +173,7 @@ class PipelineRunResult:
             "skipped": dict(self.skipped),
             "reused_pipelines": list(self.reused_pipelines),
             "certificate_path": self.certificate_path,
+            "certificate_error": self.certificate_error,
             "errors": list(self.errors),
         }
 

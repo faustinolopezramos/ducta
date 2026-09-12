@@ -5,8 +5,8 @@ from ducta.gate.fingerprinting import compute_fingerprint, diff_schema_columns
 
 
 class TestComputeFingerprint:
-    def test_reads_mode_from_global_settings(self):
-        cm = ContextManager({"global_settings": {"fingerprint_mode": "full"}})
+    def test_reads_mode_from_global_config(self):
+        cm = ContextManager({"global_config": {"fingerprint_mode": "full"}})
         fake_cls = MagicMock()
         with patch.dict(
             "sys.modules", {"ducta.mlrun.fingerprint": MagicMock(DataFingerprint=fake_cls)}
@@ -18,7 +18,7 @@ class TestComputeFingerprint:
         assert kwargs["sample_rows"] == 100
 
     def test_explicit_sample_rows_overrides_settings(self):
-        cm = ContextManager({"global_settings": {"fingerprint_sample_rows": 500}})
+        cm = ContextManager({"global_config": {"fingerprint_sample_rows": 500}})
         fake_cls = MagicMock()
         with patch.dict(
             "sys.modules", {"ducta.mlrun.fingerprint": MagicMock(DataFingerprint=fake_cls)}
@@ -34,7 +34,7 @@ class TestComputeFingerprint:
         assert kwargs["sample_rows"] == 7
 
     def test_defaults_sample_rows_from_settings_when_not_explicit(self):
-        cm = ContextManager({"global_settings": {"fingerprint_sample_rows": 500}})
+        cm = ContextManager({"global_config": {"fingerprint_sample_rows": 500}})
         fake_cls = MagicMock()
         with patch.dict(
             "sys.modules", {"ducta.mlrun.fingerprint": MagicMock(DataFingerprint=fake_cls)}

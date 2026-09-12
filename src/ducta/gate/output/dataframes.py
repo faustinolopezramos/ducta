@@ -27,12 +27,6 @@ from loguru import logger  # type: ignore
 from ducta.gate.base import BaseIO
 from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 
-# Imported separately on purpose. Grouped in one try/except, a failure of the
-# *second* import replaced BOTH names with dummies — and pyspark.sql.connect does
-# fail on Python 3.12+, where it still imports the removed `distutils`. That left
-# `isinstance(df, SparkDataFrame)` false for every real Spark DataFrame on two of
-# the four supported Python versions, with only the module-name fallback in
-# is_spark_dataframe() masking it.
 try:
     from pyspark.sql import DataFrame as SparkDataFrame  # type: ignore
 except ImportError:

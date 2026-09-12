@@ -25,6 +25,7 @@ import pytest
 from ducta.mlrun.fingerprint import (
     ALGO_PANDAS_EXACT,
     ALGO_SPARK_EXACT,
+    ALGO_SPARK_EXACT_CRYPTO,
     DataFingerprint,
     comparable,
 )
@@ -116,9 +117,21 @@ class TestSelfDescription:
     def test_sample_mode_admits_what_it_covered(self, make_df):
         f = fp(make_df(BASE), mode="sample")
         assert f.details["sample_rows_covered"] <= 100
-        # Spark's sample really is head-only; it must not claim otherwise.
+        # Spark's sample selects by row hash, not `limit`; it must say so.
         if make_df.engine == "spark":
-            assert f.details["sampling"] == "head-only"
+            assert f.details["sampling"] == "deterministic-min-rowhash"
+
+    def test_sample_mode_is_reproducible(self, make_df):
+        """The same rows, sampled twice, must give the same hash.
+
+        `limit(n)` has no defined order on a distributed DataFrame, so the old
+        head-only sample could hash different rows on two runs over identical
+        data — and `certify verify --reproduce` would call that a divergence.
+        """
+        first = fp(make_df(BASE), mode="sample")
+        second = fp(make_df(BASE), mode="sample")
+        assert first.sample_hash == second.sample_hash
+        assert first.fingerprint == second.fingerprint
 
     def test_schema_mode_carries_no_content_claim(self, make_df):
         f = fp(make_df(BASE), mode="schema")
@@ -151,3 +164,64 @@ class TestComparability:
         ok, reason = comparable(a.to_dict(), b.to_dict())
         assert ok is False
         assert "no content evidence" in reason
+
+
+class TestExactCryptoMode:
+    """`exact` aggregates xxhash64 row hashes with count+sum+xor.
+
+    That is an excellent accidental-change detector, but xxhash64 is not a
+    cryptographic hash: someone who can write the dataset can build rows with
+    chosen hash values and land on the same digest with different content —
+    which is precisely the adversary the HMAC signature exists for.
+    `exact_crypto` swaps the row hash for SHA-256 and keeps the aggregate
+    order-independent and distributed.
+    """
+
+    def test_it_keeps_every_property_exact_has(self, make_df):
+        import random
+
+        base = fp(make_df(BASE), mode="exact_crypto")
+        assert base.row_count == 5000
+        assert base.content_hash
+
+        # identical data → identical digest
+        assert fp(make_df(BASE), mode="exact_crypto").fingerprint == base.fingerprint
+
+        # physical reordering is not a data change
+        shuffled = list(BASE)
+        random.Random(7).shuffle(shuffled)
+        assert (
+            fp(make_df(shuffled, partitions=5), mode="exact_crypto").fingerprint == base.fingerprint
+        )
+
+    @pytest.mark.parametrize("index", [0, 2500, 4999], ids=["first", "middle", "last"])
+    def test_a_single_changed_cell_is_detected_anywhere(self, make_df, index):
+        mutated = list(BASE)
+        mutated[index] = (mutated[index][0], -999999.0, mutated[index][2])
+        assert (
+            fp(make_df(mutated), mode="exact_crypto").fingerprint
+            != fp(make_df(BASE), mode="exact_crypto").fingerprint
+        )
+
+    def test_a_duplicated_row_is_detected(self, make_df):
+        """Addition, not XOR: a repeated row must not cancel out."""
+        duplicated = list(BASE) + [BASE[0]]
+        assert (
+            fp(make_df(duplicated), mode="exact_crypto").fingerprint
+            != fp(make_df(BASE), mode="exact_crypto").fingerprint
+        )
+
+    def test_it_reports_its_own_algorithm_on_spark(self, make_df):
+        f = fp(make_df(BASE), mode="exact_crypto")
+        expected = ALGO_SPARK_EXACT_CRYPTO if make_df.engine == "spark" else ALGO_PANDAS_EXACT
+        assert f.algorithm == expected
+
+    def test_it_is_not_comparable_with_plain_exact_on_spark(self, make_df):
+        """Different measure, different answer — never a silent "data changed"."""
+        if make_df.engine != "spark":
+            pytest.skip("pandas computes both modes identically, by design")
+        crypto = fp(make_df(BASE), mode="exact_crypto").to_dict()
+        plain = fp(make_df(BASE), mode="exact").to_dict()
+        ok, reason = comparable(crypto, plain)
+        assert ok is False
+        assert reason

@@ -19,47 +19,21 @@ from ducta.core.executors.batch import BatchExecutor
 from ducta.core.settings import CoreSettings
 
 
-def _base_executor(mlops_required: bool) -> BaseExecutor:
-    executor = BaseExecutor.__new__(BaseExecutor)
-    executor.context = MagicMock()
-    executor.context.global_settings = {"mlops_required": mlops_required, "mlops_enabled": True}
-    executor._mlops_context = None
-    executor._mlops_init_attempted = False
-    executor._mlflow_required = mlops_required
-    executor._mlops_auto_config = MagicMock()
-    executor._mlops_auto_config.should_init_mlops_for_pipeline.return_value = True
-    # __new__ bypasses __init__; settings are resolved once at construction.
-    executor.settings = CoreSettings.from_context(executor.context)
-    return executor
-
-
 def _batch_executor(mlops_required: bool) -> BatchExecutor:
     executor = BatchExecutor.__new__(BatchExecutor)
     executor.context = MagicMock()
-    executor.context.global_settings = {"mlops_required": mlops_required, "mlops_enabled": True}
+    executor.context.global_config = {"mlops_required": mlops_required, "mlops_enabled": True}
     executor._mlflow_required = mlops_required
     executor.settings = CoreSettings.from_context(executor.context)
     return executor
 
 
-class TestInitMlopsIfNeededRequired:
-    def test_required_true_raises_on_init_failure(self):
-        executor = _base_executor(mlops_required=True)
-        with patch(
-            "ducta.mlrun.config.MLOpsContext.from_context",
-            side_effect=RuntimeError("storage backend unresolvable"),
-        ):
-            with pytest.raises(RuntimeError, match="mlops_required=true"):
-                executor._init_mlops_if_needed()
-
-    def test_required_false_degrades_to_warning(self):
-        executor = _base_executor(mlops_required=False)
-        with patch(
-            "ducta.mlrun.config.MLOpsContext.from_context",
-            side_effect=RuntimeError("storage backend unresolvable"),
-        ):
-            executor._init_mlops_if_needed()  # must not raise
-        assert executor._mlops_context is None
+# `BaseExecutor._init_mlops_if_needed` and the `mlops_context` property it fed
+# are gone: nothing on the execution path ever read them, and the tracking run
+# was in fact opened by `_start_mlops_integration`, which never asked whether the
+# pipeline had any ML in it. What those two tests were protecting — that
+# `mlops_required` aborts rather than degrading to a warning — is covered below
+# against the code that actually runs.
 
 
 class TestStartMlopsIntegrationRequired:
@@ -106,7 +80,7 @@ class TestStartMlopsIntegrationRequired:
 class TestNodeExecutorSetMlopsContext:
     def _node_executor(self) -> NodeExecutor:
         context = MagicMock()
-        context.global_settings = {}
+        context.global_config = {}
         context.is_ml_layer = False
         input_loader = MagicMock()
         output_manager = MagicMock()

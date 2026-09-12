@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import enum
 import json
-import threading
 import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -30,6 +29,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
+
+from ducta.api.execution._registry import KeyedRegistry
+from ducta.api.utils.fsio import atomic_write_json
 
 _ERRORS_FILENAME = "errors.json"
 # Retention: keep the most recent N executions' error logs on disk so a failed
@@ -261,10 +263,7 @@ class ExecutionErrorLog:
         try:
             run_dir = Path(self._base_dir) / self.execution_id
             run_dir.mkdir(parents=True, exist_ok=True)
-            payload = json.dumps(self.get_summary(), indent=2, ensure_ascii=False, default=str)
-            tmp_path = run_dir / f"{_ERRORS_FILENAME}.tmp"
-            tmp_path.write_text(payload, encoding="utf-8")
-            tmp_path.replace(run_dir / _ERRORS_FILENAME)
+            atomic_write_json(run_dir / _ERRORS_FILENAME, self.get_summary())
         except OSError as exc:  # noqa: BLE001
             logger.warning(
                 "ExecutionErrorLog.save failed for {id}: {exc}", id=self.execution_id, exc=exc
@@ -287,14 +286,6 @@ class ExecutionErrorLog:
             return None
 
 
-_error_logs: Dict[str, ExecutionErrorLog] = {}
-# Multiple concurrent pipeline executions (each in its own thread) call
-# get_error_log/flush_error_log for their own execution_id — same locking
-# pattern already used for resilience_core.py's equivalent module-level
-# registry (_resilience_contexts/_resilience_lock).
-_error_logs_lock = threading.Lock()
-
-
 def _error_base_dir() -> Optional[str]:
     """Resolve the runs dir configured for file persistence (empty → disabled)."""
     try:
@@ -306,17 +297,18 @@ def _error_base_dir() -> Optional[str]:
         return None
 
 
+_error_logs: KeyedRegistry[str, ExecutionErrorLog] = KeyedRegistry(
+    lambda execution_id: ExecutionErrorLog(execution_id, base_dir=_error_base_dir())
+)
+
+
 def get_error_log(execution_id: str) -> ExecutionErrorLog:
-    with _error_logs_lock:
-        if execution_id not in _error_logs:
-            _error_logs[execution_id] = ExecutionErrorLog(execution_id, base_dir=_error_base_dir())
-        return _error_logs[execution_id]
+    return _error_logs.get_or_create(execution_id)
 
 
 def try_get_error_log(execution_id: str) -> Optional[ExecutionErrorLog]:
     """Return the in-memory log without creating one."""
-    with _error_logs_lock:
-        return _error_logs.get(execution_id)
+    return _error_logs.peek(execution_id)
 
 
 def _prune_error_logs(max_keep: int = _MAX_ERROR_LOGS_KEPT) -> None:
@@ -344,8 +336,7 @@ def flush_error_log(execution_id: str) -> bool:
     the file keeps the failure diagnosable after the in-memory registry is
     cleaned up, and `load_error_log_summary` reads it back for the API.
     """
-    with _error_logs_lock:
-        log = _error_logs.pop(execution_id, None)
+    log = _error_logs.pop(execution_id)
     if log is not None:
         log.save()
         _prune_error_logs()

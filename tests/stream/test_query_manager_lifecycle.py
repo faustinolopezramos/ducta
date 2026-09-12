@@ -68,7 +68,7 @@ class TestConfigureTrigger:
         assert trigger["processingTime"] == "3.000 seconds"
 
     def test_adaptive_clamps_to_ceiling(self, obj_context):
-        obj_context.global_settings["streaming_adaptive_max_interval_seconds"] = 10.0
+        obj_context.global_config["streaming_adaptive_max_interval_seconds"] = 10.0
         progress_sink = MagicMock()
         progress_sink.avg_trigger_ms.return_value = 100_000.0  # way above ceiling
         qm = StreamingQueryManager(obj_context, progress_sink=progress_sink)
@@ -78,7 +78,7 @@ class TestConfigureTrigger:
 
 class TestCreateAndStartQuery:
     def _make_manager(self, obj_context, tmp_path, streaming_dataframe, mock_streaming_query):
-        obj_context.global_settings["checkpoints_base"] = str(tmp_path)
+        obj_context.global_config["checkpoints_base"] = str(tmp_path)
         qm = StreamingQueryManager(obj_context)
         qm.validator.validate_streaming_node_config = MagicMock()
         qm.reader_factory = MagicMock()
@@ -183,7 +183,7 @@ class TestWatermarkResolution:
     now work, with streaming.watermark (documented) taking precedence."""
 
     def _make_manager(self, obj_context, tmp_path, streaming_dataframe, mock_streaming_query):
-        obj_context.global_settings["checkpoints_base"] = str(tmp_path)
+        obj_context.global_config["checkpoints_base"] = str(tmp_path)
         qm = StreamingQueryManager(obj_context)
         qm.validator.validate_streaming_node_config = MagicMock()
         qm.reader_factory = MagicMock()
@@ -279,7 +279,7 @@ class TestStopQuery:
     def test_stop_removes_from_active_queries(
         self, obj_context, tmp_path, streaming_dataframe, mock_streaming_query
     ):
-        obj_context.global_settings["checkpoints_base"] = str(tmp_path)
+        obj_context.global_config["checkpoints_base"] = str(tmp_path)
         qm = StreamingQueryManager(obj_context)
         qm.validator.validate_streaming_node_config = MagicMock()
         qm.reader_factory = MagicMock()

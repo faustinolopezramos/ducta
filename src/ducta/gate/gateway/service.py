@@ -31,15 +31,12 @@ from loguru import logger
 from .connector import JDBCConnector
 from .manager import ConnectionManager
 
-SUPPORTED_TYPES = ["sqlserver", "postgresql", "mysql", "mariadb", "oracle", "snowflake"]
+# Sourced from JDBCConnector.DRIVERS so this module never drifts out of sync
+# with the driver registry (e.g. a type added via JDBCConnector.register_driver()).
+SUPPORTED_TYPES = list(JDBCConnector.DRIVERS.keys())
 
 DEFAULT_PORTS: Dict[str, int] = {
-    "sqlserver": 1433,
-    "postgresql": 5432,
-    "mysql": 3306,
-    "mariadb": 3306,
-    "oracle": 1521,
-    "snowflake": 443,
+    name: cfg["default_port"] for name, cfg in JDBCConnector.DRIVERS.items()
 }
 
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")

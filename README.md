@@ -235,7 +235,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.1",
+  "schema_version": "1.3",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -276,6 +276,7 @@ flowchart LR
   ],
   "evidence_complete": true,                 // did the run record everything it was asked to?
   "evidence_gaps": [],                       // and if not, what it could not record
+  "signed": true,                            // inside the hash, so it cannot be stripped
   "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
   "signature": "hmac-sha256:44c9…"           // optional, when a key is configured
 }
@@ -298,11 +299,18 @@ tracks on — but it is not, on its own, evidence against a motivated editor:
 anyone who changes a field can recompute the hash and `verify` will pass.
 
 Set `DUCTA_CERTIFICATE_KEY` and the certificate is HMAC-signed over that hash.
-*That* is what makes it tamper-evident: forging it requires the key, and
-`key_id` records which key signed. **Configure a key for any certificate you
-intend to rely on as evidence later.** `--reproduce` is a third, stronger
-level: it re-runs the pipeline and confirms each output fingerprint still
-matches what the certificate claims.
+*That* is what makes it tamper-evident: forging it requires the key, `key_id`
+records which key signed, and — because the certificate records *that* it was
+signed inside the hashed content — deleting the signature to pass as merely
+unsigned does not add up either, and `verify` rejects it with or without the
+key. **Configure a key for any certificate you intend to rely on as evidence
+later.** `--reproduce` is a third, stronger level: it re-runs the pipeline and
+confirms each output fingerprint still matches what the certificate claims.
+
+Certificates written before schema `1.3` carry no such marker, so `verify`
+cannot tell "never signed" from "signature removed" for them: given a key, it
+reports them as *unverifiable* rather than passing them. Verify without a key
+to check their integrity alone.
 
 ---
 
@@ -332,8 +340,21 @@ over every row**, so a single changed cell anywhere — first row or last —
 produces a different fingerprint, while a re-export that merely reorders rows
 does not. Each fingerprint records the `algorithm` that produced it, so
 comparing certificates written by different Ducta versions reports *not
-comparable* rather than inventing a data change. Set
-`fingerprint_mode: sample` (first N rows) or `schema` if a full scan is too
+comparable* rather than inventing a data change.
+
+**Know what the default digest is for.** `exact` aggregates `xxhash64` row
+hashes, which catches any *accidental* change — a bad merge, a partial reload,
+a drifted upstream — at a cost you can afford on every run. It is not a
+cryptographic commitment: xxhash64 is a fast, non-cryptographic hash, so
+someone who can already write the dataset could in principle construct rows
+that land on the same digest with different content. Where the certificate has
+to survive an adversary rather than an accident — which is the same place you
+want the HMAC signature — set `fingerprint_mode: exact_crypto`, which hashes
+every row with SHA-256 instead. Same order-independence, same distributed
+aggregation, no collecting rows to the driver; you pay a SHA-256 per row.
+
+Set `fingerprint_mode: sample` (the N rows with the lowest row-hash — chosen by
+content, so the same rows every run) or `schema` if a full scan is too
 expensive for a given project — the certificate then says exactly that.
 
 ---

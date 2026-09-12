@@ -8,6 +8,8 @@ import threading
 import time
 import types
 
+import pytest
+
 from ducta.check.storage import ContextAwareStorageBackend, FileStorageBackend, _exclusive_lock
 
 
@@ -132,3 +134,76 @@ class TestExclusiveLockWindowsFallback:
                 entered = True
 
         assert entered is True
+
+
+class TestSafeForSparkInference:
+    """Regression: ContextAwareStorageBackend.save_report(format="parquet"/etc.)
+    silently failed on every successful run — QualityReport.persistence_warnings
+    is [] whenever nothing went wrong, and spark.createDataFrame cannot infer
+    an element type from a column that is an empty list/None in every sampled
+    row (PySparkValueError [CANNOT_DETERMINE_TYPE]). The failure was caught by
+    save_report's own `except Exception: logger.warning(...)`, so `reports/`
+    stayed empty with no error surfaced to the caller."""
+
+    def test_field_empty_in_every_record_is_json_encoded(self):
+        records = [{"a": 1, "w": []}, {"a": 2, "w": []}]
+        result = ContextAwareStorageBackend._safe_for_spark_inference(records)
+        assert result == [{"a": 1, "w": "[]"}, {"a": 2, "w": "[]"}]
+
+    def test_field_none_in_every_record_is_json_encoded(self):
+        records = [{"a": 1, "w": None}]
+        result = ContextAwareStorageBackend._safe_for_spark_inference(records)
+        assert result == [{"a": 1, "w": "null"}]
+
+    def test_field_with_data_in_at_least_one_record_is_left_alone(self):
+        """Spark infers a real type fine here — nothing should be touched."""
+        records = [{"a": 1, "w": []}, {"a": 2, "w": ["x"]}]
+        result = ContextAwareStorageBackend._safe_for_spark_inference(records)
+        assert result == records
+
+    def test_field_non_empty_everywhere_is_left_alone(self):
+        records = [{"a": 1, "w": ["x"]}, {"a": 2, "w": ["y"]}]
+        result = ContextAwareStorageBackend._safe_for_spark_inference(records)
+        assert result == records
+
+    def test_scalar_falsy_values_are_not_touched(self):
+        """0 / False / "" are falsy but not container-typed — must not be
+        mistaken for the ambiguous-empty-collection case."""
+        records = [{"n": 0, "b": False, "s": ""}]
+        result = ContextAwareStorageBackend._safe_for_spark_inference(records)
+        assert result == records
+
+    def test_empty_record_list_is_returned_unchanged(self):
+        assert ContextAwareStorageBackend._safe_for_spark_inference([]) == []
+
+    @pytest.mark.spark
+    def test_to_dataframe_no_longer_raises_on_empty_persistence_warnings(self):
+        """End-to-end regression check with a real Spark session: the exact
+        report shape save_report builds must survive createDataFrame + a
+        parquet write, instead of raising CANNOT_DETERMINE_TYPE."""
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.builder.master("local[1]").appName("test_storage").getOrCreate()
+        try:
+            backend = ContextAwareStorageBackend.__new__(ContextAwareStorageBackend)
+            backend.context = types.SimpleNamespace(spark=spark)
+
+            report = {
+                "dataset_name": "ds",
+                "passed": True,
+                "score": 1.0,
+                "run_id": "r1",
+                "workspace_path": "/tmp",
+                "created_at": "2026-01-01T00:00:00",
+                "elapsed_seconds": 0.1,
+                "results": "[]",
+                "errors_count": 0,
+                "warnings_count": 0,
+                "checks_count": 0,
+                "persistence_warnings": [],
+            }
+
+            df = backend._to_dataframe([report])
+            assert df.count() == 1
+        finally:
+            spark.stop()

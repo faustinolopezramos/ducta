@@ -133,9 +133,9 @@ class TriggerScheduler:
         return {"continuous": interval}
 
     def _global_setting(self, key: str, default: Any) -> Any:
-        """Read a value from context.global_settings with a safe fallback."""
+        """Read a value from context.global_config with a safe fallback."""
         try:
-            gs = get_context_value(self.context, "global_settings", {}) or {}
+            gs = get_context_value(self.context, "global_config", {}) or {}
             if isinstance(gs, dict) and gs.get(key) is not None:
                 return gs.get(key)
         except Exception:
@@ -198,7 +198,7 @@ class TriggerScheduler:
         Streaming (esp. stateful) queries don't benefit from AQE coalesce, so the
         global default of 200 means 200 tasks + 200 state files *per micro-batch*.
         Precedence: per-node ``streaming.shuffle_partitions`` >
-        ``global_settings.streaming_shuffle_partitions`` > a computed default of
+        ``global_config.streaming_shuffle_partitions`` > a computed default of
         ``clamp(2 x defaultParallelism, 8, 64)``. Returns None to leave Spark's
         own value untouched (e.g. when parallelism can't be read).
         """

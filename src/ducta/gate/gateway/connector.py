@@ -31,10 +31,6 @@ from ducta.gate.exceptions import ConfigurationError
 class JDBCConnector:
     """Manages JDBC configuration and driver download for database ingestion."""
 
-    # Each entry pins a default driver `version` and provides `jar_template` /
-    # `maven_template` (with a `{version}` placeholder). `get_driver_jar()` /
-    # `get_driver_download_url()` always render these against the effective
-    # version (override or default) — there is a single source of truth per driver.
     DRIVERS = {
         "sqlserver": {
             "class": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
@@ -129,15 +125,7 @@ class JDBCConnector:
 
     @classmethod
     def register_driver(cls, name: str, config: Dict[str, Any]) -> None:
-        """Register a brand-new source_type, process-wide.
-
-        This mutates `DRIVERS` at the class level, so it affects every
-        ConnectionManager/JDBCConnector in the process — use it only to add
-        support for a database type not already in DRIVERS. To tweak the
-        version/jar/maven/class/sha256 of an *existing* type, use the per-source
-        `driver:` override block in sources.yaml instead (see `driver_overrides`);
-        that does not require touching this registry at all.
-        """
+        """Register a brand-new source_type, process-wide."""
         missing = cls._REQUIRED_DRIVER_CONFIG_KEYS - config.keys()
         if missing:
             raise ValueError(
@@ -188,18 +176,6 @@ class JDBCConnector:
     ) -> Path:
         """
         Downloads JDBC driver JAR to lib directory if not already present.
-
-        Args:
-            lib_dir: Directory to save JAR file
-            max_retries: Maximum number of download attempts (default: 3)
-            retry_delay: Delay in seconds between retries (default: 2.0)
-
-        Returns:
-            Path to the downloaded/existing JAR file
-
-        Raises:
-            ValueError: If max_retries is less than 1
-            Exception: If download fails after all retry attempts
         """
         if max_retries < 1:
             raise ValueError(f"max_retries must be >= 1, got {max_retries}")
@@ -218,13 +194,6 @@ class JDBCConnector:
 
         expected_sha256 = (self.driver_overrides.get("sha256") or "").strip().lower()
         if not expected_sha256:
-            # A JAR downloaded over the network and loaded into the Spark/JVM
-            # classpath is remote code execution if tampered with in transit
-            # or on the Maven mirror — integrity verification is required by
-            # default, not opt-in. Add `driver: {sha256: <hex>}` to the
-            # source config (or set `allow_unverified_driver_download: true`
-            # to explicitly accept the risk, e.g. for a private mirror whose
-            # JAR hash isn't known in advance).
             if not self.driver_overrides.get("allow_unverified_driver_download"):
                 raise ConfigurationError(
                     f"No sha256 configured for driver '{jar_name}' — refusing to download "
@@ -277,19 +246,8 @@ class JDBCConnector:
     def test_connection(self, timeout_seconds: int = 10) -> bool:
         """
         Test JDBC connection using Spark.
-
-        Args:
-            timeout_seconds: Timeout in seconds for connection test (default: 10)
-
-        Returns:
-            True if connection is successful, False otherwise.
         """
-        # Only Spark's own availability/session-state gates the "skip, will
-        # validate later" fallback below. A blanket `except Exception: return
-        # True` around the whole method previously also swallowed real
-        # config/connectivity bugs (bad JDBC URL, bad driver class, an actual
-        # connection failure raised somewhere it wasn't expected) and
-        # reported them as a successful connection test.
+
         try:
             from pyspark.sql import SparkSession
         except ImportError:

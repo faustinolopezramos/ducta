@@ -35,7 +35,7 @@ def _executor(nodes_config, datasets=None, monkeypatch=None, **settings):
     from ducta.core.execution.runner import NodeExecutor
 
     datasets = datasets if datasets is not None else {}
-    context = FakeContext(nodes_config=nodes_config, global_settings=settings)
+    context = FakeContext(nodes_config=nodes_config, global_config=settings)
     loader = FakeInputLoader(datasets)
     output = FakeOutputManager(datasets)
 

@@ -154,6 +154,25 @@ def _handle_list_pipelines(parsed_args, config_manager: ConfigManager) -> int:
         return ExitCode.EXECUTION_ERROR.value
 
 
+def _log_preflight_report(name: str, report, prefix: str = "") -> None:
+    """Log one preflight report's marker/count line and its error/warning
+    bullets. Shared by the layered and non-layered ``config validate``
+    paths; *prefix* carries the layered variant's ``"(layer) "`` tag."""
+    marker = "✓" if report.ok and not report.warnings else ("✗" if report.errors else "⚠")
+    logger.info(
+        "{} {}{}: {} error(s), {} warning(s)",
+        marker,
+        prefix,
+        name,
+        len(report.errors),
+        len(report.warnings),
+    )
+    for err in report.errors:
+        logger.error("    ERROR  {}", err)
+    for warn in report.warnings:
+        logger.warning("    WARN   {}", warn)
+
+
 def _try_validate_layered(parsed_args) -> Optional[int]:
     """Preflight every layer of a layered project; None when not layered.
 
@@ -179,7 +198,7 @@ def _try_validate_layered(parsed_args) -> Optional[int]:
                 total_errors += 1
                 continue
             context = Context(
-                global_settings=context_args["global_settings"],
+                global_config=context_args["global_config"],
                 pipelines_config=context_args["pipelines_config"],
                 nodes_config=context_args["nodes_config"],
                 input_config=context_args["input_config"],
@@ -219,22 +238,8 @@ def _try_validate_layered(parsed_args) -> Optional[int]:
             for name in sorted(reports):
                 report = reports[name]
                 total_errors += len(report.errors)
-                marker = (
-                    "✓" if report.ok and not report.warnings else ("✗" if report.errors else "⚠")
-                )
                 # Parens, not brackets: Rich would swallow "[bronze]" as markup.
-                logger.info(
-                    "{} ({}) {}: {} error(s), {} warning(s)",
-                    marker,
-                    layer_name,
-                    name,
-                    len(report.errors),
-                    len(report.warnings),
-                )
-                for err in report.errors:
-                    logger.error("    ERROR  {}", err)
-                for warn in report.warnings:
-                    logger.warning("    WARN   {}", warn)
+                _log_preflight_report(name, report, prefix=f"({layer_name}) ")
 
         if total_errors:
             logger.error("Preflight found {} error(s). Fix them before running.", total_errors)
@@ -269,21 +274,7 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
         for name in sorted(reports):
             report = reports[name]
             total_errors += len(report.errors)
-            if report.ok and not report.warnings:
-                logger.info("✓ {}: OK", name)
-                continue
-            marker = "✗" if report.errors else "⚠"
-            logger.info(
-                "{} {}: {} error(s), {} warning(s)",
-                marker,
-                name,
-                len(report.errors),
-                len(report.warnings),
-            )
-            for err in report.errors:
-                logger.error("    ERROR  {}", err)
-            for warn in report.warnings:
-                logger.warning("    WARN   {}", warn)
+            _log_preflight_report(name, report)
 
         if total_errors:
             logger.error("Preflight found {} error(s). Fix them before running.", total_errors)

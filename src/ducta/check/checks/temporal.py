@@ -21,7 +21,7 @@ Temporal quality checks.
 """
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
 from loguru import logger
 
@@ -38,10 +38,12 @@ from ducta.check.core import (
 class AnomalyDetectionCheck(BaseQualityCheck):
     """Detects anomalies in numeric columns using z-score against historical baseline."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset({"columns", "z_score_threshold"})
+
     def __init__(self) -> None:
         super().__init__("anomaly_detection", CheckSeverity.ERROR)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -49,101 +51,98 @@ class AnomalyDetectionCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute anomaly detection check."""
-        try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
 
-            columns = config.columns if hasattr(config, "columns") else []
-            if not columns:
-                return self._create_result(True, "No columns configured for anomaly detection", {})
+        columns = config.columns if hasattr(config, "columns") else []
+        if not columns:
+            return self._create_result(True, "No columns configured for anomaly detection", {})
 
-            z_score_threshold = (
-                config.z_score_threshold if hasattr(config, "z_score_threshold") else 3.0
-            )
+        z_score_threshold = (
+            config.z_score_threshold if hasattr(config, "z_score_threshold") else 3.0
+        )
 
-            # Load historical baseline
-            baseline = getattr(config, "_baseline", None)
-            if not baseline:
-                return self._create_result(
-                    True, "No baseline available, first run creates baseline", {}
-                )
-
-            anomalies = []
-            details = {}
-            columns_evaluated = 0
-
-            for column in columns:
-                try:
-                    mean, std = adapter.mean_std(column)
-                    if mean is None or std is None or std == 0:
-                        continue
-
-                    baseline_mean = baseline.get(column, {}).get("mean")
-                    baseline_std = baseline.get(column, {}).get("std")
-
-                    if baseline_mean is None or baseline_std is None:
-                        continue
-
-                    # Calculate z-score
-                    z_score = abs((mean - baseline_mean) / (baseline_std + 1e-9))
-                    columns_evaluated += 1
-
-                    details[column] = {
-                        "current_mean": float(mean),
-                        "baseline_mean": float(baseline_mean),
-                        "z_score": float(z_score),
-                        "threshold": float(z_score_threshold),
-                    }
-
-                    if z_score > z_score_threshold:
-                        anomalies.append(
-                            f"Column '{column}': z-score {z_score:.2f} > threshold {z_score_threshold}"
-                        )
-                except Exception as e:
-                    logger.exception(f"Error detecting anomaly in column '{column}': {e}")
-
-            details["_columns_evaluated"] = columns_evaluated
-            details["_columns_configured"] = len(columns)
-
-            if anomalies:
-                return self._create_result(
-                    False,
-                    f"Anomalies detected in {len(anomalies)} column(s): {'; '.join(anomalies)}",
-                    details,
-                )
-
-            if columns_evaluated == 0:
-                # `passed=True` here used to report a clean pass with zero
-                # signal behind it (no baseline meant nothing was actually
-                # checked) — `report.passed`/`errors_count` never reflected
-                # that this check evaluated nothing. WARNING severity keeps
-                # it from hard-failing the pipeline (not an ERROR), but
-                # `passed=False` makes it visible instead of silently "ok".
-                return self._create_result(
-                    False,
-                    f"No columns could be evaluated (0/{len(columns)} had a usable "
-                    "baseline/non-zero std) — inconclusive, not a pass",
-                    details,
-                    severity=CheckSeverity.WARNING,
-                )
-
-            return self._create_result(True, "No anomalies detected", details)
-
-        except Exception as e:
-            logger.exception(f"Error executing anomaly detection check: {e}")
+        # Load historical baseline
+        baseline = getattr(config, "_baseline", None)
+        if not baseline:
             return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+                True, "No baseline available, first run creates baseline", {}
             )
+
+        anomalies = []
+        details = {}
+        columns_evaluated = 0
+
+        for column in columns:
+            try:
+                mean, std = adapter.mean_std(column)
+                if mean is None or std is None or std == 0:
+                    continue
+
+                baseline_mean = baseline.get(column, {}).get("mean")
+                baseline_std = baseline.get(column, {}).get("std")
+
+                if baseline_mean is None or baseline_std is None:
+                    continue
+
+                # Calculate z-score
+                z_score = abs((mean - baseline_mean) / (baseline_std + 1e-9))
+                columns_evaluated += 1
+
+                details[column] = {
+                    "current_mean": float(mean),
+                    "baseline_mean": float(baseline_mean),
+                    "z_score": float(z_score),
+                    "threshold": float(z_score_threshold),
+                }
+
+                if z_score > z_score_threshold:
+                    anomalies.append(
+                        f"Column '{column}': z-score {z_score:.2f} > threshold {z_score_threshold}"
+                    )
+            except Exception as e:
+                logger.exception(f"Error detecting anomaly in column '{column}': {e}")
+
+        details["_columns_evaluated"] = columns_evaluated
+        details["_columns_configured"] = len(columns)
+
+        if anomalies:
+            return self._create_result(
+                False,
+                f"Anomalies detected in {len(anomalies)} column(s): {'; '.join(anomalies)}",
+                details,
+            )
+
+        if columns_evaluated == 0:
+            # `passed=True` here used to report a clean pass with zero
+            # signal behind it (no baseline meant nothing was actually
+            # checked) — `report.passed`/`errors_count` never reflected
+            # that this check evaluated nothing. WARNING severity keeps
+            # it from hard-failing the pipeline (not an ERROR), but
+            # `passed=False` makes it visible instead of silently "ok".
+            return self._create_result(
+                False,
+                f"No columns could be evaluated (0/{len(columns)} had a usable "
+                "baseline/non-zero std) — inconclusive, not a pass",
+                details,
+                severity=CheckSeverity.WARNING,
+            )
+
+        return self._create_result(True, "No anomalies detected", details)
 
 
 @register_check("incremental_volume")
 class IncrementalVolumeCheck(BaseQualityCheck):
     """Detects incomplete data loads by comparing to historical average row count."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
+        {"min_historical_samples", "min_threshold_ratio"}
+    )
+
     def __init__(self) -> None:
         super().__init__("incremental_volume", CheckSeverity.WARNING)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -151,73 +150,77 @@ class IncrementalVolumeCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute incremental volume check."""
-        try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
 
-            current_count = adapter.count()
-            min_threshold_ratio = (
-                config.min_threshold_ratio if hasattr(config, "min_threshold_ratio") else 0.5
-            )
-            min_historical_samples = (
-                config.min_historical_samples if hasattr(config, "min_historical_samples") else 5
-            )
+        current_count = adapter.count()
+        min_threshold_ratio = (
+            config.min_threshold_ratio if hasattr(config, "min_threshold_ratio") else 0.5
+        )
+        min_historical_samples = (
+            config.min_historical_samples if hasattr(config, "min_historical_samples") else 5
+        )
 
-            # Load historical history
-            history = getattr(config, "_history", [])
-            if len(history) < min_historical_samples:
-                return self._create_result(
-                    True,
-                    f"Insufficient history samples ({len(history)} < {min_historical_samples})",
-                    {},
-                )
-
-            # Calculate historical average
-            historical_counts = [h.get("row_count", 0) for h in history]
-            historical_mean = (
-                sum(historical_counts) / len(historical_counts) if historical_counts else 0
-            )
-
-            if historical_mean == 0:
-                return self._create_result(True, "Historical mean is zero", {})
-
-            ratio = current_count / historical_mean
-
-            details = {
-                "current_count": current_count,
-                "historical_mean": float(historical_mean),
-                "ratio": float(ratio),
-                "min_threshold_ratio": float(min_threshold_ratio),
-            }
-
-            if ratio < min_threshold_ratio:
-                return self._create_result(
-                    False,
-                    f"Row count {current_count} is {ratio:.2%} of historical mean {historical_mean:.0f} (threshold {min_threshold_ratio:.0%})",
-                    details,
-                )
-
+        # Load historical history
+        history = getattr(config, "_history", [])
+        if len(history) < min_historical_samples:
             return self._create_result(
                 True,
-                f"Row count {current_count} is {ratio:.2%} of historical mean (threshold {min_threshold_ratio:.0%})",
+                f"Insufficient history samples ({len(history)} < {min_historical_samples})",
+                {},
+            )
+
+        # Calculate historical average
+        historical_counts = [h.get("row_count", 0) for h in history]
+        historical_mean = (
+            sum(historical_counts) / len(historical_counts) if historical_counts else 0
+        )
+
+        if historical_mean == 0:
+            return self._create_result(True, "Historical mean is zero", {})
+
+        ratio = current_count / historical_mean
+
+        details = {
+            "current_count": current_count,
+            "historical_mean": float(historical_mean),
+            "ratio": float(ratio),
+            "min_threshold_ratio": float(min_threshold_ratio),
+        }
+
+        if ratio < min_threshold_ratio:
+            return self._create_result(
+                False,
+                f"Row count {current_count} is {ratio:.2%} of historical mean {historical_mean:.0f} (threshold {min_threshold_ratio:.0%})",
                 details,
             )
 
-        except Exception as e:
-            logger.exception(f"Error executing incremental volume check: {e}")
-            return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
-            )
+        return self._create_result(
+            True,
+            f"Row count {current_count} is {ratio:.2%} of historical mean (threshold {min_threshold_ratio:.0%})",
+            details,
+        )
 
 
 @register_check("freshness")
 class FreshnessCheck(BaseQualityCheck):
     """Validates data freshness (simple or business calendar mode)."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
+        {
+            "column",
+            "holidays",
+            "max_age_business_days",
+            "max_age_hours",
+            "timestamp_column",
+            "weekends_included",
+        }
+    )
+
     def __init__(self) -> None:
         super().__init__("freshness", CheckSeverity.ERROR)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -225,100 +228,93 @@ class FreshnessCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute freshness check."""
-        try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
 
-            column = (
-                config.column
-                if hasattr(config, "column")
-                else getattr(config, "timestamp_column", None)
+        column = (
+            config.column
+            if hasattr(config, "column")
+            else getattr(config, "timestamp_column", None)
+        )
+        if not column:
+            return self._create_result(False, "Freshness check requires 'column' parameter", {})
+
+        max_date = self._get_max_date_value(adapter, column)
+        if max_date is None:
+            return self._create_result(False, f"Column '{column}' has no dates", {})
+
+        # Simple mode: max_age_hours
+        if hasattr(config, "max_age_hours"):
+            max_age_hours = config.max_age_hours
+            now = datetime.now(timezone.utc)
+            max_date_utc = (
+                max_date.replace(tzinfo=timezone.utc) if max_date.tzinfo is None else max_date
             )
-            if not column:
-                return self._create_result(False, "Freshness check requires 'column' parameter", {})
+            age_hours = (now - max_date_utc).total_seconds() / 3600
 
-            max_date = self._get_max_date_value(adapter, column)
-            if max_date is None:
-                return self._create_result(False, f"Column '{column}' has no dates", {})
+            details = {
+                "max_date": max_date.isoformat(),
+                "age_hours": float(age_hours),
+                "max_age_hours": float(max_age_hours),
+            }
 
-            # Simple mode: max_age_hours
-            if hasattr(config, "max_age_hours"):
-                max_age_hours = config.max_age_hours
-                now = datetime.now(timezone.utc)
-                max_date_utc = (
-                    max_date.replace(tzinfo=timezone.utc) if max_date.tzinfo is None else max_date
-                )
-                age_hours = (now - max_date_utc).total_seconds() / 3600
-
-                details = {
-                    "max_date": max_date.isoformat(),
-                    "age_hours": float(age_hours),
-                    "max_age_hours": float(max_age_hours),
-                }
-
-                if age_hours > max_age_hours:
-                    return self._create_result(
-                        False,
-                        f"Data age {age_hours:.1f}h exceeds threshold {max_age_hours}h",
-                        details,
-                    )
-
+            if age_hours > max_age_hours:
                 return self._create_result(
-                    True,
-                    f"Data is fresh: {age_hours:.1f}h old (max {max_age_hours}h)",
-                    details,
-                )
-
-            # Business calendar mode: max_age_business_days
-            if hasattr(config, "max_age_business_days"):
-                max_age_business_days = config.max_age_business_days
-                holidays = config.holidays if hasattr(config, "holidays") else []
-                weekends_included = (
-                    config.weekends_included if hasattr(config, "weekends_included") else False
-                )
-
-                now = datetime.now(timezone.utc)
-                max_date_utc = (
-                    max_date.replace(tzinfo=timezone.utc) if max_date.tzinfo is None else max_date
-                )
-
-                business_days = self._count_business_days(
-                    max_date_utc.date(),
-                    now.date(),
-                    holidays,
-                    weekends_included,
-                )
-
-                details = {
-                    "max_date": max_date.isoformat(),
-                    "business_days_old": business_days,
-                    "max_age_business_days": max_age_business_days,
-                }
-
-                if business_days > max_age_business_days:
-                    return self._create_result(
-                        False,
-                        f"Data age {business_days} business days exceeds threshold {max_age_business_days}",
-                        details,
-                    )
-
-                return self._create_result(
-                    True,
-                    f"Data is fresh: {business_days} business days old",
+                    False,
+                    f"Data age {age_hours:.1f}h exceeds threshold {max_age_hours}h",
                     details,
                 )
 
             return self._create_result(
-                False,
-                "Freshness check requires max_age_hours or max_age_business_days",
-                {},
+                True,
+                f"Data is fresh: {age_hours:.1f}h old (max {max_age_hours}h)",
+                details,
             )
 
-        except Exception as e:
-            logger.exception(f"Error executing freshness check: {e}")
-            return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+        # Business calendar mode: max_age_business_days
+        if hasattr(config, "max_age_business_days"):
+            max_age_business_days = config.max_age_business_days
+            holidays = config.holidays if hasattr(config, "holidays") else []
+            weekends_included = (
+                config.weekends_included if hasattr(config, "weekends_included") else False
             )
+
+            now = datetime.now(timezone.utc)
+            max_date_utc = (
+                max_date.replace(tzinfo=timezone.utc) if max_date.tzinfo is None else max_date
+            )
+
+            business_days = self._count_business_days(
+                max_date_utc.date(),
+                now.date(),
+                holidays,
+                weekends_included,
+            )
+
+            details = {
+                "max_date": max_date.isoformat(),
+                "business_days_old": business_days,
+                "max_age_business_days": max_age_business_days,
+            }
+
+            if business_days > max_age_business_days:
+                return self._create_result(
+                    False,
+                    f"Data age {business_days} business days exceeds threshold {max_age_business_days}",
+                    details,
+                )
+
+            return self._create_result(
+                True,
+                f"Data is fresh: {business_days} business days old",
+                details,
+            )
+
+        return self._create_result(
+            False,
+            "Freshness check requires max_age_hours or max_age_business_days",
+            {},
+        )
 
     @staticmethod
     def _count_business_days(

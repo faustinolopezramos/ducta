@@ -1,4 +1,5 @@
 import React from "react";
+import { cx } from "../../utils/classNames";
 import "./Button.css";
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
@@ -45,17 +46,15 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
   },
   ref,
 ) {
-  const classes = [
+  const classes = cx(
     "tui-btn",
     `tui-btn--${variant}`,
     `tui-btn--${size}`,
-    fullWidth ? "tui-btn--block" : "",
-    iconOnly ? "tui-btn--icon" : "",
-    loading ? "is-loading" : "",
-    className ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+    fullWidth && "tui-btn--block",
+    iconOnly && "tui-btn--icon",
+    loading && "is-loading",
+    className,
+  );
 
   return (
     <button

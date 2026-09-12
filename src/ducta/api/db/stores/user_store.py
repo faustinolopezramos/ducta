@@ -27,10 +27,11 @@ from typing import Optional
 from loguru import logger
 from sqlalchemy import select
 
+from ducta.api.auth.security import probe_or_verify, resolve_admin_password
 from ducta.api.auth.service import AuthService, get_auth_service
 from ducta.api.config import get_settings
 from ducta.api.db.models import UserRow
-from ducta.api.db.session import get_session_factory
+from ducta.api.db.session import get_session_factory, require_session
 from ducta.api.models.auth import User
 
 _DUMMY_HASH_LOCK = threading.Lock()
@@ -70,24 +71,15 @@ class DatabaseUserStore:
         Idempotent: safe to call on every startup.
         """
         settings = get_settings()
-        admin_password = os.environ.get("DUCTA_ADMIN_PASSWORD")
-
-        if settings.is_production():
-            if not admin_password:
-                raise RuntimeError(
-                    "DUCTA_ADMIN_PASSWORD must be set in production when auth is enabled."
-                )
-            if admin_password == "admin":
-                raise RuntimeError(
-                    "DUCTA_ADMIN_PASSWORD cannot use insecure default value in production."
-                )
+        env_password = os.environ.get("DUCTA_ADMIN_PASSWORD")
 
         # Only an explicitly-set env var represents intentional rotation of the
         # admin password. If it's unset, don't clobber a password that may have
         # been changed some other way (e.g. directly in the DB) on every restart.
-        explicit_password = bool(admin_password)
-        if not admin_password:
-            admin_password = "admin"
+        explicit_password = bool(env_password)
+        admin_password = resolve_admin_password(
+            env_password, is_production=settings.is_production()
+        )
 
         hashed = self._svc.hash_password(admin_password)
         await self._upsert_user(
@@ -100,8 +92,10 @@ class DatabaseUserStore:
         )
         logger.debug("Admin user seeded in database")
 
+    @require_session()
     async def _upsert_user(
         self,
+        session,
         id: str,
         username: str,
         email: str,
@@ -109,47 +103,35 @@ class DatabaseUserStore:
         roles: list[str],
         update_password: bool = True,
     ) -> None:
-        factory = get_session_factory()
-        if factory is None:
-            return
-        async with factory() as session:
-            row = await session.get(UserRow, id)
-            if row is None:
-                row = UserRow(
-                    id=id,
-                    username=username,
-                    email=email,
-                    password_hash=password_hash,
-                )
-                row.roles = roles
-                session.add(row)
-            else:
-                # Only rotate the password when the caller explicitly asked to
-                # (e.g. DUCTA_ADMIN_PASSWORD was set) — otherwise leave it as-is.
-                if update_password:
-                    row.password_hash = password_hash
-                row.roles = roles
-            await session.commit()
+        row = await session.get(UserRow, id)
+        if row is None:
+            row = UserRow(
+                id=id,
+                username=username,
+                email=email,
+                password_hash=password_hash,
+            )
+            row.roles = roles
+            session.add(row)
+        else:
+            # Only rotate the password when the caller explicitly asked to
+            # (e.g. DUCTA_ADMIN_PASSWORD was set) — otherwise leave it as-is.
+            if update_password:
+                row.password_hash = password_hash
+            row.roles = roles
+        await session.commit()
 
     # ------------------------------------------------------------------ read
 
-    async def get_by_id(self, user_id: str) -> Optional[User]:
-        factory = get_session_factory()
-        if factory is None:
-            return None
-        async with factory() as session:
-            row = await session.get(UserRow, user_id)
+    @require_session()
+    async def get_by_id(self, session, user_id: str) -> Optional[User]:
+        row = await session.get(UserRow, user_id)
         return _row_to_user(row) if row else None
 
-    async def get_by_username(self, username: str) -> Optional[User]:
-        factory = get_session_factory()
-        if factory is None:
-            return None
-        async with factory() as session:
-            result = await session.execute(
-                select(UserRow).where(UserRow.username == username.lower())
-            )
-            row = result.scalar_one_or_none()
+    @require_session()
+    async def get_by_username(self, session, username: str) -> Optional[User]:
+        result = await session.execute(select(UserRow).where(UserRow.username == username.lower()))
+        row = result.scalar_one_or_none()
         return _row_to_user(row) if row else None
 
     async def authenticate(self, username: str, password: str) -> Optional[User]:
@@ -159,7 +141,13 @@ class DatabaseUserStore:
         """
         factory = get_session_factory()
         if factory is None:
-            self._svc.verify_password("__dummy_probe__", _get_dummy_hash())
+            probe_or_verify(
+                username_found=False,
+                password=password,
+                stored_hash=None,
+                dummy_hash=_get_dummy_hash(),
+                verify_fn=self._svc.verify_password,
+            )
             return None
 
         async with factory() as session:
@@ -168,12 +156,14 @@ class DatabaseUserStore:
             )
             row = result.scalar_one_or_none()
 
-        if row is None:
-            # Constant-time dummy check to prevent timing attacks
-            self._svc.verify_password("__dummy_probe__", _get_dummy_hash())
-            return None
-
-        if not self._svc.verify_password(password, row.password_hash) or not row.is_active:
+        password_valid = probe_or_verify(
+            username_found=row is not None,
+            password=password,
+            stored_hash=row.password_hash if row else None,
+            dummy_hash=_get_dummy_hash(),
+            verify_fn=self._svc.verify_password,
+        )
+        if not password_valid or row is None or not row.is_active:
             return None
 
         return _row_to_user(row)

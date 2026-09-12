@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 from ducta.console.execution import load_context
 
 _CONFIG_DATA = {
-    "global_settings": {"input_path": "/in", "output_path": "/out", "mode": "local"},
+    "global_config": {"input_path": "/in", "output_path": "/out", "mode": "local"},
     "pipelines_config": {},
     "nodes_config": {},
     "input_config": {},

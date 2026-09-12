@@ -1,5 +1,6 @@
 import { create, type StateCreator } from "zustand";
-import { devtools, persist } from "zustand/middleware";
+import { persist } from "zustand/middleware";
+import { withDevtools } from "./createStore";
 
 // ─────────────────────────────────────────────
 // SOURCE STORE — Zustand with localStorage persistence
@@ -19,8 +20,6 @@ export interface SourceStore {
   setGitUrl: (url: string | null) => void;
   clearSource: () => void;
 }
-
-const isDev = import.meta.env.DEV;
 
 const storeCreator: StateCreator<SourceStore, [["zustand/persist", unknown]]> = (set) => ({
   /** SourceInfo object returned by GET /workspace, or null */
@@ -52,28 +51,16 @@ const storeCreator: StateCreator<SourceStore, [["zustand/persist", unknown]]> = 
     set({ currentSource: null, sourceType: null, gitUrl: null }),
 });
 
+const persistedStoreCreator = persist(storeCreator, {
+  name: "ducta-source",
+  partialize: (state) => ({
+    currentSource: state.currentSource,
+    activeEnv: state.activeEnv,
+    sourceType: state.sourceType,
+    gitUrl: state.gitUrl,
+  }),
+});
+
 export const useSourceStore = create<SourceStore>()(
-  (isDev
-    ? devtools(
-        persist(storeCreator, {
-          name: "ducta-source",
-          partialize: (state) => ({
-            currentSource: state.currentSource,
-            activeEnv: state.activeEnv,
-            sourceType: state.sourceType,
-            gitUrl: state.gitUrl,
-          }),
-        }),
-        { name: "SourceStore" }
-      )
-    : persist(storeCreator, {
-        name: "ducta-source",
-        partialize: (state) => ({
-          currentSource: state.currentSource,
-          activeEnv: state.activeEnv,
-          sourceType: state.sourceType,
-          gitUrl: state.gitUrl,
-        }),
-      })
-  ) as any
+  withDevtools(persistedStoreCreator, "SourceStore") as any
 );

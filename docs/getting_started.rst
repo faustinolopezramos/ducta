@@ -44,13 +44,13 @@ Ducta enforces a clean separation of concerns:
    my_pipeline/
    ├── environment.yaml          # Maps each environment to its config files
    ├── config/
-   │   ├── global_settings.yaml  # Project-wide settings
+   │   ├── global_config.yaml  # Project-wide settings
    │   ├── pipelines.yaml        # Workflows: which nodes run, in what order
    │   ├── nodes.yaml            # Step definitions
    │   ├── input.yaml            # Input sources catalog
    │   ├── output.yaml           # Output destinations catalog
    │   ├── dev/                  # Per-environment overrides
-   │   ├── sandbox/              # (global_settings / input / output only)
+   │   ├── sandbox/              # (global_config / input / output only)
    │   └── prod/
    ├── pipelines/
    │   └── etl.py                # Your Python logic (extract/transform/load)

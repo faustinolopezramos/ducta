@@ -103,7 +103,7 @@ class NodeService:
         Raises :exc:`ValueError` on path-traversal attempts.
         """
         from ducta.api.workspace.loaders import load_config_file
-        from ducta.api.workspace.utils import resolve_module_path
+        from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
 
         py_path = resolve_module_path(self._root, module)
         if py_path.exists():
@@ -116,12 +116,7 @@ class NodeService:
                 if not project_dir.is_dir():
                     continue
                 try:
-                    ducta_file = None
-                    for ext in (".yaml", ".yml", ".toml", ".json"):
-                        candidate = project_dir / f"ducta{ext}"
-                        if candidate.exists():
-                            ducta_file = candidate
-                            break
+                    ducta_file = find_ducta_config(project_dir)
                     if not ducta_file:
                         continue
                     ducta_config = load_config_file(ducta_file)

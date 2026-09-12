@@ -2,6 +2,7 @@ import type React from "react";
 import { useState, useEffect } from "react";
 import { IconChevronUp } from "@tabler/icons-react";
 import { StatusBadge } from "../ui";
+import { formatDuration } from "../../utils/formatDuration";
 
 // ─────────────────────────────────────────────
 // EXECUTION STATUS — compact inline indicator.
@@ -28,9 +29,7 @@ function useElapsed(startedAt: string | null | undefined) {
 }
 
 function fmtDuration(totalSeconds: number) {
-  const s = totalSeconds % 60;
-  const m = Math.floor(totalSeconds / 60);
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  return formatDuration(totalSeconds, "compact");
 }
 
 const mutedText: React.CSSProperties = {

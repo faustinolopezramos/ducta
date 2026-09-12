@@ -173,7 +173,7 @@ class SecureModuleImporter:
             if not any(module_path.startswith(prefix) for prefix in self.allowed_prefixes):
                 logger.warning(
                     f"Module '{module_path}' not in whitelist prefixes but allowed because "
-                    "strict_mode is disabled (global_settings.strict_module_import: false). "
+                    "strict_mode is disabled (global_config.strict_module_import: false). "
                     "This bypasses the import whitelist security boundary."
                 )
 

@@ -50,11 +50,11 @@ def _discover_context(env: Optional[str]) -> Optional[Any]:
         return None
 
 
-def _global_settings_of(context: Optional[Any]) -> Dict[str, Any]:
-    """Best-effort ``global_settings`` dict from a (possibly ``None``) Context."""
+def _global_config_of(context: Optional[Any]) -> Dict[str, Any]:
+    """Best-effort ``global_config`` dict from a (possibly ``None``) Context."""
     if context is None:
         return {}
-    gs = getattr(context, "global_settings", {})
+    gs = getattr(context, "global_config", {})
     return gs if isinstance(gs, dict) else {}
 
 
@@ -75,7 +75,7 @@ def _resolve_storage_path(
         if resolved:
             return resolved
 
-    gs = _global_settings_of(context)
+    gs = _global_config_of(context)
     mlops_cfg = gs.get("mlops") or {}
     heuristic = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
     if heuristic:
@@ -100,8 +100,8 @@ def _build_registry(storage: LocalStorageBackend) -> ModelRegistry:
 
 
 def _resolve_promotion_policy(env: Optional[str] = None) -> Optional[PromotionPolicy]:
-    """Read mlops.promotion_policy from global settings, if configured."""
-    gs = _global_settings_of(_discover_context(env))
+    """Read mlops.promotion_policy from global config, if configured."""
+    gs = _global_config_of(_discover_context(env))
     policy_cfg = (gs.get("mlops") or {}).get("promotion_policy")
     if not isinstance(policy_cfg, dict) or not policy_cfg.get("metric"):
         return None

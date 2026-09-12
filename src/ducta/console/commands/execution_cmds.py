@@ -198,14 +198,14 @@ class ExecutionCommands:
             # layered entry point resolve it in one place.
             layer_env = layer_context_args.get("env") or self.config.env
             context = Context(
-                global_settings=layer_context_args["global_settings"],
+                global_config=layer_context_args["global_config"],
                 pipelines_config=layer_context_args["pipelines_config"],
                 nodes_config=layer_context_args["nodes_config"],
                 input_config=layer_context_args["input_config"],
                 output_config=layer_context_args["output_config"],
                 env=layer_env,
             )
-            context._config_file_path = layer_context_args["global_settings"]
+            context._config_file_path = layer_context_args["global_config"]
             context.env = layer_env
             logger.info(f"Loaded context for layer: {layer_context_args.get('layer')}")
 
@@ -247,25 +247,52 @@ class ExecutionCommands:
             logger.error(f"Validation failed: {e}")
             return ExitCode.GENERAL_ERROR.value
 
-    def _sanity_layered(self, context, executor) -> int:
+    def _run_sanity_checks(self, context, pipeline_name: str) -> int:
+        """Run preflight sanity checks for *pipeline_name* and report the
+        result. Shared by the layered and non-layered ``--sanity-only`` paths,
+        which differ only in what wraps this call (pre-checks, traceback
+        logging), not in how the checks themselves are run or reported."""
         from ducta.check.engine import QualityReporter, SanityPhaseRunner
 
+        runner = SanityPhaseRunner(fail_fast=False)
+        reports = runner.run_preflight_checks(
+            {"nodes": context.nodes_config}, context, pipeline_name=pipeline_name
+        )
+        QualityReporter().render_pipeline_summary(reports, show_details=True)
+        if all(r.passed for r in reports.values()):
+            logger.success("All sanity checks passed!")
+            return ExitCode.SUCCESS.value
+        failed = sum(1 for r in reports.values() if not r.passed)
+        logger.error("{} node(s) failed sanity checks", failed)
+        return ExitCode.VALIDATION_ERROR.value
+
+    def _sanity_layered(self, context, executor) -> int:
         logger.info("Running sanity checks only (--sanity-only)")
         try:
-            runner = SanityPhaseRunner(fail_fast=False)
-            reports = runner.run_preflight_checks(
-                {"nodes": context.nodes_config}, context, pipeline_name=self.config.pipeline
-            )
-            QualityReporter().render_pipeline_summary(reports, show_details=True)
-            if all(r.passed for r in reports.values()):
-                logger.success("All sanity checks passed!")
-                return ExitCode.SUCCESS.value
-            failed = sum(1 for r in reports.values() if not r.passed)
-            logger.error("{} node(s) failed sanity checks", failed)
-            return ExitCode.VALIDATION_ERROR.value
+            return self._run_sanity_checks(context, self.config.pipeline)
         except Exception as e:
             logger.error("Sanity check error: {}", e)
             return ExitCode.GENERAL_ERROR.value
+
+    def _report_dry_run(self, pipeline_info: dict, header: str) -> None:
+        """Log the dry-run summary for *pipeline_info* under *header*. Shared
+        by the layered and non-layered dry-run paths, which differ only in
+        how ``pipeline_info`` was obtained and in the header text."""
+        pipeline_nodes = pipeline_info.get("nodes", [])
+        logger.info(header)
+        logger.info("  Nodes: {}", ", ".join(pipeline_nodes) if pipeline_nodes else "None")
+        if self.config.node:
+            if pipeline_nodes and self.config.node not in pipeline_nodes:
+                logger.warning(
+                    f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
+                )
+            else:
+                logger.info("  Single node execution: {}", self.config.node)
+        if self.config.start_date:
+            logger.info("  Start date: {}", self.config.start_date)
+        if self.config.end_date:
+            logger.info("  End date: {}", self.config.end_date)
+        logger.success("DRY-RUN completed successfully — no actual execution performed")
 
     def _dry_run_layered(self, executor, layer_context_args) -> int:
         logger.info(
@@ -273,39 +300,43 @@ class ExecutionCommands:
         )
         try:
             pipeline_info = executor.get_pipeline_info(self.config.pipeline)
-            raw_nodes = pipeline_info.get("nodes", [])
-            pipeline_nodes = []
-            for n in raw_nodes:
-                if isinstance(n, dict):
-                    pipeline_nodes.append(n.get("name") or list(n.keys())[0] if n else "unknown")
-                else:
-                    pipeline_nodes.append(str(n))
-            logger.info(
-                "DRY-RUN: Pipeline '{}' configuration in layer '{}'",
-                self.config.pipeline,
-                layer_context_args.get("layer"),
+            self._report_dry_run(
+                pipeline_info,
+                f"DRY-RUN: Pipeline '{self.config.pipeline}' configuration "
+                f"in layer '{layer_context_args.get('layer')}'",
             )
-            logger.info("  Nodes: {}", ", ".join(pipeline_nodes) if pipeline_nodes else "None")
-            if self.config.node:
-                if pipeline_nodes and self.config.node not in pipeline_nodes:
-                    logger.warning(
-                        f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
-                    )
-                else:
-                    logger.info("  Single node execution: {}", self.config.node)
-            if self.config.start_date:
-                logger.info("  Start date: {}", self.config.start_date)
-            if self.config.end_date:
-                logger.info("  End date: {}", self.config.end_date)
-            logger.success("DRY-RUN completed successfully — no actual execution performed")
             return ExitCode.SUCCESS.value
         except Exception as e:
             logger.error("Dry-run error: {}", e)
             return ExitCode.GENERAL_ERROR.value
 
     def _handle_validate_only(self, context_init) -> int:
+        """``--validate-only``: check the configuration without executing it.
+
+        This used to build the ``Context`` and stop — schema validation only —
+        then report "Configuration validation successful". It accepted
+        ``--pipeline`` and never looked at it, so everything preflight exists to
+        catch (a check name that is not registered, a node function that cannot
+        be imported, an output key missing from the catalog, a dependency cycle,
+        a gate behavior that silently falls back) passed this command and failed
+        the run. A pre-run check that cannot fail is worse than none: it is the
+        one people put in CI.
+        """
         logger.info("Validating configuration...")
         context = context_init.initialize(self.config.env)
+
+        report = self._run_preflight_report(context)
+        if report is not None and not report.ok:
+            for warning in report.warnings:
+                logger.warning("Preflight: {}", warning)
+            for error in report.errors:
+                logger.error("Preflight: {}", error)
+            logger.error("Configuration validation failed: {} error(s)", len(report.errors))
+            return ExitCode.VALIDATION_ERROR.value
+        if report is not None:
+            for warning in report.warnings:
+                logger.warning("Preflight: {}", warning)
+
         logger.success("Configuration validation successful")
         logger.info("Execution Summary:")
         logger.info("  Environment: {}", context.env if hasattr(context, "env") else "base")
@@ -313,9 +344,36 @@ class ExecutionCommands:
         logger.info("  Nodes configured: {}", len(getattr(context, "nodes_config", {})))
         return ExitCode.SUCCESS.value
 
-    def _handle_sanity_only(self, context_init) -> int:
-        from ducta.check.engine import QualityReporter, SanityPhaseRunner
+    def _run_preflight_report(self, context):
+        """Preflight for the named pipeline, or every pipeline when none is named.
 
+        Returns a single merged report, or ``None`` when preflight itself could
+        not run — a broken checker must not turn a valid config into a failure.
+        """
+        from ducta.core.preflight import (
+            PreflightReport,
+            validate_all_pipelines,
+            validate_pipeline,
+        )
+
+        try:
+            if self.config.pipeline:
+                return validate_pipeline(context, self.config.pipeline)
+
+            merged = PreflightReport(pipeline_name="*")
+            for name, report in sorted(validate_all_pipelines(context).items()):
+                merged.errors.extend(f"[{name}] {e}" for e in report.errors)
+                merged.warnings.extend(f"[{name}] {w}" for w in report.warnings)
+            return merged
+        except Exception as e:  # noqa: BLE001 — never fail a valid config on a checker bug
+            logger.warning(
+                "Preflight validation could not run and was skipped: {}. "
+                "The configuration was still checked against its schema.",
+                e,
+            )
+            return None
+
+    def _handle_sanity_only(self, context_init) -> int:
         logger.info("Running sanity checks on pipeline '{}'...", self.config.pipeline)
         context = context_init.initialize(self.config.env)
         try:
@@ -323,18 +381,7 @@ class ExecutionCommands:
             if not pipeline_config:
                 logger.error("Pipeline '{}' not found", self.config.pipeline)
                 return ExitCode.VALIDATION_ERROR.value
-            runner = SanityPhaseRunner(fail_fast=False)
-            node_configs = context.nodes_config
-            reports = runner.run_preflight_checks(
-                {"nodes": node_configs}, context, pipeline_name=self.config.pipeline
-            )
-            QualityReporter().render_pipeline_summary(reports, show_details=True)
-            if all(r.passed for r in reports.values()):
-                logger.success("All sanity checks passed!")
-                return ExitCode.SUCCESS.value
-            failed = sum(1 for r in reports.values() if not r.passed)
-            logger.error("{} node(s) failed sanity checks", failed)
-            return ExitCode.VALIDATION_ERROR.value
+            return self._run_sanity_checks(context, self.config.pipeline)
         except Exception as e:
             logger.error("Sanity check error: {}", e)
             if self.config.verbose:
@@ -357,27 +404,9 @@ class ExecutionCommands:
             return ExitCode.VALIDATION_ERROR.value
         try:
             pipeline_info = exec_obj.get_pipeline_info(self.config.pipeline)
-            raw_nodes = pipeline_info.get("nodes", [])
-            pipeline_nodes = []
-            for n in raw_nodes:
-                if isinstance(n, dict):
-                    pipeline_nodes.append(n.get("name") or list(n.keys())[0] if n else "unknown")
-                else:
-                    pipeline_nodes.append(str(n))
-            logger.info("DRY-RUN: Pipeline '{}' configuration", self.config.pipeline)
-            logger.info("  Nodes: {}", ", ".join(pipeline_nodes) if pipeline_nodes else "None")
-            if self.config.node:
-                if pipeline_nodes and self.config.node not in pipeline_nodes:
-                    logger.warning(
-                        f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
-                    )
-                else:
-                    logger.info("  Single node execution: {}", self.config.node)
-            if self.config.start_date:
-                logger.info("  Start date: {}", self.config.start_date)
-            if self.config.end_date:
-                logger.info("  End date: {}", self.config.end_date)
-            logger.success("DRY-RUN completed successfully — no actual execution performed")
+            self._report_dry_run(
+                pipeline_info, f"DRY-RUN: Pipeline '{self.config.pipeline}' configuration"
+            )
             return ExitCode.SUCCESS.value
         except Exception as e:
             logger.error("Dry-run error: {}", e)
@@ -461,9 +490,9 @@ class ExecutionCommands:
             self._warn_if_parallel_spark(exec_obj, self.config.sweep_parallel)
             trials = []
             for index, combo in enumerate(combos, start=1):
-                hyperparams = {**(base_hyperparams or {}), **combo}
-                hyperparams["sweep_id"] = sweep_id
-                hyperparams["sweep_index"] = index
+                hyperparams = self._build_trial_hyperparams(
+                    base_hyperparams, combo, sweep_id, index
+                )
                 trials.append({"index": index, "params": combo, "hyperparams": hyperparams})
 
             if self.config.sweep_reuse_upstream:
@@ -498,9 +527,7 @@ class ExecutionCommands:
 
         failures = 0
         for index, combo in enumerate(combos, start=1):
-            hyperparams = {**(base_hyperparams or {}), **combo}
-            hyperparams["sweep_id"] = sweep_id
-            hyperparams["sweep_index"] = index
+            hyperparams = self._build_trial_hyperparams(base_hyperparams, combo, sweep_id, index)
             logger.info("Sweep run {}/{}: {}", index, len(combos), combo)
             try:
                 run = self._run_trial(exec_obj, hyperparams, trial_index=index)
@@ -539,7 +566,7 @@ class ExecutionCommands:
         """Everything a worker process needs to rebuild this run's Context."""
         base_output_path = None
         try:
-            gs = getattr(exec_obj.context, "global_settings", {}) or {}
+            gs = getattr(exec_obj.context, "global_config", {}) or {}
             base_output_path = gs.get("output_path") or getattr(
                 exec_obj.context, "output_path", None
             )
@@ -646,6 +673,20 @@ class ExecutionCommands:
                     )
         return sorted(outcomes, key=lambda o: o.get("index") or 0)
 
+    @staticmethod
+    def _build_trial_hyperparams(
+        base_hyperparams: Optional[Dict[str, Any]],
+        params: Dict[str, Any],
+        run_id: str,
+        index: int,
+    ) -> Dict[str, Any]:
+        """Merge one sweep/search trial's params onto the shared base and stamp
+        which run/index produced them."""
+        hyperparams = {**(base_hyperparams or {}), **params}
+        hyperparams["sweep_id"] = run_id
+        hyperparams["sweep_index"] = index
+        return hyperparams
+
     def _run_trial(self, exec_obj, hyperparams: Dict[str, Any], trial_index: int):
         """Execute one sweep/search trial."""
         if not self.config.sweep_reuse_upstream:
@@ -670,6 +711,19 @@ class ExecutionCommands:
             rerun_all=False,
         )
 
+    def _make_trial_runner(self, exec_obj, base_hyperparams, run_id: str, n_trials: int):
+        """Build a ``(params, index) -> RunResult`` callable for a search
+        strategy's sequential fallback path — the same shape needed by
+        ``_execute_search`` and by ``_run_search_parallel``'s replay when
+        parallel execution isn't available."""
+
+        def run_trial(params, index):
+            hyperparams = self._build_trial_hyperparams(base_hyperparams, params, run_id, index)
+            logger.info("Trial {}/{}: {}", index, n_trials, params)
+            return self._run_trial(exec_obj, hyperparams, trial_index=index)
+
+        return run_trial
+
     def _execute_search(self, exec_obj, base_hyperparams) -> int:
         """Drive a real search strategy from the pipeline's hyperparams_config."""
         from ducta.core.sweep import new_search_id, run_search
@@ -681,7 +735,7 @@ class ExecutionCommands:
             logger.error(
                 "--search needs a hyperparams_config for pipeline '{}'. Declare one "
                 "(hyperparams_config in the pipeline config, or hyperparams_config_path "
-                "in global_settings) with an algorithm, a search_space and an "
+                "in global_config) with an algorithm, a search_space and an "
                 "objective.metric. Use --sweep FILE for a plain grid instead.",
                 self.config.pipeline,
             )
@@ -739,14 +793,9 @@ class ExecutionCommands:
                 exec_obj, strategy, metric, base_hyperparams, search_id, parallel
             )
         else:
-
-            def run_trial(params, index):
-                hyperparams = {**(base_hyperparams or {}), **params}
-                hyperparams["sweep_id"] = search_id
-                hyperparams["sweep_index"] = index
-                logger.info("Trial {}/{}: {}", index, strategy.n_trials, params)
-                return self._run_trial(exec_obj, hyperparams, trial_index=index)
-
+            run_trial = self._make_trial_runner(
+                exec_obj, base_hyperparams, search_id, strategy.n_trials
+            )
             outcome = run_search(strategy, metric, run_trial, search_id=search_id)
 
         for trial in outcome.trials:
@@ -791,9 +840,7 @@ class ExecutionCommands:
 
         trials = []
         for index, params in enumerate(proposals, start=1):
-            hyperparams = {**(base_hyperparams or {}), **params}
-            hyperparams["sweep_id"] = search_id
-            hyperparams["sweep_index"] = index
+            hyperparams = self._build_trial_hyperparams(base_hyperparams, params, search_id, index)
             trials.append({"index": index, "params": params, "hyperparams": hyperparams})
 
         results = self._run_trials_parallel(exec_obj, trials, search_id, workers)
@@ -814,13 +861,9 @@ class ExecutionCommands:
                 def best(self_inner):
                     return strategy.best
 
-            def run_trial(params, index):
-                hyperparams = {**(base_hyperparams or {}), **params}
-                hyperparams["sweep_id"] = search_id
-                hyperparams["sweep_index"] = index
-                logger.info("Trial {}/{}: {}", index, strategy.n_trials, params)
-                return self._run_trial(exec_obj, hyperparams, trial_index=index)
-
+            run_trial = self._make_trial_runner(
+                exec_obj, base_hyperparams, search_id, strategy.n_trials
+            )
             return run_search(_Replay(), metric, run_trial, search_id=search_id)
 
         outcome = SearchOutcome(search_id=search_id, metric=metric, direction=strategy.direction)
@@ -871,7 +914,7 @@ class ExecutionCommands:
     def _resolve_seed(self, exec_obj):
         """Global random seed, so a random/Bayesian search is reproducible."""
         try:
-            gs = getattr(exec_obj.context, "global_settings", {}) or {}
+            gs = getattr(exec_obj.context, "global_config", {}) or {}
             seed = gs.get("random_seed")
             return int(seed) if seed is not None else None
         except (TypeError, ValueError):

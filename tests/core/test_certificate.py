@@ -106,6 +106,91 @@ class TestSigning:
         assert result.signature == "present (no key)"
 
 
+class TestSignatureCannotBeStripped:
+    """A signature that can be deleted is not tamper-evidence.
+
+    `signature`/`key_id` cannot live inside the hash they sign, so removing both
+    and recomputing `certificate_hash` used to produce a forgery that
+    `verify_certificate` reported as "hash matches — untampered" — ok=True, exit
+    0 — even when handed the correct key. Schema 1.3 puts the *claim* of being
+    signed inside the hashed content, so the removal no longer adds up.
+    """
+
+    KEY = b"super-secret-signing-key"
+
+    @staticmethod
+    def _reseal(path, mutate) -> None:
+        """Apply *mutate* to the certificate and recompute a valid self-hash."""
+        import hashlib
+
+        data = json.loads(path.read_text())
+        mutate(data)
+        content = {
+            k: v for k, v in data.items() if k not in ("certificate_hash", "signature", "key_id")
+        }
+        canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), default=str)
+        data["certificate_hash"] = "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+        path.write_text(json.dumps(data, indent=2))
+
+    def _forge(self, path) -> None:
+        def mutate(data):
+            data["outputs"] = {"gold.sales": {"row_count": 999_999}}
+            data.pop("signature", None)
+            data.pop("key_id", None)
+
+        self._reseal(path, mutate)
+
+    def test_signing_changes_the_hash(self):
+        unsigned = _make_cert().compute_hash()
+        signed = _make_cert()
+        signed.sign(self.KEY)
+        assert signed.compute_hash() != unsigned
+
+    def test_stripped_signature_fails_with_the_key(self, tmp_path):
+        cert = _make_cert()
+        cert.sign(self.KEY)
+        path = write_certificate(cert, tmp_path)
+        self._forge(path)
+
+        result = verify_certificate(path, signing_key=self.KEY)
+
+        assert result.ok is False
+        assert result.signature == "stripped"
+
+    def test_stripped_signature_fails_even_without_a_key(self, tmp_path):
+        """The verifier does not need the secret to notice the signature is gone."""
+        cert = _make_cert()
+        cert.sign(self.KEY)
+        path = write_certificate(cert, tmp_path)
+        self._forge(path)
+
+        result = verify_certificate(path)
+
+        assert result.ok is False
+        assert result.signature == "stripped"
+
+    def test_a_genuinely_unsigned_certificate_still_verifies(self, tmp_path):
+        """`signed: false` is a provable claim, so a key does not condemn it."""
+        path = write_certificate(_make_cert(), tmp_path)
+
+        assert verify_certificate(path).ok is True
+        result = verify_certificate(path, signing_key=self.KEY)
+        assert result.ok is True
+        assert result.signature == "unsigned"
+
+    def test_pre_1_3_unsigned_certificate_is_unverifiable_against_a_key(self, tmp_path):
+        """Older certificates carry no `signed` claim, so removal cannot be ruled out."""
+        path = write_certificate(_make_cert(), tmp_path)
+        self._reseal(path, lambda data: data.pop("signed", None))
+
+        # Integrity alone is still checkable.
+        assert verify_certificate(path).ok is True
+        # But it cannot attest authorship, and must not pretend otherwise.
+        result = verify_certificate(path, signing_key=self.KEY)
+        assert result.ok is False
+        assert result.signature == "unverifiable"
+
+
 class TestResolveSigningKey:
     def test_env_var_upper_case_is_accepted(self, monkeypatch):
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
@@ -130,25 +215,25 @@ class TestResolveSigningKey:
 
 
 class TestResolveSigningKeyFromDir:
-    def test_reads_key_from_global_settings_yaml(self, tmp_path, monkeypatch):
+    def test_reads_key_from_global_config_yaml(self, tmp_path, monkeypatch):
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        (tmp_path / "global_settings.yaml").write_text("certificate_signing_key: dir-based-key\n")
+        (tmp_path / "global_config.yaml").write_text("certificate_signing_key: dir-based-key\n")
         assert resolve_signing_key_from_dir(tmp_path) == b"dir-based-key"
 
     def test_falls_back_to_env_var_when_no_config_file(self, tmp_path, monkeypatch):
         monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "env-fallback-key")
         assert resolve_signing_key_from_dir(tmp_path) == b"env-fallback-key"
 
-    def test_reads_key_from_global_settings_under_config_subdir(self, tmp_path, monkeypatch):
-        """Regression: a project keeping global_settings.* under config/ (a
+    def test_reads_key_from_global_config_under_config_subdir(self, tmp_path, monkeypatch):
+        """Regression: a project keeping global_config.* under config/ (a
         layout `setting/config_forms.py`'s `_dir_convention_paths` already
         supports) used to be invisible to `certify verify` — only the
         project root itself was searched."""
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         (tmp_path / "config").mkdir()
-        (tmp_path / "config" / "global_settings.yaml").write_text(
+        (tmp_path / "config" / "global_config.yaml").write_text(
             "certificate_signing_key: config-subdir-key\n"
         )
         assert resolve_signing_key_from_dir(tmp_path) == b"config-subdir-key"
@@ -156,9 +241,9 @@ class TestResolveSigningKeyFromDir:
     def test_prefers_root_over_config_subdir_when_both_exist(self, tmp_path, monkeypatch):
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        (tmp_path / "global_settings.yaml").write_text("certificate_signing_key: root-key\n")
+        (tmp_path / "global_config.yaml").write_text("certificate_signing_key: root-key\n")
         (tmp_path / "config").mkdir()
-        (tmp_path / "config" / "global_settings.yaml").write_text(
+        (tmp_path / "config" / "global_config.yaml").write_text(
             "certificate_signing_key: config-subdir-key\n"
         )
         assert resolve_signing_key_from_dir(tmp_path) == b"root-key"

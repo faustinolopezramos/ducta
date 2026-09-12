@@ -1,14 +1,9 @@
 from ducta.setting.config_forms import FlexibleConfigResolver
 from ducta.setting.context_loader import ContextLoader
 from ducta.setting.contexts import (
-    BaseSpecializedContext,
     Context,
-    ContextFactory,
-    HybridContext,
     MLConfigMixin,
-    MLContext,
     PipelineManager,
-    StreamingContext,
 )
 from ducta.setting.environments import (
     DEFAULT_ENVIRONMENTS,
@@ -55,7 +50,7 @@ from ducta.setting.schemas import (
     ConfigSchema,
     DataQualitySchema,
     ExecutionMode,
-    GlobalSettingsSchema,
+    GlobalConfigSchema,
     InputFormat,
     InputSchema,
     LogLevel,
@@ -80,11 +75,8 @@ from ducta.setting.validators import (
     ConfigValidator,
     CrossValidator,
     FormatPolicy,
-    HybridValidator,
-    MLValidator,
     PipelineValidator,
     SpecializedValidator,
-    StreamingValidator,
 )
 
 __all__ = [
@@ -93,14 +85,9 @@ __all__ = [
     # context_loader
     "ContextLoader",
     # contexts
-    "BaseSpecializedContext",
     "Context",
-    "ContextFactory",
-    "HybridContext",
     "MLConfigMixin",
-    "MLContext",
     "PipelineManager",
-    "StreamingContext",
     # environments
     "allowed_environments",
     "CanonicalEnvironment",
@@ -143,7 +130,7 @@ __all__ = [
     "ConfigSchema",
     "DataQualitySchema",
     "ExecutionMode",
-    "GlobalSettingsSchema",
+    "GlobalConfigSchema",
     "InputFormat",
     "InputSchema",
     "LogLevel",
@@ -169,9 +156,6 @@ __all__ = [
     "ConfigValidator",
     "CrossValidator",
     "FormatPolicy",
-    "HybridValidator",
-    "MLValidator",
     "PipelineValidator",
     "SpecializedValidator",
-    "StreamingValidator",
 ]

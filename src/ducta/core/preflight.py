@@ -204,6 +204,218 @@ def _check_io_keys(
             report.error(f"Node '{node_name}': invalid output key '{key}' — {e}")
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Quality configuration
+#
+# `QualityCheckEntrySchema` and `NodeSchema` are both `extra="allow"`, and
+# deliberately so: plugin checks registered through `register_check` define
+# their own parameters, and streaming nodes carry inline connector configs that
+# no fixed schema can enumerate. The cost was that a misspelling anywhere in
+# these blocks validated clean and then changed behaviour silently — a check
+# name typo surfaced later as a *quality gate block*, which reads as a problem
+# with the data rather than with the config that was never run.
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Node keys that are legitimate but not declared on `NodeSchema`. `name` is
+#: stamped on by the loader; the rest are consumed by layers that read the raw
+#: node dict rather than the schema.
+#:
+#: Every entry names the module that reads it. That is not decoration: this set
+#: is the difference between a warning users can trust and one that told them
+#: their working configuration was being dropped. It previously omitted `source`
+#: — which preflight's own `_check_ingestion_node` *requires* two functions
+#: below — along with the vectorized-execution keys, the ML node keys and
+#: streaming's `depends_on`, so the warning fired on every ingestion node, every
+#: vectorized node, every ML node and every streaming node in existence.
+#: Anything added here must be a key some layer genuinely reads; if nothing
+#: reads it, the warning is right and the key should go.
+_EXTRA_NODE_KEYS = frozenset(
+    {
+        "name",  # stamped on by the config loader
+        "type",  # dispatch: batch | streaming | ingestion
+        "streaming",  # stream.query_manager (inline connector config)
+        "depends_on",  # stream.pipeline_manager._process_pipeline_nodes
+        "table",  # core.execution.ingestion
+        "query",  # core.execution.ingestion
+        "source",  # core.execution.ingestion (required by _check_ingestion_node)
+        "sources",  # core.execution.ingestion._resolve_sources_path
+        "columns",  # core.execution.ingestion._build_dbtable
+        "where",  # core.execution.ingestion._build_dbtable
+        "options",  # ingestion JDBC options / inline connector options
+        "on_missing_input",  # gate.input.InputLoader.load_inputs
+        "fail_fast",  # gate.input.InputLoader.load_inputs
+        "split",  # core.executors.base._get_pipeline_split_config
+        "hyperparams",  # core.commands.MLNodeCommand
+        "model_version",  # core.execution.output.OutputWriter.save
+        "execution_mode",  # core.commands (vectorized execution)
+        "execution_mode_max_rows",  # core.commands._guarded_to_pandas
+        "metrics",  # setting.contexts.MLConfigMixin.get_node_ml_config
+        "model_artifacts",  # gate.output.manager._save_model_artifacts
+        "mlops_enabled",  # core.mlops_auto_config.should_enable_mlops
+        "ml",  # core.mlops_auto_config.resolve_ml_stage (nested `stage`)
+    }
+)
+
+
+def _quality_blocks(node_config: Dict[str, Any]) -> List[tuple]:
+    """The (block_name, block) quality sections a node may declare."""
+    blocks = []
+    for key in ("data_quality", "sanity_checks"):
+        block = node_config.get(key)
+        if isinstance(block, dict):
+            blocks.append((key, block))
+    return blocks
+
+
+def _check_check_entries(report: PreflightReport, where: str, checks: Dict[str, Any]) -> None:
+    """Validate every check entry's name against the registry, and its parameters."""
+    from ducta.check.core import COMMON_CHECK_PARAMS, QUALITY_CHECKS_REGISTRY
+
+    for entry_name, entry in (checks or {}).items():
+        entry_dict = entry if isinstance(entry, dict) else {}
+        # Same resolution the engine uses: an explicit `type` names the check
+        # class, otherwise the entry's own key does.
+        registry_key = entry_dict.get("type") or entry_name
+        check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
+        if check_class is None:
+            available = ", ".join(sorted(QUALITY_CHECKS_REGISTRY)) or "(none registered)"
+            named_by = "type" if entry_dict.get("type") else "entry name"
+            report.error(
+                f"{where}: check '{registry_key}' (given as the {named_by}) is not a "
+                f"registered check. It will fail at runtime as an ERROR-severity result, "
+                f"which a quality gate reports as blocked data rather than as this "
+                f"configuration mistake. Available: {available}"
+            )
+            continue
+
+        declared = getattr(check_class, "CONFIG_PARAMS", None)
+        if declared is None:
+            continue  # a plugin check that has not declared its parameters
+        allowed = set(declared) | set(COMMON_CHECK_PARAMS)
+        # Leading underscores are how the engine injects baselines/history into
+        # a check's config at runtime; they are never user configuration.
+        unknown = sorted(k for k in entry_dict if not str(k).startswith("_") and k not in allowed)
+        if unknown:
+            report.error(
+                f"{where}: check '{entry_name}' does not accept {unknown}. Unknown keys are "
+                f"silently ignored, so the check runs with its defaults instead of the "
+                f"values written here. Accepted: {sorted(allowed)}"
+            )
+
+
+def _check_quality_gate(report: PreflightReport, where: str, gate: Any) -> None:
+    """Validate the parts of a quality gate that fall back silently at runtime."""
+    if not isinstance(gate, dict):
+        return
+    raw_behavior = gate.get("behavior")
+    if raw_behavior is None:
+        return
+    from ducta.check.gate import GateBehavior
+
+    aliases = {"block": GateBehavior.STOP_ALL.value, "warn": GateBehavior.WARN_ONLY.value}
+    normalized = aliases.get(str(raw_behavior), str(raw_behavior))
+    valid = [b.value for b in GateBehavior]
+    if normalized not in valid:
+        report.error(
+            f"{where}: quality gate behavior '{raw_behavior}' is not valid. At runtime this "
+            f"falls back to '{GateBehavior.SKIP_DOWNSTREAM.value}', so the gate would not do "
+            f"what the config says. Valid: {', '.join(valid)} "
+            f"(aliases: {', '.join(sorted(aliases))})"
+        )
+
+
+def _check_quality_config(
+    report: PreflightReport, node_name: str, node_config: Dict[str, Any]
+) -> None:
+    """Validate a node's quality blocks: check names, check parameters, gate behavior."""
+    for block_name, block in _quality_blocks(node_config):
+        where = f"Node '{node_name}'.{block_name}"
+        _check_check_entries(report, where, block.get("checks") or {})
+        _check_quality_gate(report, where, block.get("quality_gate"))
+
+
+#: Config keys belonging to the legacy DStream API. Structured Streaming ignores
+#: them outright, so setting one is silently inert — the tuning the user believes
+#: they applied simply does not happen.
+_LEGACY_DSTREAM_PREFIX = "spark.streaming."
+
+
+def _check_streaming_output_format(
+    report: PreflightReport, node_name: str, node_config: Dict[str, Any], policy: Any
+) -> None:
+    """A streaming sink's format must be one the writer can actually build.
+
+    ``_validate_streaming_requirements`` checks that an output format is
+    *present*; it does not check that it is *supported*. An unsupported one gets
+    as far as query construction before failing, which is a slow and confusing
+    way to learn about a typo.
+    """
+    output_config = node_config.get("output")
+    if not isinstance(output_config, dict):
+        return
+    output_format = output_config.get("format")
+    if not output_format:
+        return  # absence is already reported by _validate_streaming_requirements
+    try:
+        if policy.is_supported_output(output_format):
+            return
+        supported = policy.get_supported_output_formats()
+    except Exception as e:  # noqa: BLE001 — a policy that cannot answer blocks nothing
+        logger.debug("Streaming output-format check skipped for '{}': {}", node_name, e)
+        return
+    report.error(
+        f"Streaming node '{node_name}' has unsupported streaming output format "
+        f"'{output_format}'. Supported: {supported}"
+    )
+
+
+def _check_legacy_dstream_config(report: PreflightReport, where: str, spark_config: Any) -> None:
+    """Warn about ``spark.streaming.*`` keys, which Structured Streaming ignores."""
+    if not isinstance(spark_config, dict):
+        return
+    legacy = sorted(k for k in spark_config if str(k).startswith(_LEGACY_DSTREAM_PREFIX))
+    if legacy:
+        report.warn(
+            f"{where}: {legacy} belong to legacy Spark Streaming (DStream) and have no "
+            f"effect with Structured Streaming, which is what Ducta runs. Use the "
+            f"spark.sql.streaming.* equivalents instead."
+        )
+
+
+def _check_profiles(report: PreflightReport, context: Any) -> None:
+    """Validate the shared quality profiles the same way as node-level checks."""
+    global_config = getattr(context, "global_config", {}) or {}
+    if not isinstance(global_config, dict):
+        return
+    profiles = ((global_config.get("quality") or {}).get("profiles")) or {}
+    if not isinstance(profiles, dict):
+        return
+    for profile_name, profile in profiles.items():
+        if isinstance(profile, dict):
+            _check_check_entries(
+                report,
+                f"Quality profile '{profile_name}'",
+                profile.get("checks") or {},
+            )
+
+
+def _check_unknown_node_keys(
+    report: PreflightReport, node_name: str, node_config: Dict[str, Any]
+) -> None:
+    """Warn about node keys nothing reads — a misspelling that changes behaviour."""
+    from ducta.setting.schemas import NodeSchema
+
+    known = set(NodeSchema.model_fields) | set(_EXTRA_NODE_KEYS)
+    unknown = sorted(k for k in node_config if not str(k).startswith("_") and k not in known)
+    if unknown:
+        report.warn(
+            f"Node '{node_name}': {unknown} are not node configuration keys and are "
+            f"ignored. A misspelled key is dropped in silence — `dependencie` instead of "
+            f"`dependencies`, say, loses the ordering it was meant to declare. "
+            f"Known keys: {sorted(known)}"
+        )
+
+
 def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     """Validate a single pipeline's configuration without executing it."""
     report = PreflightReport(pipeline_name=pipeline_name)
@@ -261,6 +473,10 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         _check_io_keys(
             report, node_name, node_configs[node_name], input_config, output_config, validator
         )
+        _check_quality_config(report, node_name, node_configs[node_name])
+        _check_unknown_node_keys(report, node_name, node_configs[node_name])
+
+    _check_profiles(report, context)
 
     split_config = pipeline.get("split")
     if split_config:
@@ -279,6 +495,11 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
                 streaming_nodes, node_configs, policy
             ):
                 report.error(msg)
+            for node_name in streaming_nodes:
+                _check_streaming_output_format(report, node_name, node_configs[node_name], policy)
+            _check_legacy_dstream_config(
+                report, f"Pipeline '{pipeline_name}'", pipeline.get("spark_config")
+            )
         except Exception as e:  # noqa: BLE001 — never let a checker crash the preflight
             logger.debug("Streaming requirement check skipped: {}", e)
 

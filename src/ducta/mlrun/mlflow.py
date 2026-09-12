@@ -481,39 +481,15 @@ class MLflowPipelineTracker:
                 with self._lock:
                     active = mlflow.active_run()
                     if active is not None and active.info.run_id == run_id:
-                        self._log_model_by_flavor(model, artifact_path, flavor, **kwargs)
+                        _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
                     else:
                         with mlflow.start_run(run_id=run_id):
-                            self._log_model_by_flavor(model, artifact_path, flavor, **kwargs)
+                            _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
             else:
-                self._log_model_by_flavor(model, artifact_path, flavor, **kwargs)
+                _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
             logger.info(f"Logged model to: {artifact_path}")
         except Exception as e:
             logger.warning(f"Failed to log model: {e}")
-
-    def _log_model_by_flavor(
-        self,
-        model: Any,
-        artifact_path: str,
-        flavor: Optional[str],
-        **kwargs,
-    ) -> None:
-        """Log model using the appropriate flavor."""
-        flavor_map = {
-            "sklearn": mlflow.sklearn.log_model,
-            "xgboost": mlflow.xgboost.log_model,
-            "pytorch": mlflow.pytorch.log_model,
-            "tensorflow": mlflow.tensorflow.log_model,
-        }
-
-        if flavor in flavor_map:
-            flavor_map[flavor](model, artifact_path, **kwargs)
-        elif flavor == "pyfunc":
-            mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
-        elif hasattr(model, "fit") and hasattr(model, "predict"):
-            mlflow.sklearn.log_model(model, artifact_path, **kwargs)
-        else:
-            mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
 
     def log_pipeline_metric(
         self,
@@ -549,7 +525,7 @@ class MLflowPipelineTracker:
         if not MLFLOW_AVAILABLE:
             raise ImportError("MLflow is required")
 
-        gs = getattr(context, "global_settings", {}) or {}
+        gs = getattr(context, "global_config", {}) or {}
         mlflow_config = gs.get("mlflow", {}) or {}
 
         experiment_name = (
@@ -579,6 +555,35 @@ class MLflowPipelineTracker:
             nested_runs=mlflow_config.get("nested_runs", True),
             tags=tags,
         )
+
+
+def _log_model_by_flavor(
+    model: Any,
+    artifact_path: str,
+    flavor: Optional[str],
+    **kwargs,
+) -> None:
+    """Log a model using the appropriate MLflow flavor.
+
+    Module-level (uses no instance state) so both ``MLflowPipelineTracker.
+    log_model`` and ``MLflowNodeContext.log_model`` share one flavor-detection
+    implementation instead of the latter hand-rolling a subset of it.
+    """
+    flavor_map = {
+        "sklearn": mlflow.sklearn.log_model,
+        "xgboost": mlflow.xgboost.log_model,
+        "pytorch": mlflow.pytorch.log_model,
+        "tensorflow": mlflow.tensorflow.log_model,
+    }
+
+    if flavor in flavor_map:
+        flavor_map[flavor](model, artifact_path, **kwargs)
+    elif flavor == "pyfunc":
+        mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
+    elif hasattr(model, "fit") and hasattr(model, "predict"):
+        mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+    else:
+        mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
 
 
 def _mlf_log_params_from_call(
@@ -847,13 +852,12 @@ class MLflowNodeContext:
         if MLFLOW_AVAILABLE:
             mlflow.log_metric(key, value, step=step)
 
-    def log_model(self, model: Any, artifact_path: str, **kwargs) -> None:
-        """Log model with auto-detected flavor."""
+    def log_model(
+        self, model: Any, artifact_path: str, flavor: Optional[str] = None, **kwargs
+    ) -> None:
+        """Log model, auto-detecting the flavor unless one is given."""
         if MLFLOW_AVAILABLE:
-            if hasattr(model, "fit") and hasattr(model, "predict"):
-                mlflow.sklearn.log_model(model, artifact_path, **kwargs)
-            else:
-                mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
+            _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
 
 
 class MLflowHelper:

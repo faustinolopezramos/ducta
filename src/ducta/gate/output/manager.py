@@ -118,6 +118,43 @@ class DataOutputManager(BaseIO):
             return True
         return False
 
+    def _output_keys_for_empty_result(self, output_keys: List[str]) -> List[str]:
+        """Which of *output_keys* still get written when the node produced no rows."""
+        output_config = self._ctx_get("output_config", {}) or {}
+        writable: List[str] = []
+        skipped: List[str] = []
+        for out_key in output_keys:
+            cfg = output_config.get(out_key, {}) or {}
+            write_mode = cfg.get("write_mode", WriteMode.OVERWRITE.value)
+            if getattr(write_mode, "value", write_mode) == WriteMode.OVERWRITE.value:
+                writable.append(out_key)
+            else:
+                skipped.append(out_key)
+
+        if writable:
+            logger.warning(
+                "Node produced 0 rows; writing the empty result to {} (write_mode=overwrite, "
+                "so the target is truncated rather than left holding a previous run's data).",
+                writable,
+            )
+        for out_key in skipped:
+            reason = (
+                f"output '{out_key}' not written: the node produced 0 rows and its "
+                "write_mode is not 'overwrite', so there was nothing to append"
+            )
+            logger.warning("{}.", reason)
+            self._note_evidence_gap(reason)
+        return writable
+
+    def _note_evidence_gap(self, reason: str) -> None:
+        """Record on the run ledger that an output was not written. Best-effort."""
+        try:
+            from ducta.core.ledger import ledger_for
+
+            ledger_for(self.context).note_gap(reason)
+        except Exception as error:  # noqa: BLE001 — bookkeeping must never break a write
+            logger.debug("Could not record evidence gap '{}': {}", reason, error)
+
     def save_output(
         self,
         env: str,
@@ -133,12 +170,13 @@ class DataOutputManager(BaseIO):
 
         self.data_validator.validate_dataframe(dataframe, allow_empty=True)
 
-        if hasattr(dataframe, "isEmpty") and dataframe.isEmpty():
-            logger.warning("Empty DataFrame, skipping write")
-            return
-
         output_keys = self._get_output_keys(node)
-        fail_on_error = self._ctx_get("global_settings", {}).get("fail_on_error", True)
+        fail_on_error = self._ctx_get("global_config", {}).get("fail_on_error", True)
+
+        if hasattr(dataframe, "isEmpty") and dataframe.isEmpty():
+            output_keys = self._output_keys_for_empty_result(output_keys)
+            if not output_keys:
+                return
 
         from ducta.gate import handoff
 
@@ -296,7 +334,7 @@ class DataOutputManager(BaseIO):
 
     def _save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
         """Save model artifacts to registry."""
-        registry_path = self._ctx_get("global_settings", {}).get("model_registry_path")
+        registry_path = self._ctx_get("global_config", {}).get("model_registry_path")
         if not registry_path:
             logger.warning("Model registry path not configured")
             return

@@ -2,7 +2,7 @@
 
 There was previously no dedicated test file for this collaborator (extracted
 from StreamingQueryManager) — these tests focus on the "adaptive" trigger and
-on global_settings resolution across both dict- and object-style contexts.
+on global_config resolution across both dict- and object-style contexts.
 """
 
 from __future__ import annotations
@@ -17,11 +17,11 @@ def _scheduler(context, progress_sink=None):
 
 class TestGlobalSettingContextSupport:
     def test_reads_global_setting_from_dict_context(self, dict_context):
-        # Regression: _global_setting must resolve global_settings from a plain
+        # Regression: _global_setting must resolve global_config from a plain
         # dict context, not only from an attribute-based object.
         dict_context = dict(dict_context)
-        dict_context["global_settings"] = {
-            **dict_context["global_settings"],
+        dict_context["global_config"] = {
+            **dict_context["global_config"],
             "streaming_adaptive_base_interval": "7 seconds",
         }
         scheduler = _scheduler(dict_context)
@@ -29,12 +29,12 @@ class TestGlobalSettingContextSupport:
         assert trigger == {"processingTime": "7 seconds"}
 
     def test_reads_global_setting_from_object_context(self, obj_context):
-        obj_context.global_settings["streaming_adaptive_base_interval"] = "7 seconds"
+        obj_context.global_config["streaming_adaptive_base_interval"] = "7 seconds"
         scheduler = _scheduler(obj_context)
         trigger = scheduler.configure_trigger({"type": "adaptive"})
         assert trigger == {"processingTime": "7 seconds"}
 
-    def test_default_when_context_has_no_global_settings(self):
+    def test_default_when_context_has_no_global_config(self):
         scheduler = _scheduler({})
         assert scheduler._global_setting("streaming_adaptive_max_interval_seconds", 60.0) == 60.0
 
@@ -56,7 +56,7 @@ class TestAdaptiveTrigger:
         assert trigger == {"processingTime": "3.000 seconds"}
 
     def test_clamps_to_configured_ceiling(self, obj_context):
-        obj_context.global_settings["streaming_adaptive_max_interval_seconds"] = 4.0
+        obj_context.global_config["streaming_adaptive_max_interval_seconds"] = 4.0
 
         class _FakeSink:
             def avg_trigger_ms(self, query_name):

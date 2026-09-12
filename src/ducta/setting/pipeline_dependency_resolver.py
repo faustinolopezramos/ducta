@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from collections import deque
 from typing import Any, Callable, Dict, List, Optional, Set
 
-from ducta.core.dependency_resolver import detect_cycles_dfs
+from ducta.setting.dependency_resolver import detect_cycles_dfs, kahn_topological_sort
 
 
 def _get_depends_on(pipeline_cfg: Any) -> List[str]:
@@ -102,23 +102,12 @@ class PipelineDependencyResolver:
 
         detect_cycles_dfs(subgraph_deps)
 
-        in_degree: Dict[str, int] = {name: 0 for name in subgraph_names}
         adj: Dict[str, List[str]] = {name: [] for name in subgraph_names}
-
         for name in subgraph_names:
             for dep in subgraph_deps[name]:
                 adj[dep].append(name)
-                in_degree[name] += 1
 
-        ready: deque = deque(n for n in subgraph_names if in_degree[n] == 0)
-        ordered: List[str] = []
-        while ready:
-            node = ready.popleft()
-            ordered.append(node)
-            for downstream in adj[node]:
-                in_degree[downstream] -= 1
-                if in_degree[downstream] == 0:
-                    ready.append(downstream)
+        ordered = kahn_topological_sort(adj, subgraph_names)
 
         if len(ordered) != len(subgraph_names):
             unresolved = sorted(set(subgraph_names) - set(ordered))

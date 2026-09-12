@@ -45,7 +45,7 @@ Prerequisites
 Step 1: Configure Ducta's MLOps Layer
 --------------------------------------
 
-Ducta discovers configuration from the ``config/`` directory. Add an ``mlops`` block to your ``config/global_settings.toml``.
+Ducta discovers configuration from the ``config/`` directory. Add an ``mlops`` block to your ``config/global_config.toml``.
 
 .. tab-set::
 
@@ -53,7 +53,7 @@ Ducta discovers configuration from the ``config/`` directory. Add an ``mlops`` b
 
       .. code-block:: toml
 
-         # config/global_settings.toml
+         # config/global_config.toml
          [mlops]
          backend_type = "local"
          storage_path = "./mlops_data"
@@ -66,7 +66,7 @@ Ducta discovers configuration from the ``config/`` directory. Add an ``mlops`` b
 
       .. code-block:: yaml
 
-         # config/global_settings.yaml
+         # config/global_config.yaml
          mlops:
            backend_type: local
            storage_path: ./mlops_data
@@ -207,13 +207,13 @@ Create a pipeline that executes your training script.
 
 .. important::
 
-   Set ``random_seed`` in your ``global_settings`` so training runs are
+   Set ``random_seed`` in your ``global_config`` so training runs are
    reproducible. Ducta seeds ``random``, ``numpy`` and ``torch`` globally and
    exposes a deterministic per-node seed as ``ml_context["node_seed"]``:
 
    .. code-block:: toml
 
-      # config/global_settings.toml (settings live at the top level)
+      # config/global_config.toml (settings live at the top level)
       random_seed = 42
 
 Step 3: Create the Training Script
@@ -406,7 +406,7 @@ Two settings turn lineage recording into guarantees:
 
 .. code-block:: toml
 
-   # config/global_settings.toml (top-level settings)
+   # config/global_config.toml (top-level settings)
    random_seed = 42            # seeds random/numpy/torch + per-node ml_context["node_seed"]
    fingerprint_policy = "warn" # record | warn | fail when inputs changed vs previous run
 

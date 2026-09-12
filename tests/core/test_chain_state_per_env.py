@@ -18,9 +18,9 @@ from ducta.stream.constants import PipelineType
 from tests.core.fakes import FakeContext
 
 
-def _executor(env, **global_settings) -> PipelineExecutor:
-    context = FakeContext(global_settings=global_settings)
-    settings = CoreSettings.from_context({"env": env, **global_settings})
+def _executor(env, **global_config) -> PipelineExecutor:
+    context = FakeContext(global_config=global_config)
+    settings = CoreSettings.from_context({"env": env, **global_config})
     return PipelineExecutor(context, settings=settings)
 
 

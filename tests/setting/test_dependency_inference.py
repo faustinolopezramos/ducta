@@ -1,8 +1,8 @@
-"""Unit tests for ducta.core.dependency_inference."""
+"""Unit tests for ducta.setting.dependency_inference."""
 
 from __future__ import annotations
 
-from ducta.core.dependency_inference import (
+from ducta.setting.dependency_inference import (
     build_producer_map,
     extract_input_keys,
     extract_output_keys,

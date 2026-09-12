@@ -35,14 +35,14 @@ class TestFlexibleConfigResolver:
     def test_resolve_dir_bundle(self, mock_find, mock_load, mock_ctx, temp_dir):
         mock_find.return_value = temp_dir / "Ducta.yaml"
         mock_load.return_value = {
-            "global_settings": {"input_path": "/in", "output_path": "/out", "mode": "local"},
+            "global_config": {"input_path": "/in", "output_path": "/out", "mode": "local"},
             "pipelines_config": {},
             "nodes_config": {},
             "input_config": {},
             "output_config": {},
         }
         mock_ctx_instance = MagicMock()
-        mock_ctx_instance.global_settings = {
+        mock_ctx_instance.global_config = {
             "input_path": "/in",
             "output_path": "/out",
             "mode": "local",
@@ -50,7 +50,7 @@ class TestFlexibleConfigResolver:
         mock_ctx.return_value = mock_ctx_instance
         ctx = FlexibleConfigResolver.resolve_dir(temp_dir, "dev")
         assert ctx is not None
-        assert ctx.global_settings["input_path"] == "/in"
+        assert ctx.global_config["input_path"] == "/in"
 
     @patch("ducta.setting.config_forms.Context")
     @patch("ducta.setting.config_forms._load")
@@ -59,14 +59,14 @@ class TestFlexibleConfigResolver:
     def test_resolve_dir_convention(self, mock_dcp, mock_find, mock_load, mock_ctx, temp_dir):
         mock_find.return_value = None
         mock_dcp.return_value = {
-            "global_settings": str(temp_dir / "global.yaml"),
+            "global_config": str(temp_dir / "global.yaml"),
             "pipelines_config": str(temp_dir / "config/pipelines.yaml"),
             "nodes_config": str(temp_dir / "config/nodes.yaml"),
             "input_config": str(temp_dir / "config/input.yaml"),
             "output_config": str(temp_dir / "config/output.yaml"),
         }
         mock_load.return_value = {
-            "global_settings": {"input_path": "/in", "output_path": "/out", "mode": "local"},
+            "global_config": {"input_path": "/in", "output_path": "/out", "mode": "local"},
             "pipelines_config": {},
             "nodes_config": {},
             "input_config": {},
@@ -80,7 +80,7 @@ class TestFlexibleConfigResolver:
     @patch("ducta.setting.config_forms.Context")
     def test_resolve_file_bundle(self, mock_ctx, temp_dir):
         bundle = {
-            "global_settings": {"input_path": "/in", "output_path": "/out", "mode": "local"},
+            "global_config": {"input_path": "/in", "output_path": "/out", "mode": "local"},
             "pipelines_config": {"p1": {"nodes": ["n1"]}},
             "nodes_config": {"n1": {"function": "mymod.my_func"}},
             "input_config": {"ds1": {"format": "parquet"}},
@@ -89,7 +89,7 @@ class TestFlexibleConfigResolver:
         f = temp_dir / "bundle.yaml"
         f.write_text("dummy")
         mock_ctx_instance = MagicMock()
-        mock_ctx_instance.global_settings = {
+        mock_ctx_instance.global_config = {
             "input_path": "/in",
             "output_path": "/out",
             "mode": "local",
@@ -101,7 +101,7 @@ class TestFlexibleConfigResolver:
         with patch("ducta.setting.config_forms._load", return_value=bundle):
             ctx = FlexibleConfigResolver.resolve_file(str(f), bundle, "dev")
             assert ctx is not None
-            assert ctx.global_settings["input_path"] == "/in"
+            assert ctx.global_config["input_path"] == "/in"
             assert "p1" in ctx.pipelines_config
             assert ctx._config_file_path is not None
 
@@ -128,7 +128,7 @@ class TestFlexibleConfigResolver:
 
         mock_load.side_effect = _load_side_effect
         mock_ctx_instance = MagicMock()
-        mock_ctx_instance.global_settings = {"input_path": "/in"}
+        mock_ctx_instance.global_config = {"input_path": "/in"}
         mock_ctx.return_value = mock_ctx_instance
         ctx = FlexibleConfigResolver.resolve_dir(temp_dir, "dev")
         assert ctx is not None
@@ -140,7 +140,7 @@ class TestInternalHelpers:
 
         assert _is_bundle(
             {
-                "global_settings": {},
+                "global_config": {},
                 "pipelines_config": {},
                 "nodes_config": {},
                 "input_config": {},
@@ -156,7 +156,7 @@ class TestInternalHelpers:
     def test_is_bundle_false_missing_key(self):
         from ducta.setting.config_forms import _is_bundle
 
-        assert _is_bundle({"global_settings": {}, "pipelines_config": {}}) is False
+        assert _is_bundle({"global_config": {}, "pipelines_config": {}}) is False
 
     def test_find_returns_first_match(self, temp_dir):
         from ducta.setting.config_forms import _find
@@ -182,7 +182,7 @@ class TestInternalHelpers:
         (temp_dir / "output.yaml").write_text("")
         result = _dir_convention_paths(temp_dir)
         assert result is not None
-        assert "global_settings" in result
+        assert "global_config" in result
         assert "pipelines_config" in result
 
     def test_dir_convention_paths_missing(self, temp_dir):

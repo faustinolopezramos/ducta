@@ -174,7 +174,7 @@ class ModelVersion:
 
 class ModelRegistry:
     """
-    Model Registry for versionado y gestión de modelos.
+    Model Registry for versioning and managing models.
     """
 
     _INDEX_FILENAME = "index.parquet"
@@ -194,6 +194,10 @@ class ModelRegistry:
         # Flag to track if structure has been ensured (lazy initialization)
         self._structure_ensured = False
         logger.info(f"ModelRegistry initialized at {registry_path}")
+
+    def _metadata_path(self, model_id: str, version: int) -> str:
+        """Path to a version's metadata JSON: <registry_path>/metadata/<model_id>/v<version>.json."""
+        return str(Path(self.registry_path) / "metadata" / model_id / f"v{version}.json")
 
     @contextmanager
     def _registry_lock(self, timeout: float = 30.0):
@@ -381,9 +385,7 @@ class ModelRegistry:
                     size_bytes=artifact_metadata.size_bytes,
                 )
 
-                metadata_path = str(
-                    Path(self.registry_path) / "metadata" / model_id / f"v{version}.json"
-                )
+                metadata_path = self._metadata_path(model_id, version)
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
                 self._update_models_index(model_version, skip_lock=True)
@@ -443,9 +445,7 @@ class ModelRegistry:
                 raise ModelNotFoundError(name, version)
             row = row.iloc[0]
 
-        metadata_path = str(
-            Path(self.registry_path) / "metadata" / row["model_id"] / f"v{row['version']}.json"
-        )
+        metadata_path = self._metadata_path(row["model_id"], row["version"])
         data = self.storage.read_json(metadata_path)
         return ModelVersion.from_dict(data)
 
@@ -461,21 +461,14 @@ class ModelRegistry:
             stage_rows = model_rows[model_rows["stage"] == stage.value]
             if not stage_rows.empty:
                 best_row = stage_rows.sort_values("version", ascending=False).iloc[0]
-                metadata_path = str(
-                    Path(self.registry_path)
-                    / "metadata"
-                    / best_row["model_id"]
-                    / f"v{best_row['version']}.json"
-                )
+                metadata_path = self._metadata_path(best_row["model_id"], best_row["version"])
                 data = self.storage.read_json(metadata_path)
                 return ModelVersion.from_dict(data)
             raise ModelNotFoundError(f"{name} in stage {stage.value}")
 
         candidates: List[ModelVersion] = []
         for _, row in model_rows.iterrows():
-            metadata_path = str(
-                Path(self.registry_path) / "metadata" / row["model_id"] / f"v{row['version']}.json"
-            )
+            metadata_path = self._metadata_path(row["model_id"], row["version"])
             data = self.storage.read_json(metadata_path)
             mv = ModelVersion.from_dict(data)
             if mv.metadata.stage == stage:
@@ -609,9 +602,7 @@ class ModelRegistry:
             model_version.metadata.stage = stage
             model_version.updated_at = datetime.now(tz=timezone.utc).isoformat()
 
-            metadata_path = str(
-                Path(self.registry_path) / "metadata" / model_version.model_id / f"v{version}.json"
-            )
+            metadata_path = self._metadata_path(model_version.model_id, version)
             self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
             demoted_versions: List[int] = []
@@ -669,9 +660,7 @@ class ModelRegistry:
 
             other.metadata.stage = ModelStage.ARCHIVED
             other.updated_at = datetime.now(tz=timezone.utc).isoformat()
-            other_metadata_path = str(
-                Path(self.registry_path) / "metadata" / other.model_id / f"v{other_version}.json"
-            )
+            other_metadata_path = self._metadata_path(other.model_id, other_version)
             self.storage.write_json(other.to_dict(), other_metadata_path, mode="overwrite")
             self._update_models_index(other, skip_lock=True)
             self._audit_log(
@@ -859,9 +848,7 @@ class ModelRegistry:
                 logger.warning(f"Could not delete artifact: {e}")
 
             # Delete metadata
-            metadata_path = str(
-                Path(self.registry_path) / "metadata" / model_version.model_id / f"v{version}.json"
-            )
+            metadata_path = self._metadata_path(model_version.model_id, version)
             try:
                 self.storage.delete(metadata_path)
             except Exception as e:

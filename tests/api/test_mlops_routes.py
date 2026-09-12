@@ -1,10 +1,10 @@
 """Unit tests for the storage-path resolution helpers in
 ducta.api.routes.mlops.
 
-These endpoints used to resolve storage_path by parsing global_settings.*
+These endpoints used to resolve storage_path by parsing global_config.*
 directly off disk — never building a real Context — so a pipeline run that
 wrote its tracking data under output_path/<env>/<schema>/<pipeline> (the
-default whenever global_settings.mlops_path isn't set) was invisible unless
+default whenever global_config.mlops_path isn't set) was invisible unless
 the caller passed storage_path explicitly.
 """
 
@@ -19,7 +19,7 @@ from ducta.api.routes import mlops as mlops_routes
 
 def _fake_context(output_path, env="dev"):
     return SimpleNamespace(
-        global_settings={},
+        global_config={},
         output_path=output_path,
         env=env,
         execution_mode="local",
@@ -62,10 +62,10 @@ class TestResolveMlopsStoragePrecedence:
         assert got == str(tmp_path / "mlops_data")
 
 
-class TestResolveGlobalSettingsSharedWithPromotionPolicy:
+class TestResolveGlobalConfigSharedWithPromotionPolicy:
     def test_prefers_context_over_flat_files(self, tmp_path):
         ctx = _fake_context(str(tmp_path / "output"))
-        ctx.global_settings = {"mlops": {"promotion_policy": {"metric": "f1"}}}
+        ctx.global_config = {"mlops": {"promotion_policy": {"metric": "f1"}}}
 
         class FakeWorkspaceManager:
             def __init__(self, source_path):
@@ -79,8 +79,8 @@ class TestResolveGlobalSettingsSharedWithPromotionPolicy:
             "WorkspaceManager",
             FakeWorkspaceManager,
         ):
-            gs = mlops_routes._resolve_global_settings(tmp_path, env="dev")
+            gs = mlops_routes._resolve_global_config(tmp_path, env="dev")
         assert gs["mlops"]["promotion_policy"]["metric"] == "f1"
 
     def test_no_env_and_no_files_returns_empty_dict(self, tmp_path):
-        assert mlops_routes._resolve_global_settings(tmp_path, env=None) == {}
+        assert mlops_routes._resolve_global_config(tmp_path, env=None) == {}

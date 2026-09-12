@@ -59,10 +59,14 @@ class DuctaError(Exception):
     #: Whether retrying the identical operation could plausibly succeed.
     retryable: bool = False
 
-    def __init__(self, message: str, **context: Any) -> None:
+    def __init__(
+        self, message: str, *, cause: Optional[BaseException] = None, **context: Any
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.context: Dict[str, Any] = {k: v for k, v in context.items() if v is not None}
+        if cause is not None:
+            self.__cause__ = cause
 
     def to_dict(self) -> Dict[str, Any]:
         """Structured form, for API responses and structured logs."""
@@ -135,7 +139,7 @@ class PreflightError(ConfigurationError):
             f"Preflight validation failed for pipeline '{pipeline}' "
             f"({len(errors)} error(s)):\n  - {details}\n"
             f"Fix the configuration or run `ducta config validate` for details. "
-            f"Set global_settings.preflight_enabled=false to bypass.",
+            f"Set global_config.preflight_enabled=false to bypass.",
             pipeline=pipeline,
             errors=errors,
         )
@@ -174,6 +178,7 @@ class NodeExecutionError(ExecutionError):
         detail = f"{type(cause).__name__}: {cause}" if cause else "unknown error"
         super().__init__(
             message or f"Node '{node}' failed during {phase} — {detail}",
+            cause=cause,
             node=node,
             phase=phase,
             cause_type=type(cause).__name__ if cause else None,
@@ -181,8 +186,6 @@ class NodeExecutionError(ExecutionError):
         self.node = node
         self.phase = phase
         self.cause = cause
-        if cause is not None:
-            self.__cause__ = cause
 
 
 class NodeTimeoutError(ExecutionError):
@@ -218,13 +221,12 @@ class PipelineExecutionError(ExecutionError):
     ) -> None:
         super().__init__(
             message or f"Pipeline '{pipeline}' execution failed",
+            cause=cause,
             pipeline=pipeline,
             failed_nodes=failed_nodes,
         )
         self.pipeline = pipeline
         self.failed_nodes = failed_nodes or []
-        if cause is not None:
-            self.__cause__ = cause
 
 
 class ChainStepNotRefreshedError(ExecutionError):
@@ -263,6 +265,7 @@ class ChainExecutionError(ExecutionError):
             message += f" Cancelled: {cancelled}."
         super().__init__(
             message,
+            cause=cause,
             failed_pipeline=failed_pipeline,
             step=step,
             total=total,
@@ -270,8 +273,6 @@ class ChainExecutionError(ExecutionError):
         )
         self.failed_pipeline = failed_pipeline
         self.cancelled = cancelled or []
-        if cause is not None:
-            self.__cause__ = cause
 
 
 class MLOpsRequiredError(ExecutionError):

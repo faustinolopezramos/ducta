@@ -38,7 +38,9 @@ from ducta.stream.constants import (
     STREAMING_FORMAT_CONFIGS,
     StreamingFormat,
 )
-from ducta.stream.exceptions import StreamingError, StreamingFormatNotSupportedError
+from ducta.stream.context_utils import get_context_value
+from ducta.stream.exceptions import StreamingError
+from ducta.stream.factories import StreamingHandlerFactory
 
 
 class _StreamingSparkMixin:
@@ -49,11 +51,7 @@ class _StreamingSparkMixin:
         ctx = getattr(self, "context", None)
         if ctx is None:
             raise StreamingError("Context is not set in streaming reader")
-        # context can be a dict-like or an object with .spark
-        if isinstance(ctx, dict):
-            spark = ctx.get("spark")
-        else:
-            spark = getattr(ctx, "spark", None)
+        spark = get_context_value(ctx, "spark")
         if spark is None:
             raise StreamingError("Spark session is not available in context")
         return spark
@@ -110,10 +108,7 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
         """Read the global opt-out flag for default backpressure limits."""
         ctx = getattr(self, "context", None)
         try:
-            if isinstance(ctx, dict):
-                gs = ctx.get("global_settings", {}) or {}
-            else:
-                gs = getattr(ctx, "global_settings", {}) or {}
+            gs = get_context_value(ctx, "global_config", {}) or {}
             return self._coerce_bool(gs.get("streaming_disable_backpressure_defaults", False))
         except Exception:
             return False
@@ -203,7 +198,7 @@ class KafkaStreamingReader(BaseStreamingReader):
 
         package = f"org.apache.spark:spark-sql-kafka-0-10_2.12:{spark_version}"
         return (
-            f"{error_message}. Configure global_settings.spark_config with "
+            f"{error_message}. Configure global_config.spark_config with "
             f"'spark.jars.packages={package}' and restart the pipeline."
         )
 
@@ -416,65 +411,24 @@ class KinesisStreamingReader(BaseStreamingReader):
             raise StreamingError(f"Failed to create Kinesis stream: {str(e)}") from e
 
 
-class StreamingReaderFactory:
+class StreamingReaderFactory(StreamingHandlerFactory):
     """Factory for creating streaming data readers."""
 
-    def __init__(self, context):
-        self.context = context
-        # Maps format_name -> instantiated reader (populated on first access)
-        self._readers: Dict[str, BaseStreamingReader] = {}
-        self._register_builtin_classes()
-        logger.info(
-            f"StreamingReaderFactory ready with formats: {list(self._reader_classes.keys())}"
-        )
+    _KIND = "reader"
+    _BASE_CLASS = BaseStreamingReader
 
     def _register_builtin_classes(self) -> None:
-        """Register built-in reader classes without instantiating them.
-
-        ``_reader_classes`` maps ``format_name -> (cls, extra_args, extra_kwargs)``
-        so that *args/**kwargs passed to :meth:`register_custom_reader` are
-        forwarded to the reader constructor on first instantiation.
-        """
-        self._reader_classes: Dict[str, tuple] = {
+        """Register built-in reader classes without instantiating them."""
+        self._classes = {
             StreamingFormat.KAFKA.value: (KafkaStreamingReader, (), {}),
             StreamingFormat.DELTA_STREAM.value: (DeltaStreamingReader, (), {}),
             StreamingFormat.FILE_STREAM.value: (FileStreamReader, (), {}),
             StreamingFormat.KINESIS.value: (KinesisStreamingReader, (), {}),
         }
 
-    def _get_or_create_reader(self, format_key: str) -> BaseStreamingReader:
-        """Lazily instantiate and cache a reader for the given format key."""
-        if format_key not in self._readers:
-            cls, extra_args, extra_kwargs = self._reader_classes[format_key]
-            try:
-                self._readers[format_key] = cls(self.context, *extra_args, **extra_kwargs)
-            except Exception as e:
-                raise StreamingError(
-                    f"Failed to instantiate reader for format '{format_key}': {str(e)}",
-                    cause=e,
-                ) from e
-        return self._readers[format_key]
-
     def get_reader(self, format_name: str) -> BaseStreamingReader:
         """Get streaming reader for specified format."""
-        try:
-            if not format_name or not isinstance(format_name, str):
-                raise StreamingError("Format name must be a non-empty string")
-
-            format_key = format_name.lower()
-            if format_key not in self._reader_classes:
-                supported = list(self._reader_classes.keys())
-                raise StreamingFormatNotSupportedError(
-                    f"Streaming format '{format_name}' not supported. Supported formats: {supported}"
-                )
-            return self._get_or_create_reader(format_key)
-        except Exception as e:
-            logger.error(f"Error getting reader for format '{format_name}': {str(e)}")
-            raise
-
-    def list_supported_formats(self) -> list:
-        """List all supported streaming input formats."""
-        return list(self._reader_classes.keys())
+        return self.get(format_name)
 
     def register_custom_reader(self, format_name: str, reader_class, *args, **kwargs):
         """Register a custom streaming reader.
@@ -482,14 +436,4 @@ class StreamingReaderFactory:
         ``*args`` and ``**kwargs`` are stored and forwarded to the reader
         constructor on its first use, alongside the mandatory ``context`` arg.
         """
-        try:
-            if not issubclass(reader_class, BaseStreamingReader):
-                raise StreamingError("Custom reader must inherit from BaseStreamingReader")
-            # Store (class, extra_args, extra_kwargs) so they are forwarded at instantiation.
-            self._reader_classes[format_name.lower()] = (reader_class, args, kwargs)
-            # If already cached, invalidate so the new class is used
-            self._readers.pop(format_name.lower(), None)
-            logger.info(f"Registered custom reader '{format_name}'")
-        except Exception as e:
-            logger.error(f"Error registering custom reader '{format_name}': {str(e)}")
-            raise StreamingError(f"Failed to register custom reader: {str(e)}")
+        self.register_custom(format_name, reader_class, *args, **kwargs)

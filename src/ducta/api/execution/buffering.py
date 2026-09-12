@@ -234,6 +234,7 @@ class BufferedLogManager:
 
 # Singleton instance
 _buffered_log_manager: BufferedLogManager | None = None
+_buffered_log_manager_lock = threading.Lock()
 
 
 def get_buffered_log_manager(
@@ -242,5 +243,7 @@ def get_buffered_log_manager(
     """Get or create the singleton BufferedLogManager."""
     global _buffered_log_manager
     if _buffered_log_manager is None:
-        _buffered_log_manager = BufferedLogManager(default_buffer_size)
+        with _buffered_log_manager_lock:
+            if _buffered_log_manager is None:
+                _buffered_log_manager = BufferedLogManager(default_buffer_size)
     return _buffered_log_manager

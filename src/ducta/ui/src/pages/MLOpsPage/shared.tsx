@@ -1,4 +1,5 @@
 import client from "../../api/client";
+import { formatDate as formatDateShared } from "../../utils/formatDate";
 
 /** Best-effort fallback: find the project that owns a pipeline by name.
  *  Older MLOps runs only record the pipeline's name; newer runs carry a
@@ -29,12 +30,5 @@ export const STAGE_COLOR: Record<string, string> = {
 };
 
 export function formatDate(iso?: string | null) {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  return formatDateShared(iso, { includeYear: true });
 }

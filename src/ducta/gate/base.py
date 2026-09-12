@@ -110,23 +110,8 @@ class BaseIO:
         dataframe: Any,
         sample_rows: Optional[int] = None,
     ) -> Optional[Any]:
-        """Compute (if enabled) and store a DataFingerprint under ``_{scope}_fingerprints``.
-
-        ``scope`` should be "input" or "output". Never raises — fingerprinting must
-        not be the reason a pipeline fails — but a failure is no longer silent: it
-        is recorded on the run ledger, which raises it to WARNING and marks the
-        certificate ``evidence_complete: false`` with the reason in
-        ``evidence_gaps``.
-
-        That distinction matters more here than almost anywhere else. A
-        certificate whose fingerprints quietly failed to compute still verifies
-        and still looks complete, while attesting to nothing — the exact failure
-        the certificate exists to rule out. (Observed in practice: a
-        ``PYSPARK_PYTHON`` version mismatch makes every Spark worker fail, and
-        the old debug-level swallow turned that into certificates full of
-        identical empty fingerprints.)
-        """
-        if not self.context_manager.get_nested("global_settings.enable_data_fingerprinting", True):
+        """Compute (if enabled) and store a DataFingerprint under ``_{scope}_fingerprints``."""
+        if not self.context_manager.get_nested("global_config.enable_data_fingerprinting", True):
             return None
         try:
             from ducta.gate.fingerprinting import compute_fingerprint
@@ -142,8 +127,6 @@ class BaseIO:
             self._note_fingerprint_gap(f"{scope} fingerprint for '{key}'", error)
             return None
 
-        # A fingerprint that had to fall back to something weaker than asked for
-        # is also an evidence gap, even though nothing raised.
         degraded = getattr(fingerprint, "degraded_reason", None)
         if degraded:
             self._note_fingerprint_gap(

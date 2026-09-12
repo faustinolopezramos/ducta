@@ -140,12 +140,10 @@ _PUBLIC_API: dict[str, str] = {
     # Routes
     "register_routes": "ducta.api.routes",
     # Services
-    "CachedConfigService": "ducta.api.services",
     "ConfigService": "ducta.api.services",
     "NodeSchemaService": "ducta.api.services",
     "NodeService": "ducta.api.services",
     "ProjectService": "ducta.api.services",
-    "get_cached_config_service": "ducta.api.services",
     # Source resolution
     "ResolvedSource": "ducta.api.source",
     "SourceInfo": "ducta.api.source",
@@ -235,12 +233,10 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
     )
     from ducta.api.routes import register_routes
     from ducta.api.services import (
-        CachedConfigService,
         ConfigService,
         NodeSchemaService,
         NodeService,
         ProjectService,
-        get_cached_config_service,
     )
     from ducta.api.source import ResolvedSource, SourceInfo, SourceResolver
     from ducta.api.vcs import (
@@ -350,12 +346,10 @@ __all__ = [
     "PipelineRepository",
     "ProjectRepository",
     "register_routes",
-    "CachedConfigService",
     "ConfigService",
     "NodeSchemaService",
     "NodeService",
     "ProjectService",
-    "get_cached_config_service",
     "ResolvedSource",
     "SourceInfo",
     "SourceResolver",

@@ -185,7 +185,3 @@ class ProcessOutputCapture:
             clean,
             level=infer_process_output_level(clean),
         )
-
-
-# ── Back-compat alias (keeps old private name working if referenced elsewhere) ─
-_ProcessOutputCapture = ProcessOutputCapture

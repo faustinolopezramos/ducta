@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -30,6 +30,8 @@ from uuid import uuid4
 
 from loguru import logger
 from pydantic import BaseModel, Field
+
+from ducta.api.utils.fsio import atomic_write_json
 
 if TYPE_CHECKING:
     from ducta.api.execution.manager import ExecutionManager
@@ -135,9 +137,7 @@ class AsyncCronScheduler:
         try:
             self._storage_dir.mkdir(parents=True, exist_ok=True)
             raw = [s.model_dump() for s in self._schedules.values()]
-            tmp_path = self._file_path.with_suffix(".tmp")
-            tmp_path.write_text(json.dumps(raw, indent=2), encoding="utf-8")
-            os.replace(tmp_path, self._file_path)
+            atomic_write_json(self._file_path, raw)
         except Exception as exc:
             logger.error(f"Failed to save schedules to {self._file_path}: {exc}")
 
@@ -240,10 +240,13 @@ class AsyncCronScheduler:
 
 
 _scheduler: Optional[AsyncCronScheduler] = None
+_scheduler_lock = threading.Lock()
 
 
 def get_cron_scheduler() -> AsyncCronScheduler:
     global _scheduler
     if _scheduler is None:
-        _scheduler = AsyncCronScheduler()
+        with _scheduler_lock:
+            if _scheduler is None:
+                _scheduler = AsyncCronScheduler()
     return _scheduler

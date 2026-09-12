@@ -39,7 +39,7 @@ def _engine(nodes_config, pipelines_config, datasets=None, **settings):
     context = FakeContext(
         nodes_config=nodes_config,
         pipelines_config=pipelines_config,
-        global_settings=settings,
+        global_config=settings,
     )
     engine = PipelineExecutor(context)
 

@@ -76,8 +76,8 @@ def _resolve_workspace_context(source_path: Path, env: Optional[str]) -> Optiona
         return None
 
 
-def _resolve_global_settings(source_path: Path, env: Optional[str]) -> Dict[str, Any]:
-    """Best-effort ``global_settings`` dict for this workspace, preferring a
+def _resolve_global_config(source_path: Path, env: Optional[str]) -> Dict[str, Any]:
+    """Best-effort ``global_config`` dict for this workspace, preferring a
     real ``Context`` (see ``_resolve_workspace_context``) over the flat-file
     heuristic below. Shared by ``_resolve_mlops_storage`` and the promotion
     policy lookup in ``promote_model`` so both agree on the same settings —
@@ -89,11 +89,11 @@ def _resolve_global_settings(source_path: Path, env: Optional[str]) -> Dict[str,
     """
     context = _resolve_workspace_context(source_path, env)
     if context is not None:
-        gs = getattr(context, "global_settings", {})
+        gs = getattr(context, "global_config", {})
         if isinstance(gs, dict):
             return gs
 
-    for candidate in ("global_settings.toml", "global_settings.yaml", "global_settings.yml"):
+    for candidate in ("global_config.toml", "global_config.yaml", "global_config.yml"):
         cfg_file = source_path / candidate
         if cfg_file.is_file():
             try:
@@ -105,7 +105,7 @@ def _resolve_global_settings(source_path: Path, env: Optional[str]) -> Dict[str,
                 if isinstance(data, dict):
                     return data
             except Exception as exc:
-                logger.debug("Could not read global settings: {}", exc)
+                logger.debug("Could not read global config: {}", exc)
 
     return {}
 
@@ -115,7 +115,7 @@ def _resolve_mlops_storage(
     override: Optional[str],
     env: Optional[str] = None,
     pipeline_name: Optional[str] = None,
-    global_settings: Optional[Dict[str, Any]] = None,
+    global_config: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Resolve mlops storage path from workspace or explicit override."""
     if override:
@@ -129,11 +129,7 @@ def _resolve_mlops_storage(
         if resolved:
             return resolved
 
-    gs = (
-        global_settings
-        if global_settings is not None
-        else _resolve_global_settings(source_path, env)
-    )
+    gs = global_config if global_config is not None else _resolve_global_config(source_path, env)
     mlops_cfg = gs.get("mlops") or {}
     path = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
     if path:
@@ -356,8 +352,8 @@ async def promote_model(
     ),
 ) -> Dict[str, Any]:
     """Promote a model version to a new stage."""
-    gs = _resolve_global_settings(source_path, env)
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, global_settings=gs)
+    gs = _resolve_global_config(source_path, env)
+    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, global_config=gs)
 
     try:
         target_stage = ModelStage(body.stage.capitalize())

@@ -59,17 +59,17 @@ class QualityCheckExecutor:
         self.quality_output_manager = quality_output_manager
 
     def _load_quality_profiles(self) -> Dict[str, Any]:
-        """Load quality profiles from global_settings."""
+        """Load quality profiles from global_config."""
         try:
             from ducta.check.profiles import load_profiles as _load_profiles
 
-            gs = getattr(self.context, "global_settings", {}) or {}
+            gs = getattr(self.context, "global_config", {}) or {}
             return _load_profiles(gs) if isinstance(gs, dict) else {}
         except Exception:
             return {}
 
     def _ml_default_sanity_enabled(self) -> bool:
-        """Whether global settings allow the default ML sanity checks (on by default)."""
+        """Whether global config allow the default ML sanity checks (on by default)."""
         return self.settings.ml_default_sanity_checks
 
     def _deposit_quality_summary(self, node_name: str, phase: str, report: Any) -> None:
@@ -132,7 +132,7 @@ class QualityCheckExecutor:
             logger.info(
                 "Node '{}': applying default ML sanity checks ({}). Disable with "
                 "sanity_checks.enabled=false on the node or "
-                "global_settings.ml_default_sanity_checks=false.",
+                "global_config.ml_default_sanity_checks=false.",
                 node_name,
                 ", ".join(sanity_config["checks"]),
             )
@@ -150,7 +150,14 @@ class QualityCheckExecutor:
 
         self._deposit_quality_summary(node_name, "sanity", report)
 
-        if not report.passed and sanity_config.get("fail_fast", True):
+        # A node that declared a sanity_gate has already been judged by it inside
+        # the runner: a blocking verdict raised QualityGateBlocked and never got
+        # here, and reaching this line means the gate passed the node or was set
+        # to warn_only. Failing it now would overrule the gate's own decision —
+        # `warn_only` in particular means "log this and carry on", and this line
+        # turned it into a hard node failure.
+        gate_decided = bool(sanity_config.get("sanity_gate"))
+        if not gate_decided and not report.passed and sanity_config.get("fail_fast", True):
             raise SanityCheckFailedError(node_name, report.errors_count)
 
         return report

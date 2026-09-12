@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cx } from "../../utils/classNames";
 import "./Toolbar.css";
 
 export interface ToolbarProps {
@@ -22,9 +23,7 @@ export function Toolbar({ children, end, bordered = false, className, ...rest }:
   return (
     <div
       role="toolbar"
-      className={["tui-toolbar", bordered ? "tui-toolbar--bordered" : "", className ?? ""]
-        .filter(Boolean)
-        .join(" ")}
+      className={cx("tui-toolbar", bordered && "tui-toolbar--bordered", className)}
       {...rest}
     >
       <div className="tui-toolbar__group tui-toolbar__group--start">{children}</div>

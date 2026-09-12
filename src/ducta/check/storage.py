@@ -19,11 +19,13 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+import os
 import re
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Generator, List, Optional
+from uuid import uuid4
 
 from loguru import logger  # type: ignore
 
@@ -74,7 +76,34 @@ def _exclusive_lock(f: Any) -> Generator[None, None, None]:
 
 
 def _write_json_atomic(path: Path, data: Any) -> None:
-    path.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+    tmp = path.parent / f".{path.name}.tmp-{uuid4().hex}"
+    try:
+        tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
+        os.replace(tmp, path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink()
+        raise
+
+
+def _append_json_history(path: Path, metric_entry: Any) -> None:
+    """Append *metric_entry* to the JSON history array at *path*, under an
+    exclusive file lock. Shared by ``FileStorageBackend.append_history`` and
+    ``ContextAwareStorageBackend.append_history``'s JSON branch, which
+    previously each carried an identical copy of this read-modify-write."""
+    try:
+        if not path.exists():
+            path.write_text("[]", encoding="utf-8")
+        with open(path, "r+") as f:
+            with _exclusive_lock(f):
+                content = f.read()
+                history = json.loads(content) if content.strip() else []
+                history.append(metric_entry)
+                f.seek(0)
+                f.truncate()
+                json.dump(history, f, indent=2, default=str)
+    except Exception as e:
+        logger.error(f"Failed to append to history: {e}")
 
 
 def _read_json_safe(path: Path) -> Optional[Any]:
@@ -280,20 +309,9 @@ class FileStorageBackend(StorageBackend):
         return _read_json_safe(self._dataset_path(dataset_name, pipeline_name) / "history.json")
 
     def append_history(self, dataset_name, metric_entry, pipeline_name=DEFAULT_PIPELINE_NAME):
-        p = self._dataset_path(dataset_name, pipeline_name) / "history.json"
-        try:
-            if not p.exists():
-                p.write_text("[]", encoding="utf-8")
-            with open(p, "r+") as f:
-                with _exclusive_lock(f):
-                    content = f.read()
-                    history = json.loads(content) if content.strip() else []
-                    history.append(metric_entry)
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(history, f, indent=2, default=str)
-        except Exception as e:
-            logger.error(f"Failed to append to history: {e}")
+        _append_json_history(
+            self._dataset_path(dataset_name, pipeline_name) / "history.json", metric_entry
+        )
 
     def save_gate_result(
         self, gate_result, run_id, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME
@@ -431,11 +449,52 @@ class ContextAwareStorageBackend(StorageBackend):
 
     def _to_dataframe(self, data: Any):
         try:
-            return self.context.spark.createDataFrame(data)
-        except (AttributeError, Exception):
+            return self.context.spark.createDataFrame(self._safe_for_spark_inference(data))
+        except Exception:
             import pandas as pd  # type: ignore
 
             return pd.DataFrame(data)
+
+    @staticmethod
+    def _safe_for_spark_inference(records: list) -> list:
+        """JSON-encode any field that is ``None``/``[]``/``{}`` in *every*
+        record before handing rows to ``spark.createDataFrame``.
+
+        Spark infers a column's type by sampling values across rows; a
+        column that is an empty list/dict (or ``None``) in every sampled row
+        has no element to infer a type from, and ``createDataFrame`` raises
+        ``PySparkValueError [CANNOT_DETERMINE_TYPE]`` — even though the same
+        field, non-empty in even one row, infers fine. This hit
+        ``save_report`` in particular: ``QualityReport.persistence_warnings``
+        is an empty list on every successful run, so every non-JSON report
+        save failed here and was silently swallowed by its caller's
+        ``except Exception: logger.warning(...)``, leaving `reports/`
+        (`gate_results`, `baseline`, and `history` are unaffected — none of
+        their fields are container-typed) empty with no error surfaced.
+
+        Only genuinely ambiguous fields are touched — a field with real data
+        in at least one record still gets Spark's normal inferred
+        ArrayType/StructType column, unchanged from before this fix.
+        """
+        if not records:
+            return records
+
+        def _is_ambiguous(value: Any) -> bool:
+            return value is None or (isinstance(value, (list, dict)) and not value)
+
+        ambiguous_keys = {
+            key for key in records[0] if all(_is_ambiguous(record.get(key)) for record in records)
+        }
+        if not ambiguous_keys:
+            return records
+
+        return [
+            {
+                key: (json.dumps(value, default=str) if key in ambiguous_keys else value)
+                for key, value in record.items()
+            }
+            for record in records
+        ]
 
     def _from_dataframe(self, df: Any):
         if hasattr(df, "toPandas"):
@@ -492,6 +551,13 @@ class ContextAwareStorageBackend(StorageBackend):
                 report = records[0]
                 if isinstance(report.get("results"), str):
                     report["results"] = json.loads(report["results"])
+                # persistence_warnings is normally [] and so gets JSON-encoded
+                # by _to_dataframe's _safe_for_spark_inference (Spark can't
+                # infer a type from an empty list) — undo that here the same
+                # way results is unpacked above, for any (unlikely) case a
+                # single-element non-empty list also went through it.
+                if isinstance(report.get("persistence_warnings"), str):
+                    report["persistence_warnings"] = json.loads(report["persistence_warnings"])
                 return report
             return None
 
@@ -539,20 +605,9 @@ class ContextAwareStorageBackend(StorageBackend):
 
     def append_history(self, dataset_name, metric_entry, pipeline_name=DEFAULT_PIPELINE_NAME):
         if self.format == "json":
-            p = self._dataset_dir(dataset_name, pipeline_name) / "history.json"
-            try:
-                if not p.exists():
-                    p.write_text("[]", encoding="utf-8")
-                with open(p, "r+") as f:
-                    with _exclusive_lock(f):
-                        content = f.read()
-                        history = json.loads(content) if content.strip() else []
-                        history.append(metric_entry)
-                        f.seek(0)
-                        f.truncate()
-                        json.dump(history, f, indent=2, default=str)
-            except Exception as e:
-                logger.error(f"Failed to append to history: {e}")
+            _append_json_history(
+                self._dataset_dir(dataset_name, pipeline_name) / "history.json", metric_entry
+            )
         else:
             # Non-JSON formats have no cheap incremental append, so this does a
             # full load-modify-save; without a lock around that, two concurrent

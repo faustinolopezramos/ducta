@@ -24,8 +24,8 @@ from ducta.core.settings import (
 )
 
 
-def _ctx(global_settings=None, **attrs):
-    return SimpleNamespace(global_settings=global_settings or {}, **attrs)
+def _ctx(global_config=None, **attrs):
+    return SimpleNamespace(global_config=global_config or {}, **attrs)
 
 
 class TestCoerceBool:
@@ -111,7 +111,7 @@ class TestEnvResolution:
         s = CoreSettings.from_context(_ctx({"env": "from_gs"}, env="from_ctx"))
         assert s.env == "from_ctx"
 
-    def test_falls_back_to_global_settings_env(self):
+    def test_falls_back_to_global_config_env(self):
         assert CoreSettings.from_context(_ctx({"env": "dev"})).env == "dev"
 
     def test_falls_back_to_environment_key(self):
@@ -181,7 +181,7 @@ class TestImmutability:
 class TestSchemaDefaultsDoNotDrift:
     """Regression: a Pydantic default silently overrode the engine's default.
 
-    ``Context._validate_all_configs_with_pydantic`` replaces ``global_settings``
+    ``Context._validate_all_configs_with_pydantic`` replaces ``global_config``
     with ``ConfigSchema.to_dicts()``, whose ``model_dump(exclude_none=True)``
     drops ``None`` but *not* ``False``. So a schema field defaulting to ``False``
     is materialized into the dict that ``CoreSettings.from_context`` then reads
@@ -194,20 +194,20 @@ class TestSchemaDefaultsDoNotDrift:
     """
 
     @staticmethod
-    def _dumped_global_settings(**chain):
-        from ducta.setting.schemas import GlobalSettingsSchema
+    def _dumped_global_config(**chain):
+        from ducta.setting.schemas import GlobalConfigSchema
 
-        return GlobalSettingsSchema(input_path="data", output_path="data", chain=chain).model_dump(
+        return GlobalConfigSchema(input_path="data", output_path="data", chain=chain).model_dump(
             exclude_none=True
         )
 
     def test_a_chain_block_does_not_silently_disable_the_staleness_check(self):
-        dumped = self._dumped_global_settings(reuse_materialized=True)
+        dumped = self._dumped_global_config(reuse_materialized=True)
 
         assert CoreSettings.from_context(dumped).chain_staleness_check is True
 
     def test_an_explicit_false_is_still_honoured(self):
-        dumped = self._dumped_global_settings(reuse_materialized=True, staleness_check=False)
+        dumped = self._dumped_global_config(reuse_materialized=True, staleness_check=False)
 
         assert CoreSettings.from_context(dumped).chain_staleness_check is False
 

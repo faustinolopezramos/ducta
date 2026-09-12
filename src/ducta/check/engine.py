@@ -73,18 +73,28 @@ def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[st
     raise QualityGateBlocked(gate_result=gate_result, dataset_name=dataset_name, run_id=run_id)
 
 
-def _rename_result(result: "CheckResult", check_name: str) -> "CheckResult":
-    # ``executed_at`` is carried over rather than defaulted: rebuilding without
-    # it stamped the copy with the rebuild time, so every named check instance
-    # reported when it was renamed instead of when it ran.
+def _replace_result(
+    result: "CheckResult",
+    *,
+    check_name: Optional[str] = None,
+    severity: Optional[CheckSeverity] = None,
+) -> "CheckResult":
+    """Rebuild *result* with one or more fields overridden, carrying over
+    everything else — including ``executed_at``, so a rebuilt copy still
+    reports when the check actually ran, not when it was rebuilt. Shared by
+    ``_rename_result`` and ``_apply_configured_severity``."""
     return result.__class__(
-        check_name=check_name,
+        check_name=check_name if check_name is not None else result.check_name,
         passed=result.passed,
-        severity=result.severity,
+        severity=severity if severity is not None else result.severity,
         message=result.message,
         details=result.details,
         executed_at=result.executed_at,
     )
+
+
+def _rename_result(result: "CheckResult", check_name: str) -> "CheckResult":
+    return _replace_result(result, check_name=check_name)
 
 
 def _configured_severity(
@@ -121,14 +131,7 @@ def _apply_configured_severity(
     """
     if severity is None or severity == result.severity:
         return result
-    return result.__class__(
-        check_name=result.check_name,
-        passed=result.passed,
-        severity=severity,
-        message=result.message,
-        details=result.details,
-        executed_at=result.executed_at,
-    )
+    return _replace_result(result, severity=severity)
 
 
 def _build_execution_error_result(check_name: str, exc: Exception) -> "CheckResult":
@@ -440,6 +443,25 @@ class SanityPhaseRunner:
         # node's fail_fast: false would be silently ignored during preflight.
         fail_fast = sanity_config_dict.get("fail_fast", self.fail_fast)
 
+        # A declared sanity_gate is the thing that decides what a failure means,
+        # so it must get to decide. `fail_fast` defaults to true for this phase,
+        # and its raise happens inside the per-check loop below — before the gate
+        # is ever evaluated. The result was that declaring
+        # `sanity_gate: {behavior: warn_only}` did nothing at all: the node
+        # hard-failed on the first ERROR regardless of the behavior the config
+        # asked for, and `skip_downstream` came back as a failed node rather than
+        # a blocked one. Collecting the results instead lets the gate rule, which
+        # is what the data_quality phase already does. With no gate declared,
+        # fail-fast is untouched.
+        gate_will_decide = bool(sanity_config_dict.get("sanity_gate") or self._global_gate_config)
+        if gate_will_decide and fail_fast:
+            logger.debug(
+                "Node '{}': sanity_gate declared, so its behavior decides the outcome "
+                "instead of fail_fast aborting on the first ERROR.",
+                node_name,
+            )
+            fail_fast = False
+
         # Resolve profile: merge profile defaults with node-level checks
         profile_name = sanity_config_dict.get("profile")
         checks_config = resolve_checks_config(raw_checks_config, profile_name, self._profiles)
@@ -556,11 +578,16 @@ class SanityPhaseRunner:
                 from ducta.check.gate import QualityGateEvaluator as _GE  # lazy import
 
                 report.score = _GE.compute_score(report, {})
-            except (ImportError, Exception):
+            except Exception:
                 pass
 
-        # Non-fail-fast mode: raise collected failures (AFTER gate so gate result is available)
-        if not fail_fast:
+        # Non-fail-fast mode: raise collected failures (AFTER gate so gate result
+        # is available). Skipped when a gate was in charge — it has already had
+        # its say above, and for `warn_only` that say was "log this and carry
+        # on". Raising here anyway would take the node down for the failures the
+        # gate just declared tolerable, which is the same way round the
+        # fail-fast raise used to pre-empt the gate.
+        if not fail_fast and not gate_will_decide:
             errors = [r for r in results if r.is_error]
             if errors:
                 raise QualityChecksFailed(results, node_name)
@@ -695,11 +722,11 @@ class ValidationPhaseRunner:
     ) -> None:
         """Initialize validation phase runner."""
         if context is not None:
-            gs = getattr(context, "global_settings", {}) or {}
+            gs = getattr(context, "global_config", {}) or {}
             if not isinstance(gs, dict):
                 gs = {}
 
-            # Enforce Ducta Standard: All I/O should be centralized in global_settings
+            # Enforce Ducta Standard: All I/O should be centralized in global_config
             output_cfg = gs.get("quality", {}).get("output", {})
             output_fmt = format or output_cfg.get("format", "json")
             base_path = output_cfg.get("base_path")
@@ -717,7 +744,7 @@ class ValidationPhaseRunner:
 
                     raise QualityConfigError(
                         "Ducta Standard Violation: All data input/output must be explicitly configured. "
-                        "Missing 'output_path' in global_settings or 'base_path' in global_settings.quality.output."
+                        "Missing 'output_path' in global_config or 'base_path' in global_config.quality.output."
                     )
                 env = gs.get("environment", "base")
                 base_path = str(Path(global_output) / env / ".quality")
@@ -815,20 +842,9 @@ class ValidationPhaseRunner:
                     result = _build_unknown_check_type_result(check_name, registry_key)
                     results.append(result)
                     if self.fail_fast:
-                        elapsed = time.perf_counter() - start_time
-                        report = QualityReport(
-                            dataset_name=dataset_name,
-                            passed=False,
-                            results=results,
-                            run_id=run_id,
-                            workspace_path=self.workspace_path,
-                            elapsed_seconds=elapsed,
+                        self._abort_with_failure(
+                            dataset_name, results, result, run_id, pipeline_name, start_time
                         )
-                        self._assign_best_effort_score(report)
-                        self.storage.save_report(
-                            report.to_dict(), run_id, dataset_name, pipeline_name
-                        )
-                        raise QualityChecksFailed([result], dataset_name, run_id)
                     continue
 
                 configured_severity = _configured_severity(check_config_dict, check_name)
@@ -862,21 +878,9 @@ class ValidationPhaseRunner:
 
                     # Fail-fast mode
                     if self.fail_fast and not result.passed and result.is_error:
-                        elapsed = time.perf_counter() - start_time
-                        report = QualityReport(
-                            dataset_name=dataset_name,
-                            passed=False,
-                            results=results,
-                            run_id=run_id,
-                            workspace_path=self.workspace_path,
-                            elapsed_seconds=elapsed,
+                        self._abort_with_failure(
+                            dataset_name, results, result, run_id, pipeline_name, start_time
                         )
-                        self._assign_best_effort_score(report)
-                        # Save report before raising
-                        self.storage.save_report(
-                            report.to_dict(), run_id, dataset_name, pipeline_name
-                        )
-                        raise QualityChecksFailed([result], dataset_name, run_id)
 
                 except QualityChecksFailed:
                     raise
@@ -885,20 +889,9 @@ class ValidationPhaseRunner:
                     result = _build_execution_error_result(check_name, e)
                     results.append(result)
                     if self.fail_fast:
-                        elapsed = time.perf_counter() - start_time
-                        report = QualityReport(
-                            dataset_name=dataset_name,
-                            passed=False,
-                            results=results,
-                            run_id=run_id,
-                            workspace_path=self.workspace_path,
-                            elapsed_seconds=elapsed,
+                        self._abort_with_failure(
+                            dataset_name, results, result, run_id, pipeline_name, start_time
                         )
-                        self._assign_best_effort_score(report)
-                        self.storage.save_report(
-                            report.to_dict(), run_id, dataset_name, pipeline_name
-                        )
-                        raise QualityChecksFailed([results[-1]], dataset_name, run_id)
 
             # Build report
             elapsed = time.perf_counter() - start_time
@@ -1029,6 +1022,32 @@ class ValidationPhaseRunner:
         except Exception as e:
             logger.exception(f"Validation runner failed: {e}")
             raise
+
+    def _abort_with_failure(
+        self,
+        dataset_name: str,
+        results: list,
+        failing_result: "CheckResult",
+        run_id: str,
+        pipeline_name: str,
+        start_time: float,
+    ) -> None:
+        """Build+save the report so far and raise ``QualityChecksFailed`` for
+        *failing_result*. Shared by the three fail-fast abort points in
+        ``run()`` (unknown check type, a failed ERROR-severity check, and an
+        exception during check execution) — always raises, never returns."""
+        elapsed = time.perf_counter() - start_time
+        report = QualityReport(
+            dataset_name=dataset_name,
+            passed=False,
+            results=results,
+            run_id=run_id,
+            workspace_path=self.workspace_path,
+            elapsed_seconds=elapsed,
+        )
+        self._assign_best_effort_score(report)
+        self.storage.save_report(report.to_dict(), run_id, dataset_name, pipeline_name)
+        raise QualityChecksFailed([failing_result], dataset_name, run_id)
 
     @staticmethod
     def _assign_best_effort_score(report: QualityReport) -> None:

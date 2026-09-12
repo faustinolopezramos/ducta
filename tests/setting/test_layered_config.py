@@ -17,7 +17,7 @@ class TestLayerConfig:
         lc = LayerConfig("bronze", {"path": "bronze"})
         assert lc.name == "bronze"
         assert lc.path == Path("bronze")
-        assert lc.global_settings == "global.yaml"
+        assert lc.global_config == "global.yaml"
         assert lc.config_path == "config"
 
     def test_init_with_overrides(self):
@@ -27,7 +27,7 @@ class TestLayerConfig:
                 "path": "custom_path",
                 "description": "Custom layer",
                 "depends_on": ["other"],
-                "global_settings": "custom_global.yaml",
+                "global_config": "custom_global.yaml",
                 "config_path": "custom_config",
                 "environments_path": "custom_env",
             },
@@ -39,7 +39,7 @@ class TestLayerConfig:
     def test_get_config_paths(self, temp_dir):
         lc = LayerConfig("bronze", {"path": "bronze"})
         paths = lc.get_config_paths(temp_dir)
-        assert paths["global_settings"] == temp_dir / "bronze" / "global.yaml"
+        assert paths["global_config"] == temp_dir / "bronze" / "global.yaml"
         assert paths["pipelines_config"] == temp_dir / "bronze" / "config" / "pipelines.yaml"
         assert paths["nodes_config"] == temp_dir / "bronze" / "config" / "nodes.yaml"
         assert paths["layer_path"] == temp_dir / "bronze"
@@ -219,7 +219,7 @@ class TestLayerContextBuilder:
         result = LayerContextBuilder.build_context_args(detector, "bronze")
         assert result is not None
         assert result["layer"] == "bronze"
-        assert "global_settings" in result
+        assert "global_config" in result
 
     def test_inject_sys_path(self, temp_dir):
         import sys
@@ -373,7 +373,7 @@ class TestEnvTravelsWithTheContextArgs:
         args = LayerContextBuilder.build_context_args(detector, "bronze", "dev")
 
         assert set(args) >= {
-            "global_settings",
+            "global_config",
             "pipelines_config",
             "nodes_config",
             "input_config",

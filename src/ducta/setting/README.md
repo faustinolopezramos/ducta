@@ -41,7 +41,7 @@ Every data pipeline needs to know *what* to run, *where* the data lives, and *ho
 ### For Technical Users
 Ducta Setting is the declarative configuration layer of the framework, implementing:
 *   **Multi-format loading**: A pluggable `ConfigLoaderFactory` resolves `.yaml`/`.yml`, `.json`, `.toml`, and `.py` sources (plus inline dict/JSON strings), with path-traversal protection and clear per-format errors (`loaders.py`).
-*   **Pydantic-validated schemas**: `ConfigSchema` composes `GlobalSettingsSchema`, `PipelineSchema`, `NodeSchema`, `InputSchema`, `OutputSchema`, and the quality/ML sub-schemas for fail-fast validation (`schemas.py`).
+*   **Pydantic-validated schemas**: `ConfigSchema` composes `GlobalConfigSchema`, `PipelineSchema`, `NodeSchema`, `InputSchema`, `OutputSchema`, and the quality/ML sub-schemas for fail-fast validation (`schemas.py`).
 *   **Variable interpolation**: `${VAR}` substitution with OS-env precedence, circular-reference guards, and selective path-only interpolation for catalogs and streaming nodes (`interpolator.py`).
 *   **Environment normalization & fallback chains**: canonical envs (`base`/`dev`/`sandbox`/`staging`/`prod`), aliases, `sandbox_<developer>` variants, and inheritance chains (`environments.py`).
 *   **Context construction**: `Context` and specialized `MLContext` / `StreamingContext` / `HybridContext` (via `ContextFactory`), with parallel file loading and inline per-environment overrides (`contexts.py`).
@@ -54,7 +54,7 @@ Ducta Setting is the declarative configuration layer of the framework, implement
 
 All configuration is validated by Pydantic models in `ducta.setting.schemas`. A complete project is described by five sources, combined by `ConfigSchema`:
 
-*   **`global_settings` (`GlobalSettingsSchema`)**: Engine-wide settings — `input_path`, `output_path`, `mode` (`local` | `databricks` | `distributed`), `max_parallel_nodes`, `log_level`, fingerprinting, run certificates, MLOps toggles, and quality/chain sub-blocks.
+*   **`global_config` (`GlobalConfigSchema`)**: Engine-wide settings — `input_path`, `output_path`, `mode` (`local` | `databricks` | `distributed`), `max_parallel_nodes`, `log_level`, fingerprinting, run certificates, MLOps toggles, and quality/chain sub-blocks.
 *   **`pipelines_config` (`PipelineSchema`)**: One entry per pipeline — `type` (`batch` | `ml` | `streaming` | `hybrid`), the ordered `nodes` list, `depends_on` chains, and optional ML `split` / `hyperparams`.
 *   **`nodes_config` (`NodeSchema`)**: One entry per node — `module`/`function`, `input`/`output` references, `dependencies`, `retry`/`timeout`, and optional `sanity_checks` / `data_quality` blocks.
 *   **`input_config` (`InputSchema`)**: Source datasets — `format`, `filepath` (with `${VAR}` interpolation), `schema`, and format `options`.
@@ -120,7 +120,7 @@ log_level = "DEBUG"
 ### JSON
 ```json
 {
-  "global_settings": {
+  "global_config": {
     "input_path": "data/raw",
     "output_path": "data/processed",
     "mode": "local",
@@ -136,14 +136,14 @@ log_level = "DEBUG"
 ### Step 1: Build a Context
 `Context` loads all five sources (in parallel when they are files), interpolates `${VAR}` placeholders, applies environment overrides, and validates everything through Pydantic.
 
-**Environment overrides are not uniform.** `global_settings` is deep-merged over the base file, so an environment only states the keys it changes. The other four documents — `input`, `output`, `nodes`, `pipelines` — *replace* their base counterpart entirely when the environment supplies its own. Adding a dataset to the base `input.yaml` therefore has no effect in an environment that ships its own copy; declare it in that environment's file too. Ducta logs which file wins at startup:
+**Environment overrides are not uniform.** `global_config` is deep-merged over the base file, so an environment only states the keys it changes. The other four documents — `input`, `output`, `nodes`, `pipelines` — *replace* their base counterpart entirely when the environment supplies its own. Adding a dataset to the base `input.yaml` therefore has no effect in an environment that ships its own copy; declare it in that environment's file too. Ducta logs which file wins at startup:
 
 ```python
 from pathlib import Path
 from ducta.setting import Context
 
 context = Context(
-    global_settings=Path("config/global.yaml"),
+    global_config=Path("config/global.yaml"),
     pipelines_config=Path("config/pipelines.yaml"),
     nodes_config=Path("config/nodes.yaml"),
     input_config=Path("config/input.yaml"),

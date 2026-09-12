@@ -5,7 +5,7 @@ from ducta.setting.schemas import (
     ConfigSchema,
     DataQualitySchema,
     ExecutionMode,
-    GlobalSettingsSchema,
+    GlobalConfigSchema,
     InputFormat,
     InputSchema,
     LogLevel,
@@ -45,46 +45,49 @@ class TestProjectSchema:
         assert s.description == "A project"
 
 
-class TestGlobalSettingsSchema:
+class TestGlobalConfigSchema:
     def test_required_fields(self):
-        s = GlobalSettingsSchema(input_path="/in", output_path="/out")
+        s = GlobalConfigSchema(input_path="/in", output_path="/out")
         assert s.input_path == "/in"
         assert s.output_path == "/out"
         assert s.mode == ExecutionMode.LOCAL
         assert s.log_level == LogLevel.INFO
 
     def test_defaults(self):
-        s = GlobalSettingsSchema(input_path="/in", output_path="/out")
+        s = GlobalConfigSchema(input_path="/in", output_path="/out")
         assert s.max_parallel_nodes == 4
         assert s.execution_timeout_seconds == 3600
         assert s.fingerprint_mode == "exact"
-        assert s.mlops_enabled is True
+        # None, not True: unset means "decide per pipeline" (track pipelines that
+        # contain ML nodes). A True default would survive model_dump and reach
+        # the engine as though the user had asked for tracking everywhere.
+        assert s.mlops_enabled is None
         assert s.mlops_required is False
         assert s.ml_default_sanity_checks is True
 
     def test_to_dicts_via_config_schema(self):
-        gs = GlobalSettingsSchema(input_path="/in", output_path="/out", mode=ExecutionMode.LOCAL)
+        gs = GlobalConfigSchema(input_path="/in", output_path="/out", mode=ExecutionMode.LOCAL)
         config = ConfigSchema(
-            global_settings=gs,
+            global_config=gs,
             pipelines_config={},
             nodes_config={},
             input_config={},
             output_config={},
         )
         d = config.to_dicts()
-        assert d["global_settings"]["input_path"] == "/in"
-        assert d["global_settings"]["output_path"] == "/out"
+        assert d["global_config"]["input_path"] == "/in"
+        assert d["global_config"]["output_path"] == "/out"
 
     def test_run_certificate_dir_empty_string_rejected(self):
         """Regression: run_certificate_dir had no validator at all — unlike
         input_path/output_path, an empty string passed straight through."""
         with pytest.raises(Exception, match="non-empty string"):
-            GlobalSettingsSchema(input_path="/in", output_path="/out", run_certificate_dir="")
+            GlobalConfigSchema(input_path="/in", output_path="/out", run_certificate_dir="")
 
     def test_run_certificate_dir_default_and_override(self):
-        s = GlobalSettingsSchema(input_path="/in", output_path="/out")
+        s = GlobalConfigSchema(input_path="/in", output_path="/out")
         assert s.run_certificate_dir == ".ducta/runs"
-        s2 = GlobalSettingsSchema(
+        s2 = GlobalConfigSchema(
             input_path="/in", output_path="/out", run_certificate_dir="custom/runs"
         )
         assert s2.run_certificate_dir == "custom/runs"
@@ -142,7 +145,7 @@ class TestOutputSchema:
 class TestConfigSchema:
     def test_roundtrip(self):
         config = ConfigSchema(
-            global_settings=GlobalSettingsSchema(input_path="/in", output_path="/out"),
+            global_config=GlobalConfigSchema(input_path="/in", output_path="/out"),
             pipelines_config={
                 "p1": PipelineSchema(nodes=["n1"]),
             },
@@ -157,7 +160,7 @@ class TestConfigSchema:
             },
         )
         d = config.to_dicts()
-        assert d["global_settings"]["input_path"] == "/in"
+        assert d["global_config"]["input_path"] == "/in"
         assert "p1" in d["pipelines_config"]
         assert "n1" in d["nodes_config"]
         assert "ds1" in d["input_config"]
@@ -219,7 +222,9 @@ class TestQualitySchemas:
         s = QualityGateSchema()
         assert s.name == "quality_gate"
         assert s.max_errors == 0
-        assert s.min_pass_rate == 1.0
+        # 0.0 = rule off, matching QualityGateEvaluator's own default. These two
+        # defaults must agree: see tests/check/test_gate_schema_seam.py.
+        assert s.min_pass_rate == 0.0
         assert s.behavior == "skip_downstream"
 
     def test_quality_global_config(self):
@@ -246,7 +251,7 @@ class TestChainReuseConfig:
         assert s.reuse_materialized is False
         # Reuse is opt-in, so once a user asks for it the freshness check that
         # keeps it honest is on. Must match CoreSettings.chain_staleness_check:
-        # Context replaces global_settings with this schema's model_dump, and
+        # Context replaces global_config with this schema's model_dump, and
         # exclude_none does not drop a False, so a disagreeing default here
         # silently overrides the engine's. See
         # tests/core/test_settings.py::TestSchemaDefaultsDoNotDrift.

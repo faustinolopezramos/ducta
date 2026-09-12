@@ -29,6 +29,8 @@ from ducta.gate.constants import is_cloud_path
 from ducta.gate.exceptions import ConfigurationError, MissingDependencyError, ReadOperationError
 from ducta.gate.factories import ReaderFactory
 
+_ON_MISSING_INPUT = frozenset({"skip", "fail"})
+
 
 class InputLoader(BaseIO):
     """Unified InputLoader with parallel loading strategy."""
@@ -40,14 +42,7 @@ class InputLoader(BaseIO):
         self._register_custom_formats()
 
     def load_inputs(self, node: Dict[str, Any], node_name: Optional[str] = None) -> List[Any]:
-        """Load all inputs defined for a processing node.
-
-        ``node_name`` is passed explicitly by callers that know it. A node's own
-        config does not carry a ``name`` key — the name is the key it is filed
-        under — so falling back to ``node.get("name")`` produced "Node
-        'unnamed' has missing input(s): …", which named nothing and reached
-        users in the run certificate.
-        """
+        """Load all inputs defined for a processing node."""
         resolved_name = node_name or node.get("name") or "unnamed"
         input_keys = self._get_input_keys(node)
         if not input_keys:
@@ -58,11 +53,29 @@ class InputLoader(BaseIO):
         if fail_fast:
             available, missing = self._inputs_available(node)
             if not available:
-                raise MissingDependencyError(
-                    f"Node '{resolved_name}' has missing input(s): {', '.join(missing)}"
-                )
+                detail = f"Node '{resolved_name}' has missing input(s): {', '.join(missing)}"
+                on_missing = str(node.get("on_missing_input", "skip")).strip().lower()
+                if on_missing not in _ON_MISSING_INPUT:
+                    logger.warning(
+                        "Node '{}': unknown on_missing_input='{}'; using 'skip'. Valid: {}.",
+                        resolved_name,
+                        on_missing,
+                        ", ".join(sorted(_ON_MISSING_INPUT)),
+                    )
+                    on_missing = "skip"
+                if on_missing == "fail":
+                    raise ReadOperationError(
+                        f"{detail}. Aborting because on_missing_input=fail "
+                        "(set it to 'skip' to skip this node and its descendants instead)."
+                    )
+                raise MissingDependencyError(detail)
 
         return self._load_inputs_parallel(input_keys, fail_fast)
+
+    @staticmethod
+    def _is_query_format(config: Dict[str, Any]) -> bool:
+        """True when the dataset's format is 'query' (no filepath to resolve)."""
+        return config.get("format", "").lower() == "query"
 
     def _inputs_available(self, node: Dict[str, Any]) -> "tuple[bool, List[str]]":
         """Check whether every declared input for *node* currently resolves."""
@@ -70,7 +83,7 @@ class InputLoader(BaseIO):
         for input_key in self._get_input_keys(node):
             try:
                 config = self._get_dataset_config(input_key)
-                if config.get("format", "").lower() == "query":
+                if self._is_query_format(config):
                     continue
                 self._get_filepath(config, input_key)
             except ConfigurationError:
@@ -85,7 +98,7 @@ class InputLoader(BaseIO):
         for input_key in self._get_input_keys(node):
             try:
                 config = self._get_dataset_config(input_key)
-                if config.get("format", "").lower() == "query":
+                if self._is_query_format(config):
                     continue
                 path = self._get_filepath(config, input_key)
                 if is_cloud_path(path):
@@ -99,11 +112,9 @@ class InputLoader(BaseIO):
 
     def _load_inputs_parallel(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
         """Load datasets in parallel, preserving input order."""
-        fill_none = bool(
-            self.context_manager.get_nested("global_settings.fill_none_on_error", False)
-        )
+        fill_none = bool(self.context_manager.get_nested("global_config.fill_none_on_error", False))
         max_workers = self.context_manager.get_nested(
-            "global_settings.max_input_workers", min(len(input_keys), 4)
+            "global_config.max_input_workers", min(len(input_keys), 4)
         )
 
         self._print_loading_message(len(input_keys))
@@ -130,7 +141,7 @@ class InputLoader(BaseIO):
             if not fill_none:
                 raise ReadOperationError(
                     f"{len(errors)} dataset(s) failed to load: {'; '.join(errors)}. "
-                    "Set global_settings.fill_none_on_error=true to receive None "
+                    "Set global_config.fill_none_on_error=true to receive None "
                     "placeholders instead of aborting."
                 )
             logger.warning("Completed loading with {} errors: {}", len(errors), errors)
@@ -159,7 +170,7 @@ class InputLoader(BaseIO):
 
         reader = self.reader_factory.get_reader(format_name)
 
-        if format_name == "query":
+        if self._is_query_format(config):
             return reader.read("", config)
         filepath = self._get_filepath(config, input_key)
 
@@ -181,7 +192,7 @@ class InputLoader(BaseIO):
         """Apply fingerprint_policy against the previous successful run."""
         message = None
         try:
-            policy = self.context_manager.get_nested("global_settings.fingerprint_policy", "record")
+            policy = self.context_manager.get_nested("global_config.fingerprint_policy", "record")
 
             if policy not in ("warn", "fail"):
                 return
@@ -192,11 +203,6 @@ class InputLoader(BaseIO):
             if not previous_hash or previous_hash == data_fingerprint.fingerprint:
                 return
 
-            # An algorithm change is not a data change. Upgrading Ducta (or
-            # switching fingerprint_mode) alters every fingerprint's value, so
-            # without this guard the first run after an upgrade would report
-            # every input as drifted — and with policy=fail, abort the pipeline
-            # over it. Skip the comparison and say why.
             from ducta.mlrun.fingerprint import comparable
 
             can_compare, why = comparable(previous, data_fingerprint.to_dict())

@@ -36,7 +36,6 @@ execution hot path.
 
 from __future__ import annotations
 
-import json
 import threading
 from pathlib import Path
 from typing import Dict, List, Optional, TextIO
@@ -44,6 +43,7 @@ from typing import Dict, List, Optional, TextIO
 from loguru import logger
 
 from ducta.api.models.execution import ExecutionResponse, LogEntry
+from ducta.api.utils.fsio import atomic_write_json
 
 _META_FILENAME = "meta.json"
 _LOGS_FILENAME = "logs.jsonl"
@@ -260,10 +260,7 @@ class FileLogStore:
             run_dir = self._run_dir(record.id)
             run_dir.mkdir(parents=True, exist_ok=True)
             meta_path = run_dir / _META_FILENAME
-            tmp_path = meta_path.with_suffix(".json.tmp")
-            payload = json.dumps(record.model_dump(mode="json"), indent=2, ensure_ascii=False)
-            tmp_path.write_text(payload, encoding="utf-8")
-            tmp_path.replace(meta_path)  # atomic on the same filesystem
+            atomic_write_json(meta_path, record.model_dump(mode="json"))
         except OSError as exc:  # noqa: BLE001
             logger.warning("FileLogStore meta write failed for {id}: {exc}", id=record.id, exc=exc)
 

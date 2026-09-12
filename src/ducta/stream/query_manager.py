@@ -49,6 +49,7 @@ except ImportError:
 
 from ducta.stream.checkpoints import CheckpointManager
 from ducta.stream.constants import DEFAULT_STREAMING_CONFIG, StreamingOutputMode
+from ducta.stream.context_utils import get_active_env
 from ducta.stream.exceptions import (
     StreamingConfigurationError,
     StreamingError,
@@ -82,6 +83,41 @@ def looks_like_dataframe(value: Any) -> bool:
     )
 
 
+def is_query_active(query: Any) -> bool:
+    """Whether a streaming query is currently active, tolerant of query
+    objects that don't expose a callable ``isActive`` (e.g. test doubles).
+
+    Shared by :class:`StreamingQueryManager` and
+    :class:`~ducta.stream.pipeline_manager.QueryHealthMonitor`, which
+    previously each carried an independent copy of this same check.
+    """
+    is_active = getattr(query, "isActive", None)
+    if callable(is_active):
+        try:
+            return bool(is_active())
+        except Exception as e:
+            logger.debug(f"Error checking query active state: {e}")
+            return False
+    return bool(is_active) if is_active is not None else False
+
+
+def get_query_exception(query: Any) -> Optional[Exception]:
+    """Safely retrieve a streaming query's terminating exception, if any.
+
+    Shared by :class:`~ducta.stream.pipeline_manager.QueryHealthMonitor` and
+    :class:`~ducta.stream.pipeline_manager.StreamingPipelineManager`, which
+    previously each carried an independent copy of this same "call
+    query.exception() if callable, else use the attribute" logic.
+    """
+    try:
+        exc_attr = getattr(query, "exception", None)
+        if exc_attr is None:
+            return None
+        return exc_attr() if callable(exc_attr) else exc_attr
+    except Exception:
+        return None
+
+
 DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
 
@@ -108,64 +144,90 @@ _TIMESTAMP_CASTABLE_TYPES = frozenset(
 )
 
 
-class TransformationRegistry:
-    """
-    Secure registry for streaming transformations.
-    """
+class _KeyedTransformationStore:
+    """Thread-safe key->callable store with validation.
 
-    # --- class-level (global) state kept for backward-compat ---
-    _registry: ClassVar[Dict[str, Callable[..., DataFrame]]] = {}
-    _lock: ClassVar[threading.Lock] = threading.Lock()
+    The core logic behind ``TransformationRegistry``'s instance-scoped and
+    class-scoped (backward-compat, process-wide) APIs, which previously each
+    reimplemented this same validation + locking independently.
+    """
 
     def __init__(self) -> None:
-        """Create an isolated registry instance with its own state."""
-        self._inst_registry: Dict[str, Callable[..., DataFrame]] = {}
-        self._inst_lock = threading.Lock()
+        self._store: Dict[str, Callable[..., DataFrame]] = {}
+        self._lock = threading.Lock()
 
-    # ---- instance methods (isolated state) ----
-
-    def register(self, key: str, func: Callable[..., DataFrame]) -> None:  # noqa: F811
-        """Register a transformation function in this isolated registry instance."""
+    def register(self, key: str, func: Callable[..., DataFrame], *, label: str) -> None:
         if not key or not isinstance(key, str):
             raise ValueError("Transformation key must be a non-empty string")
         if not key.strip():
             raise ValueError("Transformation key cannot be whitespace only")
         if not callable(func):
             raise TypeError(f"Transformation must be callable, got {type(func).__name__}")
-        with self._inst_lock:
-            if key in self._inst_registry:
+        with self._lock:
+            if key in self._store:
                 logger.warning(f"Overwriting existing transformation: {key}")
-            self._inst_registry[key] = func
-            logger.debug(f"Registered transformation (instance): {key}")
+            self._store[key] = func
+            logger.debug(f"Registered transformation ({label}): {key}")
 
-    def get(self, key: str) -> Callable[..., DataFrame]:  # noqa: F811
-        """Get a transformation from this isolated registry instance."""
-        with self._inst_lock:
-            if key not in self._inst_registry:
-                available = sorted(self._inst_registry.keys())
+    def get(self, key: str) -> Callable[..., DataFrame]:
+        with self._lock:
+            if key not in self._store:
+                available = sorted(self._store.keys())
                 raise ValueError(
                     f"Transformation '{key}' not registered. Available transformations: {available}"
                 )
-            return self._inst_registry[key]
+            return self._store[key]
 
-    def list_transformations(self) -> List[str]:  # noqa: F811
-        """List all transformations in this isolated registry instance."""
-        with self._inst_lock:
-            return sorted(self._inst_registry.keys())
+    def list(self) -> List[str]:
+        with self._lock:
+            return sorted(self._store.keys())
 
-    def unregister(self, key: str) -> bool:  # noqa: F811
-        """Unregister a transformation. Returns True if existed."""
-        with self._inst_lock:
-            if key in self._inst_registry:
-                del self._inst_registry[key]
+    def unregister(self, key: str) -> bool:
+        with self._lock:
+            if key in self._store:
+                del self._store[key]
                 return True
             return False
 
+    def clear(self, *, label: str) -> None:
+        with self._lock:
+            self._store.clear()
+            logger.debug(f"Cleared all transformations ({label})")
+
+
+class TransformationRegistry:
+    """
+    Secure registry for streaming transformations.
+    """
+
+    # Process-wide store kept for backward-compat (class_* methods).
+    _global: ClassVar[_KeyedTransformationStore] = _KeyedTransformationStore()
+
+    def __init__(self) -> None:
+        """Create an isolated registry instance with its own state."""
+        self._local = _KeyedTransformationStore()
+
+    # ---- instance methods (isolated state) ----
+
+    def register(self, key: str, func: Callable[..., DataFrame]) -> None:  # noqa: F811
+        """Register a transformation function in this isolated registry instance."""
+        self._local.register(key, func, label="instance")
+
+    def get(self, key: str) -> Callable[..., DataFrame]:  # noqa: F811
+        """Get a transformation from this isolated registry instance."""
+        return self._local.get(key)
+
+    def list_transformations(self) -> List[str]:  # noqa: F811
+        """List all transformations in this isolated registry instance."""
+        return self._local.list()
+
+    def unregister(self, key: str) -> bool:  # noqa: F811
+        """Unregister a transformation. Returns True if existed."""
+        return self._local.unregister(key)
+
     def clear(self) -> None:  # noqa: F811
         """Clear all transformations in this isolated registry instance."""
-        with self._inst_lock:
-            self._inst_registry.clear()
-            logger.debug("Cleared all transformations (instance)")
+        self._local.clear(label="instance")
 
     # ---- classmethods (global shared state — backward-compat) ----
 
@@ -177,43 +239,22 @@ class TransformationRegistry:
             "that can cause state leakage between pipelines and tests. "
             "Prefer creating a TransformationRegistry() instance and calling .register() on it."
         )
-        if not key or not isinstance(key, str):
-            raise ValueError("Transformation key must be a non-empty string")
-        if not key.strip():
-            raise ValueError("Transformation key cannot be whitespace only")
-        if not callable(func):
-            raise TypeError(f"Transformation must be callable, got {type(func).__name__}")
-        with cls._lock:
-            if key in cls._registry:
-                logger.warning(f"Overwriting existing transformation: {key}")
-            cls._registry[key] = func
-            logger.debug(f"Registered transformation (global): {key}")
+        cls._global.register(key, func, label="global")
 
     @classmethod
     def class_get(cls, key: str) -> Callable[..., DataFrame]:
         """Get a transformation from the global registry."""
-        with cls._lock:
-            if key not in cls._registry:
-                available = sorted(cls._registry.keys())
-                raise ValueError(
-                    f"Transformation '{key}' not registered. Available transformations: {available}"
-                )
-            return cls._registry[key]
+        return cls._global.get(key)
 
     @classmethod
     def class_list_transformations(cls) -> List[str]:
         """List all transformations in the global registry."""
-        with cls._lock:
-            return sorted(cls._registry.keys())
+        return cls._global.list()
 
     @classmethod
     def class_unregister(cls, key: str) -> bool:
         """Unregister a transformation from the global registry. Returns True if existed."""
-        with cls._lock:
-            if key in cls._registry:
-                del cls._registry[key]
-                return True
-            return False
+        return cls._global.unregister(key)
 
 
 class StreamingQueryManager:
@@ -249,9 +290,7 @@ class StreamingQueryManager:
         # instead of racing with other concurrent starts on the shared session.
         self._query_start_lock = threading.Lock()
 
-        active_env = getattr(self.context, "env", None) or getattr(
-            self.context, "environment", None
-        )
+        active_env = get_active_env(self.context)
         if active_env:
             logger.debug(f"StreamingQueryManager initialized for environment: '{active_env}'")
         self.active_environment = active_env
@@ -261,14 +300,7 @@ class StreamingQueryManager:
 
     def _is_query_active(self, query: StreamingQuery) -> bool:
         """Check if a streaming query is currently active."""
-        is_active = getattr(query, "isActive", None)
-        if callable(is_active):
-            try:
-                return bool(is_active())
-            except Exception as e:
-                logger.debug(f"Error checking query active state: {e}")
-                return False
-        return bool(is_active) if is_active is not None else False
+        return is_query_active(query)
 
     def _get_query_name(self, query: StreamingQuery) -> Optional[str]:
         """Get the name of a streaming query."""
@@ -921,7 +953,7 @@ class StreamingQueryManager:
                 )
         else:
             logger.warning(
-                "Query '%s' does not expose a callable stop() method — unable to stop it programmatically.",
+                "Query '{}' does not expose a callable stop() method — unable to stop it programmatically.",
                 self._get_query_name(query),
             )
 

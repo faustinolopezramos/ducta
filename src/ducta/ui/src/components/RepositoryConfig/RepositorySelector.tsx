@@ -6,6 +6,7 @@ import { useToastStack } from "../../hooks/useModalStack";
 import { GitHubConnector } from "./GitHubConnector";
 import { AzureConnector } from "./AzureConnector";
 import { AWSConnector } from "./AWSConnector";
+import { PROVIDER_META } from "./providerMeta";
 
 const TYPES = [
   { value: "local",  label: "Local (no remote)", icon: ICONS.FOLDER },
@@ -13,13 +14,6 @@ const TYPES = [
   { value: "azure",  label: "Azure DevOps",       icon: ICONS.CONNECTIONS },
   { value: "aws",    label: "AWS CodeCommit",     icon: ICONS.CONNECTIONS },
 ];
-
-const TYPE_ACCENT = {
-  local:  { color: colors.textMuted,  bg: colors.surface,  border: colors.border },
-  github: { color: colors.green,      bg: colors.greenA15, border: colors.greenA30 },
-  azure:  { color: colors.blue,       bg: colors.blueA15,  border: colors.blueA30 },
-  aws:    { color: colors.amber,      bg: colors.amberA15, border: colors.amberA30 },
-};
 
 export function RepositorySelector() {
   const { show } = useToastStack();
@@ -79,7 +73,7 @@ export function RepositorySelector() {
         </p>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {TYPES.map((t) => {
-            const accent = TYPE_ACCENT[t.value as keyof typeof TYPE_ACCENT];
+            const accent = PROVIDER_META[t.value as keyof typeof PROVIDER_META];
             const active  = type === t.value;
             return (
               <button

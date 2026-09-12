@@ -25,10 +25,11 @@ from typing import Any, Dict, Optional
 
 from loguru import logger
 
-from ducta.api.exceptions import ConfigFileNotFoundError, NodeNotFoundError
-from ducta.api.utils.git_utils import commit_files, file_commit_sha, validate_occ
-from ducta.api.workspace.loaders import load_config_file, write_config_file
-from ducta.api.workspace.utils import find_config_files, resolve_module_path
+from ducta.api.exceptions import NodeNotFoundError
+from ducta.api.repositories._yaml_record_repository import YamlRecordRepository
+from ducta.api.utils.git_utils import file_commit_sha
+from ducta.api.workspace.loaders import load_config_file
+from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
 
 
 def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) -> Dict[str, Any]:
@@ -115,18 +116,16 @@ def _find_standard_project_nodes_file(project_dir: Path) -> Optional[Path]:
     return None
 
 
-class NodeRepository:
+class NodeRepository(YamlRecordRepository):
     """Reads and writes node definitions and associated Python source files."""
+
+    _config_key = "nodes"
+    _not_found_error = NodeNotFoundError
+    _config_label = "Nodes"
+    _action_label = "node"
 
     def __init__(self, root: Path) -> None:
         self._root = root
-
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _get_path(self) -> Optional[Path]:
-        """Return the absolute path to the base nodes config file, or None."""
-        base_paths = find_config_files(self._root, "base")
-        return base_paths.get("nodes")
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -140,12 +139,7 @@ class NodeRepository:
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
                 continue
-            ducta_file = None
-            for ext in (".yaml", ".yml", ".toml", ".json"):
-                candidate = project_dir / f"ducta{ext}"
-                if candidate.exists():
-                    ducta_file = candidate
-                    break
+            ducta_file = find_ducta_config(project_dir)
 
             if ducta_file:
                 # Layered project: load nodes from each layer defined in ducta.yaml
@@ -226,10 +220,6 @@ class NodeRepository:
 
     # ── Queries ───────────────────────────────────────────────────────────────
 
-    def get_file_path(self) -> Optional[Path]:
-        """Expose the config file path for external callers."""
-        return self._get_path()
-
     def list_all(self) -> Dict[str, Any]:
         """Return all node definitions keyed by name, normalized to frontend format.
 
@@ -240,11 +230,9 @@ class NodeRepository:
         nodes: Dict[str, Any] = {}
 
         # 1. Load base environment nodes
-        path = self._get_path()
-        if path and path.exists():
-            base_nodes = load_config_file(path) or {}
-            for name, spec in base_nodes.items():
-                nodes[name] = _normalize_node_spec(spec, node_name=name)
+        base_nodes = super().list_all()
+        for name, spec in base_nodes.items():
+            nodes[name] = _normalize_node_spec(spec, node_name=name)
 
         # 2. Load project layer nodes
         layer_nodes = self._load_layer_nodes()
@@ -252,19 +240,6 @@ class NodeRepository:
         nodes.update(layer_nodes)
 
         return nodes
-
-    def get(self, name: str) -> Dict[str, Any]:
-        """Return the spec for a single node.
-
-        Raises :exc:`NodeNotFoundError` when the node is absent.
-        """
-        nodes = self.list_all()
-        if name not in nodes:
-            raise NodeNotFoundError(
-                f"Node '{name}' not found",
-                detail={"name": name},
-            )
-        return nodes[name]
 
     def get_commit_sha(self) -> str:
         """Return the short SHA of the latest commit that modified the nodes config file."""
@@ -315,12 +290,7 @@ class NodeRepository:
 
             # Also search layer src/ directories (layered projects)
             try:
-                ducta_file = None
-                for ext in (".yaml", ".yml", ".toml", ".json"):
-                    candidate = project_dir / f"ducta{ext}"
-                    if candidate.exists():
-                        ducta_file = candidate
-                        break
+                ducta_file = find_ducta_config(project_dir)
                 if not ducta_file:
                     continue
                 ducta_config = load_config_file(ducta_file)
@@ -347,52 +317,4 @@ class NodeRepository:
 
     # ── Commands ──────────────────────────────────────────────────────────────
 
-    def save(
-        self,
-        name: str,
-        spec: Dict[str, Any],
-        expected_sha: Optional[str] = None,
-    ) -> str:
-        """Update or create a node entry and git-commit.
-
-        Returns the new commit SHA (empty string when git is unavailable).
-        """
-        path = self._get_path()
-        if path is None:
-            raise ConfigFileNotFoundError(
-                "Nodes config file not found in base environment",
-                detail={"env": "base"},
-            )
-        validate_occ(self._root, path, expected_sha)
-        current = load_config_file(path) if path.exists() else {}
-        current[name] = spec
-        write_config_file(path, current)
-        return commit_files(self._root, [path], f"chore: update node '{name}'")
-
-    def delete(self, name: str, expected_sha: Optional[str] = None) -> str:
-        """Remove a node entry and git-commit.
-
-        Raises :exc:`NodeNotFoundError` when the node is absent.
-        Raises :exc:`ConcurrencyError` (via ``validate_occ``) when
-        *expected_sha* is given and the file was modified since — the same
-        check ``save()`` already applies, but ``delete()`` used to skip it
-        entirely, so a delete could silently discard a change made
-        concurrently by someone else.
-        Returns the new commit SHA (empty string when git is unavailable).
-        """
-        path = self._get_path()
-        if path is None:
-            raise ConfigFileNotFoundError(
-                "Nodes config file not found in base environment",
-                detail={"env": "base"},
-            )
-        validate_occ(self._root, path, expected_sha)
-        current = load_config_file(path) if path.exists() else {}
-        if name not in current:
-            raise NodeNotFoundError(
-                f"Node '{name}' not found",
-                detail={"name": name},
-            )
-        del current[name]
-        write_config_file(path, current)
-        return commit_files(self._root, [path], f"chore: delete node '{name}'")
+    # save() and delete() are inherited from YamlRecordRepository.

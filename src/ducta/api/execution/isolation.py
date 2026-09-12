@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import sys
+import threading
 from typing import Set
 
 from loguru import logger
@@ -136,11 +137,14 @@ class ModuleIsolationManager:
 
 # Singleton instance
 _module_isolation: ModuleIsolationManager | None = None
+_module_isolation_lock = threading.Lock()
 
 
 def get_module_isolation_manager() -> ModuleIsolationManager:
     """Get or create the singleton ModuleIsolationManager."""
     global _module_isolation
     if _module_isolation is None:
-        _module_isolation = ModuleIsolationManager()
+        with _module_isolation_lock:
+            if _module_isolation is None:
+                _module_isolation = ModuleIsolationManager()
     return _module_isolation

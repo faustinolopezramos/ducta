@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any
+from typing import Any, Optional
 
 
 def get_context_value(context: Any, key: str, default: Any = None) -> Any:
@@ -31,3 +31,15 @@ def get_context_value(context: Any, key: str, default: Any = None) -> Any:
     if isinstance(context, dict):
         return context.get(key, default)
     return getattr(context, key, default)
+
+
+def get_active_env(context: Any) -> Optional[str]:
+    """The context's active environment name, under whichever attribute it's
+    exposed (``env`` or the legacy ``environment``).
+
+    Shared by ``StreamingQueryManager`` and ``StreamingPipelineManager``,
+    which previously each carried an identical inline fallback.
+    """
+    return get_context_value(context, "env", None) or get_context_value(
+        context, "environment", None
+    )

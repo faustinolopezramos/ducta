@@ -86,10 +86,43 @@ class TestDataOutputManager:
         (dl / "000000.json").write_text("{}")
         assert DataOutputManager._path_has_data(str(d)) is True
 
-    def test_save_output_empty_df(self, dict_context_with_spark, spark_dataframe_spec):
+    def test_empty_df_is_still_written_when_write_mode_is_overwrite(
+        self, dict_context_with_spark, spark_dataframe_spec
+    ):
+        """0 rows is the period's answer, so an overwrite target must be truncated.
+
+        Skipping the write left the previous run's rows in place while the node
+        was recorded as a clean success and the certificate claimed it had
+        produced that dataset.
+        """
         spark_dataframe_spec.isEmpty.return_value = True
+        dict_context_with_spark["output_config"]["sch.sub.tbl"] = {"write_mode": "overwrite"}
         dom = DataOutputManager(dict_context_with_spark)
+        written = []
+        dom._save_single_output = lambda key, *a, **k: written.append(key)
+
         dom.save_output("dev", {"output": ["sch.sub.tbl"], "name": "test"}, spark_dataframe_spec)
+
+        assert written == ["sch.sub.tbl"]
+
+    def test_empty_df_skips_an_append_target_and_records_an_evidence_gap(
+        self, dict_context_with_spark, spark_dataframe_spec
+    ):
+        """Appending nothing is a real no-op — but the certificate must say so."""
+        from ducta.core.ledger import ledger_for
+
+        spark_dataframe_spec.isEmpty.return_value = True
+        dict_context_with_spark["output_config"]["sch.sub.tbl"] = {"write_mode": "append"}
+        dom = DataOutputManager(dict_context_with_spark)
+        written = []
+        dom._save_single_output = lambda key, *a, **k: written.append(key)
+
+        dom.save_output("dev", {"output": ["sch.sub.tbl"], "name": "test"}, spark_dataframe_spec)
+
+        assert written == []
+        ledger = ledger_for(dict_context_with_spark)
+        assert ledger.evidence_complete is False
+        assert any("sch.sub.tbl" in gap for gap in ledger.record_failures)
 
     def test_get_output_keys(self, dict_context):
         dom = DataOutputManager(dict_context)
@@ -147,7 +180,7 @@ class TestSaveModelArtifacts:
     def test_rejects_path_traversal_in_artifact_name(self, dict_context, temp_dir):
         registry_dir = temp_dir / "registry"
         registry_dir.mkdir()
-        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dict_context["global_config"]["model_registry_path"] = str(registry_dir)
         dom = DataOutputManager(dict_context)
 
         node = {"name": "my_node", "model_artifacts": [{"name": "../../escaped"}]}
@@ -159,7 +192,7 @@ class TestSaveModelArtifacts:
     def test_rejects_path_traversal_in_model_version(self, dict_context, temp_dir):
         registry_dir = temp_dir / "registry"
         registry_dir.mkdir()
-        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dict_context["global_config"]["model_registry_path"] = str(registry_dir)
         dom = DataOutputManager(dict_context)
 
         node = {"name": "my_node", "model_artifacts": [{"name": "valid_name"}]}
@@ -170,7 +203,7 @@ class TestSaveModelArtifacts:
     def test_accepts_valid_artifact_name_and_version(self, dict_context, temp_dir):
         registry_dir = temp_dir / "registry"
         registry_dir.mkdir()
-        dict_context["global_settings"]["model_registry_path"] = str(registry_dir)
+        dict_context["global_config"]["model_registry_path"] = str(registry_dir)
         dom = DataOutputManager(dict_context)
 
         node = {"name": "my_node", "model_artifacts": [{"name": "my_model"}]}

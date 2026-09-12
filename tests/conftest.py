@@ -11,8 +11,30 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
+from pathlib import Path
 
 import pytest
+
+# ---------------------------------------------------------------------------
+# Point every process at this repo's coverage config.
+#
+# Several tests chdir into a temporary project and spawn worker processes
+# (``run_in_process``, the sweep workers, the template smoke tests).
+# pytest-cov's .pth hook starts coverage inside those children, but from a cwd
+# where this pyproject.toml is not discoverable — so they record statement-only
+# data while the parent records branch data (``[tool.coverage.run] branch =
+# true``). The run then dies in the final combine with "Can't combine statement
+# coverage data with branch data", *after* every test has passed, which reads as
+# a coverage crash rather than a test failure.
+#
+# CI set COVERAGE_RCFILE in the workflow env, so `pytest --cov` was green there
+# and crashed for anyone running it locally. Setting it here fixes both, and
+# keeps the two from drifting apart again. An operator-supplied value wins.
+# ---------------------------------------------------------------------------
+os.environ.setdefault(
+    "COVERAGE_RCFILE", str(Path(__file__).resolve().parent.parent / "pyproject.toml")
+)
 
 # ---------------------------------------------------------------------------
 # Eagerly import the real modules that some per-directory conftests
@@ -29,10 +51,11 @@ _REAL_MODULES = (
     "pandas",
     "numpy",
     "ducta.setting",
+    "ducta.setting.dependency_inference",
+    "ducta.setting.pipeline_dependency_resolver",
     "ducta.core",
     "ducta.core.utils",
-    "ducta.core.dependency_inference",
-    "ducta.core.pipeline_dependency_resolver",
+    "ducta.core.dependency_resolver",
     "ducta.check",
     "ducta.check.core",
     "ducta.mlrun",

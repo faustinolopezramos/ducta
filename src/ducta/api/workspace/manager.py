@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ducta.api.exceptions import WorkspaceNotFoundError
+from ducta.api.utils.fsio import atomic_write
 from ducta.api.utils.git_utils import (
     GIT_AVAILABLE,
     commit_files,
@@ -72,7 +73,7 @@ class WorkspaceManager:
         return list(env_settings.get("env_config", {}).keys())
 
     _CONTEXT_KEY_MAP: Dict[str, str] = {
-        "global_settings": "global_settings_path",
+        "global_config": "global_config_path",
         "pipelines": "pipelines_config_path",
         "nodes": "nodes_config_path",
         "input": "input_config_path",
@@ -152,26 +153,8 @@ class WorkspaceManager:
 
     def write_file(self, rel_path: str, content: str) -> None:
         """Create or overwrite a file in the workspace atomically."""
-        import os
-        import tempfile
-
         target = safe_path(self.root, rel_path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-
-        raw = content.encode("utf-8")
-        tmp_fd, tmp_path = tempfile.mkstemp(
-            dir=target.parent, suffix=".tmp", prefix=f".{target.name}."
-        )
-        try:
-            with os.fdopen(tmp_fd, "wb") as fh:
-                fh.write(raw)
-            os.replace(tmp_path, target)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_write(target, content.encode("utf-8"))
 
     def delete_file(self, rel_path: str) -> None:
         """Delete a file from the workspace."""
@@ -330,7 +313,7 @@ class WorkspaceManager:
         active_env: Optional[str] = None
         try:
             base_paths = find_config_files(self.root, "base")
-            gs_path = base_paths.get("global_settings")
+            gs_path = base_paths.get("global_config")
             if gs_path and gs_path.exists():
                 gs = load_config_file(gs_path)
                 active_env = gs.get("environment") or gs.get("env")

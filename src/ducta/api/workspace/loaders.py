@@ -20,8 +20,6 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,6 +27,7 @@ import yaml  # type: ignore
 from loguru import logger  # type: ignore
 
 from ducta.api.exceptions import ConfigFileNotFoundError, ConfigValidationError
+from ducta.api.utils.fsio import atomic_write
 
 # Maximum config file size (10 MB) to prevent YAML bomb / DoS attacks.
 _MAX_CONFIG_FILE_SIZE = 10 * 1024 * 1024
@@ -157,8 +156,8 @@ def _probe_default_path(
     """Return the relative path of the first existing config file for *stem*.
 
     *stem* may be a tuple of alternative names tried in order — e.g.
-    ``("global_settings", "global")`` — since projects scaffolded by
-    ``cli/template.py`` use ``global_settings.yaml`` while the layered/
+    ``("global_config", "global")`` — since projects scaffolded by
+    ``cli/template.py`` use ``global_config.yaml`` while the layered/
     convention-based loader in ``config/layered_config.py`` uses ``global.yaml``.
     """
     stems = (stem,) if isinstance(stem, str) else stem
@@ -202,8 +201,8 @@ def load_environment_yaml(workspace_root: Path) -> Dict[str, Any]:
         "base_path": ".",
         "env_config": {
             "base": {
-                "global_settings_path": _probe_default_path(
-                    workspace_root, ("global_settings", "global")
+                "global_config_path": _probe_default_path(
+                    workspace_root, ("global_config", "global")
                 ),
                 "pipelines_config_path": _probe_default_path(workspace_root, "pipelines"),
                 "nodes_config_path": _probe_default_path(workspace_root, "nodes"),
@@ -245,17 +244,7 @@ def write_config_file(path: Path, data: Dict[str, Any]) -> None:
 
         # Write to a temp file in the same directory, then atomically replace
         # the target so readers never observe partially-written content.
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp", prefix=f".{path.name}.")
-        try:
-            with os.fdopen(tmp_fd, "wb") as fh:
-                fh.write(raw)
-            os.replace(tmp_path, path)
-        except Exception:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+        atomic_write(path, raw)
 
         logger.debug("Wrote config file: {path}", path=path)
     except ConfigValidationError:

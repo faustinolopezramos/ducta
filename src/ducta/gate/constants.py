@@ -53,9 +53,6 @@ class ExecutionMode(Enum):
 
 
 DEFAULT_CSV_OPTIONS = {"header": "true"}
-# Vacuum retention: Delta Lake enforces minimum 7 days (168 hours) to prevent
-# accidental deletion of files that might be read by concurrent queries.
-# Lower values require setting spark.databricks.delta.retentionDurationCheck.enabled=false
 DEFAULT_VACUUM_RETENTION_HOURS = 168  # 7 days
 MIN_VACUUM_RETENTION_HOURS = 168  # Delta Lake enforced minimum
 DEFAULT_ENCODING = "UTF-8"  # Default encoding for text file operations

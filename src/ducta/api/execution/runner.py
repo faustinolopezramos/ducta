@@ -231,13 +231,13 @@ def normalize_execution_context_paths(ctx: Any, base_dir: Path) -> None:
         if normalized is not None and normalized != value:
             setattr(ctx, path_attr, normalized)
 
-    global_settings = getattr(ctx, "global_settings", None)
-    if isinstance(global_settings, dict):
+    global_config = getattr(ctx, "global_config", None)
+    if isinstance(global_config, dict):
         for path_key in ("input_path", "output_path", "model_registry_path", "mlops_path"):
-            value = global_settings.get(path_key)
+            value = global_config.get(path_key)
             normalized = _absolutize_path_value(value, base_dir)
             if normalized is not None and normalized != value:
-                global_settings[path_key] = normalized
+                global_config[path_key] = normalized
 
     _normalize_config_mapping(
         getattr(ctx, "input_config", None),
@@ -257,10 +257,10 @@ def select_execution_cwd(source_path: Path, env_dir: Path, ctx: Any) -> Path:
     Prefers *source_path* when relative config paths resolve there; otherwise
     falls back to *env_dir* or *source_path*.
     """
-    global_settings = getattr(ctx, "global_settings", {}) or {}
+    global_config = getattr(ctx, "global_config", {}) or {}
     candidate_paths = [
-        global_settings.get("input_path"),
-        global_settings.get("output_path"),
+        global_config.get("input_path"),
+        global_config.get("output_path"),
     ]
     relative_paths = [
         Path(str(v))
@@ -316,8 +316,7 @@ def _log_dry_run(
             f"Pipeline '{pipeline_name}' not found. Available: {', '.join(available) or 'none'}"
         )
     info = engine.get_pipeline_info(pipeline_name)
-    raw_nodes = info.get("nodes", [])
-    node_names = [n if isinstance(n, str) else (n.get("name") or "unknown") for n in raw_nodes]
+    node_names = info.get("nodes", [])
     logger.info("DRY-RUN MODE: Pipeline '{}' will not be executed", pipeline_name)
     logger.info("  Nodes: {}", ", ".join(node_names) if node_names else "None")
     if node_name:
@@ -327,6 +326,218 @@ def _log_dry_run(
     if end_date:
         logger.info("  End date: {}", end_date)
     logger.success("DRY-RUN completed — no execution performed")
+
+
+@contextlib.contextmanager
+def _execution_module_isolation_scope(execution_id: str, manager: Any) -> Iterator[None]:
+    """Snapshot ``sys.modules`` for *execution_id* on entry, and clean up any
+    modules imported during the run on exit — while the output-capture lock
+    is still held, so no concurrent run can lose its imports.
+    """
+    manager._isolation_manager.snapshot_modules(execution_id)
+    try:
+        yield
+    finally:
+        try:
+            removed = manager._isolation_manager.cleanup(execution_id)
+            logger.debug("Module cleanup: removed {count} modules", count=removed)
+        except Exception as exc:
+            logger.debug("Module isolation cleanup failed: {exc}", exc=exc)
+
+
+def _resolve_execution_context(
+    source_path: Path,
+    env: str,
+    pipeline_name: str,
+    timeout_handler: Any,
+) -> "tuple[Any, Path, Optional[str]]":
+    """Build the pipeline execution ``Context``.
+
+    Handles both a layered project (``ducta.yaml``, bypassing
+    ``WorkspaceManager.load_context`` which only understands
+    ``environment.yaml``-based layouts) and a standard project.
+
+    Returns ``(ctx, env_dir, added_layer_root_to_sys_path)`` — the last
+    element is the sys.path entry the caller must remove on cleanup, or
+    ``None`` when nothing was added.
+    """
+    from ducta.api.workspace.manager import WorkspaceManager  # avoid circular at module level
+
+    env_dir = source_path / env if (source_path / env).is_dir() else source_path
+
+    # Detect layered project (ducta.yaml) — bypass WorkspaceManager.load_context
+    # which only understands environment.yaml-based layouts.
+    _DUCTA_EXTS = (".yaml", ".yml", ".toml", ".json")
+    ducta_file = next(
+        (
+            source_path / f"ducta{ext}"
+            for ext in _DUCTA_EXTS
+            if (source_path / f"ducta{ext}").exists()
+        ),
+        None,
+    )
+    added_layer_root_to_sys_path: Optional[str] = None
+    if ducta_file is not None:
+        from ducta.setting import LayerContextBuilder, LayeredProjectDetector
+        from ducta.setting.contexts import Context as _Context
+
+        detector = LayeredProjectDetector(source_path)
+        matching_layers = detector.find_layers_for_pipeline(pipeline_name)
+        if not matching_layers:
+            raise RuntimeError(
+                f"Pipeline '{pipeline_name}' not found in any layer "
+                f"of layered project at '{source_path}'"
+            )
+        if len(matching_layers) > 1:
+            raise RuntimeError(
+                f"Pipeline '{pipeline_name}' is ambiguous: found in layers "
+                f"{matching_layers}. Use a unique pipeline name per layer."
+            )
+        layer_name = matching_layers[0]
+        context_args = LayerContextBuilder.build_context_args(detector, layer_name, env)
+        if context_args is None:
+            raise RuntimeError(
+                f"Cannot build context for layer '{layer_name}': "
+                "one or more config files are missing (input.yaml / output.yaml?)"
+            )
+        # Both import roots (the layer root, then its src/) now come
+        # from one place. The layer root has to be ahead of the
+        # workspace root so `import src.foo` resolves via this
+        # layer's src package before Python can cache the workspace's
+        # src as a namespace package and poison sys.modules['src'].
+        _roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
+        LayerContextBuilder.inject_sys_path(detector, layer_name)
+        if _roots:
+            added_layer_root_to_sys_path = _roots[0]
+        # The environment travels in the args dict, so this and every
+        # other layered entry point resolve it in one place.
+        layer_env = context_args.get("env") or env
+        ctx = _Context(
+            global_config=context_args["global_config"],
+            pipelines_config=context_args["pipelines_config"],
+            nodes_config=context_args["nodes_config"],
+            input_config=context_args["input_config"],
+            output_config=context_args["output_config"],
+            env=layer_env,
+        )
+        # _config_file_path drives the node executor's module search-path
+        # derivation: parent dir (= layer root) + parent/src are added as
+        # fallback import paths. Use a sentinel path whose .parent IS the
+        # layer root rather than a config subdirectory inside it.
+        if added_layer_root_to_sys_path:
+            ctx._config_file_path = str(Path(added_layer_root_to_sys_path) / "config.yaml")
+        else:
+            ctx._config_file_path = context_args["global_config"]
+        ctx.env = env
+        if timeout_handler:
+            timeout_handler.verify()
+    else:
+        workspace = WorkspaceManager(source_path)
+        if timeout_handler:
+            timeout_handler.verify()
+        try:
+            ctx = workspace.load_context(env)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to load context for env '{env}': {exc}") from exc
+
+    return ctx, env_dir, added_layer_root_to_sys_path
+
+
+def _dispatch_pipeline_type(
+    engine: Any,
+    pipeline_type: str,
+    *,
+    pipeline_name: str,
+    node_name: Optional[str],
+    ctx: Any,
+    sanity_only: bool,
+    dry_run: bool,
+    start_date: Optional[str],
+    end_date: Optional[str],
+    model_version: Optional[str],
+    hyperparams: Optional[dict],
+    reuse_upstream: bool,
+    rerun_all: bool,
+) -> Optional[Dict[str, Any]]:
+    """Run the pipeline according to its mode.
+
+    Returns the skip-outcome dict when the target node ended up skipped
+    (missing upstream inputs) instead of running — ``None`` for a normal
+    completion.
+    """
+    from ducta.stream.constants import PipelineType
+
+    outcome: Optional[Dict[str, Any]] = None
+    if sanity_only:
+        # Run node input sanity checks only — no pipeline execution.
+        _run_sanity_checks(ctx, pipeline_name)
+    elif dry_run:
+        # Validate the pipeline exists and log its plan without executing.
+        _log_dry_run(engine, pipeline_name, node_name, start_date, end_date)
+    elif pipeline_type in (PipelineType.STREAMING.value, PipelineType.HYBRID.value):
+        _gs = getattr(ctx, "global_config", {}) or {}
+        _transform_modules = _gs.get("streaming_transform_modules") or []
+        if isinstance(_transform_modules, str):
+            _transform_modules = [_transform_modules]
+        if _transform_modules:
+            logger.info(
+                "Registering streaming transforms from global_config: {}",
+                _transform_modules,
+            )
+            engine.register_streaming_transforms(list(_transform_modules))
+
+        # Force sync mode so the execution blocks the worker thread while queries are active
+        engine.run_pipeline_chain(
+            pipeline_name=pipeline_name,
+            node_name=node_name,
+            start_date=start_date,
+            end_date=end_date,
+            model_version=model_version,
+            hyperparams=hyperparams,
+            execution_mode="sync",
+            reuse_upstream=reuse_upstream,
+            rerun_all=rerun_all,
+        )
+    else:
+        run_result = engine.run_pipeline_chain(
+            pipeline_name=pipeline_name,
+            node_name=node_name,
+            start_date=start_date,
+            end_date=end_date,
+            model_version=model_version,
+            hyperparams=hyperparams,
+            reuse_upstream=reuse_upstream,
+            rerun_all=rerun_all,
+        )
+        # Skipped nodes and a blocked quality gate both let
+        # run_pipeline return instead of raising, so without this
+        # a run that rejected or could not read its data was
+        # recorded as a success. The classification lives on the
+        # result itself, shared with the CLI's report_run_outcome.
+        outcome = run_result.outcome() or outcome
+    return outcome
+
+
+def _link_certificate(ctx: Any, manager: Any, execution_id: str) -> None:
+    """Attach the Run Certificate this run emitted, if any (best-effort).
+
+    The executor facade stamps its run_id on the context.
+    """
+    try:
+        cert_run_id = getattr(ctx, "_run_id", None)
+        if cert_run_id:
+            manager.attach_certificate(execution_id, str(cert_run_id))
+    except Exception as e:
+        logger.debug("Could not attach certificate run_id: {}", e)
+
+
+def _shutdown_engine(engine: Any, manager: Any, execution_id: str) -> None:
+    """Unregister the active engine and shut it down (best-effort)."""
+    manager.unregister_active_engine(execution_id)
+    try:
+        engine.shutdown()
+    except Exception as e:
+        logger.error(f"Error shutting down pipeline engine: {e}")
 
 
 def run_pipeline_sync(
@@ -353,7 +564,6 @@ def run_pipeline_sync(
     completion (success/dry-run/sanity-only).
     """
     from ducta.api.execution.resilience_helpers import set_current_execution_id
-    from ducta.api.workspace.manager import WorkspaceManager  # avoid circular at module level
 
     manager.set_active_execution(execution_id)
     set_current_execution_id(execution_id)
@@ -379,247 +589,123 @@ def run_pipeline_sync(
         with ProcessOutputCapture(execution_id, manager):
             # Snapshot sys.modules under the lock so the baseline (and the later
             # cleanup) cannot race with another execution's imports.
-            manager._isolation_manager.snapshot_modules(execution_id)
-            logger.info("Starting Ducta pipeline execution")
-            try:
-                from ducta.console.ux.rich_logger import print_execution_header
+            with _execution_module_isolation_scope(execution_id, manager):
+                logger.info("Starting Ducta pipeline execution")
+                try:
+                    from ducta.console.ux.rich_logger import print_execution_header
 
-                print_execution_header(
-                    pipeline=pipeline_name,
-                    env=env,
-                    start_date=start_date,
-                    end_date=end_date,
-                    node=node_name,
-                )
-            except Exception as exc:
-                logger.debug("Failed to print execution header: {exc}", exc=exc)
-
-            if ws_root_str not in sys.path:
-                sys.path.insert(0, ws_root_str)
-                added_to_sys_path = True
-                logger.debug("Added source root to sys.path: {p}", p=ws_root_str)
-
-            original_cwd = os.getcwd()
-            try:
-                env_dir = source_path / env if (source_path / env).is_dir() else source_path
-
-                # Detect layered project (ducta.yaml) — bypass WorkspaceManager.load_context
-                # which only understands environment.yaml-based layouts.
-                _DUCTA_EXTS = (".yaml", ".yml", ".toml", ".json")
-                ducta_file = next(
-                    (
-                        source_path / f"ducta{ext}"
-                        for ext in _DUCTA_EXTS
-                        if (source_path / f"ducta{ext}").exists()
-                    ),
-                    None,
-                )
-                if ducta_file is not None:
-                    from ducta.setting import LayerContextBuilder, LayeredProjectDetector
-                    from ducta.setting.contexts import Context as _Context
-
-                    detector = LayeredProjectDetector(source_path)
-                    matching_layers = detector.find_layers_for_pipeline(pipeline_name)
-                    if not matching_layers:
-                        raise RuntimeError(
-                            f"Pipeline '{pipeline_name}' not found in any layer "
-                            f"of layered project at '{source_path}'"
-                        )
-                    if len(matching_layers) > 1:
-                        raise RuntimeError(
-                            f"Pipeline '{pipeline_name}' is ambiguous: found in layers "
-                            f"{matching_layers}. Use a unique pipeline name per layer."
-                        )
-                    layer_name = matching_layers[0]
-                    context_args = LayerContextBuilder.build_context_args(detector, layer_name, env)
-                    if context_args is None:
-                        raise RuntimeError(
-                            f"Cannot build context for layer '{layer_name}': "
-                            "one or more config files are missing (input.yaml / output.yaml?)"
-                        )
-                    # Both import roots (the layer root, then its src/) now come
-                    # from one place. The layer root has to be ahead of the
-                    # workspace root so `import src.foo` resolves via this
-                    # layer's src package before Python can cache the workspace's
-                    # src as a namespace package and poison sys.modules['src'].
-                    _roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
-                    LayerContextBuilder.inject_sys_path(detector, layer_name)
-                    if _roots:
-                        added_layer_root_to_sys_path = _roots[0]
-                    # The environment travels in the args dict, so this and every
-                    # other layered entry point resolve it in one place.
-                    layer_env = context_args.get("env") or env
-                    ctx = _Context(
-                        global_settings=context_args["global_settings"],
-                        pipelines_config=context_args["pipelines_config"],
-                        nodes_config=context_args["nodes_config"],
-                        input_config=context_args["input_config"],
-                        output_config=context_args["output_config"],
-                        env=layer_env,
+                    print_execution_header(
+                        pipeline=pipeline_name,
+                        env=env,
+                        start_date=start_date,
+                        end_date=end_date,
+                        node=node_name,
                     )
-                    # _config_file_path drives the node executor's module search-path
-                    # derivation: parent dir (= layer root) + parent/src are added as
-                    # fallback import paths. Use a sentinel path whose .parent IS the
-                    # layer root rather than a config subdirectory inside it.
-                    if added_layer_root_to_sys_path:
-                        ctx._config_file_path = str(
-                            Path(added_layer_root_to_sys_path) / "config.yaml"
-                        )
-                    else:
-                        ctx._config_file_path = context_args["global_settings"]
-                    ctx.env = env
-                    if timeout_handler:
-                        timeout_handler.verify()
-                else:
-                    workspace = WorkspaceManager(source_path)
-                    if timeout_handler:
-                        timeout_handler.verify()
-                    try:
-                        ctx = workspace.load_context(env)
-                    except Exception as exc:
-                        raise RuntimeError(
-                            f"Failed to load context for env '{env}': {exc}"
-                        ) from exc
-
-                # Expose the pipeline name to runtime consumers. The streaming
-                # status / checkpoints / data endpoints read
-                # global_settings["pipeline_name"] to scope their work to this
-                # pipeline; without it "Clear Checkpoints" 400s and the data
-                # preview falls back to every node in the workspace.
-                _gs = getattr(ctx, "global_settings", None)
-                if isinstance(_gs, dict):
-                    _gs["pipeline_name"] = pipeline_name
-                    # Propagated into MLOps run tags so runs can be traced back
-                    # to the owning project (execution is project-scoped, MLOps
-                    # storage is workspace-scoped).
-                    if project_id:
-                        _gs["project_id"] = project_id
-
-                execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
-                os.chdir(execution_cwd)
-                normalize_execution_context_paths(ctx, execution_cwd)
-
-                if timeout_handler:
-                    timeout_handler.verify()
-
-                from ducta.core.executors import PipelineExecutor
-                from ducta.stream.constants import PipelineType
-
-                engine = PipelineExecutor(ctx)
-                pipeline = engine.batch_executor._get_pipeline_config(pipeline_name)
-                pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
-
-                manager.register_active_engine(execution_id, engine)
-                # Terminal outcomes that do not raise. ``None`` means a clean run;
-                # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
-                outcome: Optional[Dict[str, Any]] = None
-                try:
-                    if sanity_only:
-                        # Run node input sanity checks only — no pipeline execution.
-                        _run_sanity_checks(ctx, pipeline_name)
-                    elif dry_run:
-                        # Validate the pipeline exists and log its plan without executing.
-                        _log_dry_run(engine, pipeline_name, node_name, start_date, end_date)
-                    elif pipeline_type in (PipelineType.STREAMING.value, PipelineType.HYBRID.value):
-                        _gs = getattr(ctx, "global_settings", {}) or {}
-                        _transform_modules = _gs.get("streaming_transform_modules") or []
-                        if isinstance(_transform_modules, str):
-                            _transform_modules = [_transform_modules]
-                        if _transform_modules:
-                            logger.info(
-                                "Registering streaming transforms from global_settings: {}",
-                                _transform_modules,
-                            )
-                            engine.register_streaming_transforms(list(_transform_modules))
-
-                        # Force sync mode so the execution blocks the worker thread while queries are active
-                        engine.run_pipeline_chain(
-                            pipeline_name=pipeline_name,
-                            node_name=node_name,
-                            start_date=start_date,
-                            end_date=end_date,
-                            model_version=model_version,
-                            hyperparams=hyperparams,
-                            execution_mode="sync",
-                            reuse_upstream=reuse_upstream,
-                            rerun_all=rerun_all,
-                        )
-                    else:
-                        run_result = engine.run_pipeline_chain(
-                            pipeline_name=pipeline_name,
-                            node_name=node_name,
-                            start_date=start_date,
-                            end_date=end_date,
-                            model_version=model_version,
-                            hyperparams=hyperparams,
-                            reuse_upstream=reuse_upstream,
-                            rerun_all=rerun_all,
-                        )
-                        # Skipped nodes and a blocked quality gate both let
-                        # run_pipeline return instead of raising, so without this
-                        # a run that rejected or could not read its data was
-                        # recorded as a success. The classification lives on the
-                        # result itself, shared with the CLI's report_run_outcome.
-                        outcome = run_result.outcome() or outcome
-                finally:
-                    # Link the Run Certificate this run emitted (the executor facade
-                    # stamps its run_id on the context).
-                    try:
-                        cert_run_id = getattr(ctx, "_run_id", None)
-                        if cert_run_id:
-                            manager.attach_certificate(execution_id, str(cert_run_id))
-                    except Exception as e:
-                        logger.debug("Could not attach certificate run_id: {}", e)
-                    manager.unregister_active_engine(execution_id)
-                    try:
-                        engine.shutdown()
-                    except Exception as e:
-                        logger.error(f"Error shutting down pipeline engine: {e}")
-
-                try:
-                    from ducta.console.ux.rich_logger import (
-                        RichLoggerManager,
-                        print_process_separator,
-                    )
-
-                    console = RichLoggerManager.get_console()
-                    console.print()
-                    print_process_separator(
-                        "success", "EXECUTION COMPLETED", f"Pipeline: {pipeline_name}", console
-                    )
-                    console.print()
-                except Exception:
-                    pass
-
-                logger.success("Ducta pipeline execution completed successfully")
-                return outcome
-            except DuctaError:
-                # Engine errors already carry the pipeline, the failed nodes and
-                # an http_status. Re-wrapping them in a RuntimeError threw all of
-                # that away and left the caller with a string to parse.
-                raise
-            except Exception as exc:
-                raise RuntimeError(f"Pipeline '{pipeline_name}' execution failed: {exc}") from exc
-            finally:
-                try:
-                    os.chdir(original_cwd)
-                except OSError:
-                    pass
-                if added_to_sys_path:
-                    try:
-                        sys.path.remove(ws_root_str)
-                    except ValueError:
-                        pass
-                if added_layer_root_to_sys_path:
-                    try:
-                        sys.path.remove(added_layer_root_to_sys_path)
-                    except ValueError:
-                        pass
-                manager.set_active_execution(None)
-                # Remove modules imported during this run while still holding the
-                # execution-body lock, so no concurrent run can lose its imports.
-                try:
-                    removed = manager._isolation_manager.cleanup(execution_id)
-                    logger.debug("Module cleanup: removed {count} modules", count=removed)
                 except Exception as exc:
-                    logger.debug("Module isolation cleanup failed: {exc}", exc=exc)
+                    logger.debug("Failed to print execution header: {exc}", exc=exc)
+
+                if ws_root_str not in sys.path:
+                    sys.path.insert(0, ws_root_str)
+                    added_to_sys_path = True
+                    logger.debug("Added source root to sys.path: {p}", p=ws_root_str)
+
+                original_cwd = os.getcwd()
+                try:
+                    ctx, env_dir, added_layer_root_to_sys_path = _resolve_execution_context(
+                        source_path, env, pipeline_name, timeout_handler
+                    )
+
+                    # Expose the pipeline name to runtime consumers. The streaming
+                    # status / checkpoints / data endpoints read
+                    # global_config["pipeline_name"] to scope their work to this
+                    # pipeline; without it "Clear Checkpoints" 400s and the data
+                    # preview falls back to every node in the workspace.
+                    _gs = getattr(ctx, "global_config", None)
+                    if isinstance(_gs, dict):
+                        _gs["pipeline_name"] = pipeline_name
+                        # Propagated into MLOps run tags so runs can be traced back
+                        # to the owning project (execution is project-scoped, MLOps
+                        # storage is workspace-scoped).
+                        if project_id:
+                            _gs["project_id"] = project_id
+
+                    execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
+                    os.chdir(execution_cwd)
+                    normalize_execution_context_paths(ctx, execution_cwd)
+
+                    if timeout_handler:
+                        timeout_handler.verify()
+
+                    from ducta.core.executors import PipelineExecutor
+                    from ducta.stream.constants import PipelineType
+
+                    engine = PipelineExecutor(ctx)
+                    pipeline = engine.batch_executor._get_pipeline_config(pipeline_name)
+                    pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
+
+                    manager.register_active_engine(execution_id, engine)
+                    # Terminal outcomes that do not raise. ``None`` means a clean run;
+                    # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
+                    outcome: Optional[Dict[str, Any]] = None
+                    try:
+                        outcome = _dispatch_pipeline_type(
+                            engine,
+                            pipeline_type,
+                            pipeline_name=pipeline_name,
+                            node_name=node_name,
+                            ctx=ctx,
+                            sanity_only=sanity_only,
+                            dry_run=dry_run,
+                            start_date=start_date,
+                            end_date=end_date,
+                            model_version=model_version,
+                            hyperparams=hyperparams,
+                            reuse_upstream=reuse_upstream,
+                            rerun_all=rerun_all,
+                        )
+                    finally:
+                        _link_certificate(ctx, manager, execution_id)
+                        _shutdown_engine(engine, manager, execution_id)
+
+                    try:
+                        from ducta.console.ux.rich_logger import (
+                            RichLoggerManager,
+                            print_process_separator,
+                        )
+
+                        console = RichLoggerManager.get_console()
+                        console.print()
+                        print_process_separator(
+                            "success", "EXECUTION COMPLETED", f"Pipeline: {pipeline_name}", console
+                        )
+                        console.print()
+                    except Exception:
+                        pass
+
+                    logger.success("Ducta pipeline execution completed successfully")
+                    return outcome
+                except DuctaError:
+                    # Engine errors already carry the pipeline, the failed nodes and
+                    # an http_status. Re-wrapping them in a RuntimeError threw all of
+                    # that away and left the caller with a string to parse.
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Pipeline '{pipeline_name}' execution failed: {exc}"
+                    ) from exc
+                finally:
+                    try:
+                        os.chdir(original_cwd)
+                    except OSError:
+                        pass
+                    if added_to_sys_path:
+                        try:
+                            sys.path.remove(ws_root_str)
+                        except ValueError:
+                            pass
+                    if added_layer_root_to_sys_path:
+                        try:
+                            sys.path.remove(added_layer_root_to_sys_path)
+                        except ValueError:
+                            pass
+                    manager.set_active_execution(None)

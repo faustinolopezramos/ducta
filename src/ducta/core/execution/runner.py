@@ -23,18 +23,17 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
-from ducta.check import QualityOutputConfig, QualityOutputManager, QualityReport
-from ducta.core.commands import Command
+from ducta.check import QualityOutputManager
 from ducta.core.errors import NodeNotFoundError
 from ducta.core.execution.coordinator import ParallelCoordinator
 from ducta.core.execution.ingestion import IngestionExecutor
 from ducta.core.execution.loader import FunctionLoader
 from ducta.core.execution.ml_builder import MLContextBuilder
-from ducta.core.execution.output import OutputWriter
+from ducta.core.execution.output import OutputWriter, report_node_failure
 from ducta.core.execution.quality import QualityCheckExecutor
 from ducta.core.execution.state import ThreadSafeExecutionState
 from ducta.core.execution_context import node_id_var
@@ -301,14 +300,7 @@ class NodeExecutor:
                     # failure box for something that did not fail.
                     logger.debug("Node '{}' skipped: {}", node_name, e)
                 else:
-                    try:
-                        from ducta.console.ux.error_analyzer import format_error_for_developer
-                        from ducta.console.ux.rich_logger import RichLoggerManager
-
-                        console = RichLoggerManager.get_console()
-                        format_error_for_developer(e, node_name, console)
-                    except Exception:
-                        logger.error("Failed to execute node '{}': {}", node_name, e)
+                    report_node_failure(e, node_name)
                 raise
             finally:
                 duration = time.perf_counter() - start_time
@@ -475,9 +467,14 @@ class NodeExecutor:
             # Worker processes outlive the thread pool unless closed; a run
             # that used run_in_process would otherwise leak them.
             self.shutdown()
-
-        self.gate_blocked = dict(execution_state.gate_blocked)
-        self.skipped = dict(execution_state.skipped)
+            # Inside the `finally`, not after it. These are what the run result
+            # (and therefore the CLI and the API) uses to say *which* nodes were
+            # gate-blocked or skipped, and `coordinate`/`cleanup` raise on any
+            # node failure — so on exactly the runs where that context matters
+            # most, both dicts stayed empty and the caller reported a bare
+            # failure with no mention of the gate or the skipped branch.
+            self.gate_blocked = dict(execution_state.gate_blocked)
+            self.skipped = dict(execution_state.skipped)
 
     def _initialize_execution_state(
         self,
@@ -505,37 +502,3 @@ class NodeExecutor:
         if not node:
             raise NodeNotFoundError(node_name, list(self.context.nodes_config.keys()))
         return node
-
-    def _run_sanity_checks_on_inputs(
-        self,
-        dfs: List[Any],
-        node_config: Dict[str, Any],
-        node_name: str,
-        pipeline_type: Optional[str] = None,
-    ) -> Optional[QualityReport]:
-        return self._quality_executor.run_sanity_checks(
-            dfs, node_config, node_name, pipeline_type, pipeline_name=self.pipeline_name
-        )
-
-    def _load_node_function(self, node: Dict[str, Any]) -> Callable:
-        return self._function_loader.load(node)
-
-    def _create_enhanced_command(
-        self,
-        function: Callable,
-        input_dfs: List[Any],
-        start_date: str,
-        end_date: str,
-        node_name: str,
-        ml_info: Dict[str, Any],
-        node_config: Dict[str, Any],
-        input_names: Optional[List[str]] = None,
-    ) -> Command:
-        return self._ml_builder.create_command(
-            function, input_dfs, start_date, end_date, node_name, ml_info, node_config, input_names
-        )
-
-    def _create_quality_output_config(
-        self, config_dict: Dict[str, Any]
-    ) -> Optional[QualityOutputConfig]:
-        return self._quality_executor._create_quality_output_config(config_dict)

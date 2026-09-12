@@ -62,11 +62,12 @@ class SparkWriterMixin:
 
     def _configure_spark_writer(self, dataframe: Any, config: Dict[str, Any]) -> Any:
         """Configure Spark DataFrame writer with write mode and schema options."""
-        _data_validator.validate_dataframe(dataframe)
-
         config = normalize_partition_config(config)
 
         write_mode = self._determine_write_mode(config)
+        _data_validator.validate_dataframe(
+            dataframe, allow_empty=write_mode == WriteMode.OVERWRITE.value
+        )
         writer = dataframe.write.format(self._get_format()).mode(write_mode)
         logger.debug("Writer configured with mode: {}", write_mode)
 
@@ -84,9 +85,6 @@ class SparkWriterMixin:
         write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
         valid_modes = [mode.value for mode in WriteMode]
         if write_mode not in valid_modes:
-            # A typo (or a stale/renamed mode) must never silently fall back
-            # to OVERWRITE — that's the single most destructive mode
-            # available, so a config mistake should never translate into it.
             raise ConfigurationError(f"Invalid write_mode '{write_mode}'. Valid: {valid_modes}")
         return write_mode
 

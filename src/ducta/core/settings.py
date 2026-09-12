@@ -16,28 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-The typed view of everything ``ducta.core`` reads out of configuration.
-
-Before this module the core reached into the context ad hoc: 56 ``getattr``
-calls, 23 of them just to obtain ``global_settings``, and 23 distinct settings
-keys read with an inline default at each use site, spread over five files. That
-shape produced a specific and repeated class of defect:
-
-* the same key read with *different* defaults in different places;
-* an environment variable (``DUCTA_MLFLOW_ENABLED``) that silently did nothing
-  because one reader spelled it differently from every other reader;
-* ``MAX_TIMEOUT_SECONDS`` duplicated into ``NodeExecutor`` with a comment
-  admitting it was copied "to avoid a circular import", so the two clamps could
-  drift;
-* three hand-written, subtly different orders for resolving the active
-  environment, one of them carrying the comment "Must mirror OutputWriter.save's
-  resolution order" — a correctness constraint enforced only by a comment.
-
-Resolution happens exactly once, in :meth:`CoreSettings.from_context`. Coercion,
-defaults, clamping and validation live here, so a misconfiguration is reported
-once, up front, with the offending key named — instead of being silently
-absorbed by a ``.get(key, default)`` deep inside an execution path.
 """
 
 from __future__ import annotations
@@ -47,12 +25,11 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.core.context_utils import get_context_value as _get
+
 # Accepted spellings for boolean-ish configuration values.
 _TRUE_VALUES = frozenset({"true", "yes", "on", "1"})
 _FALSE_VALUES = frozenset({"false", "no", "off", "0", ""})
-
-# Hard ceilings. A timeout is a safety net; a typo that adds a couple of zeros
-# turns it into "no timeout at all", which is the failure mode these prevent.
 MAX_TIMEOUT_SECONDS = 86_400
 
 DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3_600
@@ -61,19 +38,13 @@ DEFAULT_MAX_PARALLEL_NODES = 4
 DEFAULT_MAX_STREAMING_PIPELINES = 5
 DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
 
-#: ``chain.on_gate_blocked`` values. "stop" aborts the chain when a blocked
-#: quality gate stops an upstream pipeline from refreshing its outputs.
 CHAIN_ON_GATE_BLOCKED_STOP = "stop"
 CHAIN_ON_GATE_BLOCKED_CONTINUE = "continue"
 CHAIN_ON_GATE_BLOCKED_CHOICES = (CHAIN_ON_GATE_BLOCKED_STOP, CHAIN_ON_GATE_BLOCKED_CONTINUE)
 
 
 def coerce_bool(name: str, raw: Any, *, default: bool) -> bool:
-    """Coerce a settings value to ``bool``, warning on anything unrecognized.
-
-    A bare ``bool(raw)`` makes the string ``"false"`` true, which is exactly how
-    a disabled feature stays enabled with no indication anything was wrong.
-    """
+    """Coerce a settings value to ``bool``, warning on anything unrecognized."""
     if isinstance(raw, bool):
         return raw
     if raw is None:
@@ -104,12 +75,7 @@ def coerce_bool(name: str, raw: Any, *, default: bool) -> bool:
 
 
 def coerce_choice(name: str, raw: Any, *, choices: Tuple[str, ...], default: str) -> str:
-    """Coerce a settings value to one of ``choices``, warning on anything else.
-
-    Fails closed on purpose: an unrecognized value falls back to *default*
-    rather than to the most permissive option, the same way
-    ``ducta.check.gate`` resolves an unknown ``behavior``.
-    """
+    """Coerce a settings value to one of ``choices``, warning on anything else."""
     if raw is None:
         return default
     if isinstance(raw, str):
@@ -178,20 +144,9 @@ def _as_mapping(value: Any) -> Dict[str, Any]:
     return {}
 
 
-def _get(source: Any, key: str, default: Any = None) -> Any:
-    """Read ``key`` from a settings source that may be a mapping or an object."""
-    if isinstance(source, Mapping):
-        return source.get(key, default)
-    return getattr(source, key, default)
-
-
 @dataclass(frozen=True)
 class CoreSettings:
-    """Every configuration value ``ducta.core`` consumes, resolved once.
-
-    Frozen on purpose: settings are resolved at the start of a run and must not
-    drift underneath a pipeline that is already executing.
-    """
+    """Every configuration value ``ducta.core`` consumes, resolved once."""
 
     # ── Execution ────────────────────────────────────────────────────────────
     max_parallel_nodes: int = DEFAULT_MAX_PARALLEL_NODES
@@ -227,33 +182,22 @@ class CoreSettings:
 
     # ── Run certificates ─────────────────────────────────────────────────────
     enable_run_certificate: bool = True
+    require_run_certificate: bool = False
     run_certificate_dir: str = DEFAULT_CERTIFICATE_DIR
     certificate_signing_key: Optional[str] = None
 
     # ── Chain reuse ──────────────────────────────────────────────────────────
     chain_reuse_materialized: bool = False
-    #: On by default: reuse itself is opt-in, so once a user asks for it the
-    #: freshness check is the part that keeps the reuse honest.
     chain_staleness_check: bool = True
-    #: What a blocked quality gate in a *non-target* step of a chain does to
-    #: the rest of the chain. "stop" (default) aborts; "continue" runs on,
-    #: which means downstream pipelines read whatever the blocked one left on
-    #: disk from an earlier run.
     chain_on_gate_blocked: str = CHAIN_ON_GATE_BLOCKED_STOP
 
-    # ── Nested sections kept as-is (consumed by ducta.check / ducta.gate) ─────
     quality: Dict[str, Any] = field(default_factory=dict)
     ingestion: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_context(cls, context: Any) -> "CoreSettings":
-        """Resolve settings from a pipeline ``Context`` (or a bare settings dict).
-
-        Never raises: a bad value is warned about and replaced by its default, so
-        a single typo cannot make the whole engine unconstructible. Values that
-        must be enforced (timeouts) are clamped here rather than at each use.
-        """
-        gs = context if isinstance(context, Mapping) else _get(context, "global_settings", {})
+        """Resolve settings from a pipeline ``Context`` (or a bare settings dict)."""
+        gs = context if isinstance(context, Mapping) else _get(context, "global_config", {})
         gs = _as_mapping(gs)
 
         execution_timeout = clamp_timeout(
@@ -303,8 +247,6 @@ class CoreSettings:
             ),
             strict_module_import=coerce_bool(
                 "strict_module_import",
-                # The context attribute wins when present: it is how a caller
-                # overrides the setting programmatically.
                 _get(context, "strict_module_import", gs.get("strict_module_import")),
                 default=True,
             ),
@@ -314,6 +256,9 @@ class CoreSettings:
             fingerprint_policy=str(gs.get("fingerprint_policy") or "record"),
             enable_run_certificate=coerce_bool(
                 "enable_run_certificate", gs.get("enable_run_certificate"), default=True
+            ),
+            require_run_certificate=coerce_bool(
+                "require_run_certificate", gs.get("require_run_certificate"), default=False
             ),
             run_certificate_dir=str(gs.get("run_certificate_dir") or DEFAULT_CERTIFICATE_DIR),
             certificate_signing_key=_optional_str(gs.get("certificate_signing_key")),
@@ -335,15 +280,7 @@ class CoreSettings:
 
     @staticmethod
     def _resolve_env(context: Any, gs: Mapping[str, Any]) -> Optional[str]:
-        """Resolve the active environment name, once, for the whole core.
-
-        Precedence is ``context.env`` → ``global_settings.env`` →
-        ``global_settings.environment`` → ``context.environment``. This mirrors
-        what ``OutputWriter.save`` does when it decides where to *write*, which
-        is what makes the chain-reuse check look at the same path the write
-        used. That agreement was previously maintained by a comment asking the
-        reader to keep three copies of the logic in sync.
-        """
+        """Resolve the active environment name, once, for the whole core."""
         return (
             _optional_str(_get(context, "env"))
             or _optional_str(gs.get("env"))
@@ -353,14 +290,7 @@ class CoreSettings:
 
     @staticmethod
     def _resolve_mlflow_enabled(mlflow_section: Mapping[str, Any]) -> bool:
-        """Resolve MLflow enablement from the environment, then configuration.
-
-        The environment override lived in ``BaseExecutor._should_enable_mlflow``,
-        reading ``os.getenv`` directly and so bypassing this module entirely —
-        the very shape whose past failure (a variable one reader spelled
-        differently from every other) is what this module exists to prevent.
-        Both spellings are accepted because both are already documented.
-        """
+        """Resolve MLflow enablement from the environment, then configuration."""
         import os
 
         for name in ("DUCTA_MLFLOW_ENABLED", "Ducta_MLFLOW_ENABLED"):
@@ -371,12 +301,7 @@ class CoreSettings:
 
     @staticmethod
     def _resolve_mlops_enabled(gs: Mapping[str, Any], mlops_section: Mapping[str, Any]) -> bool:
-        """Resolve MLOps enablement from the flat flag and the nested section.
-
-        Two spellings exist in the wild: a top-level ``mlops_enabled`` and a
-        nested ``mlops.enabled``. An explicit nested value wins because it is the
-        more specific declaration; otherwise the flat flag applies.
-        """
+        """Resolve MLOps enablement from the flat flag and the nested section."""
         nested = mlops_section.get("enabled")
         if nested is not None:
             return coerce_bool("mlops.enabled", nested, default=True)

@@ -22,11 +22,14 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
-from typing import ClassVar, List, Optional
+from typing import Any, ClassVar, List, Literal, Optional
 
 from loguru import logger  # type: ignore
-from pydantic import Field, model_validator  # type: ignore
+from pydantic import Field, field_validator, model_validator  # type: ignore
 from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
+
+#: The only environment names `is_production()` / `is_development()` understand.
+_VALID_ENVIRONMENTS = frozenset({"development", "staging", "production"})
 
 
 class Settings(BaseSettings):
@@ -45,6 +48,33 @@ class Settings(BaseSettings):
         default="development",
         description="Runtime environment: development | staging | production",
     )
+
+    @field_validator("environment", mode="before")
+    @classmethod
+    def _normalise_environment(cls, value: Any) -> Any:
+        """Fold case/whitespace, then reject anything outside the three known values.
+
+        `is_production()` compares with `== "production"`, so every production
+        guard below (`_check_production_secrets`: no default JWT secret, auth on,
+        debug off) is keyed to that exact spelling. An unrecognised value did not
+        fail — it silently landed in the non-production branch, which is how
+        `ENVIRONMENT=prod` produced a deployment serving traffic with
+        `jwt_secret_key="change-me-in-production"` and `auth_enabled=False`.
+        Folding case accepts `PRODUCTION`/`Production` as the operator clearly
+        meant them; anything else is a typo worth failing on at startup rather
+        than silently downgrading.
+        """
+        if not isinstance(value, str):
+            return value
+        normalised = value.strip().lower()
+        if normalised not in _VALID_ENVIRONMENTS:
+            raise ValueError(
+                f"Invalid environment {value!r}. Must be one of: "
+                f"{', '.join(sorted(_VALID_ENVIRONMENTS))}. Note that an "
+                "unrecognised value would otherwise disable every production "
+                "safety check."
+            )
+        return normalised
 
     host: str = Field(
         default="127.0.0.1",
@@ -217,7 +247,12 @@ class Settings(BaseSettings):
         default="change-me-in-production",
         description="Secret key for JWT signing. MUST be overridden in production.",
     )
-    jwt_algorithm: str = Field(default="HS256")
+    # Restricted to the HMAC family: `jwt_secret_key` is a shared secret, and the
+    # asymmetric families (RS*/ES*/PS*) need a PEM key PyJWT cannot parse from
+    # it. Unconstrained, a typo here was accepted at startup and only surfaced
+    # later as an InvalidKeyError/NotImplementedError from the first login
+    # attempt — a runtime 500 instead of a config error.
+    jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(default="HS256")
     jwt_expiration_hours: int = Field(default=24)
     auth_enabled: bool = Field(
         default=False, description="Enable JWT authentication (basic login required)"

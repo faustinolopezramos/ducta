@@ -1,4 +1,6 @@
 import { colors } from "../../../theme/tokens";
+import { formatDuration } from "../../../utils/formatDuration";
+import { STATUS_META, type Status } from "../../ui/statusMeta";
 import type { StreamingStatus, RateSample, ThroughputVerdict } from "./types";
 
 export const LAYER_HINTS: { match: RegExp; icon: string; color: string }[] = [
@@ -23,24 +25,21 @@ export function formatCell(value: unknown): string {
   return String(value);
 }
 
+/**
+ * Streaming-status color, sourced from the shared STATUS_META table (see
+ * components/ui/statusMeta.ts) rather than a locally duplicated palette.
+ *
+ * Note: this used to color "running" green here specifically, diverging from
+ * the accent/primary color every other status view uses for "running" — that
+ * was the exact kind of drift this table exists to prevent, so it now matches.
+ */
 export function statusColor(status?: string): string {
-  switch (status) {
-    case "running":        return colors.green;
-    case "starting":       return colors.blue;
-    case "partial_failure": return colors.amber;
-    case "error":          return colors.red;
-    case "stopped":        return colors.textMuted;
-    default:               return colors.textMuted;
-  }
+  if (!status || !(status in STATUS_META)) return colors.textMuted;
+  return STATUS_META[status as Status].color;
 }
 
 export function formatUptime(seconds: number): string {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}h ${m}m`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
+  return formatDuration(seconds, "uptime");
 }
 
 export function formatRate(value: number): string {

@@ -23,23 +23,11 @@ Resilience & Fault-Tolerance for Pipeline Executions.
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Dict, List, Optional
 
-from loguru import logger  # type: ignore
-
-T = TypeVar("T")
-
-
-@dataclass
-class RetryConfig:
-    max_retries: int = 3
-    initial_delay: float = 1.0
-    max_delay: float = 120.0
-    backoff_factor: float = 2.0
-    jitter: bool = True
+from ducta.api.execution._registry import KeyedRegistry
 
 
 @dataclass
@@ -94,44 +82,6 @@ class ResilienceMetrics:
             }
 
 
-class EnhancedRetryPolicy:
-    def __init__(self, config: Optional[RetryConfig] = None):
-        self.config = config or RetryConfig()
-
-    def execute(self, func: Callable[..., T], *args, **kwargs) -> T:
-        last_exception: Optional[Exception] = None
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                return func(*args, **kwargs)
-            except Exception as exc:
-                last_exception = exc
-                if attempt < self.config.max_retries:
-                    delay = self._calculate_delay(attempt)
-                    logger.warning(
-                        "Retry {attempt}/{max}: {exc}. Waiting {delay:.2f}s",
-                        attempt=attempt + 1,
-                        max=self.config.max_retries,
-                        exc=str(exc),
-                        delay=delay,
-                    )
-                    time.sleep(delay)
-
-        if last_exception:
-            raise last_exception
-        raise RuntimeError("Retry loop completed without result or exception")
-
-    def _calculate_delay(self, attempt: int) -> float:
-        delay = min(
-            self.config.initial_delay * (self.config.backoff_factor**attempt),
-            self.config.max_delay,
-        )
-        if self.config.jitter:
-            import random
-
-            delay += random.uniform(0, delay * 0.1)
-        return delay
-
-
 class ResilienceContext:
     def __init__(self, execution_id: str):
         self.execution_id = execution_id
@@ -143,20 +93,12 @@ class ResilienceContext:
         self.metrics.record_failure(exception, node_id=node_id, context=context)
 
 
-_resilience_contexts: Dict[str, ResilienceContext] = {}
-_resilience_lock = threading.Lock()
+_resilience_contexts: KeyedRegistry[str, ResilienceContext] = KeyedRegistry(ResilienceContext)
 
 
 def get_resilience_context(execution_id: str) -> ResilienceContext:
-    with _resilience_lock:
-        if execution_id not in _resilience_contexts:
-            _resilience_contexts[execution_id] = ResilienceContext(execution_id)
-        return _resilience_contexts[execution_id]
+    return _resilience_contexts.get_or_create(execution_id)
 
 
 def delete_resilience_context(execution_id: str) -> bool:
-    with _resilience_lock:
-        if execution_id in _resilience_contexts:
-            del _resilience_contexts[execution_id]
-            return True
-    return False
+    return _resilience_contexts.delete(execution_id)

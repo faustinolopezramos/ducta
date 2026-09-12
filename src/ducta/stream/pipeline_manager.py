@@ -23,7 +23,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -32,6 +32,7 @@ try:
 except ImportError:
     StreamingQuery = Any  # type: ignore
 
+from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import (
     StreamingError,
     StreamingPipelineError,
@@ -43,7 +44,7 @@ from ducta.stream.progress_listener import (
     StreamingProgressSink,
     listener_available,
 )
-from ducta.stream.query_manager import StreamingQueryManager
+from ducta.stream.query_manager import StreamingQueryManager, get_query_exception, is_query_active
 from ducta.stream.validators import StreamingValidator
 
 _TRANSIENT_DELTA_ERROR_TOKENS = frozenset(
@@ -71,49 +72,32 @@ class QueryHealthMonitor:
         self._lock = Lock()
 
     def _is_query_active(self) -> bool:
-        is_active = getattr(self.query, "isActive", None)
-        if callable(is_active):
-            try:
-                return bool(is_active())
-            except Exception:
-                return False
-        return bool(is_active) if is_active is not None else False
+        return is_query_active(self.query)
 
     def _get_query_exception(self) -> Optional[Exception]:
-        try:
-            exc_attr = getattr(self.query, "exception", None)
-            if exc_attr is None:
-                return None
-            return exc_attr() if callable(exc_attr) else exc_attr
-        except Exception:
-            return None
+        return get_query_exception(self.query)
 
     def _check_progress(self) -> bool:
         with self._lock:
             try:
                 last_progress = getattr(self.query, "lastProgress", None)
                 if not last_progress:
-                    # No batch has been processed yet; not a stall, query is warming up.
                     return True
 
                 current_batch_id = last_progress.get("batchId")
                 current_time = time.time()
 
                 if current_batch_id is not None and current_batch_id != self.last_batch_id:
-                    # New batch seen — reset the stall timer.
                     self.last_batch_id = current_batch_id
                     self.last_progress_time = current_time
                     return True
 
                 if self.last_progress_time is None:
-                    # First time we see a batch but batchId hasn't changed from None yet;
-                    # initialise the timer now instead of reporting a stall.
                     self.last_progress_time = current_time
                     return True
 
                 return (current_time - self.last_progress_time) <= self.timeout_seconds
             except (AttributeError, RuntimeError) as e:
-                # Query was stopped/destroyed or attribute access failed during the check
                 logger.debug(f"Query '{self.query_name}' progress check failed: {str(e)}")
                 return False
             except Exception as e:
@@ -177,9 +161,6 @@ class StreamingPipelineManager:
         self.max_concurrent_pipelines = max_concurrent_pipelines
         policy = getattr(context, "format_policy", None)
         self.validator = validator or StreamingValidator(policy)
-        # Push-model metrics sink: fed by Spark's StreamingQueryListener so that
-        # status reads cost no py4j RPC and the adaptive trigger can learn from
-        # historical batch durations.
         self.progress_sink = StreamingProgressSink()
         self._progress_listener = None
         self.query_manager = StreamingQueryManager(
@@ -187,17 +168,12 @@ class StreamingPipelineManager:
         )
         self._register_progress_listener()
         self.monitor_interval_seconds = 5.0
-        self.active_environment = getattr(context, "env", None) or getattr(
-            context, "environment", None
-        )
-        settings = getattr(context, "global_settings", {}) or {}
+        self.active_environment = get_active_env(context)
+        settings = getattr(context, "global_config", {}) or {}
         self.node_start_retry_attempts = int(settings.get("streaming_node_start_retries", 45))
         self.node_start_retry_delay_seconds = float(
             settings.get("streaming_node_start_retry_delay_seconds", 2.0)
         )
-        # Max nodes started concurrently within a dependency wave. Independent
-        # streaming queries no longer start strictly one-by-one (a blocking
-        # retry on one node no longer stalls its siblings).
         self.node_start_parallelism = max(
             1, int(settings.get("streaming_node_start_parallelism", 8))
         )
@@ -205,10 +181,7 @@ class StreamingPipelineManager:
         self._running_pipelines: Dict[str, Dict[str, Any]] = {}
         self._pipeline_threads: Dict[str, Any] = {}
         self._pipeline_events: Dict[str, Event] = {}
-        # Per-execution cancellation signal, checked by _process_pipeline_nodes'
-        # wave loop and _start_node_query_with_retry's retry loop — the global
-        # _shutdown_event alone can't stop a single in-flight pipeline without
-        # stopping every other one the manager is running.
+        self._pipeline_started_events: Dict[str, Event] = {}
         self._pipeline_stop_events: Dict[str, Event] = {}
         self._shutdown_event = Event()
         self._lock = Lock()
@@ -223,21 +196,13 @@ class StreamingPipelineManager:
 
     def _get_spark(self) -> Optional[Any]:
         """Resolve the SparkSession from the context (dict or object form)."""
-        ctx = self.context
         try:
-            if isinstance(ctx, dict):
-                return ctx.get("spark")
-            return getattr(ctx, "spark", None)
+            return get_context_value(self.context, "spark")
         except Exception:
             return None
 
     def _register_progress_listener(self) -> None:
-        """Attach a DuctaProgressListener to the active SparkSession (best-effort).
-
-        Idempotent and fully optional: if PySpark is too old, the session is
-        unavailable, or registration fails, the manager simply runs without
-        push metrics and the adaptive trigger falls back to its base interval.
-        """
+        """Attach a DuctaProgressListener to the active SparkSession (best-effort)."""
         if not listener_available():
             return
         spark = self._get_spark()
@@ -252,17 +217,7 @@ class StreamingPipelineManager:
             logger.debug(f"Could not register streaming progress listener: {e}")
 
     def _is_transient_start_error(self, node_config: Dict[str, Any], exc: Exception) -> bool:
-        """Identify startup errors that can resolve after upstream warm-up.
-
-        Walks the exception ``__cause__`` / ``__context__`` chain to unwrap
-        Ducta's ``StreamingError`` wrappers and inspect the original PySpark
-        exception (e.g. ``AnalysisException``).
-
-        Detection order (most to least stable across Spark versions):
-        1. Structured ``errorClass`` attribute (Spark 3.4+)
-        2. Exception type name (stable across minor versions)
-        3. Message text scan — restricted to analysis-type exceptions to limit false positives
-        """
+        """Identify startup errors that can resolve after upstream warm-up."""
         input_config = node_config.get("input", {}) or {}
         input_format = str(input_config.get("format", "")).lower()
         if input_format != "delta_stream":
@@ -344,11 +299,6 @@ class StreamingPipelineManager:
                     delay,
                 )
                 if delay > 0:
-                    # Poll in small steps so either shutdown_event (global) or
-                    # this execution's stop_event can interrupt the wait
-                    # promptly — Event.wait() only blocks on one event, and a
-                    # plain time.sleep(delay) would ignore stop_pipeline()
-                    # entirely until it woke up on its own.
                     remaining = delay
                     poll_interval = 0.1
                     while remaining > 0 and not _stopping():
@@ -398,6 +348,7 @@ class StreamingPipelineManager:
                     "error": None,
                 }
                 self._pipeline_events[execution_id] = Event()
+                self._pipeline_started_events[execution_id] = Event()
                 self._pipeline_stop_events[execution_id] = Event()
 
             future = self._executor.submit(
@@ -435,6 +386,21 @@ class StreamingPipelineManager:
             return True
         return event.wait(timeout=timeout)
 
+    def wait_for_pipeline_started(self, execution_id: str, timeout: Optional[float] = None) -> bool:
+        """Block until the startup pass has finished for every node."""
+        with self._lock:
+            event = self._pipeline_started_events.get(execution_id)
+        if event is None:
+            return True
+        return event.wait(timeout=timeout)
+
+    def _signal_pipeline_started(self, execution_id: str) -> None:
+        """Release anyone waiting on the startup pass. Safe to call repeatedly."""
+        with self._lock:
+            event = self._pipeline_started_events.get(execution_id)
+        if event is not None:
+            event.set()
+
     def is_query_active(self, execution_id: str) -> bool:
         """Return True if the pipeline has active (non-terminal) status."""
         with self._lock:
@@ -445,6 +411,7 @@ class StreamingPipelineManager:
 
     def _signal_pipeline_done(self, execution_id: str) -> None:
         """Signal completion event and release associated resources."""
+        self._signal_pipeline_started(execution_id)
         prefix = f"{execution_id}:"
         with self._lock:
             event = self._pipeline_events.get(execution_id)
@@ -456,11 +423,6 @@ class StreamingPipelineManager:
             queries_snapshot = dict(pipeline_info.get("queries", {})) if pipeline_info else {}
         with self._status_cache_lock:
             self._status_cache.pop(execution_id, None)
-        # Purge this execution's entries from the progress sink now that the
-        # pipeline is done, otherwise _latest/_trigger_ms/_id_to_name grow
-        # unbounded (one set of keys per execution_id, forever). restart_node
-        # never goes through this method, so history for the "adaptive" trigger
-        # is preserved across restarts within a still-running execution.
         for query in queries_snapshot.values():
             qname = getattr(query, "name", None) or getattr(query, "queryName", None)
             if qname:
@@ -478,13 +440,7 @@ class StreamingPipelineManager:
         ).start()
 
     def _watch_pipeline_until_done(self, execution_id: str, poll_seconds: float = 1.0) -> None:
-        """Poll a pipeline's queries; signal completion once none remain active.
-
-        Only terminating triggers (once/available_now) ever go inactive on their
-        own; long-running queries keep the loop going until the pipeline event is
-        set elsewhere (stop_pipeline / error), at which point this exits quietly.
-        If a query stopped because it raised, the pipeline is marked errored.
-        """
+        """Poll a pipeline's queries; signal completion once none remain active."""
         with self._lock:
             event = self._pipeline_events.get(execution_id)
         if event is None:
@@ -516,13 +472,7 @@ class StreamingPipelineManager:
         """Return string messages for any queries that terminated due to an error."""
         errors: List[str] = []
         for query in queries:
-            exc_getter = getattr(query, "exception", None)
-            if not callable(exc_getter):
-                continue
-            try:
-                exc = exc_getter()
-            except Exception:
-                exc = None
+            exc = get_query_exception(query)
             if exc:
                 errors.append(str(exc))
         return errors
@@ -532,21 +482,21 @@ class StreamingPipelineManager:
     ) -> None:
         try:
             nodes = pipeline_config.get("nodes", [])
-            ordered_nodes = self._order_nodes_by_dependencies(nodes)
+            satisfied = set(pipeline_config.get("satisfied_dependencies") or ())
+            ordered_nodes = self._order_nodes_by_dependencies(
+                nodes, satisfied_dependencies=satisfied
+            )
             processed_nodes = self._process_pipeline_nodes(
-                execution_id, pipeline_name, ordered_nodes
+                execution_id, pipeline_name, ordered_nodes, satisfied_dependencies=satisfied
             )
             with self._lock:
                 pipeline_info = self._running_pipelines.get(execution_id)
                 if pipeline_info and pipeline_info.get("status") != "partial_failure":
                     pipeline_info["status"] = "running" if processed_nodes else "failed"
+            self._signal_pipeline_started(execution_id)
             if not processed_nodes:
                 self._signal_pipeline_done(execution_id)
             else:
-                # Watch for the queries terminating on their own. Long-running
-                # (processingTime/continuous) queries never do, so this only fires
-                # for `once`/`available_now` triggers — which is what lets a
-                # `--mode sync` run of such a pipeline return instead of hanging.
                 self._start_completion_watcher(execution_id)
         except Exception as e:
             logger.error(f"Error executing streaming pipeline '{execution_id}': {str(e)}")
@@ -554,6 +504,8 @@ class StreamingPipelineManager:
                 if execution_id in self._running_pipelines:
                     self._running_pipelines[execution_id]["status"] = "error"
                     self._running_pipelines[execution_id]["error"] = str(e)
+
+            self._signal_pipeline_started(execution_id)
             self._signal_pipeline_done(execution_id)
 
     def _start_single_node(
@@ -563,12 +515,7 @@ class StreamingPipelineManager:
         node_name: str,
         resolved_config: Dict[str, Any],
     ) -> str:
-        """Start one node's query and do its bookkeeping. Returns the outcome.
-
-        Safe to run concurrently with other nodes: all shared-state mutations
-        are guarded by ``self._lock`` and the query's actual ``.start()`` is
-        serialized inside the query manager.
-        """
+        """Start one node's query and do its bookkeeping. Returns the outcome."""
         try:
             logger.info(f"Starting node '{node_name}' in pipeline '{execution_id}'")
             query = self._start_node_query_with_retry(
@@ -597,17 +544,18 @@ class StreamingPipelineManager:
             return "failed"
 
     def _process_pipeline_nodes(
-        self, execution_id: str, pipeline_name: str, nodes: List[Any]
+        self,
+        execution_id: str,
+        pipeline_name: str,
+        nodes: List[Any],
+        satisfied_dependencies: Optional[Set[str]] = None,
     ) -> List[str]:
         """Process pipeline nodes by dependency waves, starting independent
         nodes in parallel.
-
-        Nodes within a wave (all dependencies already ``started``) are launched
-        concurrently, so a blocking startup retry on one node no longer stalls
-        its siblings. Ordering across waves still honours ``depends_on``.
         """
         processed_nodes: List[str] = []
         node_outcomes: Dict[str, str] = {}
+        satisfied = satisfied_dependencies or set()
 
         resolved_nodes = [
             (cfg.get("name", f"node_{idx}"), cfg)
@@ -626,7 +574,7 @@ class StreamingPipelineManager:
             deferred: List[Tuple[str, Dict[str, Any]]] = []
 
             for node_name, cfg in remaining:
-                depends_on = cfg.get("depends_on", []) or []
+                depends_on = [d for d in (cfg.get("depends_on", []) or []) if d not in satisfied]
                 # Dependencies that exist in this pipeline but haven't resolved yet
                 # belong to a later wave — defer rather than skip.
                 pending_deps = [d for d in depends_on if d in all_names and d not in node_outcomes]
@@ -707,14 +655,18 @@ class StreamingPipelineManager:
                     outcomes[node_name] = "failed"
         return outcomes
 
-    def _order_nodes_by_dependencies(self, nodes: List[Any]) -> List[Dict[str, Any]]:
+    def _order_nodes_by_dependencies(
+        self, nodes: List[Any], satisfied_dependencies: Optional[Set[str]] = None
+    ) -> List[Dict[str, Any]]:
         """Topologically order nodes by depends_on, delegating to the validator."""
         resolved_nodes = [self._get_node_config(node, idx) for idx, node in enumerate(nodes)]
         node_names = [node.get("name", f"node_{idx}") for idx, node in enumerate(resolved_nodes)]
         name_to_node = dict(zip(node_names, resolved_nodes))
 
         try:
-            ordered_names = self.validator.topological_sort(name_to_node)
+            ordered_names = self.validator.topological_sort(
+                name_to_node, satisfied_dependencies=satisfied_dependencies
+            )
         except StreamingError as e:
             raise StreamingPipelineError(str(e), cause=e) from e
 
@@ -770,15 +722,7 @@ class StreamingPipelineManager:
         graceful: bool,
         timeout_seconds: float,
     ) -> Tuple[List[str], Dict[str, str]]:
-        """Stop every query in *queries*.
-
-        ``queries`` must already be a private snapshot (not a live reference into
-        ``_running_pipelines[execution_id]["queries"]``) — that dict can be mutated
-        concurrently by a still-running node-start wave under ``self._lock``, and
-        iterating it directly here (without holding the lock for the whole loop,
-        which would block query stop/await calls) risks
-        ``RuntimeError: dictionary changed size during iteration``.
-        """
+        """Stop every query in *queries*."""
         stopped_queries: List[str] = []
         failed_queries: Dict[str, str] = {}
 
@@ -823,12 +767,6 @@ class StreamingPipelineManager:
         timeout_seconds: float = 30.0,
     ) -> bool:
         try:
-            # Signal cancellation *before* taking the queries snapshot below, so
-            # any in-flight node-start wave/retry for this execution_id (checked
-            # in _process_pipeline_nodes/_start_node_query_with_retry) sees it
-            # and stops adding new queries as early as possible — narrows, but
-            # doesn't by itself close, the race with a wave already past that
-            # check (handled by the re-check after the first stop pass below).
             stop_event = self._pipeline_stop_events.get(execution_id)
             if stop_event is not None:
                 stop_event.set()
@@ -836,8 +774,6 @@ class StreamingPipelineManager:
             with self._lock:
                 pipeline_info = self._running_pipelines.get(execution_id)
                 future = self._pipeline_threads.get(execution_id)
-                # Snapshot under the lock: pipeline_info["queries"] is a live dict
-                # that a concurrent node-start wave may still be mutating.
                 queries_snapshot = dict(pipeline_info.get("queries", {})) if pipeline_info else {}
 
             if not pipeline_info:
@@ -847,9 +783,6 @@ class StreamingPipelineManager:
                 queries_snapshot, execution_id, graceful, timeout_seconds
             )
 
-            # A wave already past the stop_event check above may have added a
-            # query to pipeline_info["queries"] after the snapshot was taken —
-            # re-check and stop anything new before reporting "stopped".
             with self._lock:
                 pipeline_info = self._running_pipelines.get(execution_id)
                 current_queries = dict(pipeline_info.get("queries", {})) if pipeline_info else {}
@@ -906,15 +839,7 @@ class StreamingPipelineManager:
             if is_active:
                 return status, True, False
 
-            exception_attr = getattr(query, "exception", None)
-            if callable(exception_attr):
-                try:
-                    exception = exception_attr()
-                except Exception:
-                    exception = None
-            else:
-                exception = exception_attr
-
+            exception = get_query_exception(query)
             if exception:
                 status["exception"] = str(exception)
                 return status, False, True

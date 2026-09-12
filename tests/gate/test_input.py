@@ -188,7 +188,7 @@ class TestGetConfiguredFormats:
 
 class TestLoadInputsParallel:
     def test_fail_fast_does_not_wait_for_blocked_datasets(self, dict_context):
-        dict_context["global_settings"]["max_input_workers"] = 4
+        dict_context["global_config"]["max_input_workers"] = 4
         loader = InputLoader(dict_context)
         release = threading.Event()
 
@@ -208,8 +208,8 @@ class TestLoadInputsParallel:
         release.set()
 
     def test_fill_none_on_error_preserves_order(self, dict_context):
-        dict_context["global_settings"]["max_input_workers"] = 3
-        dict_context["global_settings"]["fill_none_on_error"] = True
+        dict_context["global_config"]["max_input_workers"] = 3
+        dict_context["global_config"]["fill_none_on_error"] = True
         loader = InputLoader(dict_context)
 
         def fake_load(input_key):
@@ -223,7 +223,7 @@ class TestLoadInputsParallel:
         assert results == ["A", None, "B"]
 
     def test_no_fill_none_raises_with_error_count(self, dict_context):
-        dict_context["global_settings"]["fill_none_on_error"] = False
+        dict_context["global_config"]["fill_none_on_error"] = False
         loader = InputLoader(dict_context)
 
         def fake_load(input_key):
@@ -275,7 +275,7 @@ class TestEnforceFingerprintPolicy:
         return fp
 
     def test_warn_message_includes_schema_drift_detail(self, dict_context):
-        dict_context["global_settings"]["fingerprint_policy"] = "warn"
+        dict_context["global_config"]["fingerprint_policy"] = "warn"
         dict_context["_previous_input_fingerprints"] = {
             "ds1": self._previous(columns={"a": "int64", "b": "string"})
         }
@@ -291,7 +291,7 @@ class TestEnforceFingerprintPolicy:
         assert "added=['c']" in message
 
     def test_warn_message_without_schema_drift_has_no_detail(self, dict_context):
-        dict_context["global_settings"]["fingerprint_policy"] = "warn"
+        dict_context["global_config"]["fingerprint_policy"] = "warn"
         dict_context["_previous_input_fingerprints"] = {
             "ds1": self._previous(columns={"a": "int64"})
         }
@@ -306,7 +306,7 @@ class TestEnforceFingerprintPolicy:
         assert "schema drift" not in message
 
     def test_fail_policy_raises_with_schema_drift(self, dict_context):
-        dict_context["global_settings"]["fingerprint_policy"] = "fail"
+        dict_context["global_config"]["fingerprint_policy"] = "fail"
         dict_context["_previous_input_fingerprints"] = {
             "ds1": self._previous(columns={"a": "int64"})
         }
@@ -317,7 +317,7 @@ class TestEnforceFingerprintPolicy:
             loader._enforce_fingerprint_policy("ds1", fingerprint)
 
     def test_record_policy_does_nothing(self, dict_context):
-        dict_context["global_settings"]["fingerprint_policy"] = "record"
+        dict_context["global_config"]["fingerprint_policy"] = "record"
         dict_context["_previous_input_fingerprints"] = {"ds1": self._previous()}
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(fingerprint="new_hash")
@@ -328,7 +328,7 @@ class TestEnforceFingerprintPolicy:
         # Upgrading Ducta changes every fingerprint's value. Reporting that as
         # "the input changed" would fire on every dataset the first time anyone
         # upgrades — and with policy=fail, abort the pipeline over it.
-        dict_context["global_settings"]["fingerprint_policy"] = "fail"
+        dict_context["global_config"]["fingerprint_policy"] = "fail"
         dict_context["_previous_input_fingerprints"] = {
             "ds1": self._previous(algorithm="legacy/v1")
         }
@@ -338,7 +338,7 @@ class TestEnforceFingerprintPolicy:
         loader._enforce_fingerprint_policy("ds1", fingerprint)  # must not raise
 
     def test_a_changed_engine_is_not_reported_as_drift(self, dict_context):
-        dict_context["global_settings"]["fingerprint_policy"] = "fail"
+        dict_context["global_config"]["fingerprint_policy"] = "fail"
         previous = self._previous()
         previous["engine"] = "pandas"
         dict_context["_previous_input_fingerprints"] = {"ds1": previous}

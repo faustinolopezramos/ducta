@@ -54,7 +54,7 @@ class PipelineStatusFormatter:
     @staticmethod
     def _get_console():
         """Return the active Rich console, or None when Rich is unavailable."""
-        return RichLoggerManager.get_console() if _USE_RICH else None
+        return get_console()
 
     STATUS_COLOR_MAP = {
         "completed": SUCCESS,
@@ -153,13 +153,13 @@ class PipelineStatusFormatter:
         execution_time = status_info.get("execution_time", 0.0)
         environment = status_info.get("environment", "N/A")
 
-        status_map = {
-            "completed": f"[{SUCCESS}]✅ Completed[/]",
-            "running": f"[{WARNING}]🔄 Running[/]",
-            "failed": f"[{ERROR}]❌ Failed[/]",
-            "pending": "[bright_blue]⏳ Pending[/]",
-        }
-        status_display = status_map.get(status.lower(), f"[white]❓ {status}[/]")
+        status_key = status.lower()
+        if status_key in PipelineStatusFormatter.STATUS_COLOR_MAP:
+            color = PipelineStatusFormatter._get_status_color(status)
+            emoji = PipelineStatusFormatter._get_status_emoji(status)
+            status_display = f"[{color}]{emoji} {status_key.capitalize()}[/]"
+        else:
+            status_display = f"[white]❓ {status}[/]"
 
         progress = PipelineStatusFormatter._calculate_progress(nodes)
 

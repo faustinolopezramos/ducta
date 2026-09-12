@@ -54,7 +54,7 @@ class TestBaseStreamingReaderHelpers:
         assert reader._backpressure_disabled() is False
 
     def test_backpressure_disabled_reads_global_setting(self, dict_context):
-        dict_context["global_settings"]["streaming_disable_backpressure_defaults"] = True
+        dict_context["global_config"]["streaming_disable_backpressure_defaults"] = True
         reader = FileStreamReader(dict_context)
         assert reader._backpressure_disabled() is True
 
@@ -69,7 +69,7 @@ class TestBaseStreamingReaderHelpers:
         assert merged["maxOffsetsPerTrigger"] == 5
 
     def test_merge_backpressure_defaults_disabled_globally(self, dict_context):
-        dict_context["global_settings"]["streaming_disable_backpressure_defaults"] = True
+        dict_context["global_config"]["streaming_disable_backpressure_defaults"] = True
         reader = KafkaStreamingReader(dict_context)
         merged = reader._merge_backpressure_defaults({}, "kafka")
         assert "maxOffsetsPerTrigger" not in merged

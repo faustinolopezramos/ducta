@@ -113,9 +113,13 @@ class PlatformInfoResponse(BaseModel):
     """Response for GET /health/platform."""
 
     os: str = Field(description="Operating system name (Windows / macOS / Linux)")
-    os_version: str = Field(description="Detailed OS version string")
+    os_version: Optional[str] = Field(
+        default=None, description="Detailed OS version string (loopback callers only)"
+    )
     arch: str = Field(description="CPU architecture (e.g. AMD64, arm64)")
-    python: str = Field(description="Python interpreter version")
+    python: Optional[str] = Field(
+        default=None, description="Python interpreter version (loopback callers only)"
+    )
     git_available: bool = Field(description="True if the git binary is on PATH")
     git_version: Optional[str] = Field(default=None, description="git version string")
     git_path: Optional[str] = Field(default=None, description="Absolute path to git binary")

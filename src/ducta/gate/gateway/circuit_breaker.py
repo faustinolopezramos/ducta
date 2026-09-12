@@ -47,25 +47,12 @@ class CircuitBreaker:
         self._state = CircuitState.CLOSED
         self._consecutive_failures = 0
         self._opened_at: Optional[float] = None
-        # A single JDBC source's connector (and therefore its breaker) can be
-        # used concurrently by multiple pipeline threads. Without a lock,
-        # several threads could all observe OPEN + cooldown-elapsed at once
-        # and all transition to HALF_OPEN, each getting a "False" (proceed)
-        # result — several trial calls at once instead of exactly one, which
-        # defeats the half-open state's entire purpose.
+
         self._lock = threading.Lock()
 
     def is_open(self) -> bool:
         """True if calls should be blocked. Transitions OPEN -> HALF_OPEN once the
         cooldown elapses (returns False exactly once, to allow a trial call).
-
-        Once in HALF_OPEN, every call *other* than the one that performed the
-        transition must return True (blocked) until record_success/
-        record_failure resolves it back to CLOSED/OPEN — otherwise, with the
-        lock only protecting the transition itself, every concurrent caller
-        that observed OPEN + elapsed cooldown would still each get to run
-        their own trial call once the transition had already happened,
-        instead of exactly one caller getting the trial.
         """
         with self._lock:
             if self._state is CircuitState.OPEN:

@@ -20,7 +20,12 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+import ipaddress
+
+from fastapi import (
+    APIRouter,
+    Request,  # type: ignore
+)
 from pydantic import BaseModel
 
 from ducta import __version__
@@ -48,12 +53,39 @@ async def readiness_check() -> HealthResponse:
     return HealthResponse(status="ready", version=__version__)
 
 
+#: Fields withheld from callers that are not on the loopback interface. They are
+#: pure reconnaissance to anyone else: the exact interpreter and OS build narrow
+#: down which CVEs apply, and `git_path` discloses an absolute filesystem path
+#: (which commonly carries the account name and reveals the install layout).
+_LOOPBACK_ONLY_PLATFORM_FIELDS = ("os_version", "python", "git_path", "git_version")
+
+
+def _is_loopback_client(request: Request) -> bool:
+    """True when the peer address is loopback (so: this machine)."""
+    if request.client is None:
+        return False
+    try:
+        return ipaddress.ip_address(request.client.host).is_loopback
+    except ValueError:
+        return False
+
+
 @router.get(
     "/health/platform",
     response_model=PlatformInfoResponse,
     summary="Platform and environment info",
 )
-async def platform_info() -> PlatformInfoResponse:
-    """Return platform and environment info."""
+async def platform_info(request: Request) -> PlatformInfoResponse:
+    """Return platform info; full detail only for callers on this machine.
+
+    This route is deliberately unauthenticated — the bundled UI fetches it
+    before login to render its Git setup wizard, which needs the git version
+    and path to tell the user what to install. That diagnostic is for the
+    person running the server, so the detailed fields are served to loopback
+    callers only; a remote anonymous caller gets the coarse fields.
+    """
     info = get_platform_info()
+    if not _is_loopback_client(request):
+        for field in _LOOPBACK_ONLY_PLATFORM_FIELDS:
+            info.pop(field, None)
     return PlatformInfoResponse(**info)

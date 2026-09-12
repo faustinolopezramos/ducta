@@ -77,7 +77,7 @@ class TestFromEnv:
 
 class TestResolveMLOpsPath:
     def _ctx(self, **kw):
-        base = dict(global_settings={}, output_path=None, env=None, execution_mode="local")
+        base = dict(global_config={}, output_path=None, env=None, execution_mode="local")
         base.update(kw)
         return SimpleNamespace(**base)
 
@@ -85,8 +85,8 @@ class TestResolveMLOpsPath:
         ctx = self._ctx(output_path="/out")
         assert StorageBackendFactory._resolve_mlops_path(ctx, base_path="/explicit") == "/explicit"
 
-    def test_global_settings_mlops_path(self):
-        ctx = self._ctx(global_settings={"mlops_path": "/gs/path"})
+    def test_global_config_mlops_path(self):
+        ctx = self._ctx(global_config={"mlops_path": "/gs/path"})
         assert StorageBackendFactory._resolve_mlops_path(ctx) == "/gs/path"
 
     def test_output_path_with_pipeline_and_env(self):
@@ -106,7 +106,7 @@ class TestResolveMLOpsPath:
         # A `mlops_path: ""` (e.g. from a templated config) must not be
         # returned as-is — that would make LocalStorageBackend write into the
         # current working directory instead of falling through to output_path.
-        ctx = self._ctx(global_settings={"mlops_path": ""}, output_path="/out", env="dev")
+        ctx = self._ctx(global_config={"mlops_path": ""}, output_path="/out", env="dev")
         assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev"
 
 
@@ -136,7 +136,7 @@ class TestFromContextConfigWiring:
 
     def _ctx(self, tmp_path):
         return SimpleNamespace(
-            global_settings={},
+            global_config={},
             output_path=str(tmp_path / "output"),
             env="dev",
             execution_mode="local",
@@ -178,7 +178,7 @@ class TestFromContextConfigWiring:
 class TestMLOpsContextSharedStorage:
     def _ctx(self, tmp_path):
         return SimpleNamespace(
-            global_settings={},
+            global_config={},
             output_path=str(tmp_path / "output"),
             env="dev",
             execution_mode="local",

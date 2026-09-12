@@ -14,7 +14,7 @@ Core Capabilities
 Configuration
 -------------
 
-Configure MLOps under the ``mlops`` key of ``config/global_settings.{ext}``.
+Configure MLOps under the ``mlops`` key of ``config/global_config.{ext}``.
 Ducta turns tracking on automatically for ``ml``-type pipelines — you don't call
 any setup function in your code.
 
@@ -56,7 +56,7 @@ any setup function in your code.
 
       .. code-block:: toml
 
-         # config/global_settings.toml
+         # config/global_config.toml
          [mlops]
          backend_type = "local"
          storage_path = "./mlops_data"
@@ -68,7 +68,7 @@ any setup function in your code.
 
       .. code-block:: yaml
 
-         # config/global_settings.yaml
+         # config/global_config.yaml
          mlops:
            backend_type: local
            storage_path: "./mlops_data"

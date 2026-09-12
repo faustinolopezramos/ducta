@@ -122,40 +122,34 @@ def validate_conflicting_options(
     return True
 
 
-def validate_mode(value: Optional[str], raise_error: bool = True) -> bool:
+def _validate_choice(
+    value: Optional[str],
+    allowed: List[str],
+    field_name: str,
+    normalize,
+    raise_error: bool,
+) -> bool:
     if value is None:
         return True
-    if str(value).lower() not in ALLOWED_MODES:
+    if normalize(str(value)) not in allowed:
         if raise_error:
             raise CoreValidationError(
-                f"Invalid mode '{value}'. Allowed: {', '.join(ALLOWED_MODES)}"
+                f"Invalid {field_name} '{value}'. Allowed: {', '.join(allowed)}"
             )
         return False
     return True
+
+
+def validate_mode(value: Optional[str], raise_error: bool = True) -> bool:
+    return _validate_choice(value, ALLOWED_MODES, "mode", str.lower, raise_error)
 
 
 def validate_log_level(value: Optional[str], raise_error: bool = True) -> bool:
-    if value is None:
-        return True
-    if str(value).upper() not in ALLOWED_LOG_LEVELS:
-        if raise_error:
-            raise CoreValidationError(
-                f"Invalid log level '{value}'. Allowed: {', '.join(ALLOWED_LOG_LEVELS)}"
-            )
-        return False
-    return True
+    return _validate_choice(value, ALLOWED_LOG_LEVELS, "log level", str.upper, raise_error)
 
 
 def validate_format(value: Optional[str], raise_error: bool = True) -> bool:
-    if value is None:
-        return True
-    if str(value).lower() not in ALLOWED_FORMATS:
-        if raise_error:
-            raise CoreValidationError(
-                f"Invalid format '{value}'. Allowed: {', '.join(ALLOWED_FORMATS)}"
-            )
-        return False
-    return True
+    return _validate_choice(value, ALLOWED_FORMATS, "format", str.lower, raise_error)
 
 
 class ValidationSeverity(str, Enum):
@@ -190,7 +184,7 @@ class EnvironmentConfigValidator:
         self.errors: List[ValidationIssue] = []
 
     REQUIRED_CONFIG_SECTIONS = [
-        "global_settings",
+        "global_config",
         "pipelines",
         "nodes",
         "input",
@@ -233,26 +227,25 @@ class EnvironmentConfigValidator:
                 return candidate
         return None
 
-    def _validate_base_exists(self) -> None:
-        base_dir = self.config_dir / "base"
-        has_base_files = any(
-            (self.config_dir / f"{section}{ext}").exists()
+    def _has_required_sections(self, directory: Path) -> bool:
+        return any(
+            (directory / f"{section}{ext}").exists()
             for section in self.REQUIRED_CONFIG_SECTIONS
             for ext in self.SUPPORTED_EXTENSIONS
         )
-        if base_dir.exists():
-            has_base_files = has_base_files or any(
-                (base_dir / f"{section}{ext}").exists()
-                for section in self.REQUIRED_CONFIG_SECTIONS
-                for ext in self.SUPPORTED_EXTENSIONS
-            )
+
+    def _validate_base_exists(self) -> None:
+        base_dir = self.config_dir / "base"
+        has_base_files = self._has_required_sections(self.config_dir) or (
+            base_dir.exists() and self._has_required_sections(base_dir)
+        )
         if not has_base_files:
             self.errors.append(
                 ValidationIssue(
                     severity=ValidationSeverity.ERROR,
                     message="Base configuration not found",
                     path=self.config_dir,
-                    suggestion="Create config/global_settings.yaml (or .json/.toml) with base configuration",
+                    suggestion="Create config/global_config.yaml (or .json/.toml) with base configuration",
                 )
             )
 
@@ -316,8 +309,7 @@ class EnvironmentConfigValidator:
         ]
         canonical_envs = set(env_dirs)
         if any(
-            (self.config_dir / f"global_settings{ext}").exists()
-            for ext in self.SUPPORTED_EXTENSIONS
+            (self.config_dir / f"global_config{ext}").exists() for ext in self.SUPPORTED_EXTENSIONS
         ):
             canonical_envs.add("base")
         for env in canonical_envs:
@@ -366,13 +358,10 @@ class EnvironmentConfigValidator:
     def _validate_config_syntax(self) -> None:
         if not self.config_dir.exists():
             return
+        validated_exts = self._YAML_EXTS | {".json", self._EXT_TOML}
         for config_file in self.config_dir.rglob("*.*"):
             ext = config_file.suffix
-            if ext == ".json":
-                self._validate_file_syntax(config_file, ext)
-            elif ext in self._YAML_EXTS:
-                self._validate_file_syntax(config_file, ext)
-            elif ext == self._EXT_TOML:
+            if ext in validated_exts:
                 self._validate_file_syntax(config_file, ext)
 
     def _validate_file_syntax(self, file_path: Path, ext: str) -> None:
@@ -398,31 +387,31 @@ class EnvironmentConfigValidator:
             )
 
     def get_summary(self) -> dict:
-        return {
-            "total": len(self.errors),
-            "critical": sum(1 for e in self.errors if e.severity == ValidationSeverity.CRITICAL),
-            "errors": sum(1 for e in self.errors if e.severity == ValidationSeverity.ERROR),
-            "warnings": sum(1 for e in self.errors if e.severity == ValidationSeverity.WARNING),
-            "info": sum(1 for e in self.errors if e.severity == ValidationSeverity.INFO),
-            "is_valid": all(
-                e.severity not in (ValidationSeverity.CRITICAL, ValidationSeverity.ERROR)
-                for e in self.errors
-            ),
-        }
+        return summarize_issues(self.errors)
+
+
+def summarize_issues(issues: List[ValidationIssue]) -> dict:
+    """Tally *issues* by severity. ``is_valid`` is False if any ``ERROR`` or
+    ``CRITICAL`` issue is present — the single definition of what invalidates
+    a project, shared by ``get_summary`` and ``print_validation_report``."""
+    return {
+        "total": len(issues),
+        "critical": sum(1 for e in issues if e.severity == ValidationSeverity.CRITICAL),
+        "errors": sum(1 for e in issues if e.severity == ValidationSeverity.ERROR),
+        "warnings": sum(1 for e in issues if e.severity == ValidationSeverity.WARNING),
+        "info": sum(1 for e in issues if e.severity == ValidationSeverity.INFO),
+        "is_valid": all(
+            e.severity not in (ValidationSeverity.CRITICAL, ValidationSeverity.ERROR)
+            for e in issues
+        ),
+    }
 
 
 def print_validation_report(issues: List[ValidationIssue], project_path: Path) -> None:
     summary = (
         EnvironmentConfigValidator(project_path).get_summary()
         if not issues
-        else {
-            "total": len(issues),
-            "critical": sum(1 for e in issues if e.severity == ValidationSeverity.CRITICAL),
-            "errors": sum(1 for e in issues if e.severity == ValidationSeverity.ERROR),
-            "warnings": sum(1 for e in issues if e.severity == ValidationSeverity.WARNING),
-            "info": sum(1 for e in issues if e.severity == ValidationSeverity.INFO),
-            "is_valid": all(e.severity != ValidationSeverity.CRITICAL for e in issues),
-        }
+        else summarize_issues(issues)
     )
     print(f"\n{'=' * 70}")
     print(f"Environment Configuration Validation Report\nProject: {project_path}\n{'=' * 70}")

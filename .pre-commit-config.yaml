@@ -7,12 +7,17 @@
 # Run on demand against everything already tracked:
 #   pre-commit run --all-files
 #
-# NOTE: the ruff-pre-commit `rev` below should be kept in sync with the `ruff`
-# version pinned in pyproject.toml's dev dependency group. Run
-# `pre-commit autoupdate` to bump it to the latest compatible tag.
+# NOTE: the ruff-pre-commit `rev` below MUST stay in sync with the `ruff` version
+# resolved in poetry.lock (currently 0.4.10) — that is the one CI runs, and
+# ruff's formatter is version-dependent. When these drifted (a bare
+# `pre-commit autoupdate` bumped this rev to v0.15.22 while pyproject stayed on
+# ^0.4.0), the working tree was formatted by the newer ruff and CI's older one
+# rejected 58 files, failing `ruff format --check` on code nobody had touched.
+# To upgrade, bump BOTH together: edit pyproject's pin, run `poetry lock`, then
+# set this rev to the same tag and re-run `ruff format`.
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.22
+    rev: v0.4.10
     hooks:
       - id: ruff
         name: ruff (lint, core)

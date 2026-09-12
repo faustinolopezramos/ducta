@@ -8,11 +8,8 @@ from ducta.setting.validators import (
     ConfigValidator,
     CrossValidator,
     FormatPolicy,
-    HybridValidator,
-    MLValidator,
     PipelineValidator,
     SpecializedValidator,
-    StreamingValidator,
 )
 
 
@@ -154,114 +151,6 @@ class TestSpecializedValidator:
             v._validate_metrics({"metrics": "not_list"}, "node1")
 
 
-class TestMLValidator:
-    def test_validate_ml_pipeline_config(self):
-        v = MLValidator()
-        pipelines = {"p1": {"nodes": ["n1"]}}
-        nodes = {"n1": {"model": {"type": "spark_ml"}, "input": ["ds1"], "output": ["ds_out"]}}
-        v.validate_ml_pipeline_config(pipelines, nodes, strict=False)
-
-    def test_validate_ml_pipeline_config_missing_node(self):
-        v = MLValidator()
-        pipelines = {"p1": {"nodes": ["n1"]}}
-        with pytest.raises(ConfigValidationError, match="not defined"):
-            v.validate_ml_pipeline_config(pipelines, {}, strict=True)
-
-    def test_validate_pipeline_compatibility_no_warnings(self):
-        v = MLValidator()
-        batch = {"nodes": ["n1"]}
-        ml = {"nodes": ["n2"]}
-        warnings = v.validate_pipeline_compatibility(batch, ml, {"n1": {}, "n2": {"model": {}}})
-        assert warnings == []
-
-    def test_validate_pipeline_compatibility_with_warnings(self):
-        v = MLValidator()
-        batch = {"nodes": ["n1"]}
-        ml = {"nodes": ["n1"]}
-        nodes = {"n1": {"model": {"type": "spark_ml"}, "output": {"format": "oracle"}}}
-        warnings = v.validate_pipeline_compatibility(batch, ml, nodes)
-        assert any("model" in w for w in warnings)
-
-    def test_validate_spark_ml_config_empty(self):
-        v = MLValidator()
-        v._validate_spark_ml_config({}, strict=False)
-
-    def test_validate_spark_ml_config_present(self):
-        v = MLValidator()
-        v._validate_spark_ml_config(
-            {
-                "spark.ml.pipeline.cacheStorageLevel": "MEMORY_ONLY",
-                "spark.ml.feature.pipeline.enabled": "true",
-            },
-            strict=True,
-        )
-
-    def test_validate_spark_ml_config_missing_non_strict(self):
-        v = MLValidator()
-        v._validate_spark_ml_config({"some_config": "val"}, strict=False)
-
-    def test_validate_spark_ml_config_missing_strict(self):
-        v = MLValidator()
-        with pytest.raises(ConfigValidationError, match="Missing required Spark ML config"):
-            v._validate_spark_ml_config({"some_config": "val"}, strict=True)
-
-
-class TestStreamingValidator:
-    def test_validate_pipeline_config_empty(self):
-        v = StreamingValidator()
-        v.validate_streaming_pipeline_config({"name": "p1", "spark_config": {}}, strict=False)
-
-    def test_validate_pipeline_config_legacy_spark(self):
-        v = StreamingValidator()
-        with pytest.raises(ConfigValidationError, match="legacy Spark Streaming"):
-            v.validate_streaming_pipeline_config(
-                {"spark_config": {"spark.streaming.xxx": "val"}}, strict=True
-            )
-
-    def test_validate_pipeline_with_nodes(self):
-        v = StreamingValidator()
-        v.validate_streaming_pipeline_with_nodes(
-            {"name": "p1", "nodes": ["n1"]},
-            {"n1": {"input": {"format": "kafka"}, "output": {"format": "delta"}}},
-            strict=False,
-        )
-
-    def test_validate_pipeline_with_nodes_missing(self):
-        v = StreamingValidator()
-        with pytest.raises(ConfigValidationError, match="not defined"):
-            v.validate_streaming_pipeline_with_nodes(
-                {"name": "p1", "nodes": ["n1"]}, {}, strict=True
-            )
-
-    def test_validate_node_formats_unsupported_input(self):
-        v = StreamingValidator()
-        with pytest.raises(ConfigValidationError, match="unsupported streaming input"):
-            v._validate_node_formats(
-                {"input": {"format": "oracle"}, "output": {}}, "n1", strict=True
-            )
-
-    def test_validate_node_formats_unsupported_output(self):
-        v = StreamingValidator()
-        with pytest.raises(ConfigValidationError, match="unsupported streaming output"):
-            v._validate_node_formats(
-                {"input": {}, "output": {"format": "oracle"}}, "n1", strict=True
-            )
-
-    def test_validate_node_formats_passes(self):
-        v = StreamingValidator()
-        v._validate_node_formats(
-            {"input": {"format": "kafka"}, "output": {"format": "delta"}}, "n1", strict=True
-        )
-
-    def test_validate_pipeline_compatibility(self):
-        v = StreamingValidator()
-        batch = {"nodes": ["n1"]}
-        streaming = {"nodes": ["n1"]}
-        nodes = {"n1": {"output": {"format": "oracle"}}}
-        warnings = v.validate_pipeline_compatibility(batch, streaming, nodes)
-        assert len(warnings) >= 1
-
-
 class TestCrossValidator:
     def test_get_node_type_ml(self):
         assert CrossValidator._get_node_type({"model": {}}) == "ml"
@@ -323,24 +212,3 @@ class TestCrossValidator:
         }
         with pytest.raises(ConfigValidationError):
             CrossValidator.validate_hybrid_dependencies(nodes)
-
-
-class TestHybridValidator:
-    def test_validate_context_no_pipelines(self):
-        ctx = MagicMock()
-        ctx.nodes_config = {}
-        ctx.get_pipelines_by_type.return_value = {}
-        HybridValidator.validate_context(ctx)
-
-    def test_validate_context_passes(self):
-        ctx = MagicMock()
-        ctx.nodes_config = {
-            "n1": {"input": {"format": "kafka"}},
-            "n2": {"model": {}},
-        }
-        ctx.get_pipelines_by_type.return_value = {}
-        streaming_ctx = MagicMock()
-        streaming_ctx._is_compatible_node.side_effect = lambda c: bool(c.get("input"))
-        ml_ctx = MagicMock()
-        ml_ctx._is_compatible_node.side_effect = lambda c: "model" in c
-        HybridValidator.validate_context(ctx, streaming_ctx, ml_ctx)

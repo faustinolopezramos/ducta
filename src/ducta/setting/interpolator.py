@@ -25,23 +25,43 @@ from typing import Any, Dict, FrozenSet, Optional
 from ducta.setting.exceptions import ConfigLoadError
 
 _DEFAULT_PATH_KEYS: FrozenSet[str] = frozenset({"filepath"})
-
-# ${VAR} is meant for interpolating paths/config, not for smuggling secrets
-# into a config value — a config file (which may get logged, persisted
-# alongside a run certificate, or committed) is a much wider blast radius
-# than the environment variable itself. Reject any variable name that looks
-# like it holds a credential, whether or not it's actually set.
-#
-# Matched per name component rather than as a substring: the old
-# `re.search(r"(KEY|SECRET|...)")` also rejected ${MONKEY_DIR}, ${TOKENIZER_PATH}
-# and ${KEYSTONE_ROOT}, which are not credentials by any reading.
-_SENSITIVE_NAME_PARTS = frozenset({"KEY", "SECRET", "TOKEN", "PASSWORD", "PASSWD", "CREDENTIAL"})
+_SENSITIVE_NAME_PARTS = frozenset(
+    {
+        "KEY",
+        "KEYS",
+        "SECRET",
+        "SECRETS",
+        "TOKEN",
+        "TOKENS",
+        "PASSWORD",
+        "PASSWD",
+        "PASS",
+        "PWD",
+        "CREDENTIAL",
+        "CREDENTIALS",
+        "CREDS",
+        "APIKEY",
+        "PRIVATEKEY",
+        "ACCESSKEY",
+        "SECRETKEY",
+    }
+)
+_TRAILING_WORD_TOKENS = ("PASSWORD", "PASSWD", "SECRET", "CREDENTIAL", "APIKEY")
+_TRAILING_WORD = re.compile(
+    r"(?:%s)(?![A-Z])" % "|".join(_TRAILING_WORD_TOKENS),
+)
 _NAME_SEPARATORS = re.compile(r"[_\-.]+")
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def _is_sensitive_var_name(name: str) -> bool:
     """Whether ``name`` looks like it holds a credential."""
-    return any(part.upper() in _SENSITIVE_NAME_PARTS for part in _NAME_SEPARATORS.split(name))
+    parts: list = []
+    for chunk in _NAME_SEPARATORS.split(name):
+        parts.extend(_CAMEL_BOUNDARY.split(chunk))
+    if any(part.upper() in _SENSITIVE_NAME_PARTS for part in parts):
+        return True
+    return bool(_TRAILING_WORD.search(name.upper()))
 
 
 class VariableInterpolator:
@@ -114,11 +134,7 @@ class VariableInterpolator:
 
     @staticmethod
     def interpolate(string: str, variables: Dict[str, Any], _depth: int = 0) -> str:
-        """Replace variables in a string with their corresponding values.
-
-        OS environment variables take precedence over config-provided variables
-        (deliberate, 12-factor-style override; see TestInterpolationPrecedence).
-        """
+        """Replace variables in a string with their corresponding values."""
         if not string or not isinstance(string, str):
             return string
 
@@ -137,20 +153,7 @@ class VariableInterpolator:
         *,
         keys: Optional[FrozenSet[str]] = None,
     ) -> None:
-        """Recursively interpolate variables in configuration file paths in-place.
-
-        This method **mutates** *config* directly (no copy is made). Only dict
-        entries whose key is exactly one of ``keys`` are interpolated — by
-        default just ``"filepath"`` (the input/output catalog convention);
-        other keys (e.g. a Kafka ``options.subscribe`` topic string) are
-        intentionally left untouched so unrelated ``${...}`` templating (e.g.
-        Redpanda Connect's bloblang ``${!...}`` syntax) is never touched.
-
-        Pass ``keys={"path", "checkpoint_location"}`` to also cover streaming
-        nodes' inline I/O (``nodes_config``), which declare their storage
-        location under ``path`` and their Structured Streaming checkpoint
-        under ``checkpoint_location`` instead of a catalog ``filepath``.
-        """
+        """Recursively interpolate variables in configuration file paths in-place."""
         target_keys = keys if keys is not None else _DEFAULT_PATH_KEYS
 
         def _rec(node: Any):

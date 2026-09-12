@@ -32,13 +32,18 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.core.context_utils import get_context_value as _ctx_get
 from ducta.setting.environments import sanitize_env_for_path
 
 # 1.1 added `evidence_complete`; 1.2 added per-dataset `engine`/`algorithm`/
-# `content_hash`. Older certificates verify unchanged: the hash is recomputed
-# over whatever keys the file actually carries. They are NOT comparable to 1.2
-# fingerprints — see `fingerprints_comparable`.
-SCHEMA_VERSION = "1.2"
+# `content_hash`; 1.3 added `signed`, which brings the *fact of being signed*
+# inside the hashed content; 1.4 added `code`, the hash of the logic each node
+# ran — until then the certificate attested which data went in and out while
+# saying nothing about what transformed it. Older certificates verify
+# unchanged: the hash is recomputed over whatever keys the file actually
+# carries. They are NOT comparable to 1.2 fingerprints — see
+# `fingerprints_comparable`.
+SCHEMA_VERSION = "1.4"
 DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
 #: Fingerprints written before the algorithm was recorded. Mirrors
 #: ``ducta.mlrun.fingerprint.ALGO_LEGACY`` — duplicated as a literal rather than
@@ -75,7 +80,7 @@ def resolve_signing_key(context: Any) -> Optional[bytes]:
             # file invites. Warn rather than refuse — the key still works, and
             # failing the run over it would be worse than the exposure.
             logger.warning(
-                "Run Certificate signing key read from 'global_settings.certificate_signing_key'. "
+                "Run Certificate signing key read from 'global_config.certificate_signing_key'. "
                 "Prefer the {} environment variable: a key in a config file is usually "
                 "committed to version control, and a short/low-entropy value can be recovered "
                 "from the public 'key_id' field of any certificate it signs.",
@@ -89,7 +94,7 @@ def resolve_signing_key(context: Any) -> Optional[bytes]:
 def resolve_signing_key_from_dir(project_root: Path) -> Optional[bytes]:
     """Resolve the signing key for a project directory that has no live ``Context``.
 
-    Looks for ``certificate_signing_key`` in a ``global_settings.{toml,yaml,yml}``
+    Looks for ``certificate_signing_key`` in a ``global_config.{toml,yaml,yml}``
     file directly under ``project_root`` or under ``project_root/config``
     (same ``_dir_convention_paths`` convention as ``setting/config_forms.py``
     — a project may keep its config root-level or under ``config/``), then
@@ -103,7 +108,7 @@ def resolve_signing_key_from_dir(project_root: Path) -> Optional[bytes]:
         if not directory.is_dir():
             continue
         found = False
-        for candidate in ("global_settings.toml", "global_settings.yaml", "global_settings.yml"):
+        for candidate in ("global_config.toml", "global_config.yaml", "global_config.yml"):
             cfg_file = directory / candidate
             if cfg_file.is_file():
                 try:
@@ -126,13 +131,6 @@ def key_id_of(key: bytes) -> str:
     return hashlib.sha256(key).hexdigest()[:8]
 
 
-def _ctx_get(context: Any, key: str, default: Any = None) -> Any:
-    """Read ``key`` from a context that may be a dict or an attribute-bearing object."""
-    if isinstance(context, dict):
-        return context.get(key, default)
-    return getattr(context, key, default)
-
-
 def _canonical_json(payload: Any) -> str:
     """Deterministic JSON for hashing: sorted keys, compact, str-coerced fallbacks."""
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
@@ -147,7 +145,7 @@ def config_fingerprint(context: Any) -> str:
     configs = {
         name: _ctx_get(context, name, {}) or {}
         for name in (
-            "global_settings",
+            "global_config",
             "pipelines_config",
             "nodes_config",
             "input_config",
@@ -161,6 +159,29 @@ def config_fingerprint(context: Any) -> str:
 #: `config_fingerprint`, which core.executors.facade reads to decide whether a
 #: materialized pipeline may still be reused.
 _config_fingerprint = config_fingerprint
+
+
+def _quality_extension_fingerprints(context: Any) -> Dict[str, Any]:
+    """Hash the custom-check modules named in ``quality.extensions``.
+
+    Their ``@register_check`` verdicts land in this certificate's ``quality``
+    block, so a check rewritten to always pass yields an identically healthy
+    certificate unless the module itself is hashed. Read from config rather
+    than plumbed through the ledger: ``load_quality_extensions`` runs during
+    context construction, long before a run has a ledger to record into.
+    """
+    try:
+        from ducta.core.code_fingerprint import fingerprint_module
+
+        gs = _ctx_get(context, "global_config", {}) or {}
+        quality = gs.get("quality") if isinstance(gs, dict) else None
+        paths = (quality or {}).get("extensions") if isinstance(quality, dict) else None
+        if not paths:
+            return {}
+        return {str(path): fingerprint_module(str(path)) for path in paths}
+    except Exception as e:  # noqa: BLE001 — a certificate must never break a run
+        logger.debug("Quality extension fingerprinting skipped: {}", e)
+        return {}
 
 
 def _quality_summary(context: Any) -> List[Dict[str, Any]]:
@@ -205,6 +226,15 @@ class RunCertificate:
     certificate tamper-*evident*: producing a valid signature requires the key.
     Prefer a signed certificate wherever the file is meant to be relied on as
     evidence rather than as a checksum.
+
+    :attr:`signed` records *that* the certificate was signed, inside the hashed
+    content. Without it, the signature was self-declaring: `signature` and
+    `key_id` sat outside the hash (they have to — the HMAC is computed over it),
+    so deleting both fields and recomputing the hash produced a forged
+    certificate that `verify_certificate` reported as "untampered", even when
+    handed the correct key. Signing now changes the hash, so a stripped
+    signature leaves `signed: true` behind with nothing to verify it — which is
+    detectable, and fails.
     """
 
     run_id: str
@@ -222,12 +252,21 @@ class RunCertificate:
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
     quality: List[Dict[str, Any]] = field(default_factory=list)
+    #: What each node actually ran: ``{node: {source_hash, module_hash, scope,
+    #: …}}`` plus a ``quality_extensions`` entry for custom check modules.
+    #: ``config_fingerprint`` covers only the config documents, which *name* a
+    #: transformation without committing to its text — so without this, two
+    #: certificates could match field for field over different logic.
+    code: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
     #: False when the run's ledger failed to record something it was asked to.
     #: The certificate is still emitted — a partial record beats none — but it
     #: says so, rather than being indistinguishable from a complete one.
     evidence_complete: bool = True
     evidence_gaps: List[str] = field(default_factory=list)
+    #: Whether this certificate carries an HMAC signature. Part of the hashed
+    #: content on purpose — see the class docstring.
+    signed: bool = False
     certificate_hash: str = ""
     signature: Optional[str] = None
     key_id: Optional[str] = None
@@ -250,9 +289,11 @@ class RunCertificate:
             "inputs": self.inputs,
             "outputs": self.outputs,
             "quality": self.quality,
+            "code": self.code,
             "error": self.error,
             "evidence_complete": self.evidence_complete,
             "evidence_gaps": self.evidence_gaps,
+            "signed": self.signed,
         }
         return data
 
@@ -261,7 +302,13 @@ class RunCertificate:
         return _sha256(_canonical_json(self.content()))
 
     def sign(self, key: bytes) -> None:
-        """Attach an HMAC-SHA256 signature over the certificate hash (attribution)."""
+        """Attach an HMAC-SHA256 signature over the certificate hash (attribution).
+
+        Sets :attr:`signed` *before* hashing, so the resulting hash commits to
+        the fact that a signature exists. Removing the signature afterwards no
+        longer yields a self-consistent certificate.
+        """
+        self.signed = True
         digest = hmac.new(key, self.compute_hash().encode("utf-8"), hashlib.sha256).hexdigest()
         self.signature = _SIG_PREFIX + digest
         self.key_id = key_id_of(key)
@@ -274,6 +321,20 @@ class RunCertificate:
             data["signature"] = self.signature
             data["key_id"] = self.key_id
         return data
+
+
+def _build_code_block(context: Any, ledger: Any) -> Dict[str, Any]:
+    """Assemble the certificate's ``code`` block from the ledger and config."""
+    try:
+        block: Dict[str, Any] = {"nodes": ledger.code_fingerprints}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Code fingerprints unreadable from ledger: {}", e)
+        block = {"nodes": {}}
+
+    extensions = _quality_extension_fingerprints(context)
+    if extensions:
+        block["quality_extensions"] = extensions
+    return block
 
 
 def build_certificate(
@@ -321,6 +382,7 @@ def build_certificate(
         inputs=ledger.input_fingerprints,
         outputs=ledger.output_fingerprints,
         quality=_quality_summary(context),
+        code=_build_code_block(context, ledger),
         error=error,
         evidence_complete=ledger.evidence_complete,
         evidence_gaps=ledger.record_failures,
@@ -423,7 +485,8 @@ class VerifyResult:
     ok: bool
     run_id: Optional[str]
     reason: str
-    signature: str = "unsigned"  # unsigned | valid | invalid | present (no key)
+    #: unsigned | valid | invalid | present (no key) | stripped | unverifiable
+    signature: str = "unsigned"
 
 
 def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> VerifyResult:
@@ -431,6 +494,15 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
 
     Integrity (self-hash) is always checked. If the certificate carries a signature
     and ``signing_key`` is provided, the HMAC is verified too and a mismatch fails.
+
+    A signature cannot live inside the hash it signs, so `signature`/`key_id` are
+    excluded from the hashed content — which used to mean deleting both and
+    recomputing the hash produced a forgery this function called "untampered",
+    even when handed the right key. Schema 1.3 puts the *claim* of being signed
+    (`signed`) inside the content, so removing the signature is now detectable
+    and fails. A pre-1.3 certificate carries no such claim: when a key is
+    supplied and no signature is present, "never signed" and "signature removed"
+    are indistinguishable, and this reports that rather than guessing.
     """
     try:
         data = load_certificate(path)
@@ -455,6 +527,30 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
 
     stored_sig = data.get("signature")
     if not stored_sig:
+        # `signed` is inside the hashed content, so the hash check above already
+        # proved this flag is the one the signer wrote.
+        if data.get("signed"):
+            return VerifyResult(
+                ok=False,
+                run_id=run_id,
+                reason=(
+                    "certificate declares signed=true but carries no signature — "
+                    "the signature was removed"
+                ),
+                signature="stripped",
+            )
+        if "signed" not in data and signing_key is not None:
+            return VerifyResult(
+                ok=False,
+                run_id=run_id,
+                reason=(
+                    "certificate predates the signed marker (schema < 1.3) and carries no "
+                    "signature, so a removed signature cannot be ruled out; a signing key "
+                    "was provided, so authorship cannot be attested. Verify without a key "
+                    "to check integrity only, or re-issue the certificate."
+                ),
+                signature="unverifiable",
+            )
         return VerifyResult(ok=True, run_id=run_id, reason="hash matches — untampered")
     if signing_key is None:
         return VerifyResult(

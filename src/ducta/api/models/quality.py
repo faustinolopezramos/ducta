@@ -71,8 +71,8 @@ class ValidateConfigRequest(BaseModel):
 
     node_name: str = Field(description="Node whose quality config to validate")
     config_path: str = Field(description="Nodes config file path relative to the workspace root")
-    global_settings_path: Optional[str] = Field(
-        default=None, description="global_settings file (relative) for profile resolution"
+    global_config_path: Optional[str] = Field(
+        default=None, description="global_config file (relative) for profile resolution"
     )
 
 

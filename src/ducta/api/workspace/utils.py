@@ -24,8 +24,20 @@ from pathlib import Path
 from typing import Dict
 
 # Names of config files that ducta recognises (all five required by ContextLoader)
-CONFIG_FILE_NAMES = ("global_settings", "pipelines", "nodes", "input", "output")
+CONFIG_FILE_NAMES = ("global_config", "pipelines", "nodes", "input", "output")
 CONFIG_EXTENSIONS = (".yaml", ".yml", ".json", ".toml")
+
+#: `environment.yaml` declaration key -> the short name the rest of the API uses.
+#: Keep in step with `CONFIG_FILE_NAMES` and with
+#: `WorkspaceManager._CONTEXT_KEY_MAP`, which maps these names back to the
+#: `*_path` keys `ContextLoader.load_from_paths` requires.
+_CONFIG_KEY_TO_NAME: Dict[str, str] = {
+    "global_config_path": "global_config",
+    "pipelines_config_path": "pipelines",
+    "nodes_config_path": "nodes",
+    "input_config_path": "input",
+    "output_config_path": "output",
+}
 
 _INTERMEDIATE_FALLBACK: Dict[str, list] = {
     "staging": ["prod"],
@@ -72,10 +84,17 @@ def find_config_files(workspace_root: Path, env: str) -> Dict[str, Path]:
 
     result: Dict[str, Path] = {}
     for key, rel_path in merged.items():
-        # Strip the "_path" suffix, then any trailing "_config" to get a clean name.
-        # e.g. "pipelines_config_path" -> "pipelines_config" -> "pipelines"
-        # e.g. "global_settings_path" -> "global_settings" (no _config suffix)
-        name = key.removesuffix("_path").removesuffix("_config")
+        # Spelled out rather than derived by stripping suffixes. The old rule
+        # ("strip _path, then strip _config") worked only while the first config
+        # was called `global_settings_path`: that name has no `_config` suffix,
+        # so the second strip was a no-op on it and a clean shortening on the
+        # other four. Renaming it to `global_config_path` turned that no-op into
+        # a bite, yielding "global" — a key no consumer knows. `_CONTEXT_KEY_MAP`
+        # in workspace/manager.py then fell back to "global_path", and
+        # `ContextLoader.load_from_paths` rejected the whole context with
+        # "Missing config paths: ['global_config_path']", taking every
+        # API-driven execution, MLOps and quality route down with it.
+        name = _CONFIG_KEY_TO_NAME.get(key, key.removesuffix("_path"))
         resolved = safe_path(base_path, rel_path)
 
         # If the specified path doesn't exist, probe alternative extensions so
@@ -91,6 +110,15 @@ def find_config_files(workspace_root: Path, env: str) -> Dict[str, Path]:
         result[name] = resolved
 
     return result
+
+
+def find_ducta_config(project_dir: Path) -> Path | None:
+    """Return the ``ducta.{yaml,yml,toml,json}`` config file in *project_dir*, if any."""
+    for ext in (".yaml", ".yml", ".toml", ".json"):
+        candidate = project_dir / f"ducta{ext}"
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def resolve_module_path(workspace_root: Path, module_dotted: str) -> Path:

@@ -1,0 +1,73 @@
+import type { ComponentType } from "react";
+import {
+  IconCircle,
+  IconClock,
+  IconLoader2,
+  IconCircleCheck,
+  IconAlertTriangle,
+  IconCircleX,
+  IconBan,
+  IconPlayerSkipForward,
+} from "@tabler/icons-react";
+import { colors } from "../../theme/tokens";
+
+/**
+ * Canonical execution/node run-status domain — single source of truth for every
+ * "status → color/icon/label" table that used to be duplicated across
+ * StatusBadge, the execution log viewer (logUtils) and the streaming monitor
+ * (LiveMedallionMonitor).
+ *
+ * `idle` .. `skipped` are the "core" statuses StatusBadge renders as pills,
+ * backed by the `--status-*` CSS tokens (see StatusBadge.css) — StatusBadge
+ * normalizes any raw value down to one of these eight before rendering.
+ * `starting`, `partial_failure`, `stopped` and `error` are additional raw
+ * values the streaming monitor and the execution-log node lines see directly
+ * from the backend; they share this table too so every consumer agrees on one
+ * color/icon/label per status instead of drifting per file.
+ */
+export type Status =
+  | "idle"
+  | "pending"
+  | "starting"
+  | "running"
+  | "success"
+  | "warning"
+  | "partial_failure"
+  | "failed"
+  | "error"
+  | "cancelled"
+  | "skipped"
+  | "stopped";
+
+// Tabler icon components are forwardRef exotics; ComponentType<any> avoids the
+// ref-typing friction while keeping a single shared shape for the mapping.
+type IconComponent = ComponentType<any>;
+
+export interface StatusMeta {
+  label: string;
+  /** React icon component — used by StatusBadge and other componentized UI. */
+  Icon: IconComponent;
+  /** Unicode glyph for monospace/CLI-style rendering (the execution log viewer). */
+  glyph: string;
+  /** Theme color token, for consumers that need a raw color (dots, inline text,
+   *  sparkline accents) rather than the CSS-token-driven StatusBadge pill. */
+  color: string;
+  /** Spin the icon (in-progress states). */
+  spin?: boolean;
+}
+
+/** Canonical mapping: single source of truth for status presentation across the app. */
+export const STATUS_META: Record<Status, StatusMeta> = {
+  idle:            { label: "Idle",            Icon: IconCircle,            glyph: "○", color: colors.textDim },
+  pending:         { label: "Pending",         Icon: IconClock,             glyph: "○", color: colors.textDim },
+  starting:        { label: "Starting",        Icon: IconLoader2,           glyph: "▶", color: colors.blue, spin: true },
+  running:         { label: "Running",         Icon: IconLoader2,           glyph: "▶", color: colors.accent, spin: true },
+  success:         { label: "Success",         Icon: IconCircleCheck,       glyph: "✓", color: colors.green },
+  warning:         { label: "Warning",         Icon: IconAlertTriangle,     glyph: "!", color: colors.amber },
+  partial_failure: { label: "Partial failure", Icon: IconAlertTriangle,     glyph: "!", color: colors.amber },
+  failed:          { label: "Failed",          Icon: IconCircleX,           glyph: "✕", color: colors.red },
+  error:           { label: "Error",           Icon: IconCircleX,           glyph: "✕", color: colors.red },
+  cancelled:       { label: "Cancelled",       Icon: IconBan,               glyph: "■", color: colors.amber },
+  skipped:         { label: "Skipped",         Icon: IconPlayerSkipForward, glyph: "–", color: colors.amber },
+  stopped:         { label: "Stopped",         Icon: IconBan,               glyph: "■", color: colors.textMuted },
+};

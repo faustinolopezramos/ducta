@@ -20,7 +20,7 @@ from ducta.stream.constants import PipelineType
 def _executor(pipeline_type: str, execution_id: str = "exec-1") -> PipelineExecutor:
     executor = PipelineExecutor.__new__(PipelineExecutor)
     executor.context = MagicMock()
-    executor.context.global_settings = {"preflight_enabled": False}
+    executor.context.global_config = {"preflight_enabled": False}
     # __new__ bypasses __init__, so resolve the settings the executor now
     # expects to have been resolved once at construction time.
     executor.settings = CoreSettings.from_context(executor.context)
@@ -33,7 +33,9 @@ def _executor(pipeline_type: str, execution_id: str = "exec-1") -> PipelineExecu
     fake_streaming.execute.return_value = execution_id
     executor._streaming_executor = fake_streaming
 
-    executor._emit_run_certificate = MagicMock()
+    # `_emit_run_certificate` returns (path, reason_not_written); the caller
+    # unpacks it, so a bare MagicMock would fail to iterate.
+    executor._emit_run_certificate = MagicMock(return_value=("cert.json", None))
     executor._record_chain_state = MagicMock()
     return executor
 

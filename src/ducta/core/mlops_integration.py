@@ -20,15 +20,29 @@ SPDX-License-Identifier: Apache-2.0
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta.core.context_utils import get_active_env
 from ducta.mlrun.config import MLOpsContext
 from ducta.mlrun.experiment_tracking import RunStatus
 
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context
+
+
+def _log_numeric_metrics(
+    tracker: Any,
+    run_id: str,
+    metrics: Dict[str, Any],
+    name_fn: Callable[[str], str] = lambda key: key,
+) -> None:
+    """Log every numeric value in *metrics* via ``tracker.log_metric``, skipping
+    non-numeric values; *name_fn* derives the logged metric name from each key."""
+    for key, value in metrics.items():
+        if isinstance(value, (int, float)):
+            tracker.log_metric(run_id, name_fn(key), float(value), step=0)
 
 
 class MLOpsExecutorIntegration:
@@ -200,7 +214,7 @@ class MLOpsExecutorIntegration:
             if self.context:
                 try:
                     config_snapshot = {
-                        "global_settings": getattr(self.context, "global_settings", {}),
+                        "global_config": getattr(self.context, "global_config", {}),
                         "pipelines_config": getattr(self.context, "pipelines_config", {}),
                         "nodes_config": getattr(self.context, "nodes_config", {}),
                     }
@@ -226,7 +240,7 @@ class MLOpsExecutorIntegration:
             return None
 
     def _get_fingerprint_policy(self) -> str:
-        """Read fingerprint_policy from global settings (dict or object form)."""
+        """Read fingerprint_policy from global config (dict or object form)."""
         if not self.context:
             return "record"
         from ducta.core.settings import CoreSettings
@@ -321,14 +335,9 @@ class MLOpsExecutorIntegration:
             )
 
             if metrics and log_strategy.get("log_metrics", True):
-                for metric_name, value in metrics.items():
-                    if isinstance(value, (int, float)):
-                        self._tracker.log_metric(
-                            run_id,
-                            f"node_{node_name}_{metric_name}",
-                            float(value),
-                            step=0,
-                        )
+                _log_numeric_metrics(
+                    self._tracker, run_id, metrics, lambda key: f"node_{node_name}_{key}"
+                )
 
             if error:
                 self._tracker.log_parameter(
@@ -354,14 +363,7 @@ class MLOpsExecutorIntegration:
             return
 
         try:
-            for metric_name, value in metrics.items():
-                if isinstance(value, (int, float)):
-                    self._tracker.log_metric(
-                        run_id,
-                        metric_name,
-                        float(value),
-                        step=0,
-                    )
+            _log_numeric_metrics(self._tracker, run_id, metrics)
 
             logger.debug("Logged pipeline metrics")
 
@@ -413,14 +415,7 @@ class MLOpsExecutorIntegration:
         try:
             # Log summary if provided
             if summary:
-                for key, value in summary.items():
-                    if isinstance(value, (int, float)):
-                        self._tracker.log_metric(
-                            run_id,
-                            f"summary_{key}",
-                            float(value),
-                            step=0,
-                        )
+                _log_numeric_metrics(self._tracker, run_id, summary, lambda key: f"summary_{key}")
 
             # Log data fingerprints for lineage tracking
             import json
@@ -487,9 +482,7 @@ class MLOpsExecutorIntegration:
             enriched_tags = dict(tags or {})
 
             if self.context:
-                environment = getattr(self.context, "env", None) or getattr(
-                    self.context, "environment", None
-                )
+                environment = get_active_env(self.context)
                 if environment:
                     enriched_tags["environment"] = str(environment)
                     logger.debug(f"Registering model in environment: {environment}")

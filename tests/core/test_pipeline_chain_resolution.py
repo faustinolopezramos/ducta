@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
+from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver
 
 
 def _chain(target, cfg, depends_on_map=None):
@@ -143,7 +143,7 @@ class TestDeterminism:
                 """
             import sys
             sys.path.insert(0, %r)
-            from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver as R
+            from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver as R
             cfg = {
                 "alpha": {}, "beta": {}, "gamma": {}, "delta": {}, "epsilon": {},
                 "t": {"depends_on": ["alpha", "beta", "gamma", "delta", "epsilon"]},

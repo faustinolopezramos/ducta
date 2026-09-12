@@ -33,52 +33,10 @@ from .exceptions import JDBCCircuitOpenError
 
 
 class ConnectionManager:
-    """Manages JDBC connections from declarative configuration.
-
-    Configuration file (sources.yaml):
-        sources:
-          education_db:
-            type: "sqlserver"
-            host: "localhost"
-            port: 1433
-            database: "education_db"
-
-    Credentials from environment:
-        SQLSERVER_USER=user
-        SQLSERVER_PASSWORD=password
-
-    Driver JARs are downloaded lazily, per source, the first time ``.get(source_name)``
-    is called — the constructor does no network I/O. Call ``prefetch_drivers()``
-    explicitly to download and register every configured source's driver up front,
-    in parallel (useful for a preflight/warm-up step).
-
-    Circuit breaker (opt-in, disabled by default) around ``Connection.test_connection()``:
-        circuit_breaker:
-          enabled: true
-          failure_threshold: 5
-          cooldown_seconds: 60
-        sources:
-          education_db:
-            ...
-            circuit_breaker:            # per-source override, merged over the top-level block
-              failure_threshold: 3
-    Only protects the explicit preflight check (``test_connection()``); it does not
-    wrap the JDBC read/write path itself, which reads ``jdbc_url``/``jdbc_properties``
-    directly. ``record_success``/``record_failure`` are exposed publicly so callers
-    that perform the real read/write outside of ``Connection`` can still feed the
-    same per-source breaker state.
-    """
+    """Manages JDBC connections from declarative configuration."""
 
     def __init__(self, config_path: Path):
-        """Initialize ConnectionManager with config file.
-
-        Args:
-            config_path: Path to sources.yaml (or sources.toml, sources.json)
-
-        Raises:
-            FileNotFoundError: If config file doesn't exist
-            ValueError: If config is invalid
-        """
+        """Initialize ConnectionManager with config file."""
         self.config_path = Path(config_path)
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
@@ -103,7 +61,7 @@ class ConnectionManager:
         """Opt-in per source_name; merges the top-level `circuit_breaker:` block
         with a per-source override (same pattern as `driver:` overrides). Returns
         None (disabled) unless explicitly enabled — ConnectionManager has no access
-        to pipeline global_settings, so this is configured in sources.yaml itself."""
+        to pipeline global_config, so this is configured in sources.yaml itself."""
         source_cfg = self.sources.get(source_name, {}) or {}
         override = source_cfg.get("circuit_breaker")
         override = override if isinstance(override, dict) else {}
@@ -160,17 +118,7 @@ class ConnectionManager:
             raise ValueError(f"Unsupported format: {suffix}. Use: .yaml, .yml, .json, or .toml")
 
     def get(self, source_name: str) -> "Connection":
-        """Get a connection by source name.
-
-        Args:
-            source_name: Name of the source (e.g., 'education_db')
-
-        Returns:
-            Connection object ready to use with Spark
-
-        Raises:
-            ValueError: If source not found in configuration
-        """
+        """Get a connection by source name."""
         if source_name not in self.sources:
             available = ", ".join(self.sources.keys())
             raise ValueError(f"Source '{source_name}' not found. Available: {available}")
@@ -186,15 +134,7 @@ class ConnectionManager:
         return driver if isinstance(driver, dict) else None
 
     def prefetch_drivers(self, max_workers: Optional[int] = None) -> None:
-        """Download and register in Spark the JDBC drivers for every configured source.
-
-        Opt-in only: the constructor no longer calls this. Normal usage is lazy —
-        ``.get(source_name)`` downloads and registers a source's driver the first
-        time it is actually used (via ``_create_connector``). Call this explicitly
-        (e.g. from a preflight/warm-up command) to prepare every configured source's
-        driver up front, in parallel. Best-effort per source, same as before: a
-        failure for one source is logged and does not stop the others.
-        """
+        """Download and register in Spark the JDBC drivers for every configured source."""
         items = list(self.sources.items())
         if not items:
             return
@@ -230,7 +170,7 @@ class ConnectionManager:
     def _load_driver_class(self, connector: JDBCConnector) -> None:
         """Load a connector's JDBC driver class explicitly in the Spark JVM."""
         try:
-            from pyspark.sql import SparkSession
+            from pyspark.sql import SparkSession  # type: ignore
 
             spark = SparkSession.getActiveSession()
             if spark is None:
@@ -247,8 +187,6 @@ class ConnectionManager:
 
             jvm = spark.sparkContext._jvm
 
-            # Try to load the driver class using URLClassLoader
-            # This ensures the driver is available even if not in standard classpath
             try:
                 jar_url = jvm.java.io.File(str(jar_path)).toURI().toURL()
                 url_array = jvm.java.lang.reflect.Array.newInstance(jvm.java.net.URL, 1)
@@ -313,11 +251,6 @@ class ConnectionManager:
         # Load credentials from environment or .env file
         self._load_env_file()
 
-        # Preferred: per-connection prefix (IngestionService writes this).
-        # Two connections of the same source_type must not share one .env
-        # entry — falling back to the type-based prefix only keeps older
-        # .env files (written before credentials were keyed by connection
-        # name) working without requiring every deployment to re-run setup.
         name_prefix = source_name.upper()
         username = os.getenv(f"{name_prefix}_USER")
         password = os.getenv(f"{name_prefix}_PASSWORD")
@@ -423,18 +356,7 @@ class ConnectionManager:
 
 
 class Connection:
-    """Wrapper for a JDBC connection with Spark-ready properties.
-
-    Usage:
-        connections = ConnectionManager("config/sources.yaml")
-        conn = connections.get("education_db")
-
-        df = spark.read.jdbc(
-            url=conn.jdbc_url,
-            table="dbo.MyTable",
-            properties=conn.jdbc_properties
-        )
-    """
+    """Wrapper for a JDBC connection with Spark-ready properties."""
 
     def __init__(self, connector: JDBCConnector, breaker: Optional[CircuitBreaker] = None):
         """Initialize Connection wrapper. `breaker` is None unless the source has
@@ -457,12 +379,7 @@ class Connection:
         }
 
     def test_connection(self, timeout_seconds: int = 10) -> bool:
-        """Test if connection is valid.
-
-        If a circuit breaker is configured for this source and currently open,
-        raises JDBCCircuitOpenError immediately instead of testing the connection.
-        Otherwise tests as before and feeds the result into the breaker.
-        """
+        """Test if connection is valid."""
         if self._breaker is not None and self._breaker.is_open():
             raise JDBCCircuitOpenError(
                 "Circuit open for this source (too many consecutive failures); "

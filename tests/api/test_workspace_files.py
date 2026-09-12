@@ -23,7 +23,7 @@ def workspace(tmp_path):
     (tmp_path / "__pycache__").mkdir()  # in _SKIP_DIRS
 
     (tmp_path / "environment.yaml").write_text("project_name: demo\n")
-    (tmp_path / "config" / "global_settings.yaml").write_text("mode: local\n")
+    (tmp_path / "config" / "global_config.yaml").write_text("mode: local\n")
     (tmp_path / "config" / "dev" / "input.yaml").write_text("{}\n")
     (tmp_path / "pipelines" / "etl.py").write_text("def run():\n    pass\n")
 
@@ -46,7 +46,7 @@ class TestListDirectory:
         by_name = {e["name"]: e for e in workspace.list_directory("config")}
 
         assert by_name["dev"]["path"] == "config/dev"
-        assert by_name["global_settings.yaml"]["path"] == "config/global_settings.yaml"
+        assert by_name["global_config.yaml"]["path"] == "config/global_config.yaml"
 
     def test_reports_entry_types_and_sizes(self, workspace):
         by_name = {e["name"]: e for e in workspace.list_directory("pipelines")}

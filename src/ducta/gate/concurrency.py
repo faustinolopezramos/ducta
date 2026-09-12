@@ -42,16 +42,7 @@ def run_parallel(
     max_workers: int,
     fail_fast: bool = False,
 ) -> ParallelResult[R]:
-    """Run ``fn(item)`` for every item in a bounded thread pool, preserving order.
-
-    With ``fail_fast=True``, the first error stops the caller from *waiting* on the
-    remaining work: the executor is shut down with ``cancel_futures=True`` and
-    ``wait=False``, which cancels tasks that have not started yet. Tasks already
-    running keep executing in the background (Python cannot kill a running thread),
-    but this function returns as soon as the failure is observed instead of blocking
-    until every in-flight task finishes, unlike a plain ``with ThreadPoolExecutor()``
-    block whose ``__exit__`` always calls ``shutdown(wait=True)``.
-    """
+    """Run ``fn(item)`` for every item in a bounded thread pool, preserving order."""
     results: List[Optional[R]] = [None] * len(items)
     errors: List[Tuple[int, BaseException]] = []
     aborted = False

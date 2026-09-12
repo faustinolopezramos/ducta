@@ -118,14 +118,14 @@ class TestBaseIOSanitizeSQL:
 
 class TestBaseIORecordFingerprint:
     def test_disabled_returns_none_without_importing_mlrun(self):
-        io = BaseIO({"global_settings": {"enable_data_fingerprinting": False}})
+        io = BaseIO({"global_config": {"enable_data_fingerprinting": False}})
         with patch("ducta.gate.fingerprinting.compute_fingerprint") as mock_compute:
             result = io._record_fingerprint("input", "ds1", "/tmp/ds1.csv", MagicMock())
         mock_compute.assert_not_called()
         assert result is None
 
     def test_mlrun_unavailable_returns_none(self):
-        io = BaseIO({"global_settings": {"enable_data_fingerprinting": True}})
+        io = BaseIO({"global_config": {"enable_data_fingerprinting": True}})
         with patch(
             "ducta.gate.fingerprinting.compute_fingerprint",
             side_effect=ImportError("no mlrun"),
@@ -135,7 +135,7 @@ class TestBaseIORecordFingerprint:
         assert "_input_fingerprints" not in io.context
 
     def test_stores_under_input_scope_dict_context(self):
-        context = {"global_settings": {"enable_data_fingerprinting": True}}
+        context = {"global_config": {"enable_data_fingerprinting": True}}
         io = BaseIO(context)
         fake_fingerprint = MagicMock()
         fake_fingerprint.to_dict.return_value = {"fingerprint": "abc"}
@@ -146,7 +146,7 @@ class TestBaseIORecordFingerprint:
 
     def test_stores_under_output_scope_object_context(self):
         class Ctx:
-            global_settings = {"enable_data_fingerprinting": True}
+            global_config = {"enable_data_fingerprinting": True}
 
         ctx = Ctx()
         io = BaseIO(ctx)
@@ -158,7 +158,7 @@ class TestBaseIORecordFingerprint:
         assert ctx._output_fingerprints["out1"] == {"fingerprint": "xyz"}
 
     def test_accumulates_across_calls(self):
-        context = {"global_settings": {"enable_data_fingerprinting": True}}
+        context = {"global_config": {"enable_data_fingerprinting": True}}
         io = BaseIO(context)
 
         def fake_compute(context_manager, *, key, identifier, dataframe, sample_rows=None):

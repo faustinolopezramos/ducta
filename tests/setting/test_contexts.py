@@ -4,17 +4,58 @@ from unittest.mock import MagicMock, PropertyMock, patch
 import pytest
 
 from ducta.setting.contexts import (
-    BaseSpecializedContext,
     Context,
-    ContextFactory,
-    HybridContext,
     MLConfigMixin,
-    MLContext,
     PipelineManager,
-    StreamingContext,
 )
 from ducta.setting.exceptions import ConfigLoadError, ConfigValidationError
+from ducta.setting.interpolator import VariableInterpolator
+from ducta.setting.loaders import ConfigLoaderFactory
 from ducta.setting.utils import deep_merge_dicts as _deep_merge_dicts
+from ducta.setting.validators import ConfigValidator, FormatPolicy
+
+
+def _make_bare_context(
+    global_config,
+    pipelines_config,
+    nodes_config,
+    input_config,
+    output_config,
+    ml_info=None,
+    spark_session=None,
+    env=None,
+    allow_python_config=True,
+):
+    """Build a ``Context`` without running ``__init__``'s full load/validate/
+    process pipeline — for tests that need a ``Context`` populated from
+    already-final config dicts, to exercise one piece (e.g.
+    ``_apply_environment_overrides``) in isolation. This used to be a
+    production classmethod (``Context._from_processed``); it was removed as
+    dead code (no production caller ever used the fast path), and this
+    fixture-only helper took its place since only tests needed it."""
+    obj = Context.__new__(Context)
+    obj.allow_python_config = allow_python_config
+    obj._config_loader = ConfigLoaderFactory(allow_python=allow_python_config)
+    obj._validator = ConfigValidator()
+    obj._interpolator = VariableInterpolator()
+    obj._validate_with_pydantic = False
+    obj.env = env
+    obj.global_config = global_config
+    obj.pipelines_config = pipelines_config
+    obj.nodes_config = nodes_config
+    obj.input_config = input_config
+    obj.output_config = output_config
+    obj.execution_mode = global_config.get("mode", "local")
+    obj.input_path = global_config.get("input_path")
+    obj.output_path = global_config.get("output_path")
+    obj.ml_info = ml_info if isinstance(ml_info, dict) else {}
+    obj.layer = global_config.get("layer", "").lower()
+    obj.format_policy = FormatPolicy(obj.global_config.get("format_policy", {}))
+    if spark_session is not None:
+        obj.spark = spark_session
+    obj._pipeline_manager = PipelineManager(obj.pipelines_config, obj.nodes_config)
+    obj.quality_output_paths = []
+    return obj
 
 
 class TestDeepMergeDicts:
@@ -105,24 +146,24 @@ class TestPipelineManager:
 class TestMLConfigMixin:
     def test_default_hyperparams(self):
         ctx = MLConfigMixin()
-        ctx.global_settings = {"default_hyperparams": {"lr": 0.01}}
+        ctx.global_config = {"default_hyperparams": {"lr": 0.01}}
         result = ctx.default_hyperparams
         assert result["lr"] == 0.01
 
     def test_default_hyperparams_empty(self):
         ctx = MLConfigMixin()
-        ctx.global_settings = {}
+        ctx.global_config = {}
         result = ctx.default_hyperparams
         assert result == {}
 
     def test_default_model_version(self):
         ctx = MLConfigMixin()
-        ctx.global_settings = {"default_model_version": "1.0"}
+        ctx.global_config = {"default_model_version": "1.0"}
         assert ctx.default_model_version == "1.0"
 
     def test_default_model_version_none(self):
         ctx = MLConfigMixin()
-        ctx.global_settings = {}
+        ctx.global_config = {}
         assert ctx.default_model_version is None
 
     def test_is_ml_layer_true(self):
@@ -137,7 +178,7 @@ class TestMLConfigMixin:
 
     def test_merge_hyperparams(self):
         mixin = MLConfigMixin()
-        mixin.global_settings = {"default_hyperparams": {"lr": 0.01}}
+        mixin.global_config = {"default_hyperparams": {"lr": 0.01}}
         result = mixin._merge_hyperparams({"lr": 0.001, "epochs": 10})
         assert result == {"lr": 0.001, "epochs": 10}
 
@@ -159,7 +200,7 @@ class TestMLConfigMixin:
     def test_get_pipeline_ml_config(self):
         mixin = MLConfigMixin()
         mixin.pipelines_config = {"p1": {"hyperparams": {"epochs": 5}, "description": "test"}}
-        mixin.global_settings = {"default_model_version": "1.0", "default_hyperparams": {}}
+        mixin.global_config = {"default_model_version": "1.0", "default_hyperparams": {}}
         result = mixin.get_pipeline_ml_config("p1")
         assert result["description"] == "test"
 
@@ -167,7 +208,7 @@ class TestMLConfigMixin:
         mixin = MLConfigMixin()
         mixin.ml_info = {"model_name": "base_model"}
         mixin.pipelines_config = {"p1": {}}
-        mixin.global_settings = {
+        mixin.global_config = {
             "default_model_version": "1.0",
             "default_hyperparams": {},
             "project_name": "test_project",
@@ -185,7 +226,7 @@ class TestMLConfigMixin:
         mixin = MLConfigMixin()
         mixin.ml_info = {}
         mixin.pipelines_config = {"bronze.ingestion": {"type": "batch"}}
-        mixin.global_settings = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
+        mixin.global_config = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
 
         result = mixin._resolve_hyperparams_config("bronze.ingestion")
 
@@ -197,7 +238,7 @@ class TestMLConfigMixin:
         mixin = MLConfigMixin()
         mixin.ml_info = {}
         mixin.pipelines_config = {"ml.student_performance": {"type": "ml"}}
-        mixin.global_settings = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
+        mixin.global_config = {"hyperparams_config_path": "config/ml/hyperparams.yml"}
 
         mixin._resolve_hyperparams_config("ml.student_performance")
 
@@ -215,70 +256,36 @@ class TestContextInit:
 
         with patch.object(Context, "_validate_all_configs_with_pydantic"):
             ctx = Context.from_json_config(
-                global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
+                global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
                 pipelines_config={"p1": {"nodes": ["n1"]}},
                 nodes_config={"n1": {"function": "mymod.my_func"}},
                 input_config={"ds1": {"format": "parquet"}},
                 output_config={"out1": {"format": "delta"}},
             )
-        assert ctx.global_settings["input_path"] == "/in"
+        assert ctx.global_config["input_path"] == "/in"
         assert ctx.execution_mode == "local"
         assert ctx.layer == ""
 
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_from_processed(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
-
-        ctx = Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
-            pipelines_config={"p1": {"nodes": ["n1"]}},
-            nodes_config={"n1": {"function": "mymod.my_func"}},
-            input_config={"ds1": {"format": "parquet"}},
-            output_config={"out1": {"format": "delta"}},
-            env="dev",
-        )
-        assert ctx.global_settings["input_path"] == "/in"
-        assert ctx.env == "dev"
-        assert ctx._validate_with_pydantic is False
-
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_from_processed_with_ml_info(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
-
-        ctx = Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
-            pipelines_config={"p1": {"nodes": ["n1"]}},
-            nodes_config={},
-            input_config={},
-            output_config={},
-            ml_info={"model_name": "mymodel"},
-        )
-        assert ctx.ml_info["model_name"] == "mymodel"
-
     def test_prepare_sources(self):
         result = Context._prepare_sources(
-            global_settings={"a": 1},
+            global_config={"a": 1},
             pipelines_config={},
             nodes_config={},
             input_config={},
             output_config={},
         )
-        assert isinstance(result["global_settings"], dict)
-        assert result["global_settings"]["a"] == 1
+        assert isinstance(result["global_config"], dict)
+        assert result["global_config"]["a"] == 1
 
     def test_prepare_sources_string_to_path(self):
         result = Context._prepare_sources(
-            global_settings="/path/to/file.yaml",
+            global_config="/path/to/file.yaml",
             pipelines_config={},
             nodes_config={},
             input_config={},
             output_config={},
         )
-        assert isinstance(result["global_settings"], Path)
+        assert isinstance(result["global_config"], Path)
 
 
 class TestContextLazySpark:
@@ -289,8 +296,8 @@ class TestContextLazySpark:
     def _make_context(self, mock_loader_cls, mock_get_session):
         mock_get_session.return_value = MagicMock()
         mock_loader_cls.return_value = MagicMock()
-        return Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
+        return _make_bare_context(
+            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
             pipelines_config={"p1": {"nodes": ["n1"]}},
             nodes_config={"n1": {"function": "mymod.my_func"}},
             input_config={"ds1": {"format": "parquet"}},
@@ -333,8 +340,8 @@ class TestContextLazySpark:
     def test_explicit_spark_session_override_skips_factory(self, mock_loader_cls, mock_get_session):
         mock_loader_cls.return_value = MagicMock()
         injected = MagicMock(name="injected-session")
-        ctx = Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
+        ctx = _make_bare_context(
+            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
             pipelines_config={},
             nodes_config={},
             input_config={},
@@ -345,35 +352,6 @@ class TestContextLazySpark:
         assert ctx.spark is injected
         mock_get_session.assert_not_called()
 
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_from_base_context_reuses_materialized_session(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        base = self._make_context(mock_loader_cls, mock_get_session)
-        base.spark  # materialize it on the base context
-        mock_get_session.reset_mock()
-
-        specialized = MLContext.from_base_context(base)
-
-        assert specialized.spark is base.spark
-        mock_get_session.assert_not_called()
-
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_from_base_context_does_not_force_unmaterialized_base(
-        self, mock_loader_cls, mock_get_session
-    ):
-        mock_get_session.return_value = MagicMock()
-        base = self._make_context(mock_loader_cls, mock_get_session)
-
-        MLContext.from_base_context(base)
-
-        # Building the specialized context must not have touched the base's
-        # session — that's the whole point of checking has_spark_session()
-        # instead of getattr(base_context, "spark", None).
-        assert base.has_spark_session() is False
-        mock_get_session.assert_not_called()
-
 
 class TestContextQualityOutput:
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
@@ -382,8 +360,8 @@ class TestContextQualityOutput:
         mock_get_session.return_value = MagicMock()
         mock_loader_cls.return_value = MagicMock()
 
-        ctx = Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
+        ctx = _make_bare_context(
+            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
             pipelines_config={},
             nodes_config={},
             input_config={},
@@ -427,8 +405,8 @@ class TestContextEnvironmentOverrides:
         mock_get_session.return_value = MagicMock()
         mock_loader_cls.return_value = MagicMock()
 
-        ctx = Context._from_processed(
-            global_settings={
+        ctx = _make_bare_context(
+            global_config={
                 "input_path": "/in",
                 "output_path": "/out",
                 "mode": "local",
@@ -441,8 +419,8 @@ class TestContextEnvironmentOverrides:
             env="dev",
         )
         ctx._apply_environment_overrides()
-        assert ctx.global_settings.get("environment") == "dev"
-        assert "environments" not in ctx.global_settings
+        assert ctx.global_config.get("environment") == "dev"
+        assert "environments" not in ctx.global_config
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
     @patch("ducta.setting.contexts.ConfigLoaderFactory")
@@ -450,8 +428,8 @@ class TestContextEnvironmentOverrides:
         mock_get_session.return_value = MagicMock()
         mock_loader_cls.return_value = MagicMock()
 
-        ctx = Context._from_processed(
-            global_settings={"input_path": "/in", "output_path": "/out", "mode": "local"},
+        ctx = _make_bare_context(
+            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
             pipelines_config={},
             nodes_config={},
             input_config={},
@@ -465,8 +443,8 @@ class TestContextEnvironmentOverrides:
         mock_get_session.return_value = MagicMock()
         mock_loader_cls.return_value = MagicMock()
 
-        ctx = Context._from_processed(
-            global_settings={
+        ctx = _make_bare_context(
+            global_config={
                 "input_path": "/in",
                 "output_path": "/out",
                 "mode": "local",
@@ -479,68 +457,7 @@ class TestContextEnvironmentOverrides:
             env="dev",
         )
         ctx._apply_environment_overrides()
-        assert ctx.global_settings["mode"] == "distributed"
-        assert ctx.global_settings["log_level"] == "DEBUG"
-        assert ctx.global_settings["input_path"] == "/in"
-        assert ctx.global_settings.get("environment") == "dev"
-
-
-class TestMLContext:
-    def test_is_compatible_node(self):
-        assert MLContext._is_compatible_node(None, {"model": {}}) is True
-        assert MLContext._is_compatible_node(None, {}) is False
-
-
-class TestStreamingContext:
-    def test_is_streaming_node_with_format_policy(self):
-        ctx = StreamingContext.__new__(StreamingContext)
-        from ducta.setting.validators import StreamingValidator
-
-        ctx._validator = StreamingValidator()
-        ctx.format_policy = ctx._validator.policy
-        assert (
-            ctx._is_streaming_node({"input": {"format": "kafka"}, "output": {"format": "delta"}})
-            is True
-        )
-
-    def test_is_not_streaming_node(self):
-        ctx = StreamingContext.__new__(StreamingContext)
-        from ducta.setting.validators import StreamingValidator
-
-        ctx._validator = StreamingValidator()
-        ctx.format_policy = ctx._validator.policy
-        assert ctx._is_streaming_node({"input": {"format": "parquet"}, "output": {}}) is False
-
-
-class TestContextFactory:
-    def test_create_context_batch(self):
-        base = MagicMock(spec=Context)
-        base.get_pipelines_by_type.side_effect = lambda t: {"bp": {}} if t == "batch" else {}
-        result = ContextFactory.create_context(base)
-        assert result is base
-
-    def test_create_context_ml(self):
-        base = MagicMock(spec=Context)
-        base.get_pipelines_by_type.side_effect = lambda t: {"ml_p": {}} if t == "ml" else {}
-        with patch("ducta.setting.contexts.MLContext.from_base_context", return_value="ml_ctx"):
-            result = ContextFactory.create_context(base)
-            assert result == "ml_ctx"
-
-    def test_create_context_streaming(self):
-        base = MagicMock(spec=Context)
-        base.get_pipelines_by_type.side_effect = lambda t: {"str_p": {}} if t == "streaming" else {}
-        with patch(
-            "ducta.setting.contexts.StreamingContext.from_base_context", return_value="str_ctx"
-        ):
-            result = ContextFactory.create_context(base)
-            assert result == "str_ctx"
-
-    def test_create_context_hybrid(self):
-        base = MagicMock(spec=Context)
-        base.get_pipelines_by_type.side_effect = lambda t: (
-            {"ml_p": {}} if t == "ml" else {"str_p": {}} if t == "streaming" else {}
-        )
-        with patch("ducta.setting.contexts.HybridContext") as mock_hc:
-            mock_hc.return_value = "hybrid_ctx"
-            result = ContextFactory.create_context(base)
-            assert result == "hybrid_ctx"
+        assert ctx.global_config["mode"] == "distributed"
+        assert ctx.global_config["log_level"] == "DEBUG"
+        assert ctx.global_config["input_path"] == "/in"
+        assert ctx.global_config.get("environment") == "dev"

@@ -32,7 +32,7 @@ Start here
       :link: configuration
       :link-type: doc
 
-      Global settings, pipelines, nodes, inputs, and outputs — every option explained.
+      Global config, pipelines, nodes, inputs, and outputs — every option explained.
 
    .. grid-item-card:: 💻 CLI Usage
       :link: cli_usage

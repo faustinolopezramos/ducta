@@ -17,13 +17,13 @@ from ducta.gate.handoff import (
 
 def _make_context_dict(handoff_enabled=False):
     return {
-        "global_settings": {"in_memory_handoff": handoff_enabled},
+        "global_config": {"in_memory_handoff": handoff_enabled},
     }
 
 
 class _ObjContext:
     def __init__(self, handoff_enabled=False):
-        self.global_settings = {"in_memory_handoff": handoff_enabled}
+        self.global_config = {"in_memory_handoff": handoff_enabled}
         # Accept arbitrary attributes (no __slots__)
         self.__dict__ = self.__dict__  # ensure setattr works
 
@@ -44,13 +44,13 @@ class TestIsEnabled:
     def test_disabled_object(self):
         assert is_enabled(_ObjContext(False)) is False
 
-    def test_no_global_settings_dict(self):
+    def test_no_global_config_dict(self):
         assert is_enabled({}) is False
 
-    def test_no_global_settings_object(self):
+    def test_no_global_config_object(self):
         assert is_enabled(_ObjContext()) is False
 
-    def test_missing_global_settings(self):
+    def test_missing_global_config(self):
         ctx = {"other": 1}
         assert is_enabled(ctx) is False
 
@@ -193,10 +193,10 @@ class TestGetStore:
 
     def test_object_context_rejects_attribute(self):
         class SlotsObj:
-            __slots__ = ("global_settings",)
+            __slots__ = ("global_config",)
 
             def __init__(self):
-                self.global_settings = {"in_memory_handoff": True}
+                self.global_config = {"in_memory_handoff": True}
 
         ctx = SlotsObj()
         store = get_store(ctx)
@@ -243,10 +243,10 @@ class TestOfferTake:
 
     def test_take_no_store(self):
         class SlotsObj:
-            __slots__ = ("global_settings",)
+            __slots__ = ("global_config",)
 
             def __init__(self):
-                self.global_settings = {"in_memory_handoff": True}
+                self.global_config = {"in_memory_handoff": True}
 
         ctx = SlotsObj()
         assert take(ctx, "/path") is None

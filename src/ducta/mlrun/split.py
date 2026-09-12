@@ -121,14 +121,7 @@ def _split_dataframe_impl(
     if val_size is not None and val_size + test_size >= 1:
         raise SplitError("val_size + test_size must be < 1")
 
-    seed = cfg.get("seed")
-    seed = default_seed if seed is None else seed
-    if seed is None:
-        seed = 42
-        logger.warning(
-            "split_dataframe called without a seed (config or default): using 42. "
-            "Set global_settings.random_seed for explicit reproducibility."
-        )
+    seed = _resolve_seed(cfg, default_seed, "split_dataframe")
 
     holdout = test_size + (val_size or 0.0)
 
@@ -150,26 +143,16 @@ def _split_dataframe_impl(
         _check_non_degenerate(parts, n, method)
         return parts
 
-    if method == "group":
-        group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
-        group_lookup = {v: _stable_fraction(v, seed) for v in df[group_col].unique()}
-        fractions = df[group_col].map(group_lookup)
-    elif method == "stratified":
-        stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
-        class_counts = df[stratify_col].value_counts()
-        singletons = class_counts[class_counts < 2]
-        if not singletons.empty:
-            shown = {str(k): int(v) for k, v in singletons.head(10).items()}
-            raise SplitError(
-                f"Stratified split requires at least 2 rows per class; "
-                f"{len(singletons)} class(es) have fewer: {shown}. "
-                "Drop or merge these classes, or use method='random'."
-            )
-        fractions = (
-            _row_fractions(df, seed).groupby(df[stratify_col].values).rank(pct=True, method="first")
+    def _stratified_error(count: int, shown: Dict[str, int]) -> str:
+        return (
+            f"Stratified split requires at least 2 rows per class; "
+            f"{count} class(es) have fewer: {shown}. "
+            "Drop or merge these classes, or use method='random'."
         )
-    else:  # random
-        fractions = _row_fractions(df, seed).rank(pct=True, method="first")
+
+    fractions = _compute_fractions(
+        df, cfg, method, seed, min_rows_per_class=2, stratified_error=_stratified_error
+    )
 
     test_mask = fractions > (1 - test_size)
     if val_size is not None:
@@ -208,6 +191,62 @@ def _row_fractions(df: Any, seed: int):
     return pd.Series(rng.random(len(df)), index=df.index)
 
 
+def _resolve_seed(cfg: Dict[str, Any], default_seed: Optional[int], caller_name: str) -> int:
+    """Resolve the effective seed for a split/fold call, warning and falling
+    back to 42 if none was configured. Shared by ``_split_dataframe_impl`` and
+    ``_kfold_splits_impl``, which previously carried this block twice,
+    identical apart from ``caller_name`` in the warning text.
+    """
+    seed = cfg.get("seed")
+    seed = default_seed if seed is None else seed
+    if seed is None:
+        seed = 42
+        logger.warning(
+            "{} called without a seed (config or default): using 42. "
+            "Set global_config.random_seed for explicit reproducibility.",
+            caller_name,
+        )
+    return seed
+
+
+def _compute_fractions(
+    df: Any,
+    cfg: Dict[str, Any],
+    method: str,
+    seed: int,
+    *,
+    min_rows_per_class: int,
+    stratified_error: Callable[[int, Dict[str, int]], str],
+):
+    """Per-row ``[0, 1)`` fraction used to assign rows to train/val/test (or a
+    fold), for the ``group``/``stratified``/``random`` methods — ``temporal``
+    is handled separately by each caller since its cut-point arithmetic
+    differs between a single split and k folds.
+
+    Shared by ``_split_dataframe_impl`` and ``_kfold_splits_impl``, which
+    previously carried this block twice, identical apart from the stratified
+    class-size threshold (``2`` vs ``n_splits``) and its error message.
+    ``stratified_error(count, shown)`` builds that caller-specific message.
+    """
+    if method == "group":
+        group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
+        group_lookup = {v: _stable_fraction(v, seed) for v in df[group_col].unique()}
+        return df[group_col].map(group_lookup)
+
+    if method == "stratified":
+        stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
+        class_counts = df[stratify_col].value_counts()
+        too_small = class_counts[class_counts < min_rows_per_class]
+        if not too_small.empty:
+            shown = {str(k): int(v) for k, v in too_small.head(10).items()}
+            raise SplitError(stratified_error(len(too_small), shown))
+        return (
+            _row_fractions(df, seed).groupby(df[stratify_col].values).rank(pct=True, method="first")
+        )
+
+    return _row_fractions(df, seed).rank(pct=True, method="first")  # random
+
+
 def kfold_splits(
     df: Any,
     split_config: Any = None,
@@ -244,14 +283,7 @@ def _kfold_splits_impl(
             f"Cannot build {n_splits} folds from {len(df)} row(s): use fewer folds or more data."
         )
 
-    seed = cfg.get("seed")
-    seed = default_seed if seed is None else seed
-    if seed is None:
-        seed = 42
-        logger.warning(
-            "kfold_splits called without a seed (config or default): using 42. "
-            "Set global_settings.random_seed for explicit reproducibility."
-        )
+    seed = _resolve_seed(cfg, default_seed, "kfold_splits")
 
     if method == "temporal":
         time_col = _require_column(df, cfg.get("time_col"), method, "time_col")
@@ -270,26 +302,16 @@ def _kfold_splits_impl(
             folds.append((train_part, val_part))
         return folds
 
-    if method == "group":
-        group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
-        group_lookup = {v: _stable_fraction(v, seed) for v in df[group_col].unique()}
-        fractions = df[group_col].map(group_lookup)
-    elif method == "stratified":
-        stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
-        class_counts = df[stratify_col].value_counts()
-        too_small = class_counts[class_counts < n_splits]
-        if not too_small.empty:
-            shown = {str(k): int(v) for k, v in too_small.head(10).items()}
-            raise SplitError(
-                f"Stratified {n_splits}-fold requires at least {n_splits} rows per class; "
-                f"{len(too_small)} class(es) have fewer: {shown}. "
-                "Use fewer folds, merge/drop rare classes, or method='random'."
-            )
-        fractions = (
-            _row_fractions(df, seed).groupby(df[stratify_col].values).rank(pct=True, method="first")
+    def _stratified_error(count: int, shown: Dict[str, int]) -> str:
+        return (
+            f"Stratified {n_splits}-fold requires at least {n_splits} rows per class; "
+            f"{count} class(es) have fewer: {shown}. "
+            "Use fewer folds, merge/drop rare classes, or method='random'."
         )
-    else:  # random
-        fractions = _row_fractions(df, seed).rank(pct=True, method="first")
+
+    fractions = _compute_fractions(
+        df, cfg, method, seed, min_rows_per_class=n_splits, stratified_error=_stratified_error
+    )
 
     fold_ids = (fractions * n_splits).astype(int).clip(upper=n_splits - 1)
 

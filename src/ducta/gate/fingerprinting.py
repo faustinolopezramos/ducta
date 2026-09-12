@@ -31,18 +31,14 @@ def compute_fingerprint(
     dataframe: Any,
     sample_rows: Optional[int] = None,
 ) -> Any:
-    """Compute a DataFingerprint, reading fingerprint_mode/sample_rows from global_settings.
-
-    Does not decide whether fingerprinting should run at all — that is the caller's
-    responsibility (see ``BaseIO._record_fingerprint``).
-    """
+    """Compute a DataFingerprint, reading fingerprint_mode/sample_rows from global_config."""
     from ducta.mlrun.fingerprint import DataFingerprint  # optional dependency (mlrun)
 
-    mode = context_manager.get_nested("global_settings.fingerprint_mode", "exact")
+    mode = context_manager.get_nested("global_config.fingerprint_mode", "exact")
     rows = (
         sample_rows
         if sample_rows is not None
-        else context_manager.get_nested("global_settings.fingerprint_sample_rows", 100)
+        else context_manager.get_nested("global_config.fingerprint_sample_rows", 100)
     )
     return DataFingerprint.from_file_and_df(key, identifier, dataframe, sample_rows=rows, mode=mode)
 

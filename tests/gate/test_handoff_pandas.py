@@ -21,7 +21,7 @@ from ducta.gate import handoff
 
 class FakeContext:
     def __init__(self, enabled: bool = True):
-        self.global_settings = {"in_memory_handoff": enabled}
+        self.global_config = {"in_memory_handoff": enabled}
 
 
 @pytest.fixture

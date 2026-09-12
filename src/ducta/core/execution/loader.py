@@ -122,9 +122,16 @@ class FunctionLoader:
                 f"Missing: {', '.join(missing)}. Configuration found: {node}"
             )
 
+        node_name = str(node.get("name") or f"{module_path}.{function_name}")
+
         cache_key = (module_path, function_name)
         cached = self._function_cache.get(cache_key)
         if cached is not None:
+            # Recorded on the cache hit too, not only on the miss. One executor
+            # drives every pipeline in a chain and the ledger resets between
+            # them, so a node loaded once and reused would leave the second
+            # pipeline's certificate silently missing its code evidence.
+            self._record_code_fingerprint(node_name, cached, module_path, function_name)
             return cached
 
         try:
@@ -159,6 +166,7 @@ class FunctionLoader:
                 logger.warning("Signature validation skipped for {}: {}", function_name, e)
 
             self._function_cache[cache_key] = func
+            self._record_code_fingerprint(node_name, func, module_path, function_name)
             return func
 
         except ModuleImportError as e:
@@ -172,3 +180,37 @@ class FunctionLoader:
                 e,
             )
             raise
+
+    def _record_code_fingerprint(
+        self,
+        node_name: str,
+        func: Callable,
+        module_path: str,
+        function_name: str,
+    ) -> None:
+        """Hash the loaded function into the run ledger, for the certificate.
+
+        Best-effort in the strict sense: a failure here degrades the evidence
+        and is counted as an evidence gap, but never stops a node from running.
+        """
+        try:
+            from ducta.core.code_fingerprint import fingerprint_callable
+            from ducta.core.ledger import ledger_for
+
+            fingerprint = fingerprint_callable(func, module=module_path, function=function_name)
+            ledger_for(self.context).record_code(node_name, fingerprint)
+        except Exception as e:  # noqa: BLE001 — evidence must never break a run
+            logger.warning(
+                "Could not fingerprint the code for node '{}' ({}.{}): {}. "
+                "The run certificate will be marked evidence_complete=false.",
+                node_name,
+                module_path,
+                function_name,
+                e,
+            )
+            try:
+                from ducta.core.ledger import ledger_for
+
+                ledger_for(self.context).note_gap(f"code fingerprint for '{node_name}': {e}")
+            except Exception:  # noqa: BLE001
+                pass

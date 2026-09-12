@@ -26,7 +26,7 @@ from ducta.mlrun.exceptions import ModelNotFoundError, PromotionGateError
 
 def _fake_context(output_path, env="dev"):
     return SimpleNamespace(
-        global_settings={},
+        global_config={},
         output_path=output_path,
         env=env,
         execution_mode="local",
@@ -87,7 +87,7 @@ class TestResolveStoragePathPrecedence:
         got = mlops_commands._resolve_storage_path(None, env="dev")
         assert got == "./mlops_data"
 
-    def test_env_var_used_when_no_context_and_no_global_settings(self, monkeypatch):
+    def test_env_var_used_when_no_context_and_no_global_config(self, monkeypatch):
         monkeypatch.setenv("Ducta_MLOPS_PATH", "/from/env/var")
         got = mlops_commands._resolve_storage_path(None, env=None)
         assert got == "/from/env/var"

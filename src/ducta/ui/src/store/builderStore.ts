@@ -7,8 +7,8 @@
 // ─────────────────────────────────────────────
 
 import { create, type StateCreator } from "zustand";
-import { devtools } from "zustand/middleware";
 import { immer } from "zustand/middleware/immer";
+import { withDevtools } from "./createStore";
 import {
   validatePipelineGraph,
   type ValidationResult,
@@ -127,8 +127,6 @@ const initialState = {
   executionStates: {} as Record<string, string>,
   activeNodeExecutions: {} as Record<string, string>,
 };
-
-const isDev = import.meta.env.DEV;
 
 const storeCreator = immer<BuilderState>((set, get) => ({
   ...initialState,
@@ -275,6 +273,4 @@ const storeCreator = immer<BuilderState>((set, get) => ({
   reset: () => set(initialState),
 }));
 
-export const useBuilderStore = create<BuilderState>()(
-  (isDev ? devtools(storeCreator, { name: "BuilderStore" }) : storeCreator) as any
-);
+export const useBuilderStore = create<BuilderState>()(withDevtools(storeCreator, "BuilderStore") as any);

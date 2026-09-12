@@ -21,24 +21,24 @@ class TestDetermineCheckpointBase:
         manager = CheckpointManager(dict_context)
         assert manager.determine_checkpoint_base("explicit/base") == "explicit/base"
 
-    def test_falls_back_to_global_settings_with_dict_context(self, dict_context):
-        # Regression: determine_checkpoint_base must resolve global_settings
+    def test_falls_back_to_global_config_with_dict_context(self, dict_context):
+        # Regression: determine_checkpoint_base must resolve global_config
         # from a plain dict context, not only from an attribute-based object.
         manager = CheckpointManager(dict_context)
         assert manager.determine_checkpoint_base(None) == "/tmp/checkpoints"
 
-    def test_falls_back_to_global_settings_with_object_context(self, obj_context):
+    def test_falls_back_to_global_config_with_object_context(self, obj_context):
         manager = CheckpointManager(obj_context)
         assert manager.determine_checkpoint_base(None) == "/tmp/checkpoints"
 
     def test_falls_back_to_output_path_when_no_global_setting(self, dict_context):
         dict_context = dict(dict_context)
-        dict_context["global_settings"] = {}
+        dict_context["global_config"] = {}
         manager = CheckpointManager(dict_context)
         assert manager.determine_checkpoint_base(None) == "/tmp/output/streaming_checkpoints"
 
     def test_raises_when_nothing_configured(self):
-        manager = CheckpointManager({"global_settings": {}})
+        manager = CheckpointManager({"global_config": {}})
         with pytest.raises(StreamingConfigurationError):
             manager.determine_checkpoint_base(None)
 

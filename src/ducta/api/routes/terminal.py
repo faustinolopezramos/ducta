@@ -25,27 +25,18 @@ import json
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from loguru import logger
 
 from ducta.api.config import Settings, get_settings
-from ducta.api.dependencies import WebSocketAuthError, resolve_websocket_user
-from ducta.api.middleware.origin import websocket_origin_allowed
+from ducta.api.dependencies import authenticate_websocket
 
 ws_router = APIRouter(tags=["Terminal"])
 
 
 def _resolve_shell(settings: Settings) -> str:
     return settings.terminal_shell or os.environ.get("SHELL") or "/bin/bash"
-
-
-def _extract_token(websocket: WebSocket) -> Optional[str]:
-    auth_header = websocket.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header[7:]
-    return websocket.cookies.get("access_token")
 
 
 def _is_loopback_client(websocket: WebSocket) -> bool:
@@ -69,28 +60,10 @@ async def terminal_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1008, reason="Terminal disabled")
         return
 
-    # 1a. Origin — checked before anything else that could accept the socket.
-    # CORS never sees a WebSocket handshake, so without this a page on any site
-    # the user happens to be visiting can open this endpoint from their own
-    # browser. The loopback check further down does not help there: that page's
-    # connection *is* loopback.
-    if not await websocket_origin_allowed(websocket, settings):
-        return
-
-    # 1b. Rate limit the handshake — `BaseHTTPMiddleware` (RateLimitMiddleware)
-    # only intercepts the ASGI 'http' scope and never sees WebSocket connections.
-    if settings.rate_limit_enabled:
-        from ducta.api.middleware.rate_limit import (
-            get_websocket_client_key,
-            get_websocket_connection_limiter,
-        )
-
-        limiter = get_websocket_connection_limiter(settings)
-        if not limiter.is_allowed(get_websocket_client_key(websocket)):
-            await websocket.close(code=1013, reason="Rate limit exceeded")
-            return
-
-    # 2. POSIX-only (stdlib pty).
+    # 2. POSIX-only (stdlib pty). Checked before accepting/authenticating the
+    # socket — it depends only on the server platform, not on the caller, so
+    # moving it ahead of the origin/auth checks below changes no security
+    # property, only ordering.
     try:
         import fcntl
         import pty
@@ -100,15 +73,14 @@ async def terminal_ws(websocket: WebSocket) -> None:
         await websocket.close(code=1011, reason="Terminal not supported on this platform")
         return
 
-    # 3. Auth — same scheme as the logs WebSocket.
-    token = _extract_token(websocket)
-    try:
-        user = await resolve_websocket_user(settings, token)
-    except WebSocketAuthError as exc:
-        await websocket.close(code=exc.code, reason=exc.reason)
-        return
-    if settings.auth_enabled and not user.has_permission("execution.write"):
-        await websocket.close(code=1008, reason="Forbidden: insufficient permissions")
+    # 1a/1b/3. Origin check, rate limit, and auth — same shared handshake used
+    # by the execution log-streaming WebSocket (see dependencies.authenticate_websocket).
+    # CORS never sees a WebSocket handshake, so the origin check is the only thing
+    # standing between a page on any site the user happens to be visiting and this
+    # endpoint. The loopback check further down does not help there: that page's
+    # connection *is* loopback.
+    user = await authenticate_websocket(websocket, settings, permission="execution.write")
+    if user is None:
         return
 
     # When auth is disabled there is no per-user permission to enforce, so a remote

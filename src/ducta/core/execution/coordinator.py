@@ -31,6 +31,7 @@ from loguru import logger  # type: ignore
 
 from ducta.core.errors import NodeTimeoutError, PipelineExecutionError
 from ducta.core.execution.ml_builder import MLContextBuilder
+from ducta.core.execution.output import report_node_failure
 from ducta.core.execution.state import ThreadSafeExecutionState
 from ducta.core.ledger import ledger_for
 from ducta.core.settings import CoreSettings
@@ -382,18 +383,15 @@ class ParallelCoordinator:
             "config": node_info.get("config", {}),
         }
         execution_state.mark_gate_blocked(node_name, info)
-        descendants = self._transitive_descendants(node_name, dag)
-        for dep in descendants:
-            reason = f"skipped: upstream quality gate blocked at '{node_name}'"
-            execution_state.mark_skipped(dep, reason)
-            self._record_trace(dep, "skipped", reason)
-
-        logger.warning(
-            "Quality gate blocked node '{}' (behavior=skip_downstream); skipping {} "
-            "descendant(s): {}",
+        self._cascade_skip(
             node_name,
-            len(descendants),
-            sorted(descendants),
+            dag,
+            execution_state,
+            reason_fn=lambda dep: f"skipped: upstream quality gate blocked at '{node_name}'",
+            log_message=(
+                "Quality gate blocked node '{}' (behavior=skip_downstream); skipping {} "
+                "descendant(s): {}"
+            ),
         )
         return False
 
@@ -418,19 +416,40 @@ class ParallelCoordinator:
         # "failed". Same division of labour as _handle_gate_block: the node's
         # own trace belongs to the runner, the cascade below belongs here.
 
-        descendants = self._transitive_descendants(node_name, dag)
-        for dep in descendants:
-            dep_reason = f"skipped: missing inputs — upstream node '{node_name}' skipped"
-            execution_state.mark_skipped(dep, dep_reason)
-            self._record_trace(dep, "skipped", dep_reason)
-
-        logger.warning(
-            "Node '{}' skipped (missing dependencies); skipping {} descendant(s): {}",
+        self._cascade_skip(
             node_name,
-            len(descendants),
-            sorted(descendants),
+            dag,
+            execution_state,
+            reason_fn=lambda dep: (
+                f"skipped: missing inputs — upstream node '{node_name}' skipped"
+            ),
+            log_message="Node '{}' skipped (missing dependencies); skipping {} descendant(s): {}",
         )
         return False
+
+    def _cascade_skip(
+        self,
+        node_name: str,
+        dag: Dict[str, Set[str]],
+        execution_state: ThreadSafeExecutionState,
+        reason_fn: Callable[[str], str],
+        log_message: str,
+    ) -> Set[str]:
+        """Mark every transitive descendant of ``node_name`` as skipped and
+        record its trace, then log a summary.
+
+        Shared by ``_handle_gate_block`` and ``_handle_missing_deps_skip``,
+        which previously each carried an identical copy of this loop —
+        differing only in the per-descendant skip reason and the log message.
+        """
+        descendants = self._transitive_descendants(node_name, dag)
+        for dep in descendants:
+            reason = reason_fn(dep)
+            execution_state.mark_skipped(dep, reason)
+            self._record_trace(dep, "skipped", reason)
+
+        logger.warning(log_message, node_name, len(descendants), sorted(descendants))
+        return descendants
 
     def _record_trace(self, node_name: str, status: str, error: Optional[str]) -> None:
         """Append a node outcome to ``context._run_node_details`` (for the certificate).
@@ -526,14 +545,7 @@ class ParallelCoordinator:
         }
         execution_state.mark_failed(node_name, error_info, exception=error)
 
-        try:
-            from ducta.console.ux.error_analyzer import format_error_for_developer
-            from ducta.console.ux.rich_logger import RichLoggerManager
-
-            console = RichLoggerManager.get_console()
-            format_error_for_developer(error, node_name, console)
-        except Exception:
-            logger.error("Node '{}' failed: {}", node_name, error)
+        report_node_failure(error, node_name)
 
     def _find_newly_ready_nodes(
         self,
@@ -588,11 +600,20 @@ class ParallelCoordinator:
         for future in futures:
             if not future.done():
                 node_info = future_to_info.get(future)
-                if node_info:
-                    logger.warning(
-                        "Cancelling unfinished future for node '{}'",
-                        node_info["node_name"],
-                    )
+                node_name = node_info["node_name"] if node_info else "<unknown>"
+                logger.warning("Cancelling unfinished future for node '{}'", node_name)
+                # `cancel()` is a no-op on a future that already started, and a
+                # thread cannot be killed: this node keeps running — still
+                # writing datasets and still appending to the ledger's
+                # fingerprint dicts — after the certificate for this run has
+                # been sealed. That makes the certificate's account of the run
+                # incomplete by construction, so it has to say so instead of
+                # being sealed as if the node had never existed.
+                self._ledger.note_gap(
+                    f"node '{node_name}' was still running when the run ended; its "
+                    "outputs and fingerprints may be missing from this certificate, "
+                    "and it may have kept writing after the certificate was sealed"
+                )
                 try:
                     future.cancel()
                 except Exception:

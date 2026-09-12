@@ -22,6 +22,7 @@ import atexit
 import bisect
 import json
 import math
+import operator
 import threading
 import weakref
 from collections import OrderedDict, defaultdict, deque
@@ -58,6 +59,18 @@ DEFAULT_METRIC_BUFFER_SIZE = 100
 DEFAULT_STALE_RUN_AGE_SECONDS = 3600.0  # 1 hour
 DEFAULT_MAX_METRICS_PER_KEY = 10000  # Max metrics per key in memory (rolling window)
 DEFAULT_MAX_METRICS_PER_RUN = 100000  # Absolute limit per run
+
+# Comparison operators accepted in metric filters (search_runs / _compare).
+# `operator.gt` etc. work equally well applied to a scalar (_compare) or a
+# pandas Series (_search_runs_optimized) — shared so the two call sites can't
+# support a different operator set from each other.
+_METRIC_OPS = {
+    ">": operator.gt,
+    "<": operator.lt,
+    ">=": operator.ge,
+    "<=": operator.le,
+    "==": operator.eq,
+}
 
 
 class MetricRollingWindow:
@@ -559,14 +572,19 @@ class ExperimentTracker:
             end = end.replace(tzinfo=timezone.utc)
         return (end - start).total_seconds()
 
-    def _end_run_internal(self, run_id: str, status: RunStatus) -> Optional[Run]:
-        """End run without acquiring lock (for internal use)."""
-        if run_id not in self._active_runs:
-            return None
+    def _finalize_run_state(self, run: "Run", status: RunStatus) -> None:
+        """Set status/timestamps/duration and flush metrics + final snapshot.
 
-        run = self._active_runs[run_id]
+        Shared by ``end_run`` and ``_end_run_internal``, which differ only in
+        what happens *after* this: ``end_run`` lets a persist failure raise
+        (the run stays active so the caller can retry), while
+        ``_end_run_internal`` logs and swallows it (used by cleanup loops that
+        must not abort over one bad run). Neither `_flush_metrics` nor
+        `_write_final_metrics_snapshot` raises — both are best-effort and
+        handle their own errors internally — so this part is safe to share
+        unconditionally.
+        """
         now = datetime.now(timezone.utc).isoformat()
-
         run.status = status
         run.updated_at = now
         run.end_time = now
@@ -574,8 +592,32 @@ class ExperimentTracker:
         if run.start_time:
             run.duration_seconds = self._duration_seconds(run.start_time, now)
 
-        self._flush_metrics(run_id)
+        self._flush_metrics(run.run_id)
         self._write_final_metrics_snapshot(run)
+
+    def _forget_run(self, run_id: str) -> None:
+        """Drop a run's auxiliary per-run bookkeeping (metric flush cursors/
+        counters). Called whenever a run leaves ``_active_runs``, whatever the
+        reason (ended, cleaned up as stale, or explicitly deleted).
+        """
+        self._metric_counts.pop(run_id, None)
+        self._total_metric_counts.pop(run_id, None)
+        self._last_flushed_index.pop(run_id, None)
+        self._last_seen_evictions.pop(run_id, None)
+
+    def _record_run_outcome(self, status: RunStatus) -> None:
+        if status == RunStatus.COMPLETED:
+            self._total_runs_completed += 1
+        else:
+            self._total_runs_failed += 1
+
+    def _end_run_internal(self, run_id: str, status: RunStatus) -> Optional[Run]:
+        """End run without acquiring lock (for internal use)."""
+        if run_id not in self._active_runs:
+            return None
+
+        run = self._active_runs[run_id]
+        self._finalize_run_state(run, status)
 
         try:
             run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
@@ -585,15 +627,8 @@ class ExperimentTracker:
             logger.error(f"Failed to persist run {run_id}: {e}")
 
         del self._active_runs[run_id]
-        self._metric_counts.pop(run_id, None)
-        self._total_metric_counts.pop(run_id, None)
-        self._last_flushed_index.pop(run_id, None)
-        self._last_seen_evictions.pop(run_id, None)
-
-        if status == RunStatus.COMPLETED:
-            self._total_runs_completed += 1
-        else:
-            self._total_runs_failed += 1
+        self._forget_run(run_id)
+        self._record_run_outcome(status)
 
         return run
 
@@ -755,39 +790,18 @@ class ExperimentTracker:
         """
         with self._runs_lock:
             run = self._get_active_run(run_id)
+            self._finalize_run_state(run, status)
 
-            now = datetime.now(timezone.utc).isoformat()
-            run.status = status
-            run.updated_at = now
-            run.end_time = now
-
-            if run.start_time:
-                run.duration_seconds = self._duration_seconds(run.start_time, now)
-
-            # Final incremental flush + consolidated snapshot, before the run
-            # object (and its in-memory metrics) is discarded below.
-            self._flush_metrics(run_id)
-            self._write_final_metrics_snapshot(run)
-
-            # Persist run to storage
+            # Persist run to storage. Unlike _end_run_internal, a failure here
+            # is allowed to raise: the run stays in _active_runs so the caller
+            # can retry end_run() instead of losing track of it silently.
             run_path = f"{self.tracking_path}/runs/{run.experiment_id}/{run_id}.json"
             self.storage.write_json(run.to_dict(), run_path, mode="overwrite")
-
-            # Update runs index
             self._update_runs_index(run)
 
-            # Remove from active runs
             del self._active_runs[run_id]
-            self._metric_counts.pop(run_id, None)
-            self._total_metric_counts.pop(run_id, None)  # B-02: prevent memory leak
-            self._last_flushed_index.pop(run_id, None)
-            self._last_seen_evictions.pop(run_id, None)
-
-            # Update statistics
-            if status == RunStatus.COMPLETED:
-                self._total_runs_completed += 1
-            else:
-                self._total_runs_failed += 1
+            self._forget_run(run_id)
+            self._record_run_outcome(status)
 
             logger.info(f"Ended run {run.name} (ID: {run_id}) with status {status.value}")
             return run
@@ -847,10 +861,7 @@ class ExperimentTracker:
 
         with self._runs_lock:
             self._active_runs.pop(run_id, None)
-            self._metric_counts.pop(run_id, None)
-            self._total_metric_counts.pop(run_id, None)
-            self._last_flushed_index.pop(run_id, None)
-            self._last_seen_evictions.pop(run_id, None)
+            self._forget_run(run_id)
 
         logger.info(f"Deleted run {run_id}")
 
@@ -942,15 +953,8 @@ class ExperimentTracker:
         return pd.DataFrame(rows)
 
     def _compare(self, value: float, op: str, threshold: float) -> bool:
-        ops = {
-            ">": lambda a, b: a > b,
-            "<": lambda a, b: a < b,
-            ">=": lambda a, b: a >= b,
-            "<=": lambda a, b: a <= b,
-            "==": lambda a, b: a == b,
-        }
         try:
-            return ops[op](value, threshold)
+            return _METRIC_OPS[op](value, threshold)
         except KeyError:
             raise ValueError(f"Unsupported operator: {op}")
 
@@ -997,18 +1001,9 @@ class ExperimentTracker:
                 # Metric not in index, fallback to full scan
                 raise ValueError(f"Metric {metric_name} not in index")
 
-            if op == ">":
-                metrics_df = metrics_df[metrics_df[col_name] > threshold]
-            elif op == "<":
-                metrics_df = metrics_df[metrics_df[col_name] < threshold]
-            elif op == ">=":
-                metrics_df = metrics_df[metrics_df[col_name] >= threshold]
-            elif op == "<=":
-                metrics_df = metrics_df[metrics_df[col_name] <= threshold]
-            elif op == "==":
-                metrics_df = metrics_df[metrics_df[col_name] == threshold]
-            else:
+            if op not in _METRIC_OPS:
                 raise ValueError(f"Unsupported operator: {op}")
+            metrics_df = metrics_df[_METRIC_OPS[op](metrics_df[col_name], threshold)]
 
         return metrics_df["run_id"].tolist()
 

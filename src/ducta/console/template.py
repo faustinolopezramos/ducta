@@ -36,10 +36,6 @@ try:
 except ImportError:
     HAS_YAML = False
 
-# Path constants to avoid duplicated literals
-DATA_BRONZE = "data/bronze"
-DATA_SILVER = "data/silver"
-DATA_GOLD = "data/gold"
 PIPELINES_ETL_MODULE = "pipelines.etl"
 _TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
 
@@ -48,6 +44,7 @@ class TemplateType(Enum):
     """Available template types for project generation."""
 
     MEDALLION_BASIC = "medallion_basic"
+    STREAMING_BASIC = "streaming_basic"
 
 
 class TemplateError(DuctaError):
@@ -60,6 +57,15 @@ class TemplateError(DuctaError):
 class TemplateFactory:
     """Factory for creating template instances."""
 
+    #: One place naming every template. The registry and the listing are derived
+    #: from it, so adding a template cannot leave `--list-templates` behind.
+    @staticmethod
+    def _registry() -> Dict[TemplateType, Any]:
+        return {
+            TemplateType.MEDALLION_BASIC: MedallionBasicTemplate,
+            TemplateType.STREAMING_BASIC: StreamingBasicTemplate,
+        }
+
     @staticmethod
     def create_template(
         template_type: TemplateType,
@@ -67,24 +73,35 @@ class TemplateFactory:
         config_format: ConfigFormat = ConfigFormat.YAML,
     ) -> Any:
         """Create a template instance based on the given type."""
-        if template_type == TemplateType.MEDALLION_BASIC:
-            return MedallionBasicTemplate(project_name, config_format)
-        raise TemplateError(f"Unknown template type: {template_type}")
+        template_class = TemplateFactory._registry().get(template_type)
+        if template_class is None:
+            raise TemplateError(f"Unknown template type: {template_type}")
+        return template_class(project_name, config_format)
 
     @staticmethod
     def list_available_templates() -> List[Dict[str, str]]:
         """List all available templates with their metadata."""
         return [
             {
-                "type": "medallion_basic",
-                "name": "Medallion Basic",
-                "description": "Functional Medallion template: minimal, clean, and production-ready",
-            },
+                "type": template_type.value,
+                "name": template_class.TEMPLATE_NAME,
+                "description": template_class.TEMPLATE_DESCRIPTION,
+            }
+            for template_type, template_class in TemplateFactory._registry().items()
         ]
 
 
-class MedallionBasicTemplate:
-    """Functional Medallion template: minimal, clean, and production-ready."""
+class BaseTemplate:
+    """What every project scaffold shares, whatever kind of pipeline it ships.
+
+    The env_config layout, the base global config and the file-extension map
+    are properties of a *Ducta project*, not of any one template. Keeping them
+    here is what makes a second template a matter of describing its pipeline
+    rather than restating the project structure around it.
+
+    A subclass supplies the five config documents (``generate_*_config``), its
+    sample data, and the module of Python its nodes point at.
+    """
 
     # File extension mapping by format
     FORMAT_EXTENSIONS = {
@@ -93,10 +110,28 @@ class MedallionBasicTemplate:
         ConfigFormat.TOML: ".toml",
     }
 
+    #: Shown by `ducta template --list-templates`.
+    TEMPLATE_NAME = "Base"
+    TEMPLATE_DESCRIPTION = ""
+    #: Dotted module the generated nodes import their functions from, and the
+    #: file the generator writes that module to.
+    SAMPLE_MODULE = "pipelines.etl"
+    SAMPLE_MODULE_PATH = ("pipelines", "etl.py")
+    #: The pipeline `ducta start --pipeline <name>` should run first.
+    DEFAULT_PIPELINE = "etl"
+
     def __init__(self, project_name: str, config_format: ConfigFormat = ConfigFormat.YAML):
         self.project_name = project_name
         self.config_format = config_format
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    def generate_sample_code(self) -> Optional[str]:
+        """The Python module backing this template's nodes, or None if it needs none."""
+        return None
+
+    def get_sample_data(self) -> Optional[str]:
+        """CSV seed data written to ``data/input.csv``, or None if unused."""
+        return None
 
     def generate_settings_json(self) -> Dict[str, Any]:
         """Generate environment configuration with paths matching the format."""
@@ -105,24 +140,24 @@ class MedallionBasicTemplate:
         # Common path patterns for each environment
         config_paths = {
             "base": {
-                "global_settings_path": f"config/global_settings{file_ext}",
+                "global_config_path": f"config/global_config{file_ext}",
                 "pipelines_config_path": f"config/pipelines{file_ext}",
                 "nodes_config_path": f"config/nodes{file_ext}",
                 "input_config_path": f"config/input{file_ext}",
                 "output_config_path": f"config/output{file_ext}",
             },
             "dev": {
-                "global_settings_path": f"config/dev/global_settings{file_ext}",
+                "global_config_path": f"config/dev/global_config{file_ext}",
                 "input_config_path": f"config/dev/input{file_ext}",
                 "output_config_path": f"config/dev/output{file_ext}",
             },
             "sandbox": {
-                "global_settings_path": f"config/sandbox/global_settings{file_ext}",
+                "global_config_path": f"config/sandbox/global_config{file_ext}",
                 "input_config_path": f"config/sandbox/input{file_ext}",
                 "output_config_path": f"config/sandbox/output{file_ext}",
             },
             "prod": {
-                "global_settings_path": f"config/prod/global_settings{file_ext}",
+                "global_config_path": f"config/prod/global_config{file_ext}",
                 "input_config_path": f"config/prod/input{file_ext}",
                 "output_config_path": f"config/prod/output{file_ext}",
             },
@@ -130,15 +165,20 @@ class MedallionBasicTemplate:
 
         return {"base_path": ".", "env_config": config_paths}
 
-    def get_common_global_settings(self) -> Dict[str, Any]:
-        """Get common global settings for all templates."""
-        return {
+    #: Stamped into global_config for documentation/provenance. Subclasses
+    #: override to describe their own shape.
+    TEMPLATE_TYPE = "base"
+    ARCHITECTURE = "generic"
+    LAYERS: List[str] = []
+
+    def get_common_global_config(self) -> Dict[str, Any]:
+        """Get common global config for all templates."""
+        settings: Dict[str, Any] = {
             "project_name": self.project_name,
             "version": "1.0.0",
             "created_at": self.timestamp,
-            "template_type": "medallion_basic",
-            "architecture": "medallion",
-            "layers": ["bronze", "silver", "gold"],
+            "template_type": self.TEMPLATE_TYPE,
+            "architecture": self.ARCHITECTURE,
             "mode": "local",  # change to 'databricks' or 'distributed' if needed
             # Base dirs for ${input_path}/${output_path} interpolation in the
             # I/O catalogs; required by Context validation.
@@ -147,9 +187,27 @@ class MedallionBasicTemplate:
             "max_parallel_nodes": 4,
             "fail_on_error": True,
         }
+        if self.LAYERS:
+            settings["layers"] = list(self.LAYERS)
+        return settings
 
-    def generate_global_settings(self) -> Dict[str, Any]:
-        base_settings = self.get_common_global_settings()
+
+class MedallionBasicTemplate(BaseTemplate):
+    """Functional Medallion template: minimal, clean, and production-ready."""
+
+    TEMPLATE_NAME = "Medallion Basic"
+    TEMPLATE_DESCRIPTION = (
+        "Batch ETL across bronze/silver/gold, with quality gates that block on real defects"
+    )
+    TEMPLATE_TYPE = "medallion_basic"
+    ARCHITECTURE = "medallion"
+    LAYERS = ["bronze", "silver", "gold"]
+    SAMPLE_MODULE = PIPELINES_ETL_MODULE
+    SAMPLE_MODULE_PATH = ("pipelines", "etl.py")
+    DEFAULT_PIPELINE = "etl"
+
+    def generate_global_config(self) -> Dict[str, Any]:
+        base_settings = self.get_common_global_config()
         base_settings.update(
             {
                 "default_date": "2025-01-01",
@@ -358,6 +416,311 @@ class MedallionBasicTemplate:
         return "\n".join([header, *rows]) + "\n"
 
 
+class StreamingBasicTemplate(BaseTemplate):
+    """A working Structured Streaming project: file source -> transform -> sink.
+
+    Streaming is the type whose configuration is least guessable from the batch
+    scaffold, and until now it had no scaffold at all. Three things work
+    differently here and each is wrong in a way that is hard to diagnose from a
+    blank file:
+
+    * a streaming node's function is a **dict** naming a registered transform,
+      not a ``module``/``function`` pair, and it is called ``fn(df)`` or
+      ``fn(df, params)`` — not with ``start_date``/``end_date``;
+    * ordering between streaming nodes uses ``depends_on``;
+    * every node needs its own ``checkpoint_location``, and two nodes sharing
+      one corrupts both.
+
+    The source is ``file_stream`` on purpose: it runs with nothing installed but
+    Spark, so the scaffold works before anyone stands up Kafka. The
+    ``kafka``-shaped alternative is written out in the generated README.
+    """
+
+    TEMPLATE_NAME = "Streaming Basic"
+    TEMPLATE_DESCRIPTION = (
+        "Structured Streaming: file source, registered transforms, per-node checkpoints"
+    )
+    TEMPLATE_TYPE = "streaming_basic"
+    ARCHITECTURE = "streaming"
+    LAYERS = ["bronze", "silver"]
+    SAMPLE_MODULE = "pipelines.transforms"
+    SAMPLE_MODULE_PATH = ("pipelines", "transforms.py")
+    DEFAULT_PIPELINE = "events_stream"
+
+    def generate_global_config(self) -> Dict[str, Any]:
+        settings = self.get_common_global_config()
+        settings.update(
+            {
+                "spark_master": "local[4]",
+                # Imported and called before any streaming pipeline starts, so
+                # the transforms below are in the registry by the time the nodes
+                # that name them are built. Without this the CLI needs
+                # --transforms-modules on every run.
+                "streaming_transform_modules": [self.SAMPLE_MODULE],
+                # Long-running queries: no run certificate is emitted for an
+                # async streaming pipeline, so leaving this on costs nothing and
+                # covers the `--mode sync` case.
+                "max_streaming_pipelines": 5,
+            }
+        )
+        return settings
+
+    def generate_pipelines_config(self) -> Dict[str, Any]:
+        return {
+            "events_stream": {
+                "description": "Ingest a file stream, clean it, and land it as Delta-ready Parquet",
+                "type": "streaming",
+                "nodes": ["ingest_events", "clean_events"],
+                # Streaming pipelines are not date-ranged: they run until stopped.
+                "requires_dates": False,
+            },
+        }
+
+    def generate_nodes_config(self) -> Dict[str, Any]:
+        """Two streaming nodes, wired the way streaming nodes actually wire up.
+
+        Note what is *not* here: no ``module``/``function``, no ``dependencies``.
+        A streaming node names a transform registered in the registry, and orders
+        itself with ``depends_on``.
+        """
+        return {
+            "ingest_events": {
+                "description": "Bronze: land the raw event stream exactly as it arrives",
+                "type": "streaming",
+                "input": {
+                    "format": "file_stream",
+                    # `file_format`, not options.format: the reader passes
+                    # options straight to Spark, and Spark has no "format"
+                    # option — it would be accepted and ignored.
+                    "file_format": "json",
+                    # Top level, not inside options, and required: Structured
+                    # Streaming cannot infer a schema from a stream. Get it
+                    # wrong and you get an empty stream, not an error.
+                    "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
+                    "options": {
+                        # The path belongs in options; the top-level spelling is
+                        # deprecated and warns.
+                        "path": "${input_path}/events",
+                        # One file per micro-batch, so the demo shows several
+                        # batches instead of swallowing every seed file at once.
+                        "maxFilesPerTrigger": 1,
+                    },
+                },
+                "output": {
+                    "format": "parquet",
+                    "path": "${output_path}/${environment}/bronze/events",
+                },
+                "streaming": {
+                    # Per node. Two nodes sharing a checkpoint corrupt each
+                    # other's offsets; delete this directory to replay from the start.
+                    "checkpoint_location": "${output_path}/${environment}/_ckpt/ingest_events",
+                    "trigger": {"type": "processing_time", "interval": "5 seconds"},
+                    "output_mode": "append",
+                },
+            },
+            "clean_events": {
+                "description": "Silver: drop incomplete events and stamp an ingest time",
+                "type": "streaming",
+                # Ordering between streaming nodes. Not `dependencies` — that is
+                # the batch/ML key. Ducta reads both, but `depends_on` is what
+                # the streaming engine orders its startup waves by.
+                "depends_on": ["ingest_events"],
+                "input": {
+                    "format": "file_stream",
+                    "file_format": "parquet",
+                    "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
+                    "options": {"path": "${output_path}/${environment}/bronze/events"},
+                },
+                # A dict naming a transform in the registry by its `key`, with
+                # its params. `module` makes the query manager import it and call
+                # register_transforms() before the lookup, so the node works even
+                # if global_config.streaming_transform_modules is removed.
+                "function": {
+                    "key": "clean_events",
+                    "module": self.SAMPLE_MODULE,
+                    "params": {"min_amount": 0.0},
+                },
+                "output": {
+                    "format": "parquet",
+                    "path": "${output_path}/${environment}/silver/events",
+                },
+                "streaming": {
+                    "checkpoint_location": "${output_path}/${environment}/_ckpt/clean_events",
+                    "trigger": {"type": "processing_time", "interval": "5 seconds"},
+                    "output_mode": "append",
+                },
+            },
+        }
+
+    def generate_input_config(self) -> Dict[str, Any]:
+        """Streaming nodes carry their I/O inline, so the catalogs stay empty.
+
+        Kept as valid empty documents because Context requires all five.
+        """
+        return {}
+
+    def generate_output_config(self) -> Dict[str, Any]:
+        return {}
+
+    def get_sample_data(self) -> Optional[str]:
+        """No CSV seed: the generator writes JSON events into the watched folder."""
+        return None
+
+    #: Seed events dropped into ``data/events/`` so the stream has something to
+    #: read on the first run. Two carry a null amount, so `clean_events` has
+    #: real work to do and the row counts visibly differ between layers.
+    SAMPLE_EVENTS = [
+        '{"event_id": "e1", "category": "electronics", "amount": 42.5, "ts": "2026-01-01T10:00:00"}',
+        '{"event_id": "e2", "category": "grocery", "amount": 7.25, "ts": "2026-01-01T10:00:05"}',
+        '{"event_id": "e3", "category": "apparel", "amount": null, "ts": "2026-01-01T10:00:09"}',
+        '{"event_id": "e4", "category": "home", "amount": 88.0, "ts": "2026-01-01T10:00:14"}',
+        '{"event_id": "e5", "category": "toys", "amount": null, "ts": "2026-01-01T10:00:21"}',
+    ]
+
+    def generate_sample_code(self) -> Optional[str]:
+        return '''"""
+Streaming transforms for the `events_stream` pipeline.
+
+A streaming transform is NOT a batch node function. It takes the streaming
+DataFrame and returns one; it gets no ``start_date``/``end_date``, because a
+stream has no date range. Two shapes are accepted:
+
+    def fn(df)            -> DataFrame
+    def fn(df, params)    -> DataFrame     # `params` is the node's function.params
+
+Nodes reference a transform by the name it was registered under, not by import
+path:
+
+    function: {name: "clean_events", params: {min_amount: 0.0}}
+
+`register_transforms` is called automatically before the pipeline starts,
+because `global_config.streaming_transform_modules` names this module. Run
+`ducta stream run --pipeline events_stream --config environment.yaml` and drop
+another .json file into data/events/ to watch it picked up.
+"""
+from typing import Any, Dict
+
+from loguru import logger
+
+
+def clean_events(df: Any, params: Dict[str, Any] | None = None) -> Any:
+    """Drop events with no amount, and stamp when Ducta saw them.
+
+    This is where a streaming job earns its silver layer: the bronze node lands
+    everything, and this one decides what counts as usable. The two seed events
+    with a null amount are dropped here, so bronze and silver visibly differ.
+    """
+    from pyspark.sql import functions as F
+
+    params = params or {}
+    min_amount = float(params.get("min_amount", 0.0))
+
+    cleaned = (
+        df.filter(F.col("amount").isNotNull())
+        .filter(F.col("amount") >= F.lit(min_amount))
+        .withColumn("ingested_at", F.current_timestamp())
+    )
+    logger.info("clean_events: filtering nulls and amounts below {}", min_amount)
+    return cleaned
+
+
+def register_transforms(registry: Any) -> None:
+    """Called by Ducta before the pipeline starts.
+
+    The registry maps a name to a callable; `function: {name: ...}` in
+    config/nodes.yaml is what looks it up.
+    """
+    registry.register("clean_events", clean_events)
+    logger.info("Registered streaming transforms: clean_events")
+'''
+
+    def generate_readme(self, ext: str) -> str:
+        """README for a streaming project, which runs differently from a batch one."""
+        return f"""# {self.project_name}
+
+A **Structured Streaming** pipeline built with **Ducta**.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+
+# Start the stream (runs until you stop it)
+ducta stream run --config environment{ext} --pipeline events_stream --env dev
+
+# In another shell: watch it, then stop it
+ducta stream status --config environment{ext} --env dev
+ducta stream stop   --config environment{ext} --env dev --execution-id <id>
+```
+
+`data/events/` ships five seed events. Two have a null `amount`, so the silver
+layer visibly drops rows the bronze layer kept. Drop another `.json` file into
+that folder while the stream runs and watch it get picked up.
+
+## What is different from a batch pipeline
+
+Three things, and each is hard to guess from the batch scaffold:
+
+**1. A streaming node's function is a dict, not `module` + `function`.**
+
+```yaml
+function: {{key: "clean_events", module: "pipelines.transforms", params: {{min_amount: 0.0}}}}
+```
+
+It names a transform registered in `pipelines/transforms.py`, and it is called
+`fn(df)` or `fn(df, params)` — no `start_date`/`end_date`, because a stream has
+no date range. `global_config.streaming_transform_modules` makes Ducta import
+and register them for you.
+
+**2. Ordering uses `depends_on`, not `dependencies`.**
+
+```yaml
+clean_events:
+  depends_on: ["ingest_events"]
+```
+
+**3. Every node needs its own `checkpoint_location`.**
+
+Two nodes sharing one corrupt each other's offsets. Delete a node's checkpoint
+directory to replay its source from the beginning.
+
+## Switching the source to Kafka
+
+Replace the `input` block of `ingest_events`:
+
+```yaml
+input:
+  format: kafka
+  options:
+    kafka.bootstrap.servers: "localhost:9092"
+    subscribe: "events"
+    startingOffsets: "latest"
+```
+
+Kafka delivers `key`/`value` as bytes, so your transform casts them:
+`df.selectExpr("CAST(value AS STRING) as json")` and then `from_json`.
+
+## What streaming does *not* get
+
+Quality checks, data fingerprints and run certificates are batch/ML features.
+A streaming pipeline started with `--mode async` emits no run certificate: it
+has no end to certify. Use `--mode sync` with a `once` or `availableNow`
+trigger if you want a terminating run.
+
+## Layout
+
+```
+{self.project_name}/
+├── config/                  # the five config documents, per environment
+├── pipelines/transforms.py  # your streaming transforms + register_transforms
+├── data/events/             # the watched source directory
+└── environment{ext}         # which config file each --env resolves to
+```
+
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""
+
+
 class TemplateGenerator:
     """Generates complete project templates with directory structure."""
 
@@ -394,6 +757,7 @@ class TemplateGenerator:
 
         # Create template instance
         template = TemplateFactory.create_template(template_type, project_name, self.config_format)
+        self.template = template
 
         # Create directory structure
         self._create_directory_structure(developer_sandboxes)
@@ -403,7 +767,7 @@ class TemplateGenerator:
 
         # Generate sample code if requested
         if create_sample_code:
-            self._generate_sample_code()
+            self._generate_sample_code(template)
 
         # Generate additional project files
         self._generate_project_files(template)
@@ -443,7 +807,7 @@ class TemplateGenerator:
     ) -> None:
         """Generate all configuration files."""
         configs = {
-            "global_settings": template.generate_global_settings(),
+            "global_config": template.generate_global_config(),
             "pipelines": template.generate_pipelines_config(),
             "nodes": template.generate_nodes_config(),
             "input": template.generate_input_config(),
@@ -453,12 +817,7 @@ class TemplateGenerator:
         # Generate main settings file with format-specific writer
         settings_file = self.output_path / self._settings_filename
 
-        if self.config_format == ConfigFormat.YAML:
-            self._write_yaml_file(settings_file, template.generate_settings_json())
-        elif self.config_format == ConfigFormat.TOML:
-            self._write_toml_file(settings_file, template.generate_settings_json())
-        else:
-            self._write_json_file(settings_file, template.generate_settings_json())
+        self._writer(settings_file, template.generate_settings_json())
 
         # Generate configuration files for each environment
         environments = ["base", "dev", "sandbox", "prod"]
@@ -506,9 +865,27 @@ class TemplateGenerator:
         with open(file_path, "wb") as f:
             tomli_w.dump(data, f)
 
-    def _generate_sample_code(self) -> None:
-        """Generate the sample pipeline modules."""
-        self._generate_etl_sample_code()
+    def _generate_sample_code(self, template: Optional[BaseTemplate] = None) -> None:
+        """Write the Python module this template's nodes point at.
+
+        Asks the template for its own code rather than hard-coding the ETL one:
+        a streaming template's module is a transform registry, not a set of
+        batch node functions, and they are not interchangeable.
+        """
+        code = template.generate_sample_code() if template is not None else None
+        if code is None:
+            # No template-supplied module: the medallion ETL is the historical
+            # default, kept so an older caller still scaffolds something usable.
+            self._generate_etl_sample_code()
+            return
+
+        package, filename = template.SAMPLE_MODULE_PATH
+        package_dir = self.output_path / package
+        package_dir.mkdir(parents=True, exist_ok=True)
+        init_file = package_dir / "__init__.py"
+        if not init_file.exists():
+            self._write_text_file(init_file, "")
+        self._write_text_file(package_dir / filename, code)
 
     def _generate_etl_sample_code(self) -> None:
         """Generate a single, focused ETL pipeline module."""
@@ -675,7 +1052,7 @@ Steps to activate a custom check
    ``@register_check("your_check_name")``.
 2. Implement the ``run()`` method and return a ``CheckResult``.
 3. Add the module path to ``quality.extensions`` in
-   ``config/global_settings.yaml``:
+   ``config/global_config.yaml``:
 
    .. code-block:: yaml
 
@@ -792,7 +1169,15 @@ class PositiveValuesCheck(BaseQualityCheck):
         # The scaffold honours --format, so the README must name the files that
         # actually exist on disk: config/input.json, not config/input.yaml.
         ext = self._file_extension
-        # README.md
+        # README.md — templates that describe a different pipeline supply their
+        # own; the medallion text below would otherwise tell a streaming user to
+        # run a batch pipeline that does not exist in their project.
+        custom_readme = getattr(template, "generate_readme", None)
+        if callable(custom_readme):
+            self._write_text_file(self.output_path / "README.md", custom_readme(ext))
+            self._write_support_files(template)
+            return
+
         readme_content = f"""# {template.project_name}
 
 A medallion ETL pipeline built with **Ducta**.
@@ -843,7 +1228,7 @@ back to a passing run.
 ```
 {template.project_name}/
 ├── config/
-│   ├── global_settings{ext}  # project settings, quality profiles
+│   ├── global_config{ext}  # project settings, quality profiles
 │   ├── pipelines{ext}        # which nodes make up which pipeline
 │   ├── nodes{ext}            # per-node I/O, checks and gates
 │   ├── input{ext}            # where data is read from
@@ -884,6 +1269,10 @@ Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
         readme_file = self.output_path / "README.md"
         self._write_text_file(readme_file, readme_content)
 
+        self._write_support_files(template)
+
+    def _write_support_files(self, template: BaseTemplate) -> None:
+        """requirements, .gitignore and seed data — identical for every template."""
         # requirements.txt - minimal but complete
         # `ducta[spark]` rather than ducta + a loose pyspark pin: the extra is
         # what the project actually declares as compatible, and pinning pyspark
@@ -933,9 +1322,27 @@ spark-warehouse/
         gitignore_file = self.output_path / ".gitignore"
         self._write_text_file(gitignore_file, gitignore)
 
+        self._write_seed_data(template)
+
+    def _write_seed_data(self, template: BaseTemplate) -> None:
+        """Write whatever seed data this template's first run needs.
+
+        A batch template seeds one CSV the input catalog points at. A streaming
+        template seeds *files in a watched directory* — the stream has to have
+        something to pick up, and it arrives as separate files rather than one.
+        """
         sample_data = template.get_sample_data()
-        sample_data_file = self.output_path / "data" / "input.csv"
-        self._write_text_file(sample_data_file, sample_data)
+        if sample_data is not None:
+            self._write_text_file(self.output_path / "data" / "input.csv", sample_data)
+
+        events = getattr(template, "SAMPLE_EVENTS", None)
+        if events:
+            events_dir = self.output_path / "data" / "events"
+            events_dir.mkdir(parents=True, exist_ok=True)
+            # One file per event: `maxFilesPerTrigger: 1` then makes the demo
+            # show several micro-batches instead of swallowing everything in one.
+            for index, event in enumerate(events, start=1):
+                self._write_text_file(events_dir / f"event_{index:03d}.json", event + "\n")
 
     def _write_text_file(self, file_path: Path, content: str) -> None:
         """Write text file."""
@@ -1058,7 +1465,7 @@ class TemplateCommand:
 
     def _validate_config_format(self, format_str: str) -> Optional[int]:
         """Validate config format string."""
-        valid_formats = ["yaml", "json", "toml"]
+        valid_formats = [f.value for f in ConfigFormat]
         if format_str not in valid_formats:
             logger.error(
                 "Invalid format '{}'. Use one of: {}", format_str, ", ".join(valid_formats)
@@ -1084,7 +1491,7 @@ class TemplateCommand:
                 input(f"Output path (default: {default_output}): ").strip() or default_output
             )
 
-            valid_formats = ["yaml", "json", "toml"]
+            valid_formats = [f.value for f in ConfigFormat]
             print(f"\nConfig formats: {', '.join(valid_formats)}")
             config_format = self._prompt_config_format()
             if config_format is None:
@@ -1133,6 +1540,18 @@ class TemplateCommand:
             return None
         return config_format
 
+    @staticmethod
+    def _parse_enum_or_error(enum_cls, value: str, label: str, available_label: str):
+        """Parse *value* as *enum_cls*, or log the invalid value and its
+        allowed options under *label*/*available_label* and return ``None``."""
+        try:
+            return enum_cls(value)
+        except ValueError:
+            available = [member.value for member in enum_cls]
+            logger.error("Invalid {}: {}", label, value)
+            logger.info("Available {}: {}", available_label, ", ".join(available))
+            return None
+
     def _generate_template(
         self,
         template_type: str,
@@ -1144,20 +1563,16 @@ class TemplateCommand:
     ) -> int:
         """Generate template with specified parameters."""
         try:
-            try:
-                template_enum = TemplateType(template_type)
-            except ValueError:
-                available = [t.value for t in TemplateType]
-                logger.error("Invalid template type: {}", template_type)
-                logger.info("Available types: {}", ", ".join(available))
+            template_enum = self._parse_enum_or_error(
+                TemplateType, template_type, "template type", "types"
+            )
+            if template_enum is None:
                 return ExitCode.VALIDATION_ERROR.value
 
-            try:
-                format_enum = ConfigFormat(config_format)
-            except ValueError:
-                available = [f.value for f in ConfigFormat]
-                logger.error("Invalid config format: {}", config_format)
-                logger.info("Available formats: {}", ", ".join(available))
+            format_enum = self._parse_enum_or_error(
+                ConfigFormat, config_format, "config format", "formats"
+            )
+            if format_enum is None:
                 return ExitCode.VALIDATION_ERROR.value
 
             if not output_path:
@@ -1175,7 +1590,9 @@ class TemplateCommand:
                 template_enum, project_name, create_sample_code, sandbox_developers
             )
 
-            self._show_success_message(project_name, output_dir)
+            self._show_success_message(
+                project_name, output_dir, self.generator.template, self.generator._settings_filename
+            )
 
             return ExitCode.SUCCESS.value
 
@@ -1183,29 +1600,49 @@ class TemplateCommand:
             logger.error("Template generation failed: {}", e)
             return ExitCode.GENERAL_ERROR.value
 
-    def _show_success_message(self, project_name: str, output_dir: Path) -> None:
-        """Show success message with next steps."""
+    def _show_success_message(
+        self, project_name: str, output_dir: Path, template: "BaseTemplate", config_filename: str
+    ) -> None:
+        """Show success message with next steps, tailored to *template*'s
+        module path, default pipeline and run command — these differ between
+        a batch template (``ducta start``) and a streaming one (``ducta
+        stream run``)."""
         logger.success("✅ Project '{}' created successfully!", project_name)
         logger.info("📁 Location: {}", output_dir.absolute())
         logger.info("\n📋 Next steps:")
         logger.info("1️⃣  cd {}", output_dir)
         logger.info("2️⃣  pip install -r requirements.txt")
         logger.info("3️⃣  Update config/input.yaml and config/output.yaml for your data")
-        logger.info("4️⃣  Customize pipelines/etl.py for your business logic")
+        logger.info(
+            "4️⃣  Customize {} for your business logic", "/".join(template.SAMPLE_MODULE_PATH)
+        )
         logger.info("5️⃣  Update config/dev/input.yaml and output.yaml for dev environment")
 
         logger.info("\n🚀 Quick start:")
-        logger.info("   # Run the ETL pipeline")
-        logger.info("   ducta start -e dev -p etl")
-        logger.info("")
-        logger.info("   # Run specific node")
-        logger.info("   ducta start -e dev -p etl -n extract")
-        logger.info("")
-        logger.info("   # Debug mode")
-        logger.info("   ducta start -e dev -p etl --log-level DEBUG")
-        logger.info("")
-        logger.info("   # Validate config")
-        logger.info("   ducta start -e dev -p etl --validate-only")
+        pipeline = template.DEFAULT_PIPELINE
+        if template.ARCHITECTURE == "streaming":
+            logger.info("   # Start the stream (runs until you stop it)")
+            logger.info(
+                "   ducta stream run --config {} --pipeline {} --env dev", config_filename, pipeline
+            )
+            logger.info("")
+            logger.info("   # In another shell: watch it, then stop it")
+            logger.info("   ducta stream status --config {} --env dev", config_filename)
+            logger.info(
+                "   ducta stream stop   --config {} --env dev --execution-id <id>", config_filename
+            )
+        else:
+            logger.info("   # Run the {} pipeline", pipeline)
+            logger.info("   ducta start -e dev -p {}", pipeline)
+            logger.info("")
+            logger.info("   # Run specific node")
+            logger.info("   ducta start -e dev -p {} -n extract", pipeline)
+            logger.info("")
+            logger.info("   # Debug mode")
+            logger.info("   ducta start -e dev -p {} --log-level DEBUG", pipeline)
+            logger.info("")
+            logger.info("   # Validate config")
+            logger.info("   ducta start -e dev -p {} --validate-only", pipeline)
 
         logger.info("\n✨ Features ready to use:")
         logger.info("   ✓ Multi-format I/O (CSV → Parquet → CSV)")

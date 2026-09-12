@@ -49,7 +49,7 @@ class FakeContext:
         self,
         nodes_config: Optional[Dict[str, Dict[str, Any]]] = None,
         pipelines_config: Optional[Dict[str, Any]] = None,
-        global_settings: Optional[Dict[str, Any]] = None,
+        global_config: Optional[Dict[str, Any]] = None,
         input_config: Optional[Dict[str, Any]] = None,
         output_config: Optional[Dict[str, Any]] = None,
     ):
@@ -58,12 +58,12 @@ class FakeContext:
         self.pipelines = self.pipelines_config
         self.input_config = input_config or {}
         self.output_config = output_config or {}
-        self.global_settings = {
+        self.global_config = {
             "preflight_enabled": False,
             "enable_run_certificate": False,
             "mlops_enabled": False,
             "max_parallel_nodes": 4,
-            **(global_settings or {}),
+            **(global_config or {}),
         }
         self.env = "test"
         self.is_ml_layer = False

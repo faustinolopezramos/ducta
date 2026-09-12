@@ -193,6 +193,34 @@ class StorageBackend(ABC):
         """Get storage statistics (optional override)."""
         return {}
 
+    # ── Circuit breaker bookkeeping ─────────────────────────────────────────
+    # Shared by LocalStorageBackend and DatabricksStorageBackend (previously
+    # two byte-identical copies). Defensive `getattr` rather than assuming
+    # `self._circuit_breaker`/`self._stats` exist: this ABC has no `__init__`
+    # of its own, and a subclass (e.g. a test double) is not required to set
+    # them if it never calls these methods.
+
+    def _check_circuit_breaker(self) -> None:
+        """Check circuit breaker before operation."""
+        breaker = getattr(self, "_circuit_breaker", None)
+        if breaker:
+            breaker.check()
+
+    def _record_success(self) -> None:
+        """Record successful operation."""
+        breaker = getattr(self, "_circuit_breaker", None)
+        if breaker:
+            breaker.record_success()
+
+    def _record_failure(self, error: Exception) -> None:
+        """Record failed operation."""
+        stats = getattr(self, "_stats", None)
+        if isinstance(stats, dict):
+            stats["errors"] = stats.get("errors", 0) + 1
+        breaker = getattr(self, "_circuit_breaker", None)
+        if breaker:
+            breaker.record_failure(error)
+
 
 # Constants
 PARQUET_EXT = ".parquet"
@@ -295,22 +323,6 @@ class LocalStorageBackend(StorageBackend):
         except Exception as e:
             logger.error(f"Invalid path '{path}': {e}")
             raise ValueError(f"Invalid path '{path}': {e}") from e
-
-    def _check_circuit_breaker(self) -> None:
-        """Check circuit breaker before operation."""
-        if self._circuit_breaker:
-            self._circuit_breaker.check()
-
-    def _record_success(self) -> None:
-        """Record successful operation."""
-        if self._circuit_breaker:
-            self._circuit_breaker.record_success()
-
-    def _record_failure(self, error: Exception) -> None:
-        """Record failed operation."""
-        self._stats["errors"] += 1
-        if self._circuit_breaker:
-            self._circuit_breaker.record_failure(error)
 
     def _create_metadata(
         self,
@@ -752,22 +764,6 @@ class DatabricksStorageBackend(StorageBackend):
         if self._spark is None:
             self._init_spark_session()
         return self._spark
-
-    def _check_circuit_breaker(self) -> None:
-        """Check circuit breaker before operation."""
-        if self._circuit_breaker:
-            self._circuit_breaker.check()
-
-    def _record_success(self) -> None:
-        """Record successful operation."""
-        if self._circuit_breaker:
-            self._circuit_breaker.record_success()
-
-    def _record_failure(self, error: Exception) -> None:
-        """Record failed operation."""
-        self._stats["errors"] += 1
-        if self._circuit_breaker:
-            self._circuit_breaker.record_failure(error)
 
     def _get_volume_path(self, path: str) -> str:
         """Get the full Unity Catalog volume path.

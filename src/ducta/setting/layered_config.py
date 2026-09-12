@@ -62,13 +62,7 @@ def _load_manifest(path: Path) -> Optional[Dict]:
 
 
 def _relativize(config_value: str, layer_path: str) -> str:
-    """Normalize a layer's ``config`` path to be relative to its ``path``.
-
-    ``ducta.yaml`` layers commonly express ``config`` from the project root
-    (``config: bronze/config`` for ``path: bronze``); ``LayerConfig`` expects it
-    relative to the layer directory. Strips the leading layer prefix when
-    present, otherwise returns the value unchanged.
-    """
+    """Normalize a layer's ``config`` path to be relative to its ``path``."""
     config_path = Path(config_value)
     try:
         return str(config_path.relative_to(layer_path))
@@ -84,7 +78,7 @@ class LayerConfig:
         self.path = Path(config_dict.get("path", name))
         self.description = config_dict.get("description", "")
         self.depends_on = config_dict.get("depends_on", [])
-        self.global_settings = config_dict.get("global_settings", "global.yaml")
+        self.global_config = config_dict.get("global_config", "global.yaml")
         self.config_path = config_dict.get("config_path", "config")
 
     def get_config_paths(self, base_path: Path) -> Dict[str, Path]:
@@ -92,7 +86,7 @@ class LayerConfig:
         layer_path = base_path / self.path
 
         return {
-            "global_settings": layer_path / self.global_settings,
+            "global_config": layer_path / self.global_config,
             "pipelines_config": layer_path / self.config_path / "pipelines.yaml",
             "nodes_config": layer_path / self.config_path / "nodes.yaml",
             "input_config": layer_path / self.config_path / "input.yaml",
@@ -101,12 +95,7 @@ class LayerConfig:
         }
 
     def get_pipeline_names(self, base_path: Path) -> Set[str]:
-        """Return the set of top-level pipeline keys in this layer's pipelines.yaml.
-
-        Best-effort: returns an empty set (never raises) if the file is missing,
-        unreadable, malformed, or not a mapping — this is a detection helper,
-        not a validation gate.
-        """
+        """Return the set of top-level pipeline keys in this layer's pipelines.yaml."""
         pipelines_path = self.get_config_paths(base_path)["pipelines_config"]
         if not pipelines_path.exists():
             return set()
@@ -133,13 +122,6 @@ class LayeredProjectDetector:
         self.layers: Dict[str, LayerConfig] = {}
         self.execution_order: List[str] = []
 
-        # Resolution order: explicit .ducta/settings.json → declarative ducta.yaml
-        # (arbitrary layer names) → convention auto-detection.
-        #
-        # Each step must fall through when it yields no layers, not merely when
-        # its source is absent: a settings file that exists but declares no
-        # `layers` is not evidence that the project is flat, and must not
-        # suppress the manifest and auto-detection that follow it.
         if self.settings_file.exists():
             self._load_settings()
         if not self.is_layered_project and self._load_ducta_yaml():
@@ -150,27 +132,21 @@ class LayeredProjectDetector:
             self.is_layered_project = True
 
     def _auto_detect_layers(self) -> bool:
-        """Auto-detect layered structure by looking for standard layer directories.
-
-        Looks for directories like bronze/, silver/, gold/, ml/ with valid configs.
-
-        Returns:
-            True if valid layered structure detected
-        """
+        """Auto-detect layered structure by looking for standard layer directories."""
         detected_layers = []
 
         for layer_name in self.DEFAULT_LAYER_NAMES:
             layer_path = self.project_root / layer_name
-            global_settings = layer_path / "global.yaml"
+            global_config = layer_path / "global.yaml"
             config_dir = layer_path / "config"
 
             # Check if this looks like a valid layer
-            if layer_path.is_dir() and global_settings.exists() and config_dir.is_dir():
+            if layer_path.is_dir() and global_config.exists() and config_dir.is_dir():
                 detected_layers.append(layer_name)
                 # Create layer config automatically
                 layer_config = {
                     "path": layer_name,
-                    "global_settings": "global.yaml",
+                    "global_config": "global.yaml",
                     "config_path": "config",
                     "description": f"Layer: {layer_name}",
                 }
@@ -215,25 +191,7 @@ class LayeredProjectDetector:
             self.is_layered_project = False
 
     def _load_ducta_yaml(self) -> bool:
-        """Load layer definitions from a declarative ``ducta.*`` manifest.
-
-        The manifest opts in with ``project.type: layered`` and declares a
-        ``layers`` mapping (arbitrary names, not just the medallion defaults),
-        e.g.::
-
-            project: {type: layered}
-            layers:
-              raw:      {path: raw,      config: raw/config,      dependencies: []}
-              curated:  {path: curated,  config: curated/config,  dependencies: [raw]}
-            execution: {order: [raw, curated]}
-
-        Each layer's ``config`` is normalized to a path *relative to the layer*
-        (``LayerConfig`` joins ``base/<path>/<config_path>/pipelines.yaml``), so
-        both ``config: raw/config`` and ``config: config`` resolve correctly.
-        Returns ``False`` (leaving the detector untouched) when no manifest
-        exists or it is not a layered project, so the caller can fall back to
-        convention auto-detection.
-        """
+        """Load layer definitions from a declarative ``ducta.*`` manifest."""
         manifest = _find_manifest(self.project_root)
         if manifest is None:
             return False
@@ -260,7 +218,7 @@ class LayeredProjectDetector:
                 name,
                 {
                     "path": layer_path,
-                    "global_settings": layer_def.get("global_settings", "global.yaml"),
+                    "global_config": layer_def.get("global_config", "global.yaml"),
                     "config_path": config_rel,
                     "description": layer_def.get("description", ""),
                     "depends_on": layer_def.get("dependencies", []) or [],
@@ -297,11 +255,7 @@ class LayeredProjectDetector:
         return layer_name in self.layers
 
     def find_layers_for_pipeline(self, pipeline_name: str) -> List[str]:
-        """Return layer names whose pipelines.yaml contains pipeline_name as a key.
-
-        Iterates in execution_order (falls back to dict insertion order) for
-        deterministic, reproducible results across calls.
-        """
+        """Return layer names whose pipelines.yaml contains pipeline_name as a key."""
         layer_order = self.execution_order or list(self.layers.keys())
         matches = []
         for layer_name in layer_order:
@@ -339,20 +293,7 @@ class LayerContextBuilder:
     def build_context_args(
         detector: LayeredProjectDetector, layer_name: str, env: str = "base"
     ) -> Optional[Dict]:
-        """Build context arguments for a specific layer.
-
-        ``env`` is returned in the dict rather than merely accepted: the caller
-        has to pass it on to ``Context(env=...)``, and when it was only a
-        parameter this method ignored, at least one caller
-        (``ducta config validate``) resolved an environment, handed it here, and
-        then built its Context without one — validating a layered project
-        against its base configuration whatever ``--env`` said.
-
-        Returns:
-            Dictionary with keys: global_settings, pipelines_config, nodes_config,
-                                 input_config, output_config, layer, layer_path, env.
-            Or None if layer not found or paths don't exist.
-        """
+        """Build context arguments for a specific layer."""
         layer = detector.get_layer(layer_name)
         if not layer:
             logger.error(f"Layer '{layer_name}' not found")
@@ -362,7 +303,7 @@ class LayerContextBuilder:
 
         # Verify all required files exist
         required_files = [
-            "global_settings",
+            "global_config",
             "pipelines_config",
             "nodes_config",
             "input_config",
@@ -375,7 +316,7 @@ class LayerContextBuilder:
                 return None
 
         return {
-            "global_settings": str(config_paths["global_settings"]),
+            "global_config": str(config_paths["global_config"]),
             "pipelines_config": str(config_paths["pipelines_config"]),
             "nodes_config": str(config_paths["nodes_config"]),
             "input_config": str(config_paths["input_config"]),
@@ -395,9 +336,7 @@ class LayerContextBuilder:
         roots = []
         layer_root = (detector.project_root / layer.path).resolve()
         layer_src = layer_root / "src"
-        # The layer root first, so `import src.foo` resolves to *this* layer's
-        # `src` package before Python can cache the workspace root's `src` as a
-        # namespace package.
+
         if layer_root.is_dir():
             roots.append(str(layer_root))
         if layer_src.is_dir():
@@ -419,18 +358,7 @@ class LayerContextBuilder:
 
 @contextmanager
 def layer_sys_path(detector: "LayeredProjectDetector", layer_name: str) -> Iterator[None]:
-    """Make a layer importable for the duration of the block, then undo it.
-
-    ``inject_sys_path`` only ever added. Every layer names its package ``src``,
-    so running more than one layer in a process (``--all-layers``, the API
-    serving two layered projects) left each layer's directory stacked on
-    ``sys.path`` with a stale ``sys.modules['src']`` pointing at whichever ran
-    first — after which the second layer silently imported the first layer's
-    node functions.
-
-    Restores ``sys.path`` and drops the modules that were imported from the
-    roots this block added, so the next layer resolves its own.
-    """
+    """Make a layer importable for the duration of the block, then undo it."""
     roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
     added = [root for root in roots if root not in sys.path]
     for root in reversed(added):

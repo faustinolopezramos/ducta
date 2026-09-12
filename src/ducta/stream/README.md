@@ -51,15 +51,15 @@ Ducta Stream is the Structured Streaming layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Streaming nodes declare their I/O **inline** (rather than referencing the input/output catalog). Behavior is driven by the node's `input`, `output`, `streaming`, and `depends_on` blocks plus a few `global_settings` keys:
+Streaming nodes declare their I/O **inline** (rather than referencing the input/output catalog). Behavior is driven by the node's `input`, `output`, `streaming`, and `depends_on` blocks plus a few `global_config` keys:
 
 *   **`input.format`**: `kafka` | `kinesis` | `delta_stream` | `file_stream` | `socket` | `rate` | `memory`, with format-specific `options`.
 *   **`output.format`**: `kafka` | `delta` | `parquet` | `json` | `csv` | `console` | `memory`, with `path` and `options`.
 *   **`streaming.checkpoint_location` / `streaming.trigger` / `output_mode`**: checkpoint dir, trigger (`processingTime`, `once`, `available_now`, `continuous`), and output mode (`append`/`update`/`complete`).
 *   **`depends_on`**: intra-pipeline ordering; independent nodes in the same wave start concurrently.
-*   **`global_settings`**: `max_streaming_pipelines`, `checkpoints_base`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`.
+*   **`global_config`**: `max_streaming_pipelines`, `checkpoints_base`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`.
 
-Checkpoint base resolution order: node `streaming.checkpoint` → `global_settings.checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed).
+Checkpoint base resolution order: node `streaming.checkpoint` → `global_config.checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed).
 
 ---
 
@@ -88,7 +88,7 @@ events_stream:
   type: streaming
   nodes: ["enrich_events"]
 
-# global_settings.yaml
+# global_config.yaml
 max_streaming_pipelines: 5
 checkpoints_base: "data/_checkpoints"
 streaming_node_start_parallelism: 8

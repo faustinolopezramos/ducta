@@ -296,8 +296,6 @@ class ConfigCache:
 
     @classmethod
     def invalidate_all(cls, pattern: Optional[str] = None) -> None:
-        import re
-
         with cls._lock:
             if pattern is None:
                 cls._cache.clear()
@@ -327,7 +325,14 @@ class LoggerManager:
         log_file: Optional[str] = None,
         verbose: bool = False,
         quiet: bool = False,
+        file_logging: bool = True,
     ) -> None:
+        """Configure console logging, and a file sink unless *file_logging* is off.
+
+        Both branches default the file sink to a project-relative path, so it has
+        to be suppressible for commands that run outside a project — see the note
+        in `RichLoggerManager.setup`. An explicit *log_file* always wins.
+        """
         if _USE_RICH:
             RichLoggerManager.setup(
                 level=level,
@@ -337,6 +342,7 @@ class LoggerManager:
                 show_time=True,
                 show_path=verbose,
                 enable_rich_tracebacks=True,
+                file_logging=file_logging,
             )
         else:
             logger.remove()
@@ -347,6 +353,8 @@ class LoggerManager:
                 colorize=True,
                 level=console_level,
             )
+            if not file_logging and not log_file:
+                return
             log_path = Path(log_file) if log_file else Path("logs/log")
             log_path.parent.mkdir(parents=True, exist_ok=True)
             logger.add(

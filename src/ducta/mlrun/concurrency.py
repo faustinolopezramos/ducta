@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 from loguru import logger
@@ -836,6 +836,18 @@ class SafeTransaction(Transaction):
         self.enable_staging = enable_staging
         self._original_values: Dict[str, Any] = {}
 
+    def _snapshot_readwrite(self, operation: "Operation", read_fn: Callable[[str], Any]) -> None:
+        """Snapshot pre-transaction state for a write_dataframe/write_json
+        operation: record the existing value, or ``_NOT_EXISTED`` if there
+        wasn't one. Shared by ``_snapshot_operations``, whose write_dataframe/
+        write_json branches were otherwise identical apart from which storage
+        read method they called.
+        """
+        try:
+            self._original_values[operation.path] = read_fn(operation.path)
+        except FileNotFoundError:
+            self._original_values[operation.path] = self._NOT_EXISTED
+
     def _snapshot_operations(self) -> None:
         """Snapshot pre-transaction state for each operation (used for rollback)."""
         if self.enable_staging and not self._staging_dir:
@@ -844,19 +856,9 @@ class SafeTransaction(Transaction):
         for operation in self.operations:
             try:
                 if operation.operation_type == "write_dataframe":
-                    try:
-                        self._original_values[operation.path] = self.storage.read_dataframe(
-                            operation.path
-                        )
-                    except FileNotFoundError:
-                        self._original_values[operation.path] = self._NOT_EXISTED
+                    self._snapshot_readwrite(operation, self.storage.read_dataframe)
                 elif operation.operation_type == "write_json":
-                    try:
-                        self._original_values[operation.path] = self.storage.read_json(
-                            operation.path
-                        )
-                    except FileNotFoundError:
-                        self._original_values[operation.path] = self._NOT_EXISTED
+                    self._snapshot_readwrite(operation, self.storage.read_json)
                 elif operation.operation_type == "write_artifact":
                     # Improved v2.2: Backup existing artifacts for full rollback support
                     if self.storage.exists(operation.path):
@@ -909,6 +911,22 @@ class SafeTransaction(Transaction):
             # Staging dir remains for potential rollback
             raise
 
+    def _rollback_readwrite(self, operation: "Operation", write_fn: Callable[..., Any]) -> bool:
+        """Restore a write_dataframe/write_json operation to its
+        pre-transaction state. Shared by ``_rollback_single_operation``, whose
+        write_dataframe/write_json branches were otherwise identical apart
+        from which storage write method restores the original value.
+        """
+        if operation.path not in self._original_values:
+            return False
+        orig = self._original_values[operation.path]
+        if orig is self._NOT_EXISTED:
+            if self.storage.exists(operation.path):
+                self.storage.delete(operation.path)
+            return True
+        write_fn(orig, operation.path, mode="overwrite")
+        return True
+
     def _rollback_single_operation(self, operation) -> bool:
         """
         Attempt to rollback a single operation.
@@ -916,23 +934,9 @@ class SafeTransaction(Transaction):
         """
         try:
             if operation.operation_type == "write_dataframe":
-                if operation.path in self._original_values:
-                    orig = self._original_values[operation.path]
-                    if orig is self._NOT_EXISTED:
-                        if self.storage.exists(operation.path):
-                            self.storage.delete(operation.path)
-                        return True
-                    self.storage.write_dataframe(orig, operation.path, mode="overwrite")
-                    return True
+                return self._rollback_readwrite(operation, self.storage.write_dataframe)
             elif operation.operation_type == "write_json":
-                if operation.path in self._original_values:
-                    orig = self._original_values[operation.path]
-                    if orig is self._NOT_EXISTED:
-                        if self.storage.exists(operation.path):
-                            self.storage.delete(operation.path)
-                        return True
-                    self.storage.write_json(orig, operation.path, mode="overwrite")
-                    return True
+                return self._rollback_readwrite(operation, self.storage.write_json)
             elif operation.operation_type == "write_artifact":
                 orig = self._original_values.get(operation.path)
                 if orig is self._SNAPSHOT_FAILED:
@@ -975,6 +979,7 @@ class SafeTransaction(Transaction):
             return False
 
         logger.warning("Attempting to rollback transaction")
+        total_operations = len(self.operations)
         rollback_count = sum(1 for op in self.operations if self._rollback_single_operation(op))
 
         # Cleanup staging after rollback attempt
@@ -987,9 +992,16 @@ class SafeTransaction(Transaction):
 
         self.state = TransactionState.ROLLED_BACK
 
-        if rollback_count > 0:
+        if rollback_count == total_operations:
             logger.info(f"Rolled back {rollback_count} operations")
             return True
+
+        if rollback_count > 0:
+            logger.error(
+                f"Partial rollback: only {rollback_count}/{total_operations} operations "
+                "were restored — remaining state may be inconsistent."
+            )
+            return False
 
         logger.warning("Rollback did not restore any files")
         return False

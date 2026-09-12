@@ -74,7 +74,7 @@ certificate:
    * - Field
      - What it tells you
    * - ``config_fingerprint``
-     - Hash over the five config documents (global settings, pipelines,
+     - Hash over the five config documents (global config, pipelines,
        nodes, input, output). Changes the instant *any* of them changes —
        lets you confirm "this ran with the config I think it did" without
        diffing YAML by hand.
@@ -138,7 +138,7 @@ against someone who edited it on purpose.
 Configuring certification
 ---------------------------
 
-In ``config/global_settings.{yaml,toml}``:
+In ``config/global_config.{yaml,toml}``:
 
 .. code-block:: yaml
 
@@ -158,7 +158,7 @@ see below):
 The code also accepts the historical mixed-case name
 ``Ducta_CERTIFICATE_KEY``; use the all-caps form above for anything you
 write yourself. A key can also live at
-``global_settings.certificate_signing_key``, but Ducta logs a warning if you
+``global_config.certificate_signing_key``, but Ducta logs a warning if you
 do — a key in a config file is usually committed to version control, and a
 short, human-chosen value is brute-forceable from the certificate's public
 ``key_id``. Prefer the environment variable.

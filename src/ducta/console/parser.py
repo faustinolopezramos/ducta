@@ -84,6 +84,46 @@ class UnifiedArgumentParser:
         return parser
 
     @staticmethod
+    def _add_discovery_args(parser: argparse.ArgumentParser) -> None:
+        """``--base-path``/``--layer-name``/``--use-case``/``--config-type``/
+        ``--interactive``: the config-discovery group shared by ``start`` and
+        ``config``."""
+        parser.add_argument("--base-path", help=HELP_BASE_PATH)
+        parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
+        parser.add_argument("--use-case", dest="use_case_name", help=HELP_USE_CASE)
+        parser.add_argument(
+            "--config-type", choices=["yaml", "json", "toml"], help=HELP_CONFIG_TYPE
+        )
+        parser.add_argument(
+            "--interactive", action="store_true", help="Interactive config selection"
+        )
+
+    @staticmethod
+    def _add_output_format_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
+        parser.add_argument(
+            "--output-format", choices=["rich", "json"], default="rich", help=help_text
+        )
+
+    @staticmethod
+    def _add_mlops_resolution_args(parser: argparse.ArgumentParser, pipeline_help: str) -> None:
+        """``--storage-path``/``--env``/``--pipeline``: MLOps resolution group
+        shared by ``experiment list``, ``model promote`` and ``model gc``.
+        *pipeline_help* carries each subcommand's own full ``--pipeline`` help
+        text, which differs in its closing clause."""
+        parser.add_argument(
+            "--storage-path",
+            help="MLOps storage path (Optional, auto-discovered by default)",
+            default=None,
+        )
+        parser.add_argument(
+            "--env",
+            help="Project environment to resolve the storage path from "
+            "(e.g. dev, prod) — auto-discovery requires this",
+            default=None,
+        )
+        parser.add_argument("--pipeline", help=pipeline_help, default=None)
+
+    @staticmethod
     def _add_start_subcommand(subparsers):
         start_parser = subparsers.add_parser(
             "start",
@@ -110,15 +150,7 @@ class UnifiedArgumentParser:
         )
         start_parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
         start_parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
-        start_parser.add_argument("--base-path", help=HELP_BASE_PATH)
-        start_parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
-        start_parser.add_argument("--use-case", dest="use_case_name", help=HELP_USE_CASE)
-        start_parser.add_argument(
-            "--config-type", choices=["yaml", "json", "toml"], help=HELP_CONFIG_TYPE
-        )
-        start_parser.add_argument(
-            "--interactive", action="store_true", help="Interactive config selection"
-        )
+        UnifiedArgumentParser._add_discovery_args(start_parser)
         start_parser.add_argument(
             "--log-level",
             default="INFO",
@@ -349,15 +381,7 @@ class UnifiedArgumentParser:
 
         config_subparsers.add_parser("clear-cache", help="Clear configuration cache")
 
-        config_parser.add_argument("--base-path", help=HELP_BASE_PATH)
-        config_parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
-        config_parser.add_argument("--use-case", dest="use_case_name", help=HELP_USE_CASE)
-        config_parser.add_argument(
-            "--config-type", choices=["yaml", "json", "toml"], help=HELP_CONFIG_TYPE
-        )
-        config_parser.add_argument(
-            "--interactive", action="store_true", help="Interactive config selection"
-        )
+        UnifiedArgumentParser._add_discovery_args(config_parser)
 
     @staticmethod
     def _add_ui_subcommand(subparsers):
@@ -464,11 +488,8 @@ class UnifiedArgumentParser:
             "--dataset-name",
             help="Name for the dataset in the spec (default: the file stem)",
         )
-        profile_parser.add_argument(
-            "--output-format",
-            default="rich",
-            choices=["rich", "json"],
-            help="How to render the profile (default: rich)",
+        UnifiedArgumentParser._add_output_format_arg(
+            profile_parser, help_text="How to render the profile (default: rich)"
         )
 
         quality_parser = subparsers.add_parser(
@@ -502,11 +523,8 @@ class UnifiedArgumentParser:
             help="Path to a TOML/YAML file with check config (checks table)",
         )
         run_qp.add_argument("--fail-fast", action="store_true", help="Stop on first failing check")
-        run_qp.add_argument(
-            "--output-format",
-            default="rich",
-            choices=["rich", "json"],
-            help="Report output format (default: rich)",
+        UnifiedArgumentParser._add_output_format_arg(
+            run_qp, help_text="Report output format (default: rich)"
         )
 
         report_qp = quality_subparsers.add_parser(
@@ -530,11 +548,8 @@ class UnifiedArgumentParser:
             action="store_true",
             help="List all stored run IDs for the dataset",
         )
-        report_qp.add_argument(
-            "--output-format",
-            default="rich",
-            choices=["rich", "json"],
-            help="Report output format (default: rich)",
+        UnifiedArgumentParser._add_output_format_arg(
+            report_qp, help_text="Report output format (default: rich)"
         )
         report_qp.add_argument(
             "--env",
@@ -561,11 +576,8 @@ class UnifiedArgumentParser:
             dest="last_n",
             help="Number of recent scores to show (default: 20)",
         )
-        trend_qp.add_argument(
-            "--output-format",
-            default="rich",
-            choices=["rich", "json"],
-            help="Output format (default: rich)",
+        UnifiedArgumentParser._add_output_format_arg(
+            trend_qp, help_text="Output format (default: rich)"
         )
         trend_qp.add_argument(
             "--env",
@@ -584,11 +596,8 @@ class UnifiedArgumentParser:
         score_qp.add_argument(
             "--workspace", "-w", default=".", help="Workspace root path (default: .)"
         )
-        score_qp.add_argument(
-            "--output-format",
-            default="rich",
-            choices=["rich", "json"],
-            help="Output format (default: rich)",
+        UnifiedArgumentParser._add_output_format_arg(
+            score_qp, help_text="Output format (default: rich)"
         )
         score_qp.add_argument(
             "--env",
@@ -608,7 +617,7 @@ class UnifiedArgumentParser:
             "--config", "-c", required=True, help="Path to nodes config file (TOML/YAML)"
         )
         validate_qp.add_argument(
-            "--global-settings", "-g", help="Path to global_settings file (for profile resolution)"
+            "--global-config", "-g", help="Path to global_config file (for profile resolution)"
         )
 
     @staticmethod
@@ -622,24 +631,12 @@ class UnifiedArgumentParser:
             dest="experiment_command", help="Experiment commands", required=True
         )
         list_p = exp_sub.add_parser("list", help="List recent experiments")
-        list_p.add_argument(
-            "--storage-path",
-            help="MLOps storage path (Optional, auto-discovered by default)",
-            default=None,
-        )
-        list_p.add_argument(
-            "--env",
-            help="Project environment to resolve the storage path from "
-            "(e.g. dev, prod) — auto-discovery requires this",
-            default=None,
-        )
-        list_p.add_argument(
-            "--pipeline",
-            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+        UnifiedArgumentParser._add_mlops_resolution_args(
+            list_p,
+            pipeline_help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
             "storage path — matches how a real run resolves its own path when "
             "no global 'mlops_path' override is set. Omit to look at the "
             "environment's shared/default MLOps directory instead.",
-            default=None,
         )
         list_p.add_argument(
             "--limit",
@@ -665,23 +662,11 @@ class UnifiedArgumentParser:
         prom_p.add_argument(
             "stage", choices=["staging", "production", "archived"], help="Target stage"
         )
-        prom_p.add_argument(
-            "--storage-path",
-            help="MLOps storage path (Optional, auto-discovered by default)",
-            default=None,
-        )
-        prom_p.add_argument(
-            "--env",
-            help="Project environment to resolve the storage path from "
-            "(e.g. dev, prod) — auto-discovery requires this",
-            default=None,
-        )
-        prom_p.add_argument(
-            "--pipeline",
-            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+        UnifiedArgumentParser._add_mlops_resolution_args(
+            prom_p,
+            pipeline_help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
             "storage path — matches how a real run resolves its own path when "
             "no global 'mlops_path' override is set.",
-            default=None,
         )
         prom_p.add_argument(
             "--force",
@@ -693,24 +678,12 @@ class UnifiedArgumentParser:
         gc_p.add_argument(
             "--dry-run", action="store_true", help="Show what would be deleted without deleting"
         )
-        gc_p.add_argument(
-            "--storage-path",
-            help="MLOps storage path (Optional, auto-discovered by default)",
-            default=None,
-        )
-        gc_p.add_argument(
-            "--env",
-            help="Project environment to resolve the storage path from "
-            "(e.g. dev, prod) — auto-discovery requires this",
-            default=None,
-        )
-        gc_p.add_argument(
-            "--pipeline",
-            help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+        UnifiedArgumentParser._add_mlops_resolution_args(
+            gc_p,
+            pipeline_help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
             "storage path — matches how a real run resolves its own path when "
             "no global 'mlops_path' override is set. Omit to garbage-collect "
             "the environment's shared/default MLOps directory instead.",
-            default=None,
         )
 
     @staticmethod

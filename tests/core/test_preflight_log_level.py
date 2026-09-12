@@ -15,7 +15,7 @@ from ducta.core.settings import CoreSettings
 def _executor() -> PipelineExecutor:
     executor = PipelineExecutor.__new__(PipelineExecutor)
     executor.context = MagicMock()
-    executor.context.global_settings = {"preflight_enabled": True}
+    executor.context.global_config = {"preflight_enabled": True}
     # __new__ bypasses __init__; settings are resolved once at construction.
     executor.settings = CoreSettings.from_context(executor.context)
     return executor

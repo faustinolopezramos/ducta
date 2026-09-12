@@ -22,8 +22,9 @@ Async SQLAlchemy session factory and FastAPI dependency.
 
 from __future__ import annotations
 
+import functools
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Optional
+from typing import Any, AsyncGenerator, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -47,6 +48,30 @@ def get_session_factory() -> Optional[async_sessionmaker]:
             autoflush=False,
         )
     return _session_factory
+
+
+def require_session(default: Any = None) -> Callable:
+    """Decorator for an async store method: skip persistence when no session
+    factory is configured, otherwise open a session and pass it as the
+    method's first argument (after ``self``).
+
+    ``default`` is returned as-is when it's not callable, or called (with no
+    arguments) to produce the fallback value otherwise — so mutable-looking
+    defaults such as ``[]`` stay fresh instances via ``default=list``.
+    """
+
+    def decorator(fn: Callable) -> Callable:
+        @functools.wraps(fn)
+        async def wrapper(self, *args, **kwargs):
+            factory = get_session_factory()
+            if factory is None:
+                return default() if callable(default) else default
+            async with factory() as session:
+                return await fn(self, session, *args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 @asynccontextmanager

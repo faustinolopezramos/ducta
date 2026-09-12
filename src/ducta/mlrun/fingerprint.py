@@ -22,18 +22,21 @@ import hashlib
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
 ALGO_SPARK_EXACT = "xxhash64-multiset/v2"
-ALGO_SPARK_SAMPLE = "spark-head/v2"
+ALGO_SPARK_EXACT_CRYPTO = "sha256-multiset/v3"
+ALGO_SPARK_SAMPLE = "spark-minhash/v3"
 ALGO_PANDAS_EXACT = "pandas-sha256/v2"
 ALGO_PANDAS_SAMPLE = "pandas-systematic/v2"
 ALGO_SCHEMA_ONLY = "schema-only/v2"
 ALGO_LEGACY = "legacy/v1"
-VALID_MODES = ("exact", "sample", "schema")
-_LEGACY_MODES = {"fast": "sample", "full": "exact"}
+VALID_MODES = ("exact", "exact_crypto", "sample", "schema")
+_FULL_SCAN_MODES = frozenset({"exact", "exact_crypto"})
+_LEGACY_MODES = {"fast": "sample", "full": "exact", "exact-crypto": "exact_crypto"}
 
 
 def normalize_mode(mode: Optional[str]) -> str:
@@ -116,7 +119,7 @@ class DataFingerprint:
         fp.engine = detect_engine(df)
         fp._capture_file_stat(filepath)
         fp._capture_schema(df)
-        if mode == "exact":
+        if mode in _FULL_SCAN_MODES:
             fp.raw_file_hash = fp._compute_full_file_hash(filepath)
 
         if fp.engine == "spark":
@@ -146,20 +149,26 @@ class DataFingerprint:
             self.algorithm = ALGO_SCHEMA_ONLY
             return
 
-        if self.mode == "sample":
-            rows = df.limit(sample_rows).collect()
-            self.sample_hash = hashlib.sha256(
-                "\n".join(repr(tuple(r)) for r in rows).encode()
-            ).hexdigest()
-            self.content_hash = self.sample_hash
-            self.algorithm = ALGO_SPARK_SAMPLE
-            self.details["sample_rows_covered"] = len(rows)
-            self.details["sampling"] = "head-only"
-            return
         columns = [F.col(c) for c in df.columns]
         if not columns:
             self.algorithm = ALGO_SCHEMA_ONLY
             self.degraded_reason = "dataframe has no columns"
+            return
+
+        if self.mode == "sample":
+            hashed = df.select(F.xxhash64(*columns).alias("_ducta_h"))
+            rows = hashed.orderBy(F.col("_ducta_h").asc()).limit(sample_rows).collect()
+            self.sample_hash = hashlib.sha256(
+                "\n".join(str(r["_ducta_h"]) for r in rows).encode()
+            ).hexdigest()
+            self.content_hash = self.sample_hash
+            self.algorithm = ALGO_SPARK_SAMPLE
+            self.details["sample_rows_covered"] = len(rows)
+            self.details["sampling"] = "deterministic-min-rowhash"
+            return
+
+        if self.mode == "exact_crypto":
+            self._compute_spark_exact_crypto(df, columns)
             return
 
         row_hash = F.xxhash64(*columns)
@@ -178,6 +187,33 @@ class DataFingerprint:
         self.content_hash = hashlib.sha256(f"{n}:{s}:{x}".encode()).hexdigest()
         self.algorithm = ALGO_SPARK_EXACT
 
+    def _compute_spark_exact_crypto(self, df: Any, columns: list) -> None:
+        """Order-independent digest built on SHA-256 rather than xxhash64."""
+        from pyspark.sql import functions as F  # type: ignore
+
+        parts = []
+        for col in columns:
+            as_str = col.cast("string")
+            parts.append(
+                F.when(as_str.isNull(), F.lit("\u0000N")).otherwise(
+                    F.concat(F.length(as_str).cast("string"), F.lit(":"), as_str)
+                )
+            )
+        row_hash = F.sha2(F.concat_ws("\u0001", *parts), 256)
+        hashed = df.select(row_hash.alias("_ducta_h"))
+        lane_a = F.conv(F.substring(F.col("_ducta_h"), 1, 16), 16, 10).cast("decimal(38,0)")
+        lane_b = F.conv(F.substring(F.col("_ducta_h"), 17, 16), 16, 10).cast("decimal(38,0)")
+        agg = hashed.agg(
+            F.count("*").alias("n"),
+            F.sum(lane_a).alias("a"),
+            F.sum(lane_b).alias("b"),
+        ).first()
+        n = int(agg["n"] or 0)
+        a = int(agg["a"] or 0)
+        b = int(agg["b"] or 0)
+        self.content_hash = hashlib.sha256(f"{n}:{a}:{b}".encode()).hexdigest()
+        self.algorithm = ALGO_SPARK_EXACT_CRYPTO
+
     # ── pandas ───────────────────────────────────────────────────────────────
 
     def _compute_pandas(self, df: Any, sample_rows: int) -> None:
@@ -187,7 +223,7 @@ class DataFingerprint:
             self.algorithm = ALGO_SCHEMA_ONLY
             return
 
-        if self.mode == "exact":
+        if self.mode in _FULL_SCAN_MODES:
             self.content_hash = self._pandas_content_hash(df)
             self.algorithm = ALGO_PANDAS_EXACT
             return
@@ -233,11 +269,24 @@ class DataFingerprint:
             logger.debug("Could not hash file bytes for {}: {}", filepath, exc)
             return None
 
+    @staticmethod
+    def _total_size_bytes(filepath: str) -> Optional[int]:
+        """Bytes on disk for a dataset, whether it is one file or a directory."""
+        path = Path(filepath)
+        try:
+            if path.is_file():
+                return path.stat().st_size
+            if path.is_dir():
+                return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
+        except OSError as e:
+            logger.debug(f"Could not size {filepath}: {e}")
+        return None
+
     def _capture_file_stat(self, filepath: str) -> None:
         try:
             if os.path.exists(filepath):
                 stat = os.stat(filepath)
-                self.file_size_bytes = stat.st_size
+                self.file_size_bytes = self._total_size_bytes(filepath)
                 self.file_mtime = str(stat.st_mtime)
         except Exception as e:
             logger.debug(f"Failed to stat {filepath}: {e}")

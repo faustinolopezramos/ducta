@@ -136,7 +136,7 @@ def is_valid_environment(env: str) -> bool:
     if normalized in ENV_ALIASES:
         return True
 
-    if normalized == "sandbox" or normalized.startswith("sandbox_"):
+    if is_sandbox_environment(normalized):
         return True
 
     return False
@@ -154,9 +154,9 @@ def normalize_environment(env_name: Optional[str]) -> Optional[str]:
     if env in ENV_ALIASES:
         return ENV_ALIASES[env]
 
-    if env == "sandbox":
-        return "sandbox"
-    if env.startswith("sandbox_"):
+    if is_sandbox_environment(env):
+        if env == "sandbox":
+            return "sandbox"
         dev = env.split("_", 1)[1]
         safe_dev = "".join(c for c in dev if c.isalnum() or c == "_")
         return f"sandbox_{safe_dev}" if safe_dev else "sandbox"
@@ -200,7 +200,7 @@ def is_allowed_environment(env_name: str) -> bool:
     if not norm:
         return False
 
-    if norm == "sandbox" or norm.startswith("sandbox_"):
+    if is_sandbox_environment(norm):
         return True
 
     return norm in allowed_environments()

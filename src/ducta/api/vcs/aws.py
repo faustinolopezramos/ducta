@@ -27,19 +27,14 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ducta.api.exceptions import RepositoryAdapterError
-from ducta.api.utils.git_utils import (
-    GIT_AVAILABLE,
-    get_repo,
-    http_auth_env,
-    redact_git_credentials,
-)
+from ducta.api.utils.git_utils import GIT_AVAILABLE, http_auth_env, redact_git_credentials
 from ducta.api.vcs.base import RepositoryAdapter
 
 
 class AWSAdapter(RepositoryAdapter):
     """Adapter for AWS CodeCommit using boto3 + GitPython."""
 
-    _GIT_REQUIRED_ERROR = "GitPython required. Install: pip install gitpython"
+    _provider_name = "AWS"
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self._region: str = config.get("region", "")
@@ -78,10 +73,14 @@ class AWSAdapter(RepositoryAdapter):
             path=local_path,
         )
         try:
-            Repo.clone_from(url, str(local_path), env=self._auth_env())
+            Repo.clone_from(
+                url,
+                str(local_path),
+                env={"GIT_TERMINAL_PROMPT": "0", **self._auth_env()},
+            )
         except Exception as exc:
             raise RepositoryAdapterError(
-                f"AWS clone failed: {redact_git_credentials(str(exc))}",
+                f"AWS clone failed: {self._safe_error(exc)}",
                 detail={"url": url, "local_path": str(local_path)},
             ) from exc
         self._local_path = local_path
@@ -89,38 +88,6 @@ class AWSAdapter(RepositoryAdapter):
     def get_remote_url(self) -> str:
         """Return the HTTPS clone URL for this CodeCommit repository."""
         return f"https://git-codecommit.{self._region}.amazonaws.com/v1/repos/{self._repo_name}"
-
-    def push(self, branch: str = "main") -> None:
-        """Push local commits to AWS CodeCommit."""
-        self._require_local_path("push")
-        if not GIT_AVAILABLE:
-            raise RuntimeError(self._GIT_REQUIRED_ERROR)
-        try:
-            repo = get_repo(self._local_path)  # type: ignore[arg-type]
-            with repo.git.custom_environment(**self._auth_env()):
-                repo.git.push(self.get_remote_url(), f"HEAD:{branch}")
-            logger.info("Pushed to AWS CodeCommit branch: {branch}", branch=branch)
-        except Exception as exc:
-            raise RepositoryAdapterError(
-                f"AWS push failed: {redact_git_credentials(str(exc))}",
-                detail={"branch": branch},
-            ) from exc
-
-    def pull(self, branch: str = "main") -> None:
-        """Pull latest commits from AWS CodeCommit."""
-        self._require_local_path("pull")
-        if not GIT_AVAILABLE:
-            raise RuntimeError(self._GIT_REQUIRED_ERROR)
-        try:
-            repo = get_repo(self._local_path)  # type: ignore[arg-type]
-            with repo.git.custom_environment(**self._auth_env()):
-                repo.git.pull(self.get_remote_url(), branch)
-            logger.info("Pulled from AWS CodeCommit branch: {branch}", branch=branch)
-        except Exception as exc:
-            raise RepositoryAdapterError(
-                f"AWS pull failed: {redact_git_credentials(str(exc))}",
-                detail={"branch": branch},
-            ) from exc
 
     def get_commit_log(self) -> List[Dict[str, Any]]:
         """Return up to 50 commits by walking the branch HEAD via boto3."""
@@ -186,6 +153,18 @@ class AWSAdapter(RepositoryAdapter):
             return {}
         return http_auth_env(self._https_username, self._https_password)
 
+    def _secret_values(self) -> List[str]:
+        return [
+            v
+            for v in (
+                self._access_key,
+                self._secret_key,
+                self._https_username,
+                self._https_password,
+            )
+            if v
+        ]
+
     @staticmethod
     def _parse_aws_date(date_str: str) -> str:
         """Convert AWS epoch-based date string to ISO-8601."""
@@ -197,9 +176,3 @@ class AWSAdapter(RepositoryAdapter):
             return dt.replace(tzinfo=timezone.utc).isoformat()
         except (ValueError, TypeError):
             return date_str
-
-    def _require_local_path(self, operation: str) -> None:
-        if not self._local_path:
-            raise RepositoryAdapterError(
-                f"No local path set for {operation}. Call clone() or set_local_path() first."
-            )

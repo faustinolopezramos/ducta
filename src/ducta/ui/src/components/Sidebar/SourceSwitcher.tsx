@@ -2,14 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { IconChevronDown, IconFolder, IconCheck } from "@tabler/icons-react";
 import { StorageService } from "../../utils/storage";
 import { useSourceSelection } from "../../hooks/useWorkspaceSelection";
-
-/** Friendly short label for a source path or git URL. */
-function sourceLabel(src: string): string {
-  if (!src) return "—";
-  const cleaned = src.replace(/\.git$/, "").replace(/\/+$/, "");
-  const seg = cleaned.split(/[/\\]/).filter(Boolean).pop();
-  return seg || cleaned;
-}
+import { sourceLabel } from "../../utils/sourceLabel";
 
 /**
  * Compact recent-sources switcher for the sidebar footer. Switching a source

@@ -31,7 +31,7 @@ _CONFIG_EXTS = (".toml", ".yaml", ".yml", ".json")
 
 # Top-level keys that mark a single-file *bundle*.
 _BUNDLE_KEYS = (
-    "global_settings",
+    "global_config",
     "pipelines_config",
     "nodes_config",
     "input_config",
@@ -43,7 +43,7 @@ _BUNDLE_STEMS = ("ducta", "config", "bundle")
 
 # Context kwarg -> accepted file stems for the directory convention.
 _DIR_CONVENTION = {
-    "global_settings": ("global_settings", "global"),
+    "global_config": ("global_config", "global"),
     "pipelines_config": ("pipelines",),
     "nodes_config": ("nodes",),
     "input_config": ("input",),
@@ -84,20 +84,11 @@ def _is_bundle(data: Dict[str, Any]) -> bool:
 
 
 class FlexibleConfigResolver:
-    """Resolve a :class:`Context` from any non-canonical configuration form.
-
-    All methods return ``None`` when the given source does not match one of the
-    supported forms, so callers can fall through to the next strategy.
-    """
+    """Resolve a :class:`Context` from any non-canonical configuration form."""
 
     @staticmethod
     def resolve_file(path: Path, data: Optional[Dict[str, Any]], env: str) -> Optional[Context]:
-        """Resolve from an explicitly discovered/selected config file.
-
-        ``data`` may be pre-loaded (to avoid a second read); when ``None`` the
-        file is loaded here. Returns ``None`` for an ``env_config`` root so the
-        caller keeps using :class:`AppConfigManager`.
-        """
+        """Resolve from an explicitly discovered/selected config file."""
         path = Path(path)
         if data is None:
             data = _load(path)
@@ -107,7 +98,7 @@ class FlexibleConfigResolver:
             return None  # canonical root — not our concern
         if _is_bundle(data):
             return _build_bundle(data, env, path)
-        # A non-bundle file (e.g. a bare global settings file): treat its
+        # A non-bundle file (e.g. a bare global config file): treat its
         # directory as the project root and try the directory/quickstart forms.
         return FlexibleConfigResolver.resolve_dir(path.parent, env)
 
@@ -142,13 +133,7 @@ class FlexibleConfigResolver:
 
 
 def _dir_convention_paths(root: Path) -> Optional[Dict[str, str]]:
-    """Locate the five standard config files under ``root`` or ``root/config``.
-
-    Each file may live directly in ``root`` or in a ``config/`` subdirectory,
-    so a project can keep ``global.yaml`` at the root and the rest under
-    ``config/`` (or all five together in either place). Returns ``None`` unless
-    all five are found.
-    """
+    """Locate the five standard config files under ``root`` or ``root/config``."""
     search_dirs = [root, root / "config"]
     result: Dict[str, str] = {}
     for kwarg, stems in _DIR_CONVENTION.items():
@@ -166,7 +151,7 @@ def _dir_convention_paths(root: Path) -> Optional[Dict[str, str]]:
 
 def _build_quickstart(base: Path, env: str) -> Optional[Context]:
     """Build a Context from ``global.*`` + a grouped ``pipeline.*`` file."""
-    global_file = _find(base, "global", "global_settings")
+    global_file = _find(base, "global", "global_config")
     grouped_file = _find(base, "pipeline")
     if global_file is None or grouped_file is None:
         return None
@@ -175,7 +160,7 @@ def _build_quickstart(base: Path, env: str) -> Optional[Context]:
     if grouped is None:
         return None
 
-    kwargs: Dict[str, Any] = {"global_settings": str(global_file)}
+    kwargs: Dict[str, Any] = {"global_config": str(global_file)}
     for kwarg, section in _QUICKSTART_SECTIONS.items():
         kwargs[kwarg] = grouped.get(section, {}) or {}
 
@@ -187,7 +172,7 @@ def _build_quickstart(base: Path, env: str) -> Optional[Context]:
 def _build_bundle(data: Dict[str, Any], env: str, source: Path) -> Context:
     """Build a Context from a single-file bundle's inline sections."""
     context = Context(
-        global_settings=data["global_settings"],
+        global_config=data["global_config"],
         pipelines_config=data["pipelines_config"],
         nodes_config=data["nodes_config"],
         input_config=data["input_config"],
@@ -201,12 +186,12 @@ def _build_bundle(data: Dict[str, Any], env: str, source: Path) -> Context:
 def _build_from_paths(paths: Dict[str, str], env: str) -> Context:
     """Build a Context from a mapping of the five ``*_config`` file paths."""
     context = Context(
-        global_settings=paths["global_settings"],
+        global_config=paths["global_config"],
         pipelines_config=paths["pipelines_config"],
         nodes_config=paths["nodes_config"],
         input_config=paths["input_config"],
         output_config=paths["output_config"],
         env=env,
     )
-    context._config_file_path = paths["global_settings"]
+    context._config_file_path = paths["global_config"]
     return context

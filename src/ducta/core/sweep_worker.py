@@ -20,10 +20,10 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import contextlib
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from ducta.core.worker_bootstrap import bootstrap_worker_context, silence_output
 
 TRIALS_DIRNAME = "_trials"
 SHARED_PREFIX_DIRNAME = "_shared"
@@ -52,47 +52,22 @@ def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
     quiet = payload.get("quiet", True)
-    devnull = None
-    silence: Any = contextlib.ExitStack()
-    if quiet:
-        devnull = open(os.devnull, "w")
-        silence.enter_context(contextlib.redirect_stdout(devnull))
-        silence.enter_context(contextlib.redirect_stderr(devnull))
 
     try:
-        with silence:
+        with silence_output(quiet):
             from loguru import logger
 
             if quiet:
                 logger.remove()
 
-            from ducta.console.config import ConfigManager
-            from ducta.console.execution import ContextInitializer
             from ducta.core import PipelineExecutor
 
-            config_manager = ConfigManager(
-                base_path=payload.get("base_path"),
-                layer_name=payload.get("layer_name"),
-                use_case=payload.get("use_case_name"),
-                config_type=payload.get("config_type"),
-                interactive=False,
-                require_config=False,
-            )
-            config_manager.change_to_config_directory()
-            context = ContextInitializer(config_manager).initialize(payload["env"])
-
-            output_path = payload.get("output_path")
-            if output_path:
-                os.makedirs(output_path, exist_ok=True)
-                context.output_path = output_path
-                settings = getattr(context, "global_settings", None)
-                if isinstance(settings, dict):
-                    settings["output_path"] = output_path
+            config_manager, context = bootstrap_worker_context(payload, ensure_output_dir=True)
 
             read_fallback_paths = payload.get("read_fallback_paths") or []
             if read_fallback_paths:
                 context._read_fallback_paths = read_fallback_paths
-                settings = getattr(context, "global_settings", None)
+                settings = getattr(context, "global_config", None)
                 if isinstance(settings, dict):
                     settings["_read_fallback_paths"] = read_fallback_paths
 
@@ -115,9 +90,6 @@ def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:  # noqa: BLE001 — a worker must always answer
         result["failed"] = True
         result["reason"] = f"{type(e).__name__}: {e}"
-    finally:
-        if devnull is not None:
-            devnull.close()
 
     return result
 

@@ -22,19 +22,14 @@ import os
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
 from loguru import logger
 
 from ducta.mlrun.experiment_tracking import ExperimentTracker
 from ducta.mlrun.model_registry import ModelRegistry
 from ducta.mlrun.resilience import STORAGE_RETRY_CONFIG
-from ducta.mlrun.storage import (
-    DatabricksStorageBackend,
-    LocalStorageBackend,
-    StorageBackend,
-    StorageBackendRegistry,
-)
+from ducta.mlrun.storage import StorageBackend, StorageBackendRegistry
 
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context
@@ -48,6 +43,15 @@ DEFAULT_MAX_ACTIVE_RUNS = 100
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_RETRY_DELAY = 1.0
 DEFAULT_STALE_RUN_AGE = 3600.0
+
+
+def _active_env(context: "Context") -> Optional[str]:
+    """The context's active environment name, however it's exposed.
+
+    Different Context flavors carry it under ``env`` or ``environment`` —
+    shared to avoid re-deriving this fallback at every call site.
+    """
+    return getattr(context, "env", None) or getattr(context, "environment", None)
 
 
 @dataclass
@@ -230,7 +234,7 @@ class StorageBackendFactory:
         if base_path:
             return base_path
 
-        gs = getattr(context, "global_settings", {}) or {}
+        gs = getattr(context, "global_config", {}) or {}
 
         if gs.get("mlops_path"):
             return gs["mlops_path"]
@@ -239,7 +243,7 @@ class StorageBackendFactory:
         if output_path and pipeline_name:
             try:
                 schema, sub_folder = pipeline_name.split(".", 1)
-                active_env = getattr(context, "env", None) or getattr(context, "environment", None)
+                active_env = _active_env(context)
                 root = Path(output_path)
                 if active_env:
                     return str(root / active_env / schema / sub_folder)
@@ -253,7 +257,7 @@ class StorageBackendFactory:
                 )
 
         if output_path:
-            active_env = getattr(context, "env", None) or getattr(context, "environment", None)
+            active_env = _active_env(context)
             return str(Path(output_path) / (active_env or "default"))
 
         logger.critical(
@@ -356,7 +360,7 @@ class TrackingURIResolver:
         if not output_path:
             return tracking_uri
 
-        active_env = getattr(context, "env", None) or getattr(context, "environment", None)
+        active_env = _active_env(context)
         base = Path(output_path) / active_env if active_env else Path(output_path)
         resolved = str(base / tracking_uri)
 
@@ -366,6 +370,46 @@ class TrackingURIResolver:
             logger.debug(f"Resolved tracking_uri (no env): {resolved}")
 
         return resolved
+
+
+def _resolve_component_storage(
+    context: "Context",
+    component_name: str,
+    capability_label: str,
+    path_label: str,
+    path_value: str,
+    pipeline_name: Optional[str],
+    storage: Optional[StorageBackend],
+    storage_kwargs: Dict[str, Any],
+) -> Optional[StorageBackend]:
+    """Resolve (or reuse) the storage backend for an MLOps component factory.
+
+    Shared by ``ExperimentTrackerFactory.from_context`` and
+    ``ModelRegistryFactory.from_context``, which previously each carried a
+    near-identical copy of this resolution + fail-safe warning + "Creating
+    X..." info log; only the component name, the "MLOps ... will not be
+    available" phrasing, and which path kwarg gets logged differ.
+    """
+    if storage is None:
+        storage = StorageBackendFactory.create_from_context(
+            context, pipeline_name=pipeline_name, **storage_kwargs
+        )
+
+    # Fail-safe: If storage creation failed, return None
+    if storage is None:
+        logger.warning(
+            f"{component_name} creation failed: Could not initialize storage backend. "
+            f"MLOps {capability_label} will not be available. This usually happens if "
+            "'output_path' is missing from global_config or cannot be resolved."
+        )
+        return None
+
+    logger.info(
+        f"Creating {component_name} with {storage.__class__.__name__} "
+        f"at base '{storage.base_path}' "
+        f"(env: {_active_env(context) or 'none'}, {path_label}: {path_value})"
+    )
+    return storage
 
 
 class ExperimentTrackerFactory:
@@ -389,30 +433,18 @@ class ExperimentTrackerFactory:
         """
         Create ExperimentTracker with appropriate storage backend from context.
         """
-
-        if storage is None:
-            storage = StorageBackendFactory.create_from_context(
-                context, pipeline_name=pipeline_name, **storage_kwargs
-            )
-
-        # Fail-safe: If storage creation failed, return None
-
-        if storage is None:
-            logger.warning(
-                "ExperimentTracker creation failed: Could not initialize storage backend. "
-                "MLOps tracking will not be available. This usually happens if 'output_path' "
-                "is missing from global_settings or cannot be resolved."
-            )
-
-            return None
-
-        active_env = getattr(context, "env", None) or getattr(context, "environment", None)
-
-        logger.info(
-            f"Creating ExperimentTracker with {storage.__class__.__name__} "
-            f"at base '{storage.base_path}' "
-            f"(env: {active_env or 'none'}, tracking_path: {tracking_path})"
+        storage = _resolve_component_storage(
+            context,
+            "ExperimentTracker",
+            "tracking",
+            "tracking_path",
+            tracking_path,
+            pipeline_name,
+            storage,
+            storage_kwargs,
         )
+        if storage is None:
+            return None
 
         return ExperimentTracker(
             storage=storage,
@@ -445,30 +477,18 @@ class ModelRegistryFactory:
         the model registry and the experiment tracker share one backend
         instance) to skip resolving/creating a new one.
         """
-
-        if storage is None:
-            storage = StorageBackendFactory.create_from_context(
-                context, pipeline_name=pipeline_name, **storage_kwargs
-            )
-
-        # Fail-safe: If storage creation failed, return None
-
-        if storage is None:
-            logger.warning(
-                "ModelRegistry creation failed: Could not initialize storage backend. "
-                "MLOps model registry will not be available. This usually happens if 'output_path' "
-                "is missing from global_settings or cannot be resolved."
-            )
-
-            return None
-
-        active_env = getattr(context, "env", None) or getattr(context, "environment", None)
-
-        logger.info(
-            f"Creating ModelRegistry with {storage.__class__.__name__} "
-            f"at base '{storage.base_path}' "
-            f"(env: {active_env or 'none'}, registry_path: {registry_path})"
+        storage = _resolve_component_storage(
+            context,
+            "ModelRegistry",
+            "model registry",
+            "registry_path",
+            registry_path,
+            pipeline_name,
+            storage,
+            storage_kwargs,
         )
+        if storage is None:
+            return None
 
         return ModelRegistry(
             storage=storage,
@@ -528,30 +548,7 @@ class MLOpsContext:
                 **{k: v for k, v in kwargs.items() if k in MLOpsConfig.__dataclass_fields__},
             )
 
-            # Create components from config
-            resolved_backend = _resolve_backend_type(legacy_config.backend_type)
-
-            if resolved_backend == "local":
-                storage = LocalStorageBackend(base_path=legacy_config.storage_path)
-            else:
-                storage = DatabricksStorageBackend(
-                    catalog=legacy_config.catalog or os.getenv("DATABRICKS_CATALOG", "main"),
-                    schema=legacy_config.schema or os.getenv("DATABRICKS_SCHEMA", "ml_tracking"),
-                )
-
-            model_registry = ModelRegistry(
-                storage=storage,
-                registry_path=legacy_config.registry_path,
-            )
-
-            experiment_tracker = ExperimentTracker(
-                storage=storage,
-                tracking_path=legacy_config.tracking_path,
-                metric_buffer_size=legacy_config.metric_buffer_size,
-                auto_flush_metrics=legacy_config.auto_flush_metrics,
-                max_active_runs=legacy_config.max_active_runs,
-            )
-
+            _, model_registry, experiment_tracker = MLOpsContext._build_from_config(legacy_config)
             config = legacy_config
 
         self.model_registry = model_registry
@@ -574,8 +571,37 @@ class MLOpsContext:
 
         config.validate()
 
-        resolved_backend = _resolve_backend_type(config.backend_type)
+        _, model_registry, experiment_tracker = cls._build_from_config(config)
 
+        logger.info(
+            f"MLOpsContext created from config "
+            f"(backend: {_resolve_backend_type(config.backend_type)}, "
+            f"max_runs: {config.max_active_runs})"
+        )
+
+        return cls(
+            model_registry=model_registry,
+            experiment_tracker=experiment_tracker,
+            config=config,
+        )
+
+    @staticmethod
+    def _build_from_config(
+        config: MLOpsConfig,
+    ) -> Tuple[StorageBackend, ModelRegistry, ExperimentTracker]:
+        """Build the (storage, model_registry, experiment_tracker) triple a
+        ``MLOpsConfig`` describes.
+
+        Shared by ``from_config`` and ``__init__``'s legacy-kwargs branch,
+        which previously built this triple independently and had drifted:
+        the legacy path never passed ``auto_cleanup_stale``/
+        ``stale_run_age_seconds`` to ``ExperimentTracker`` (silently ignoring
+        those ``MLOpsConfig`` settings) and constructed the Databricks backend
+        directly instead of through ``StorageBackendRegistry`` (silently
+        ignoring ``config.volume``). Does not call ``config.validate()`` —
+        callers decide whether/when to validate.
+        """
+        resolved_backend = _resolve_backend_type(config.backend_type)
         backend_cls = StorageBackendRegistry.get(resolved_backend)
 
         if resolved_backend == "local":
@@ -603,16 +629,7 @@ class MLOpsContext:
             stale_run_age_seconds=config.stale_run_age_seconds,
         )
 
-        logger.info(
-            f"MLOpsContext created from config "
-            f"(backend: {resolved_backend}, max_runs: {config.max_active_runs})"
-        )
-
-        return cls(
-            model_registry=model_registry,
-            experiment_tracker=experiment_tracker,
-            config=config,
-        )
+        return storage, model_registry, experiment_tracker
 
     @classmethod
     def from_context(
@@ -649,7 +666,7 @@ class MLOpsContext:
             max_active_runs if max_active_runs is not None else config.max_active_runs
         )
 
-        active_env = getattr(context, "env", None) or getattr(context, "environment", None)
+        active_env = _active_env(context)
 
         mode = getattr(context, "execution_mode", "local")
 

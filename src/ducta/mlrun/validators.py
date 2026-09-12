@@ -22,7 +22,7 @@ import math
 import re
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from loguru import logger
 
@@ -559,24 +559,43 @@ class ArtifactValidator:
             pickle.load(f)
 
     @staticmethod
+    def _load_native_or_pickle_fallback(
+        artifact_path: Path,
+        framework: str,
+        native_suffix: str,
+        native_loader: Callable[[Path], None],
+        trust_artifact_source: bool,
+    ) -> None:
+        """Try the framework's native (safe) format first; otherwise fall
+        back to pickle if trusted, or a lightweight non-deserializing check
+        otherwise. Shared by ``_load_xgboost``/``_load_lightgbm``, which
+        previously carried this exact three-way branch twice.
+        """
+        if str(artifact_path).endswith(native_suffix):
+            native_loader(artifact_path)
+        elif trust_artifact_source:
+            ArtifactValidator._load_pickle(artifact_path)
+        else:
+            logger.warning(
+                f"Skipping pickle-based validation of {framework} artifact at {artifact_path}: "
+                "requires trust_artifact_source=True."
+            )
+            ArtifactValidator._lightweight_validate(artifact_path, framework)
+
+    @staticmethod
     def _load_xgboost(artifact_path: Path, trust_artifact_source: bool = False) -> None:
         try:
             import xgboost as xgb  # type: ignore
         except ImportError as e:
             logger.warning("xgboost runtime not installed, cannot validate xgboost artifacts")
             raise ImportError("xgboost library is required to validate xgboost artifacts") from e
-        # Try JSON booster first (native format, safe); otherwise the only
-        # remaining option is the pickle fallback, which requires trust.
-        if str(artifact_path).endswith(".json"):
-            xgb.Booster(model_file=str(artifact_path))
-        elif trust_artifact_source:
-            ArtifactValidator._load_pickle(artifact_path)
-        else:
-            logger.warning(
-                f"Skipping pickle-based validation of xgboost artifact at {artifact_path}: "
-                "requires trust_artifact_source=True."
-            )
-            ArtifactValidator._lightweight_validate(artifact_path, "xgboost")
+        ArtifactValidator._load_native_or_pickle_fallback(
+            artifact_path,
+            "xgboost",
+            ".json",
+            lambda p: xgb.Booster(model_file=str(p)),
+            trust_artifact_source,
+        )
 
     @staticmethod
     def _load_lightgbm(artifact_path: Path, trust_artifact_source: bool = False) -> None:
@@ -585,16 +604,13 @@ class ArtifactValidator:
         except ImportError as e:
             logger.warning("lightgbm runtime not installed, cannot validate lightgbm artifacts")
             raise ImportError("lightgbm library is required to validate lightgbm artifacts") from e
-        if str(artifact_path).endswith(".txt"):
-            lgb.Booster(model_file=str(artifact_path))
-        elif trust_artifact_source:
-            ArtifactValidator._load_pickle(artifact_path)
-        else:
-            logger.warning(
-                f"Skipping pickle-based validation of lightgbm artifact at {artifact_path}: "
-                "requires trust_artifact_source=True."
-            )
-            ArtifactValidator._lightweight_validate(artifact_path, "lightgbm")
+        ArtifactValidator._load_native_or_pickle_fallback(
+            artifact_path,
+            "lightgbm",
+            ".txt",
+            lambda p: lgb.Booster(model_file=str(p)),
+            trust_artifact_source,
+        )
 
     @staticmethod
     def _load_pytorch(artifact_path: Path) -> None:

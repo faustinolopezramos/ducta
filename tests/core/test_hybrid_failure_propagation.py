@@ -19,7 +19,7 @@ from ducta.core.settings import CoreSettings
 
 def _executor(pipeline_type="hybrid"):
     context = MagicMock()
-    context.global_settings = {
+    context.global_config = {
         "preflight_enabled": False,
         "enable_run_certificate": False,
         "start_date": "2024-01-01",

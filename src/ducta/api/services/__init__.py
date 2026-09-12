@@ -20,18 +20,15 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from ducta.api.services.config_cache import CachedConfigService, get_cached_config_service
 from ducta.api.services.config_service import ConfigService
 from ducta.api.services.node_schema_service import NodeSchemaService
 from ducta.api.services.node_service import NodeFileInfo, NodeService
 from ducta.api.services.project import ProjectService
 
 __all__ = [
-    "CachedConfigService",
     "ConfigService",
     "NodeFileInfo",
     "NodeSchemaService",
     "NodeService",
     "ProjectService",
-    "get_cached_config_service",
 ]

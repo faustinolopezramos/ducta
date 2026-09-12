@@ -38,7 +38,6 @@ from ducta.api.config import get_settings
 from ducta.api.execution.manager import get_execution_manager
 from ducta.api.middleware import register_middleware
 from ducta.api.routes import register_routes
-from ducta.api.services.config_cache import get_cached_config_service
 from ducta.api.utils.logging import configure_logging
 
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "dist"
@@ -121,13 +120,6 @@ def create_app() -> FastAPI:
         else:
             logger.info("Persistence disabled — running in in-memory mode")
         # ────────────────────────────────────────────────────────────────────
-
-        config_cache = get_cached_config_service(ttl_seconds=settings.config_cache_ttl_seconds)
-        app.state.config_cache = config_cache
-        logger.info(
-            "CachedConfigService initialized (ttl={ttl}s, max_size=100)",
-            ttl=settings.config_cache_ttl_seconds,
-        )
 
         # ExecutionManager is in-memory; DB persistence is layered transparently.
         exec_manager = get_execution_manager()

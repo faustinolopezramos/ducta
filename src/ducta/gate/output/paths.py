@@ -46,14 +46,6 @@ class _PathComponents:
         if not self.table_name or not self.schema:
             raise ConfigurationError("table_name and schema cannot be empty")
 
-        # `validate_output_key` (below, in ConfigValidator) applies this same
-        # pattern when these values are *parsed* from a declarative `out_key`
-        # (e.g. "schema.sub_folder.table_name") — but resolve_output_path lets
-        # `dataset_config` override each field explicitly, bypassing that
-        # check entirely. A `table_name`/`schema`/`sub_folder` of `"../../etc"`
-        # would then escape `output_path` via `Path.joinpath`. Validate here,
-        # the single point where both sources converge, so neither path can
-        # skip it.
         for field_name, value in (
             ("table_name", self.table_name),
             ("schema", self.schema),

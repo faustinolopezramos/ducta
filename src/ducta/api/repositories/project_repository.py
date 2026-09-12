@@ -29,6 +29,7 @@ from loguru import logger
 from ducta.api.exceptions import ProjectAlreadyExistsError, ProjectNotFoundError, ValidationError
 from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, write_config_file
+from ducta.api.workspace.utils import find_ducta_config
 
 _PROJECT_SETTINGS_FILE = "project_settings.yaml"
 _PROJECTS_DIR = "projects"
@@ -173,12 +174,7 @@ class ProjectRepository:
         all_pipelines = {}
 
         # Check if this is a layered project (ducta.yaml defines layers)
-        ducta_config_file = None
-        for ext in (".yaml", ".yml", ".toml", ".json"):
-            candidate = p_dir / f"ducta{ext}"
-            if candidate.exists():
-                ducta_config_file = candidate
-                break
+        ducta_config_file = find_ducta_config(p_dir)
 
         if ducta_config_file:
             try:
@@ -265,7 +261,7 @@ class ProjectRepository:
                 "base_path": "../..",
                 "env_config": {
                     "base": {
-                        "global_settings_path": "config/global_settings.yaml",
+                        "global_config_path": "config/global_config.yaml",
                         "pipelines_config_path": f"projects/{project_id}/config/pipelines.yaml",
                         "nodes_config_path": "config/nodes.yaml",
                         "input_config_path": "config/input.yaml",

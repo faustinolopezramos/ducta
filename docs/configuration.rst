@@ -22,7 +22,7 @@ A Ducta project is described by five files, each with one job:
 
    * - File
      - What it defines
-   * - ``config/global_settings.{ext}``
+   * - ``config/global_config.{ext}``
      - Project-wide settings: paths, execution mode, quality profiles, MLOps.
    * - ``config/pipelines.{ext}``
      - Your workflows — which nodes run, in what order, of what type.
@@ -48,7 +48,7 @@ Two more files complete the picture:
    them under a ``pipelines:`` / ``nodes:`` / ``inputs:`` key — Ducta would read
    that wrapper as a pipeline/node/dataset called "pipelines" and fail.
 
-global_settings — project-wide settings
+global_config — project-wide settings
 ----------------------------------------
 
 Settings live at the top level of the file (flat keys):
@@ -59,7 +59,7 @@ Settings live at the top level of the file (flat keys):
 
       .. code-block:: toml
 
-         # config/global_settings.toml
+         # config/global_config.toml
          project_name = "my_project"
          mode = "local"                      # local, databricks, or distributed
          input_path = "data"                 # base dir for ${input_path}
@@ -75,7 +75,7 @@ Settings live at the top level of the file (flat keys):
 
       .. code-block:: yaml
 
-         # config/global_settings.yaml
+         # config/global_config.yaml
          project_name: my_project
          mode: local
          input_path: data
@@ -340,7 +340,7 @@ Variables & Secrets
 Config values support interpolation so you never hard-code paths or credentials:
 
 - ``${input_path}`` / ``${output_path}`` / ``${environment}`` — resolved from
-  ``global_settings`` and the active ``--env``.
+  ``global_config`` and the active ``--env``.
 - ``$DB_PASSWORD`` — read from ``.env`` or the process environment.
 - ``$TIMEOUT|300`` — use the environment value, or ``300`` if it is not set.
 
@@ -420,19 +420,19 @@ The ``environment.*`` root form. ``ducta template`` scaffolds this by default:
    my_project/
    ├── environment.toml            # maps each env -> its config file paths
    ├── config/
-   │   ├── global_settings.toml    # base: shared by every environment
+   │   ├── global_config.toml    # base: shared by every environment
    │   ├── pipelines.toml          # base only (pipelines/nodes are not per-env)
    │   ├── nodes.toml
    │   ├── input.toml
    │   ├── output.toml
-   │   ├── dev/                     # dev overrides: global_settings / input / output
+   │   ├── dev/                     # dev overrides: global_config / input / output
    │   ├── sandbox/
    │   └── prod/
    └── .env
 
 - The **base** config lives directly under ``config/`` and is always loaded.
 - ``config/dev/``, ``config/sandbox/``, ``config/prod/`` override only
-  ``global_settings``, ``input``, and ``output`` — ``pipelines`` and ``nodes``
+  ``global_config``, ``input``, and ``output`` — ``pipelines`` and ``nodes``
   are defined once, in base, and shared across every environment.
 - The ``environment`` descriptor wires env names to those paths, so you select
   one with ``--env``:
@@ -455,7 +455,7 @@ The ``environment.*`` root form. ``ducta template`` scaffolds this by default:
 Inline overrides (bundle / directory-convention / quickstart / layered forms)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The lighter-weight forms keep one ``global_settings`` (however it's packaged)
+The lighter-weight forms keep one ``global_config`` (however it's packaged)
 and carry an inline ``environments:`` block of minimal per-env diffs:
 
 .. code-block:: yaml
@@ -523,7 +523,7 @@ carry the same flat sections — only the packaging changes.
 
 .. note::
    Environment overrides work in **every** form: keep an inline ``environments:``
-   block in your global settings and Ducta deep-merges the active ``--env`` over
+   block in your global config and Ducta deep-merges the active ``--env`` over
    the base (the ``config/dev/`` override *directories* are specific to the
    canonical environment-root form).
 
@@ -532,13 +532,13 @@ Bundle — everything in one file
 
 A single ``ducta.*``, ``config.*``, or ``bundle.*`` file whose top level carries
 the five ``*_config`` sections. This is the one place the sections are *wrapped*
-(under ``global_settings`` / ``pipelines_config`` / ...), because they share a
+(under ``global_config`` / ``pipelines_config`` / ...), because they share a
 file:
 
 .. code-block:: yaml
 
    # ducta.yaml  — run:  ducta start --env dev --pipeline demo
-   global_settings:
+   global_config:
      input_path: ./data
      output_path: ./data
      mode: local
@@ -558,13 +558,13 @@ Directory convention — five files, no root
 
 Drop the five standard files in the project root or a ``config/`` subdirectory
 and skip the ``environment.*`` descriptor entirely. Ducta locates each by name
-(``global_settings`` *or* ``global``, ``pipelines``, ``nodes``, ``input``,
+(``global_config`` *or* ``global``, ``pipelines``, ``nodes``, ``input``,
 ``output``). The global file may sit at the root with the rest under ``config/``:
 
 .. code-block:: text
 
    my_project/
-   ├── global.yaml                 # or config/global_settings.yaml
+   ├── global.yaml                 # or config/global_config.yaml
    └── config/
        ├── pipelines.yaml
        ├── nodes.yaml

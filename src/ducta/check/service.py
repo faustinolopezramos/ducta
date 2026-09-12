@@ -27,6 +27,33 @@ if TYPE_CHECKING:
     from ducta.check.storage import StorageBackend
 
 
+def _resolve_storage(storage: "Optional[StorageBackend]", workspace: str) -> "StorageBackend":
+    """Return *storage* unchanged, or a default ``FileStorageBackend`` for
+    *workspace* when none was given. Shared by every read-path method below."""
+    if storage is not None:
+        return storage
+    from ducta.check import FileStorageBackend
+
+    return FileStorageBackend(workspace)
+
+
+def _pandas_loader_for(format: str):
+    """Return the pandas reader for *format*, or raise if unsupported.
+    Shared by ``run_checks`` and ``profile``, which both load a standalone
+    file the same way."""
+    import pandas as pd  # type: ignore
+
+    loaders = {
+        "parquet": pd.read_parquet,
+        "csv": pd.read_csv,
+        "json": pd.read_json,
+    }
+    loader = loaders.get(format.lower())
+    if loader is None:
+        raise ValueError(f"Unsupported format '{format}'. Use parquet, csv, or json.")
+    return loader
+
+
 class QualityService:
     """Facade over the ducta.check engine for CLI consumption."""
 
@@ -60,21 +87,10 @@ class QualityService:
         source_checks: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Run data-quality checks on a local file and return a report dict."""
-        import pandas as pd  # type: ignore
-
         from ducta.check import FileStorageBackend, ValidationPhaseRunner
         from ducta.console.config import load_config_file
 
-        # Load dataframe
-        loaders = {
-            "parquet": pd.read_parquet,
-            "csv": pd.read_csv,
-            "json": pd.read_json,
-        }
-        loader = loaders.get(format.lower())
-        if loader is None:
-            raise ValueError(f"Unsupported format '{format}'. Use parquet, csv, or json.")
-        df = loader(input_path)
+        df = _pandas_loader_for(format)(input_path)
 
         # Load checks config
         raw_config = load_config_file(config_path)
@@ -119,20 +135,9 @@ class QualityService:
         because its whole point is to be useful before anyone has adopted the
         framework.
         """
-        import pandas as pd  # type: ignore
-
         from ducta.check.profiling import infer_spec, profile_dataset, spec_to_yaml
 
-        loaders = {
-            "parquet": pd.read_parquet,
-            "csv": pd.read_csv,
-            "json": pd.read_json,
-        }
-        loader = loaders.get(format.lower())
-        if loader is None:
-            raise ValueError(f"Unsupported format '{format}'. Use parquet, csv, or json.")
-
-        df = loader(input_path)
+        df = _pandas_loader_for(format)(input_path)
         name = dataset_name or Path(input_path).stem
         profile = profile_dataset(df, dataset_name=name, sample_rows=sample_rows)
         spec = infer_spec(profile, strictness)
@@ -159,10 +164,7 @@ class QualityService:
         pipeline_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Load a stored quality report (or list available run IDs)."""
-        if storage is None:
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
         effective_pipeline = pipeline_name or DEFAULT_PIPELINE_NAME
         run_ids = storage.list_reports(dataset, effective_pipeline)
 
@@ -197,10 +199,7 @@ class QualityService:
         pipeline_name: Optional[str] = None,
     ) -> None:
         """Delete a stored quality report."""
-        if storage is None:
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
         if not storage.delete_report(run_id, dataset, pipeline_name or DEFAULT_PIPELINE_NAME):
             raise FileNotFoundError(f"Report '{run_id}' not found for dataset '{dataset}'")
 
@@ -216,10 +215,7 @@ class QualityService:
         pipeline. Omitted, aggregates across every pipeline and returns
         ``"{pipeline_name}/{dataset_name}"`` qualified names.
         """
-        if storage is None:
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
         return storage.list_datasets(pipeline_name)
 
     @staticmethod
@@ -235,10 +231,7 @@ class QualityService:
         each summary entry's ``dataset`` is then the qualified
         ``"{pipeline_name}/{dataset_name}"`` name (see ``list_datasets``).
         """
-        if storage is None:
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
         summary: List[Dict[str, Any]] = []
         for entry in storage.list_datasets(pipeline_name):
             if pipeline_name is not None:
@@ -269,7 +262,7 @@ class QualityService:
     def validate_node_config(
         node_name: str,
         config_path: str,
-        global_settings_path: Optional[str] = None,
+        global_config_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Validate quality config for a node without executing any checks."""
         from ducta.check import QUALITY_CHECKS_REGISTRY
@@ -287,15 +280,15 @@ class QualityService:
 
         node_cfg = nodes[node_name]
 
-        # Load profiles if global_settings provided
+        # Load profiles if global_config provided
         profiles: Dict[str, Any] = {}
-        if global_settings_path:
+        if global_config_path:
             try:
-                gs = load_config_file(global_settings_path)
+                gs = load_config_file(global_config_path)
                 raw_profiles = gs.get("quality", {}).get("profiles", {})
                 profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
             except Exception as exc:
-                warnings.append(f"Could not load global_settings: {exc}")
+                warnings.append(f"Could not load global_config: {exc}")
 
         def _validate_checks_section(section_key: str) -> None:
             section = node_cfg.get(section_key, {})
@@ -306,7 +299,7 @@ class QualityService:
             if profile_name and profile_name not in profiles:
                 warnings.append(
                     f"Profile '{profile_name}' referenced in {section_key} is not defined "
-                    "in global_settings"
+                    "in global_config"
                 )
 
             for check_name, check_cfg in section.get("checks", {}).items():
@@ -341,10 +334,7 @@ class QualityService:
         pipeline_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Return the last N quality scores for a dataset."""
-        if storage is None:
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
         scores = storage.load_score_trend(dataset, last_n, pipeline_name or DEFAULT_PIPELINE_NAME)
 
         if not scores:
@@ -374,10 +364,7 @@ class QualityService:
             quality_dir = Path(workspace) / ".quality"
             if not quality_dir.exists():
                 raise FileNotFoundError(f"No quality data found in workspace '{workspace}'")
-
-            from ducta.check import FileStorageBackend
-
-            storage = FileStorageBackend(workspace)
+        storage = _resolve_storage(storage, workspace)
 
         node_scores: Dict[str, float] = {}
         gate_actions: Dict[str, str] = {}

@@ -158,20 +158,32 @@ class MLOpsAutoConfigurator:
 
     @classmethod
     def should_init_mlops_for_pipeline(
-        cls, nodes_config: Dict[str, Dict[str, Any]], global_settings: Dict[str, Any]
+        cls, nodes_config: Dict[str, Dict[str, Any]], global_config: Dict[str, Any]
     ) -> bool:
-        """
-        Determine if MLOps should be initialized for a pipeline.
-        """
-        mlops_global = global_settings.get("mlops", {})
+        """Whether this pipeline's nodes warrant experiment tracking.
 
-        if mlops_global.get("enabled") is False:
-            logger.info("MLOps disabled by global settings")
-            return False
+        ``nodes_config`` must hold **the nodes of the pipeline being run**, not
+        every node in the project. Handed the whole project, one ML node
+        anywhere turns tracking on for every batch pipeline that shares the
+        configuration.
 
-        if mlops_global.get("enabled") is True:
-            logger.info("MLOps enabled by global settings")
-            return True
+        An explicit setting always wins over detection. Both spellings are
+        accepted, and the nested one wins, matching
+        ``CoreSettings._resolve_mlops_enabled`` — this used to read only
+        ``mlops.enabled``, so the flat ``mlops_enabled`` that
+        ``GlobalConfigSchema`` documents did nothing here.
+        """
+        mlops_section = global_config.get("mlops") or {}
+        explicit = mlops_section.get("enabled")
+        if explicit is None:
+            explicit = global_config.get("mlops_enabled")
+
+        if explicit is not None:
+            from ducta.core.settings import coerce_bool
+
+            enabled = coerce_bool("mlops_enabled", explicit, default=True)
+            logger.info("MLOps {} by global config", "enabled" if enabled else "disabled")
+            return enabled
 
         ml_nodes = cls.detect_pipeline_ml_nodes(nodes_config)
 

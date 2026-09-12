@@ -35,14 +35,7 @@ def collect_jdbc_jars(
     lib_dir: Optional[Path] = None,
     download: bool = True,
 ) -> List[str]:
-    """Ensure JDBC drivers for the configured sources are present; return JAR paths.
-
-    Reads ``config/sources.yaml`` (if present), downloads any missing driver JARs into
-    ``lib/jdbc`` and returns absolute paths to every JAR found there.
-
-    Best-effort: never raises. On failure it returns whatever JARs already exist so the
-    session can still start.
-    """
+    """Ensure JDBC drivers for the configured sources are present; return JAR paths."""
     lib_dir = Path(lib_dir) if lib_dir else _default_lib_dir()
     sources_path = Path(sources_path) if sources_path else Path(DEFAULT_SOURCES_PATH)
 

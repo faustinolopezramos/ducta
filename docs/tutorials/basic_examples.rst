@@ -15,7 +15,7 @@ Regardless of the format you choose, your configuration files should live in the
    my_project/
    ├── environment.toml               # maps environments to config files
    ├── config/
-   │   ├── global_settings.toml (or .yaml/.json)
+   │   ├── global_config.toml (or .yaml/.json)
    │   ├── pipelines.toml
    │   ├── nodes.toml
    │   ├── input.toml

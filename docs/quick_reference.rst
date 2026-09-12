@@ -50,7 +50,7 @@ A standard Ducta project follows this structure:
    ├── config/                     # YAML/TOML/JSON configuration
    │   ├── pipelines.toml          # Workflows: nodes and their order
    │   ├── nodes.toml              # Step definitions
-   │   ├── global_settings.toml    # Project-wide settings
+   │   ├── global_config.toml    # Project-wide settings
    │   ├── input.toml              # Input sources catalog
    │   ├── output.toml             # Output destinations catalog
    │   ├── dev/                    # Per-environment overrides
@@ -152,7 +152,7 @@ Define your workflows in ``config/pipelines.toml`` (YAML and JSON also supported
 Environment Overrides
 ---------------------
 
-To override a setting for production, create an override file (e.g., ``config/prod/global_settings.yaml``):
+To override a setting for production, create an override file (e.g., ``config/prod/global_config.yaml``):
 
 .. tab-set::
 

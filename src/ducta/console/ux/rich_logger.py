@@ -119,9 +119,9 @@ class RichLoggerManager:
         """
         level_styles = {
             "DEBUG": DIM_WHITE,
-            "INFO": "bold bright_blue",
-            "WARNING": "bold bright_yellow",
-            "ERROR": "bold bright_red",
+            "INFO": INFO,
+            "WARNING": WARNING,
+            "ERROR": ERROR,
             "CRITICAL": "bold bright_white on bright_red",
         }
 
@@ -145,6 +145,7 @@ class RichLoggerManager:
         show_time: bool = True,
         show_path: bool = False,
         enable_rich_tracebacks: bool = True,
+        file_logging: bool = True,
     ) -> None:
         """
         Configure application logging with professional Rich formatting.
@@ -190,10 +191,21 @@ class RichLoggerManager:
             colorize=False,  # Rich handles colors via markup
         )
 
-        if log_file:
-            log_path = Path(log_file)
-        else:
-            log_path = Path("logs/ducta.log")
+        # The default sink is deliberately project-relative: `ducta template`
+        # scaffolds a `logs/` directory and gitignores it, so a run inside a
+        # project leaves its log next to the data it produced. That only holds
+        # for commands that *operate on* a project. `ducta template` runs before
+        # one exists, so creating `./logs/ducta.log` there wrote into whatever
+        # directory the user happened to be standing in — and then
+        # `validate_template_arguments` saw that very directory as "not empty"
+        # and refused `--output-path .`, in a directory that had been empty a
+        # moment earlier. Such commands pass file_logging=False; an explicit
+        # --log-file still wins, since that names a destination outright.
+        if not file_logging and not log_file:
+            logger.debug("Rich logger initialized (console only, console_level={})", console_level)
+            return
+
+        log_path = Path(log_file) if log_file else Path("logs/ducta.log")
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
 

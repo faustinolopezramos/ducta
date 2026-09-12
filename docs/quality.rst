@@ -242,5 +242,5 @@ quality data::
        <dataset_name>/...   # runs with no real pipeline (e.g. `ducta quality run` on a bare file)
 
 The same scoping applies to the optional structured output (``data_quality.output`` /
-``global_settings.quality.output``, when ``enabled: true``), which persists under
+``global_config.quality.output``, when ``enabled: true``), which persists under
 ``<base_path>/<report_type>/<pipeline_name>/<node_name>/<run_id>``.

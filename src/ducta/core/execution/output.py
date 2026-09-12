@@ -30,6 +30,23 @@ from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.settings import CoreSettings
 
 
+def report_node_failure(error: Exception, node_name: str) -> None:
+    """Show a rich, developer-facing error breakdown for a failed node,
+    falling back to a plain log line if the console formatter is unavailable.
+
+    Shared by ``NodeExecutor`` and ``ParallelCoordinator``, which previously
+    each carried an identical try/import/format/except-fallback copy of this.
+    """
+    try:
+        from ducta.console.ux.error_analyzer import format_error_for_developer
+        from ducta.console.ux.rich_logger import RichLoggerManager
+
+        console = RichLoggerManager.get_console()
+        format_error_for_developer(error, node_name, console)
+    except Exception:
+        logger.error("Node '{}' failed: {}", node_name, error)
+
+
 class OutputWriter:
     """Validates and persists node output DataFrames."""
 

@@ -90,7 +90,7 @@ def _install_mocks():
     )
 
     # -------------------------------------------------------------- #
-    # ducta.mlrun / ducta.check / ducta.core  (thunk-based mocks)    #
+    # ducta.mlrun / ducta.check  (thunk-based mocks)                 #
     # -------------------------------------------------------------- #
 
     class _HyperparamConfig:
@@ -124,28 +124,6 @@ def _install_mocks():
     ducta_check_core = _make_module(
         "ducta.check.core",
         load_quality_extensions=lambda exts: None,
-    )
-
-    # ducta.core — lazily imported inside validators.py
-    class _PipelineDependencyResolver:
-        @staticmethod
-        def validate_pipeline_dependencies(pipelines, depends_on_map=None):
-            pass
-
-    ducta_core_pdr = _make_module(
-        "ducta.core.pipeline_dependency_resolver",
-        PipelineDependencyResolver=_PipelineDependencyResolver,
-    )
-
-    ducta_core_di = _make_module(
-        "ducta.core.dependency_inference",
-        merge_pipeline_depends_on=lambda p, n: None,
-    )
-
-    ducta_core = _make_module(
-        "ducta.core",
-        pipeline_dependency_resolver=ducta_core_pdr,
-        dependency_inference=ducta_core_di,
     )
 
     # -------------------------------------------------------------- #
@@ -193,9 +171,6 @@ def _install_mocks():
         "ducta.mlrun.hyperparams": ducta_mlrun_hyperparams,
         "ducta.check": ducta_check,
         "ducta.check.core": ducta_check_core,
-        "ducta.core": ducta_core,
-        "ducta.core.pipeline_dependency_resolver": ducta_core_pdr,
-        "ducta.core.dependency_inference": ducta_core_di,
         "databricks": databricks,
         "databricks.connect": dc,
         "databricks.sdk": _make_module("databricks.sdk", core=dsc),
@@ -223,7 +198,7 @@ def temp_dir():
 
 
 @pytest.fixture
-def minimal_global_settings():
+def minimal_global_config():
     return {
         "input_path": "/data/input",
         "output_path": "/data/output",

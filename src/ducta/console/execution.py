@@ -26,7 +26,7 @@ from loguru import logger  # type: ignore
 
 from ducta.console.config import AppConfigManager, ConfigManager
 from ducta.console.core import ConfigurationError, ExitCode, ValidationError
-from ducta.console.ux.error_analyzer import format_error_for_developer
+from ducta.console.ux.error_analyzer import try_format_error
 
 try:
     from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
@@ -129,10 +129,7 @@ class ContextInitializer:
         except ConfigurationError:
             raise
         except Exception as e:
-            try:
-                format_error_for_developer(e, f"INIT:{env}", RichLoggerManager.get_console())
-            except Exception:
-                pass
+            try_format_error(e, f"INIT:{env}")
             raise ConfigurationError(f"Context initialization failed: {e}")
 
     def _resolve_context(self, env: str) -> Optional[Context]:
@@ -153,7 +150,7 @@ class ContextInitializer:
                 app_config = AppConfigManager(config_file_path)
                 return self.context_loader.load_from_paths(app_config.get_env_config(env), env)
             # Discovered file is not an env_config root (e.g. a bundle or a bare
-            # global settings file): resolve it as a flexible form.
+            # global config file): resolve it as a flexible form.
             flexible = FlexibleConfigResolver.resolve_file(Path(config_file_path), data, env)
             if flexible is not None:
                 return flexible
@@ -192,7 +189,7 @@ def load_context(
     if all(
         k in config_data
         for k in (
-            "global_settings",
+            "global_config",
             "pipelines_config",
             "nodes_config",
             "input_config",
@@ -200,7 +197,7 @@ def load_context(
         )
     ):
         context = Context(
-            global_settings=config_data["global_settings"],
+            global_config=config_data["global_config"],
             pipelines_config=config_data["pipelines_config"],
             nodes_config=config_data["nodes_config"],
             input_config=config_data["input_config"],
@@ -212,7 +209,7 @@ def load_context(
         base = Path(config_path_str).parent
         ext = Path(config_path_str).suffix
         context = Context(
-            global_settings=str(base / f"global_settings{ext}"),
+            global_config=str(base / f"global_config{ext}"),
             pipelines_config=str(base / f"pipelines{ext}"),
             nodes_config=str(base / f"nodes{ext}"),
             input_config=str(base / f"input{ext}"),
@@ -290,6 +287,39 @@ def run_streaming_pipeline_cli(
             model_version=model_version,
             hyperparams=parsed,
         )
+
+        # `run_streaming_pipeline` returns once the startup work is queued, not
+        # once anything is running. Reporting success on that id alone meant a
+        # pipeline whose every node failed to start still exited 0, and no script
+        # wrapping `ducta` could tell the two apart.
+        startup = executor.wait_for_streaming_startup(execution_id, timeout=300.0)
+        started, skipped, failed = (
+            startup["started"],
+            startup["skipped"],
+            startup["failed"],
+        )
+
+        for node, reason in sorted(skipped.items()):
+            logger.warning("Streaming node '{}' did not start: {}", node, reason)
+        for node, reason in sorted(failed.items()):
+            logger.error("Streaming node '{}' failed to start: {}", node, reason)
+
+        if not started:
+            logger.error(
+                "Streaming pipeline '{}' started no queries (execution ID: {})",
+                pipeline,
+                execution_id,
+            )
+            return ExitCode.EXECUTION_ERROR.value
+
+        if skipped or failed:
+            logger.warning(
+                "Streaming pipeline '{}' started {} of {} node(s)",
+                pipeline,
+                len(started),
+                len(started) + len(skipped) + len(failed),
+            )
+
         print(f"Streaming pipeline '{pipeline}' started with execution ID: {execution_id}")
         logger.info("Streaming pipeline '{}' started with execution ID: {}", pipeline, execution_id)
         return ExitCode.SUCCESS.value

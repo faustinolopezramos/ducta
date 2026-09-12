@@ -33,7 +33,7 @@ export interface RunChecksVars {
 export interface ValidateConfigVars {
   node_name: string;
   config_path: string;
-  global_settings_path?: string;
+  global_config_path?: string;
 }
 
 export interface ValidateConfigResult {

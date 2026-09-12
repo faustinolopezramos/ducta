@@ -30,7 +30,7 @@ from ducta.mlrun.mlflow import MLflowPipelineTracker, is_mlflow_available
 
 
 class MLflowNodeExecutor(NodeExecutor):
-    """NodeExecutor con integración MLflow."""
+    """NodeExecutor with MLflow integration."""
 
     def __init__(
         self,
@@ -76,7 +76,7 @@ class MLflowNodeExecutor(NodeExecutor):
         ml_info: Dict[str, Any],
     ) -> None:
         """
-        Execute single node con MLflow step tracking.
+        Execute single node with MLflow step tracking.
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
             return super().execute_single_node(node_name, start_date, end_date, ml_info)
@@ -143,7 +143,7 @@ class MLflowNodeExecutor(NodeExecutor):
         ml_info: Dict[str, Any],
     ) -> None:
         """
-        Execute nodes in parallel con MLflow tracking.
+        Execute nodes in parallel with MLflow tracking.
         """
         if not self.enable_mlflow or not self.mlflow_tracker:
             return super().execute_nodes_parallel(

@@ -107,22 +107,6 @@ class HyperparamConfig:
             study_name=data.get("study_name"),
         )
 
-    @classmethod
-    def from_yaml(cls, path: Union[str, Path], key: str) -> Optional["HyperparamConfig"]:
-        """Load one pipeline's hyperparameter config from a YAML file."""
-        import yaml  # type: ignore
-
-        p = Path(path)
-        if not p.exists():
-            logger.warning("Hyperparams YAML not found: {}", p)
-            return None
-        with p.open("r", encoding="utf-8") as f:
-            data = yaml.safe_load(f) or {}
-        if key not in data:
-            logger.warning("Key '{}' not found in hyperparams file '{}'", key, p)
-            return None
-        return cls.from_dict(data[key])
-
     @staticmethod
     def _is_conditional(spec: Any) -> bool:
         """Return True if this spec defines a conditional parameter (has ``depends_on``)."""

@@ -40,14 +40,6 @@ from ducta.core.certificate import (
 # Commands
 # ---------------------------------------------------------------------------
 from ducta.core.commands import Command, MLNodeCommand, NodeCommand, NodeFunction
-from ducta.core.dependency_inference import (
-    build_producer_map,
-    extract_input_keys,
-    extract_output_keys,
-    infer_pipeline_depends_on,
-    merge_pipeline_depends_on,
-    resolve_node_dependencies,
-)
 from ducta.core.dependency_resolver import DependencyResolver, detect_cycles_dfs
 
 # ---------------------------------------------------------------------------
@@ -105,7 +97,6 @@ from ducta.core.ml_context import MLNodeContext
 from ducta.core.mlflow_node_executor import MLflowNodeExecutor, create_mlflow_executor
 from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
 from ducta.core.mlops_integration import MLInfoConfigLoader, MLOpsExecutorIntegration
-from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
 
 # ---------------------------------------------------------------------------
 # Pipeline state & dependency resolution
@@ -178,6 +169,15 @@ from ducta.core.utils import (
     jit,
     normalize_dependencies,
 )
+from ducta.setting.dependency_inference import (
+    build_producer_map,
+    extract_input_keys,
+    extract_output_keys,
+    infer_pipeline_depends_on,
+    merge_pipeline_depends_on,
+    resolve_node_dependencies,
+)
+from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver
 
 __all__ = [
     # pipeline execution

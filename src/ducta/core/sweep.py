@@ -62,10 +62,19 @@ def expand_sweep(spec: Dict[str, Any], max_runs: int = 50) -> List[Dict[str, Any
         raise SweepError(str(e)) from e
 
 
+def _new_id(prefix: str) -> str:
+    """Readable, unique identifier: ``<prefix>-<UTC timestamp>-<6 hex chars>``.
+
+    Shared by ``new_sweep_id``/``new_search_id``, which previously each
+    carried an identical copy of this apart from the prefix.
+    """
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    return f"{prefix}-{stamp}-{uuid4().hex[:6]}"
+
+
 def new_sweep_id() -> str:
     """Readable, unique sweep identifier."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return f"sweep-{stamp}-{uuid4().hex[:6]}"
+    return _new_id("sweep")
 
 
 @dataclass
@@ -101,8 +110,7 @@ class SearchOutcome:
 
 def new_search_id() -> str:
     """Readable, unique search identifier."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return f"search-{stamp}-{uuid4().hex[:6]}"
+    return _new_id("search")
 
 
 def run_search(

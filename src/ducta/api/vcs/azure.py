@@ -26,19 +26,14 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ducta.api.exceptions import RepositoryAdapterError
-from ducta.api.utils.git_utils import (
-    GIT_AVAILABLE,
-    get_repo,
-    http_auth_env,
-    redact_git_credentials,
-)
+from ducta.api.utils.git_utils import GIT_AVAILABLE, http_auth_env, redact_git_credentials
 from ducta.api.vcs.base import RepositoryAdapter
 
 
 class AzureAdapter(RepositoryAdapter):
     """Adapter for Azure Repos using azure-devops-python-api + GitPython."""
 
-    _GIT_REQUIRED_MSG = "GitPython required. Install: pip install gitpython"
+    _provider_name = "Azure"
 
     def __init__(self, config: Dict[str, Any]) -> None:
         self._token: str = config.get("token", "")
@@ -67,7 +62,7 @@ class AzureAdapter(RepositoryAdapter):
     def clone(self, url: str, local_path: Path) -> None:
         """Clone from Azure Repos using PAT authentication."""
         if not GIT_AVAILABLE:
-            raise RuntimeError(self._GIT_REQUIRED_MSG)
+            raise RuntimeError(self._GIT_REQUIRED_ERROR)
         from git import Repo  # type: ignore
 
         # Log the original URL (without embedded credentials)
@@ -81,9 +76,8 @@ class AzureAdapter(RepositoryAdapter):
                 env={"GIT_TERMINAL_PROMPT": "0", **self._auth_env()},
             )
         except Exception as exc:
-            safe_msg = redact_git_credentials(str(exc)).replace(self._token, "***")
             raise RepositoryAdapterError(
-                f"Azure clone failed: {safe_msg}",
+                f"Azure clone failed: {self._safe_error(exc)}",
                 detail={"url": url, "local_path": str(local_path)},
             ) from exc
         self._local_path = local_path
@@ -91,40 +85,6 @@ class AzureAdapter(RepositoryAdapter):
     def get_remote_url(self) -> str:
         """Return the HTTPS clone URL for this Azure Repos repository."""
         return f"{self._org}/{self._project}/_git/{self._repo_name}"
-
-    def push(self, branch: str = "main") -> None:
-        """Push local commits to Azure Repos using PAT authentication."""
-        self._require_local_path("push")
-        if not GIT_AVAILABLE:
-            raise RuntimeError(self._GIT_REQUIRED_MSG)
-        try:
-            repo = get_repo(self._local_path)  # type: ignore[arg-type]
-            with repo.git.custom_environment(**self._auth_env()):
-                repo.git.push(self.get_remote_url(), f"HEAD:{branch}")
-            logger.info("Pushed to Azure branch: {branch}", branch=branch)
-        except Exception as exc:
-            safe_msg = redact_git_credentials(str(exc)).replace(self._token, "***")
-            raise RepositoryAdapterError(
-                f"Azure push failed: {safe_msg}",
-                detail={"branch": branch},
-            ) from exc
-
-    def pull(self, branch: str = "main") -> None:
-        """Pull latest commits from Azure Repos using PAT authentication."""
-        self._require_local_path("pull")
-        if not GIT_AVAILABLE:
-            raise RuntimeError(self._GIT_REQUIRED_MSG)
-        try:
-            repo = get_repo(self._local_path)  # type: ignore[arg-type]
-            with repo.git.custom_environment(**self._auth_env()):
-                repo.git.pull(self.get_remote_url(), branch)
-            logger.info("Pulled from Azure branch: {branch}", branch=branch)
-        except Exception as exc:
-            safe_msg = redact_git_credentials(str(exc)).replace(self._token, "***")
-            raise RepositoryAdapterError(
-                f"Azure pull failed: {safe_msg}",
-                detail={"branch": branch},
-            ) from exc
 
     def get_commit_log(self) -> List[Dict[str, Any]]:
         """Return up to 50 commits from Azure DevOps Git ducta.api."""
@@ -170,8 +130,5 @@ class AzureAdapter(RepositoryAdapter):
         """Git config env vars authenticating with this adapter's PAT (see `http_auth_env`)."""
         return http_auth_env("", self._token)
 
-    def _require_local_path(self, operation: str) -> None:
-        if not self._local_path:
-            raise RepositoryAdapterError(
-                f"No local path set for {operation}. Call clone() or set_local_path() first."
-            )
+    def _secret_values(self) -> List[str]:
+        return [self._token]

@@ -397,7 +397,7 @@ def _handle_verify(parsed_args) -> int:
 
     # Integrity first: a tampered certificate can't be trusted to reproduce against.
     # A signing key (env Ducta_CERTIFICATE_KEY/DUCTA_CERTIFICATE_KEY, or
-    # global_settings.certificate_signing_key in the project's config) additionally
+    # global_config.certificate_signing_key in the project's config) additionally
     # verifies the signature.
     signing_key = resolve_signing_key_from_dir(Path.cwd())
     result = verify_certificate(path, signing_key=signing_key)
@@ -588,7 +588,7 @@ def _handle_diff(parsed_args) -> int:
         console.print(f"Status match: {_mark(result['status_match'])}")
         console.print(
             f"Config fingerprint match: {_mark(result['config_fingerprint_match'])} "
-            "[dim](same fingerprint = identical global_settings/pipelines/nodes/input/output config)[/]"
+            "[dim](same fingerprint = identical global_config/pipelines/nodes/input/output config)[/]"
         )
 
         if result["outputs"]:

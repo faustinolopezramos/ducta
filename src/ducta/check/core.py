@@ -23,7 +23,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Tuple
 
 try:
     from enum import StrEnum
@@ -38,6 +38,11 @@ from loguru import logger  # type: ignore
 
 # --- REGISTRY ---
 QUALITY_CHECKS_REGISTRY: Dict[str, type] = {}
+
+#: Keys every check entry accepts, whatever the check. `enabled` and `type` are
+#: read by the engine when it resolves the entry; `severity` overrides the
+#: class's own severity for this node.
+COMMON_CHECK_PARAMS: FrozenSet[str] = frozenset({"enabled", "type", "severity"})
 
 
 def register_check(name: str) -> Callable:
@@ -477,12 +482,42 @@ class QualityReport:
 
 
 class BaseQualityCheck(ABC):
+    #: The config keys this check reads, so preflight can flag a misspelled
+    #: parameter *before* the run instead of letting it fall through to the
+    #: check's default. `QualityCheckEntrySchema` is `extra="allow"` on purpose
+    #: — plugin checks registered through `register_check` define their own
+    #: parameters and nothing here can know them — which is exactly why a typo
+    #: like `row_count: {minimum: 400}` used to validate clean and then run the
+    #: check with no minimum at all.
+    #:
+    #: `None` means "undeclared": preflight validates the check's *name* but
+    #: leaves its parameters alone. Every built-in check declares a set;
+    #: third-party checks may, and get the same validation if they do.
+    #: `COMMON_CHECK_PARAMS` is always accepted and need not be repeated, and
+    #: keys starting with `_` are treated as engine-injected, never user config.
+    CONFIG_PARAMS: ClassVar[Optional[FrozenSet[str]]] = None
+
     def __init__(self, name: str, severity: CheckSeverity = CheckSeverity.ERROR) -> None:
         self.name = name
         self.severity = severity
 
-    @abstractmethod
     def run(
+        self, df: Any, config: Any, adapter: Any, context_datasets: Optional[Dict[str, Any]] = None
+    ) -> CheckResult:
+        """Execute this check, converting any exception into a failed result
+        instead of propagating it. Every concrete check previously repeated
+        this exact try/except around its own logic — factored here once so
+        subclasses implement only :meth:`_run_impl`."""
+        try:
+            return self._run_impl(df, config, adapter, context_datasets)
+        except Exception as e:
+            logger.exception(f"Error executing '{self.name}' check: {e}")
+            return self._create_result(
+                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+            )
+
+    @abstractmethod
+    def _run_impl(
         self, df: Any, config: Any, adapter: Any, context_datasets: Optional[Dict[str, Any]] = None
     ) -> CheckResult: ...
 

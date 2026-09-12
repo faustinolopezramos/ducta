@@ -125,9 +125,7 @@ def validate_ui_arguments(args: argparse.Namespace) -> None:
     validate_positive_number(port, max_val=65535, field_name="port")
 
 
-def validate_server_arguments(args: argparse.Namespace) -> None:
-    port = getattr(args, "port", 8000)
-    validate_positive_number(port, max_val=65535, field_name="port")
+validate_server_arguments = validate_ui_arguments
 
 
 def validate_quality_arguments(args: argparse.Namespace) -> None:
@@ -167,6 +165,11 @@ def validate_init_arguments(args: argparse.Namespace) -> None:
         raise ValidationError("An init subcommand is required (e.g., ingestion)")
 
 
+#: Subcommands that do not run inside an existing project, and so must not
+#: create a `logs/` directory in whatever the current working directory is.
+_PROJECTLESS_SUBCOMMANDS = frozenset({"template"})
+
+
 class UnifiedCLI:
     def run(self, args: Optional[List[str]] = None) -> int:
         parsed_args: Optional[argparse.Namespace] = None
@@ -183,9 +186,19 @@ class UnifiedCLI:
             logger.warning("Execution interrupted by user")
             return ExitCode.GENERAL_ERROR.value
         except Exception as e:
-            logger.error("Unexpected error: {}", e)
-            if parsed_args is not None and getattr(parsed_args, "verbose", False):
-                logger.debug(traceback.format_exc())
+            # `logger.error` is a no-op when no sink is attached, and there is a
+            # real window where that is the case: LoggerManager.setup() calls
+            # `logger.remove()` before adding its handlers, so anything raising
+            # in between leaves the logger silent. The CLI then exited 1 having
+            # printed nothing at all — the least debuggable failure possible.
+            # Fall back to stderr whenever the logger cannot speak for itself.
+            if not logger._core.handlers:  # type: ignore[attr-defined]
+                print(f"Unexpected error: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+            else:
+                logger.error("Unexpected error: {}", e)
+                if parsed_args is not None and getattr(parsed_args, "verbose", False):
+                    logger.debug(traceback.format_exc())
             return ExitCode.GENERAL_ERROR.value
         finally:
             try:
@@ -206,6 +219,7 @@ class UnifiedCLI:
             log_file=getattr(parsed_args, "log_file", None),
             verbose=bool(getattr(parsed_args, "verbose", False)),
             quiet=bool(getattr(parsed_args, "quiet", False)),
+            file_logging=parsed_args.subcommand not in _PROJECTLESS_SUBCOMMANDS,
         )
         return parsed_args
 
@@ -241,14 +255,9 @@ class UnifiedCLI:
                 validator(parsed_args)
             return handler(parsed_args)
         except ValidationError as e:
-            try:
-                from ducta.console.ux.error_analyzer import format_error_for_developer
-                from ducta.console.ux.rich_logger import RichLoggerManager
+            from ducta.console.ux.error_analyzer import try_format_error
 
-                format_error_for_developer(
-                    e, "argument validation", RichLoggerManager.get_console()
-                )
-            except Exception:
+            if not try_format_error(e, "argument validation"):
                 logger.error("Invalid arguments: {}", e)
             return ExitCode.VALIDATION_ERROR.value
 

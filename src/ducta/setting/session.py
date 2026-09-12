@@ -295,7 +295,18 @@ class SparkSessionFactory:
         ]
     )
 
-    # ── Performance Optimizations ─────────────────────────────────────────────
+    _JAVA_ADD_OPENS = (
+        "--add-opens=java.base/java.nio=ALL-UNNAMED "
+        "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED "
+        "--add-opens=java.base/java.util=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang=ALL-UNNAMED "
+        "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
+        "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED "
+        "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED "
+        "--add-opens=java.base/java.net=ALL-UNNAMED "
+        "--add-opens=java.base/java.text=ALL-UNNAMED "
+        "--add-opens=java.sql/java.sql=ALL-UNNAMED"
+    )
 
     PERFORMANCE_CONFIGS: Dict[str, Any] = {
         "spark.scheduler.mode": "FAIR",
@@ -312,30 +323,8 @@ class SparkSessionFactory:
         "spark.sql.streaming.stateStore.rocksdb.lockAcquireTimeoutMs": "60000",
         "spark.sql.streaming.stateStore.rocksdb.useBloomFilter": "true",
         "spark.sql.streaming.stateStore.rocksdb.compactOnClose": "true",
-        "spark.driver.extraJavaOptions": (
-            "--add-opens=java.base/java.nio=ALL-UNNAMED "
-            "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED "
-            "--add-opens=java.base/java.util=ALL-UNNAMED "
-            "--add-opens=java.base/java.lang=ALL-UNNAMED "
-            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
-            "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED "
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED "
-            "--add-opens=java.base/java.net=ALL-UNNAMED "
-            "--add-opens=java.base/java.text=ALL-UNNAMED "
-            "--add-opens=java.sql/java.sql=ALL-UNNAMED"
-        ),
-        "spark.executor.extraJavaOptions": (
-            "--add-opens=java.base/java.nio=ALL-UNNAMED "
-            "--add-opens=java.base/sun.nio.ch=ALL-UNNAMED "
-            "--add-opens=java.base/java.util=ALL-UNNAMED "
-            "--add-opens=java.base/java.lang=ALL-UNNAMED "
-            "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED "
-            "--add-opens=java.base/java.util.concurrent=ALL-UNNAMED "
-            "--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED "
-            "--add-opens=java.base/java.net=ALL-UNNAMED "
-            "--add-opens=java.base/java.text=ALL-UNNAMED "
-            "--add-opens=java.sql/java.sql=ALL-UNNAMED"
-        ),
+        "spark.driver.extraJavaOptions": _JAVA_ADD_OPENS,
+        "spark.executor.extraJavaOptions": _JAVA_ADD_OPENS,
     }
 
     LOCAL_DEFAULT_CONFIGS: Dict[str, Any] = {
@@ -345,19 +334,9 @@ class SparkSessionFactory:
     }
 
     @classmethod
-    def _apply_performance_configs(cls, builder: Any) -> Any:
-        """Apply global performance optimizations to the Spark builder."""
-        for k, v in cls.PERFORMANCE_CONFIGS.items():
-            try:
-                builder = builder.config(k, v)
-            except Exception:
-                pass
-        return builder
-
-    @classmethod
-    def _apply_local_defaults(cls, builder: Any) -> Any:
-        """Apply local-mode defaults to the Spark builder."""
-        for k, v in cls.LOCAL_DEFAULT_CONFIGS.items():
+    def _apply_configs(cls, builder: Any, configs: Dict[str, Any]) -> Any:
+        """Apply a flat dict of Spark config keys/values to the builder."""
+        for k, v in configs.items():
             try:
                 builder = builder.config(k, v)
             except Exception:
@@ -424,7 +403,9 @@ class SparkSessionFactory:
                 host=config.host, token=config.token, cluster_id=config.cluster_id
             )
 
-            builder = SparkSessionFactory._apply_performance_configs(builder)
+            builder = SparkSessionFactory._apply_configs(
+                builder, SparkSessionFactory.PERFORMANCE_CONFIGS
+            )
 
             if ml_config:
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
@@ -453,8 +434,12 @@ class SparkSessionFactory:
             os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
             builder = SparkSession.builder.appName("DuctaLocal").master("local[*]")
 
-            builder = SparkSessionFactory._apply_performance_configs(builder)
-            builder = SparkSessionFactory._apply_local_defaults(builder)
+            builder = SparkSessionFactory._apply_configs(
+                builder, SparkSessionFactory.PERFORMANCE_CONFIGS
+            )
+            builder = SparkSessionFactory._apply_configs(
+                builder, SparkSessionFactory.LOCAL_DEFAULT_CONFIGS
+            )
             builder = SparkSessionFactory._apply_jdbc_jars(builder)
 
             if ml_config and isinstance(ml_config, dict):
@@ -479,7 +464,7 @@ class SparkSessionFactory:
             "  • To run locally:     pip uninstall -y databricks-connect && "
             "pip install --force-reinstall 'pyspark>=3.5,<4'\n"
             "  • To use Databricks:  keep databricks-connect and set mode: "
-            "databricks (not 'local') in global_settings.\n"
+            "databricks (not 'local') in global_config.\n"
             "Install 'ducta[spark]' or 'ducta[databricks]' — never both."
         ) from error
 

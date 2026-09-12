@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import re
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -40,10 +40,6 @@ NON_EMPTY_STRING = "non-empty string"
 TRIGGER_INTERVAL_FIELD = "streaming.trigger.interval"
 DEFAULT_SUPPORTED_OUTPUT_FORMATS = ["console", "delta", "parquet", "kafka", "json", "csv"]
 ALLOWED_FILE_FORMATS = {"parquet", "json", "csv", "orc", "text", "avro"}
-# These belong under streaming.* — setting them under output.* would make the
-# writer apply outputMode/trigger/checkpointLocation/queryName a second time on
-# top of what StreamingQueryManager already configured, which Spark can reject
-# with a confusing "multiple streaming triggers"-style error.
 RESERVED_OUTPUT_KEYS = {"trigger", "outputMode", "checkpointLocation", "queryName"}
 
 
@@ -59,8 +55,6 @@ class StreamingValidator:
         """
         format_policy is optional. If provided, it will be used to validate input/output formats
         (e.g., Context.format_policy). Otherwise, default enums/constants are used.
-
-        max_batch_nodes / max_streaming_nodes control the resource-usage warning thresholds.
         """
         self.policy = format_policy
         self.max_batch_nodes = max_batch_nodes
@@ -84,7 +78,8 @@ class StreamingValidator:
         if streaming_config:
             self._validate_pipeline_streaming_config(streaming_config)
 
-        self._validate_pipeline_dependencies(nodes)
+        satisfied = set(pipeline_config.get("satisfied_dependencies") or ())
+        self._validate_pipeline_dependencies(nodes, satisfied_dependencies=satisfied)
         logger.info("Streaming pipeline configuration validated successfully")
 
     def _ensure_pipeline_is_dict(self, pipeline_config: Any) -> None:
@@ -716,8 +711,16 @@ class StreamingValidator:
                         actual=str(options[opt]),
                     )
 
-    def _validate_pipeline_dependencies(self, nodes: List[Any]) -> None:
-        """Validate depends_on declarations across pipeline nodes."""
+    def _validate_pipeline_dependencies(
+        self, nodes: List[Any], satisfied_dependencies: Optional[Set[str]] = None
+    ) -> None:
+        """Validate depends_on declarations across pipeline nodes.
+
+        Names in ``satisfied_dependencies`` completed outside this pipeline and
+        are exempt from the "undefined node" check — see
+        :meth:`topological_sort`.
+        """
+        satisfied = satisfied_dependencies or set()
         node_names: List[str] = []
         node_by_name: Dict[str, Dict[str, Any]] = {}
 
@@ -759,7 +762,7 @@ class StreamingValidator:
                         field="depends_on",
                     )
 
-                if dependency not in names_set:
+                if dependency not in names_set and dependency not in satisfied:
                     raise StreamingValidationError(
                         f"Node '{node_name}' depends on undefined node '{dependency}'",
                         field="depends_on",
@@ -767,20 +770,31 @@ class StreamingValidator:
                         actual=dependency,
                     )
 
-        self._validate_acyclic_dependencies(node_by_name)
+        self._validate_acyclic_dependencies(node_by_name, satisfied_dependencies=satisfied)
 
-    def _validate_acyclic_dependencies(self, node_by_name: Dict[str, Dict[str, Any]]) -> None:
+    def _validate_acyclic_dependencies(
+        self,
+        node_by_name: Dict[str, Dict[str, Any]],
+        satisfied_dependencies: Optional[Set[str]] = None,
+    ) -> None:
         """Detect cycles in the depends_on graph."""
-        self.topological_sort(node_by_name)
+        self.topological_sort(node_by_name, satisfied_dependencies=satisfied_dependencies)
 
-    def topological_sort(self, node_by_name: Dict[str, Dict[str, Any]]) -> List[str]:
+    def topological_sort(
+        self,
+        node_by_name: Dict[str, Dict[str, Any]],
+        satisfied_dependencies: Optional[Set[str]] = None,
+    ) -> List[str]:
         """Return topologically sorted node names using Kahn's algorithm."""
+        satisfied = satisfied_dependencies or set()
         node_names = list(node_by_name.keys())
         in_degree: Dict[str, int] = {name: 0 for name in node_names}
         graph: Dict[str, List[str]] = {name: [] for name in node_names}
 
         for name, node in node_by_name.items():
             for dep in node.get("depends_on", []) or []:
+                if dep in satisfied:
+                    continue
                 if dep not in node_by_name:
                     raise StreamingValidationError(
                         f"Node '{name}' depends on undefined node '{dep}'",
@@ -846,12 +860,7 @@ class StreamingValidator:
     def _validate_watermark_config(
         self, watermark: Dict[str, Any], node_name: str, field_prefix: str = "input.watermark"
     ) -> None:
-        """Validate watermark configuration with enhanced checks.
-
-        ``field_prefix`` identifies which config location is being validated —
-        ``input.watermark`` (legacy) or ``streaming.watermark`` (documented) —
-        so error messages point at the field the user actually set.
-        """
+        """Validate watermark configuration with enhanced checks."""
         if not isinstance(watermark, dict):
             raise StreamingValidationError(
                 f"Node '{node_name}' watermark configuration must be a dictionary",
@@ -1068,11 +1077,7 @@ class StreamingValidator:
             return [f"Error during compatibility validation: {str(e)}"]
 
     def _extract_output_paths(self, nodes: List[Any]) -> set:
-        """Extract output path strings from a list of nodes.
-
-        Handles both singular ``output`` and plural ``outputs`` forms, where each
-        may be a single dict or a list of dicts.
-        """
+        """Extract output path strings from a list of nodes."""
         outputs = set()
         for node in nodes:
             if not isinstance(node, dict):

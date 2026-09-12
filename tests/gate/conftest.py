@@ -217,7 +217,7 @@ def dict_context():
         "input_config": {},
         "output_config": {},
         "output_path": "/tmp/output",
-        "global_settings": {
+        "global_config": {
             "in_memory_handoff": False,
             "fill_none_on_error": False,
             "max_input_workers": 2,
@@ -247,7 +247,7 @@ def obj_context():
         input_config={},
         output_config={},
         output_path="/tmp/output",
-        global_settings={
+        global_config={
             "in_memory_handoff": False,
             "fill_none_on_error": False,
             "max_input_workers": 2,

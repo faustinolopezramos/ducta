@@ -31,7 +31,8 @@ except ImportError:  # PySpark not installed (e.g. pure-Python test environments
     DataStreamWriter = Any  # type: ignore
     StreamingQuery = Any  # type: ignore
 
-from ducta.stream.exceptions import StreamingError, StreamingFormatNotSupportedError
+from ducta.stream.exceptions import StreamingError
+from ducta.stream.factories import StreamingHandlerFactory
 
 
 class BaseStreamingWriter(ABC):
@@ -284,26 +285,15 @@ class CSVStreamingWriter(BasePathStreamingWriter):
         return self._write_to_path(write_stream, merged_config, self.FORMAT_NAME)
 
 
-class StreamingWriterFactory:
+class StreamingWriterFactory(StreamingHandlerFactory):
     """Factory for creating streaming data writers."""
 
-    def __init__(self, context):
-        self.context = context
-        # Maps format_name -> instantiated writer (populated on first access)
-        self._writers: Dict[str, BaseStreamingWriter] = {}
-        self._register_builtin_classes()
-        logger.info(
-            f"StreamingWriterFactory ready with formats: {list(self._writer_classes.keys())}"
-        )
+    _KIND = "writer"
+    _BASE_CLASS = BaseStreamingWriter
 
     def _register_builtin_classes(self) -> None:
-        """Register built-in writer classes without instantiating them.
-
-        ``_writer_classes`` maps ``format_name -> (cls, extra_args, extra_kwargs)``
-        so that *args/**kwargs passed to :meth:`register_custom_writer` are
-        forwarded to the writer constructor on first instantiation.
-        """
-        self._writer_classes: Dict[str, tuple] = {
+        """Register built-in writer classes without instantiating them."""
+        self._classes = {
             "console": (ConsoleStreamingWriter, (), {}),
             "delta": (DeltaStreamingWriter, (), {}),
             "parquet": (ParquetStreamingWriter, (), {}),
@@ -312,43 +302,9 @@ class StreamingWriterFactory:
             "csv": (CSVStreamingWriter, (), {}),
         }
 
-    def _get_or_create_writer(self, format_key: str) -> BaseStreamingWriter:
-        """Lazily instantiate and cache a writer for the given format key."""
-        if format_key not in self._writers:
-            cls, extra_args, extra_kwargs = self._writer_classes[format_key]
-            try:
-                self._writers[format_key] = cls(self.context, *extra_args, **extra_kwargs)
-            except Exception as e:
-                raise StreamingError(
-                    f"Failed to instantiate writer for format '{format_key}': {str(e)}",
-                    cause=e,
-                ) from e
-        return self._writers[format_key]
-
     def get_writer(self, format_name: str) -> BaseStreamingWriter:
         """Get streaming writer for specified format."""
-        try:
-            if not format_name or not isinstance(format_name, str):
-                raise StreamingError("Format name must be a non-empty string")
-
-            format_key = format_name.lower()
-
-            if format_key not in self._writer_classes:
-                supported_formats = list(self._writer_classes.keys())
-                raise StreamingFormatNotSupportedError(
-                    f"Streaming format '{format_name}' not supported. "
-                    f"Supported formats: {supported_formats}"
-                )
-
-            return self._get_or_create_writer(format_key)
-
-        except Exception as e:
-            logger.error(f"Error getting writer for format '{format_name}': {str(e)}")
-            raise
-
-    def list_supported_formats(self) -> list:
-        """List all supported streaming output formats."""
-        return list(self._writer_classes.keys())
+        return self.get(format_name)
 
     def register_custom_writer(self, format_name: str, writer_class, *args, **kwargs):
         """Register a custom streaming writer.
@@ -356,14 +312,4 @@ class StreamingWriterFactory:
         ``*args`` and ``**kwargs`` are stored and forwarded to the writer
         constructor on its first use, alongside the mandatory ``context`` arg.
         """
-        try:
-            if not issubclass(writer_class, BaseStreamingWriter):
-                raise StreamingError("Custom writer must inherit from BaseStreamingWriter")
-            # Store (class, extra_args, extra_kwargs) so they are forwarded at instantiation.
-            self._writer_classes[format_name.lower()] = (writer_class, args, kwargs)
-            # If already cached, invalidate so the new class is used
-            self._writers.pop(format_name.lower(), None)
-            logger.info(f"Registered custom writer '{format_name}'")
-        except Exception as e:
-            logger.error(f"Error registering custom writer '{format_name}': {str(e)}")
-            raise StreamingError(f"Failed to register custom writer: {str(e)}")
+        self.register_custom(format_name, writer_class, *args, **kwargs)

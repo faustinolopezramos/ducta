@@ -137,48 +137,48 @@ class TestContextManagerIsSparkAvailable:
 
 class TestContextManagerGetNested:
     def test_dict_in_dict(self):
-        cm = ContextManager({"global_settings": {"fingerprint_mode": "fast"}})
-        assert cm.get_nested("global_settings.fingerprint_mode") == "fast"
+        cm = ContextManager({"global_config": {"fingerprint_mode": "fast"}})
+        assert cm.get_nested("global_config.fingerprint_mode") == "fast"
 
     def test_object_in_dict(self):
         class Settings:
             fingerprint_mode = "thorough"
 
-        cm = ContextManager({"global_settings": Settings()})
-        assert cm.get_nested("global_settings.fingerprint_mode") == "thorough"
+        cm = ContextManager({"global_config": Settings()})
+        assert cm.get_nested("global_config.fingerprint_mode") == "thorough"
 
     def test_dict_in_object(self):
         class Ctx:
-            global_settings = {"fingerprint_mode": "fast"}
+            global_config = {"fingerprint_mode": "fast"}
 
         cm = ContextManager(Ctx())
-        assert cm.get_nested("global_settings.fingerprint_mode") == "fast"
+        assert cm.get_nested("global_config.fingerprint_mode") == "fast"
 
     def test_object_in_object(self):
         class Settings:
             fingerprint_mode = "thorough"
 
         class Ctx:
-            global_settings = Settings()
+            global_config = Settings()
 
         cm = ContextManager(Ctx())
-        assert cm.get_nested("global_settings.fingerprint_mode") == "thorough"
+        assert cm.get_nested("global_config.fingerprint_mode") == "thorough"
 
     def test_missing_intermediate_returns_default(self):
         cm = ContextManager({})
-        assert cm.get_nested("global_settings.fingerprint_mode", "fast") == "fast"
+        assert cm.get_nested("global_config.fingerprint_mode", "fast") == "fast"
 
     def test_none_intermediate_returns_default(self):
-        cm = ContextManager({"global_settings": None})
-        assert cm.get_nested("global_settings.fingerprint_mode", "fast") == "fast"
+        cm = ContextManager({"global_config": None})
+        assert cm.get_nested("global_config.fingerprint_mode", "fast") == "fast"
 
     def test_intermediate_raises_returns_default(self):
         class BadSettings:
             def __getattr__(self, name):
                 raise RuntimeError("boom")
 
-        cm = ContextManager({"global_settings": BadSettings()})
-        assert cm.get_nested("global_settings.fingerprint_mode", "fast") == "fast"
+        cm = ContextManager({"global_config": BadSettings()})
+        assert cm.get_nested("global_config.fingerprint_mode", "fast") == "fast"
 
     def test_single_segment_path(self):
         cm = ContextManager({"spark": "session"})

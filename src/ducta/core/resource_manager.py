@@ -119,11 +119,15 @@ class ManagedResource:
         if hasattr(self.resource, "close"):
             self.resource.close()
 
-    def _cleanup_temp_file(self) -> None:
-        """Cleanup temporary file."""
-        path = (
+    def _resolve_path_resource(self) -> Optional[Any]:
+        """Resolve the filesystem path for a temp-file/temp-dir resource."""
+        return (
             self.resource if isinstance(self.resource, (str, Path)) else self.metadata.get("path")
         )
+
+    def _cleanup_temp_file(self) -> None:
+        """Cleanup temporary file."""
+        path = self._resolve_path_resource()
         if not path:
             return
         try:
@@ -134,9 +138,7 @@ class ManagedResource:
 
     def _cleanup_temp_dir(self) -> None:
         """Cleanup temporary directory."""
-        path = (
-            self.resource if isinstance(self.resource, (str, Path)) else self.metadata.get("path")
-        )
+        path = self._resolve_path_resource()
         if not path:
             return
         try:
@@ -222,14 +224,12 @@ class ResourceManager:
         resource: Any,
         resource_type: str,
         cleanup_fn: Optional[Callable] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Register a node-scoped resource and return an opaque resource identifier."""
-        managed = ManagedResource(resource, resource_type, cleanup_fn)
+        self.register(resource, resource_type, node_id, cleanup_fn, metadata)
         with self._lock:
-            bucket = self._resources.setdefault(node_id, [])
-            bucket.append(managed)
-            idx = len(bucket) - 1
-        logger.debug(f"Registered {resource_type} resource for context '{node_id}'")
+            idx = len(self._resources[node_id]) - 1
         return f"{node_id}_{idx}"
 
     def register(

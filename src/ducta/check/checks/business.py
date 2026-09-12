@@ -22,7 +22,7 @@ Business rule quality checks.
 
 import ast
 import re
-from typing import Any, Dict, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, Optional
 
 from loguru import logger
 
@@ -39,10 +39,14 @@ from ducta.check.core import (
 class BusinessRulesCheck(BaseQualityCheck):
     """Validates custom business rules on data (SQL WHERE clauses or Python lambdas)."""
 
+    CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
+        {"max_failures_allowed", "rule_type", "rules"}
+    )
+
     def __init__(self) -> None:
         super().__init__("business_rules", CheckSeverity.ERROR)
 
-    def run(
+    def _run_impl(
         self,
         df: Any,
         config: Any,
@@ -50,93 +54,86 @@ class BusinessRulesCheck(BaseQualityCheck):
         context_datasets: Optional[Dict[str, Any]] = None,
     ) -> CheckResult:
         """Execute business rules check."""
+        if not getattr(config, "enabled", True):
+            return self._create_result(True, "Check disabled")
+
+        rules = config.rules if hasattr(config, "rules") else []
+        rule_type = config.rule_type if hasattr(config, "rule_type") else "sql"
         try:
-            if not getattr(config, "enabled", True):
-                return self._create_result(True, "Check disabled")
+            max_failures_allowed = int(getattr(config, "max_failures_allowed", 0) or 0)
+        except (TypeError, ValueError):
+            max_failures_allowed = 0
 
-            rules = config.rules if hasattr(config, "rules") else []
-            rule_type = config.rule_type if hasattr(config, "rule_type") else "sql"
+        if not rules:
+            return self._create_result(True, "No rules configured", {})
+
+        violations_by_rule = {}
+        rule_errors = {}
+        total_violations = 0
+
+        for rule in rules:
             try:
-                max_failures_allowed = int(getattr(config, "max_failures_allowed", 0) or 0)
-            except (TypeError, ValueError):
-                max_failures_allowed = 0
+                if rule_type == "sql":
+                    violations = self._execute_sql_rule(adapter, rule)
+                elif rule_type == "python":
+                    violations = self._execute_python_rule(adapter, rule)
+                else:
+                    logger.warning(f"Unknown rule type: {rule_type}")
+                    continue
 
-            if not rules:
-                return self._create_result(True, "No rules configured", {})
+                violations_by_rule[rule] = violations
+                total_violations += int(violations)
 
-            violations_by_rule = {}
-            rule_errors = {}
-            total_violations = 0
+            except Exception as e:
+                logger.warning(f"Error executing rule '{rule}': {e}")
+                rule_errors[rule] = str(e)
 
-            for rule in rules:
-                try:
-                    if rule_type == "sql":
-                        violations = self._execute_sql_rule(adapter, rule)
-                    elif rule_type == "python":
-                        violations = self._execute_python_rule(adapter, rule)
-                    else:
-                        logger.warning(f"Unknown rule type: {rule_type}")
-                        continue
+        details = {
+            "violations_by_rule": violations_by_rule,
+            "rule_errors": rule_errors,
+            "rule_errors_count": len(rule_errors),
+            "total_violations": total_violations,
+            "max_failures_allowed": max_failures_allowed,
+        }
 
-                    violations_by_rule[rule] = violations
-                    total_violations += int(violations)
+        violations_exceeded = total_violations > max_failures_allowed
 
-                except Exception as e:
-                    logger.warning(f"Error executing rule '{rule}': {e}")
-                    rule_errors[rule] = str(e)
-
-            details = {
-                "violations_by_rule": violations_by_rule,
-                "rule_errors": rule_errors,
-                "rule_errors_count": len(rule_errors),
-                "total_violations": total_violations,
-                "max_failures_allowed": max_failures_allowed,
-            }
-
-            violations_exceeded = total_violations > max_failures_allowed
-
-            if rule_errors and violations_exceeded:
-                return self._create_result(
-                    False,
-                    f"Business rules validation failed: {total_violations} violation(s) "
-                    f"> {max_failures_allowed} allowed, and {len(rule_errors)} rule(s) "
-                    f"failed to execute",
-                    details,
-                )
-
-            if rule_errors:
-                # A rule that couldn't even execute (SQL syntax error, an
-                # exception in a Python lambda, ...) is an unverified rule,
-                # not a milder case than one that ran and found violations —
-                # WARNING here would silently downgrade "we don't know if
-                # this data violates the rule" below a known assertion
-                # failure, which is backwards.
-                return self._create_result(
-                    False,
-                    f"Business rules completed with {len(rule_errors)} rule execution error(s)",
-                    details,
-                    severity=CheckSeverity.ERROR,
-                )
-
-            if violations_exceeded:
-                return self._create_result(
-                    False,
-                    f"Business rules validation failed: {total_violations} violation(s) "
-                    f"> {max_failures_allowed} allowed",
-                    details,
-                )
-
+        if rule_errors and violations_exceeded:
             return self._create_result(
-                True,
-                f"All business rules passed ({total_violations} violation(s) within threshold)",
+                False,
+                f"Business rules validation failed: {total_violations} violation(s) "
+                f"> {max_failures_allowed} allowed, and {len(rule_errors)} rule(s) "
+                f"failed to execute",
                 details,
             )
 
-        except Exception as e:
-            logger.exception(f"Error executing business rules check: {e}")
+        if rule_errors:
+            # A rule that couldn't even execute (SQL syntax error, an
+            # exception in a Python lambda, ...) is an unverified rule,
+            # not a milder case than one that ran and found violations —
+            # WARNING here would silently downgrade "we don't know if
+            # this data violates the rule" below a known assertion
+            # failure, which is backwards.
             return self._create_result(
-                False, f"Check execution failed: {str(e)}", {"error": str(e)}
+                False,
+                f"Business rules completed with {len(rule_errors)} rule execution error(s)",
+                details,
+                severity=CheckSeverity.ERROR,
             )
+
+        if violations_exceeded:
+            return self._create_result(
+                False,
+                f"Business rules validation failed: {total_violations} violation(s) "
+                f"> {max_failures_allowed} allowed",
+                details,
+            )
+
+        return self._create_result(
+            True,
+            f"All business rules passed ({total_violations} violation(s) within threshold)",
+            details,
+        )
 
     @staticmethod
     def _execute_sql_rule(adapter: DFAdapter, rule: str) -> int:

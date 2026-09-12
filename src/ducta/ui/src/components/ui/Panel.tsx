@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cx } from "../../utils/classNames";
 import "./Panel.css";
 
 export interface PanelProps {
@@ -35,14 +36,7 @@ export function Panel({
   className,
   ...rest
 }: PanelProps) {
-  const classes = [
-    "tui-panel",
-    `tui-panel--${elevation}`,
-    flush ? "tui-panel--flush" : "",
-    className ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  const classes = cx("tui-panel", `tui-panel--${elevation}`, flush && "tui-panel--flush", className);
 
   const hasHeader = title || actions || description;
 

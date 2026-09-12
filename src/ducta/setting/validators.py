@@ -84,22 +84,13 @@ class PipelineValidator(ConfigValidator):
     def validate_pipeline_dependency_graph(
         pipelines: Dict[str, Any], nodes: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Validate inter-pipeline depends_on declarations.
-
-        Checks that all referenced pipelines exist, no pipeline depends on
-        itself, and the dependency graph is acyclic. When *nodes* is provided,
-        validation runs over the merged (explicit ∪ dataset-inferred) graph, so
-        a cycle introduced purely by cross-pipeline data flow is caught too.
-
-        Raises:
-            PipelineValidationError: on any violation.
-        """
+        """Validate inter-pipeline depends_on declarations."""
         try:
-            from ducta.core.pipeline_dependency_resolver import PipelineDependencyResolver
+            from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver
 
             depends_on_map = None
             if nodes is not None:
-                from ducta.core.dependency_inference import merge_pipeline_depends_on
+                from ducta.setting.dependency_inference import merge_pipeline_depends_on
 
                 depends_on_map = merge_pipeline_depends_on(pipelines, nodes)
 
@@ -252,169 +243,12 @@ class SpecializedValidator(ConfigValidator):
             self._raise_or_warn(msg, strict)
 
 
-class MLValidator(SpecializedValidator):
-    """Validator for machine learning-specific configurations."""
-
-    SUPPORTED_MODEL_TYPES = ["spark_ml", "sklearn", "tensorflow", "pytorch"]
-    REQUIRED_NODE_FIELDS = ["model", "input", "output"]
-
-    def validate_ml_pipeline_config(
-        self,
-        pipelines_config: Dict[str, Any],
-        nodes_config: Dict[str, Any],
-        *,
-        strict: bool = True,
-    ) -> None:
-        for pipeline_name, pipeline in pipelines_config.items():
-            for node_name in pipeline.get("nodes", []):
-                self._assert_node_exists(node_name, pipeline_name, nodes_config)
-                self._validate_node_config(nodes_config[node_name], node_name, strict=strict)
-            self._validate_spark_ml_config(pipeline.get("spark_config", {}), strict=strict)
-
-    def _validate_spark_ml_config(
-        self, spark_config: Dict[str, Any], *, strict: bool = True
-    ) -> None:
-        # Nothing to validate when the pipeline does not declare any Spark config.
-        # Avoids false positives for non-Spark ML backends (sklearn, pytorch, etc.).
-        if not spark_config:
-            return
-        required_configs = [
-            "spark.ml.pipeline.cacheStorageLevel",
-            "spark.ml.feature.pipeline.enabled",
-        ]
-        for config in required_configs:
-            if config not in spark_config:
-                self._raise_or_warn(
-                    f"Missing required Spark ML config: {config}. "
-                    "Set validators.ml.strict=false in global_settings to treat it as a warning.",
-                    strict,
-                )
-
-    def validate_pipeline_compatibility(
-        self,
-        batch_pipeline: Dict[str, Any],
-        ml_pipeline: Dict[str, Any],
-        nodes_config: Dict[str, Any],
-    ) -> List[str]:
-        warnings: List[str] = []
-
-        batch_nodes = set(batch_pipeline.get("nodes", []))
-        ml_nodes = set(ml_pipeline.get("nodes", []))
-        common_nodes = batch_nodes.intersection(ml_nodes)
-
-        for node in common_nodes:
-            node_config = nodes_config.get(node, {})
-
-            if "model" in node_config:
-                warnings.append(
-                    f"Node '{node}' used in both batch and ML pipelines contains ML-specific model configuration"
-                )
-            output_format = node_config.get("output", {}).get("format", "")
-            if output_format and output_format not in ["parquet", "delta"]:
-                warnings.append(
-                    f"Node '{node}' used in both batch and ML pipelines has incompatible output format: {output_format}"
-                )
-
-        return warnings
-
-
-class StreamingValidator(SpecializedValidator):
-    """Validator for streaming-specific configurations."""
-
-    def __init__(self, format_policy: Optional[FormatPolicy] = None) -> None:
-        self.policy = format_policy or FormatPolicy()
-
-    def validate_streaming_pipeline_config(
-        self, pipeline_config: Dict[str, Any], *, strict: bool = True
-    ) -> None:
-        spark_config = pipeline_config.get("spark_config", {})
-        self._validate_spark_streaming_config(spark_config, strict=strict)
-
-    def validate_streaming_pipeline_with_nodes(
-        self,
-        pipeline_config: Dict[str, Any],
-        nodes_config: Dict[str, Any],
-        *,
-        strict: bool = True,
-    ) -> None:
-        pipeline_name = pipeline_config.get("name", "unnamed_pipeline")
-
-        for node_name in pipeline_config.get("nodes", []):
-            self._assert_node_exists(node_name, pipeline_name, nodes_config)
-            node_config = nodes_config[node_name]
-            self._validate_node_formats(node_config, node_name, strict=strict)
-
-        self.validate_streaming_pipeline_config(pipeline_config, strict=strict)
-
-    def _validate_node_formats(
-        self, node_config: Dict[str, Any], node_name: str, *, strict: bool = True
-    ) -> None:
-        input_config = node_config.get("input", {})
-        output_config = node_config.get("output", {})
-
-        if isinstance(input_config, dict):
-            input_format = input_config.get("format")
-            if input_format and not self.policy.is_supported_input(input_format):
-                self._raise_or_warn(
-                    f"Node '{node_name}' has unsupported streaming input format: {input_format}. "
-                    f"Supported: {self.policy.get_supported_input_formats()}",
-                    strict,
-                )
-
-        if isinstance(output_config, dict):
-            output_format = output_config.get("format")
-            if output_format and not self.policy.is_supported_output(output_format):
-                self._raise_or_warn(
-                    f"Node '{node_name}' has unsupported streaming output format: {output_format}. "
-                    f"Supported: {self.policy.get_supported_output_formats()}",
-                    strict,
-                )
-
-    def _validate_spark_streaming_config(
-        self, spark_config: Dict[str, Any], *, strict: bool = True
-    ) -> None:
-        for config_key in spark_config:
-            if config_key.startswith("spark.streaming."):
-                self._raise_or_warn(
-                    f"Config '{config_key}' belongs to legacy Spark Streaming (DStream) and "
-                    "has no effect with Structured Streaming. "
-                    "Use spark.sql.streaming.* equivalents instead.",
-                    strict,
-                )
-
-    def validate_pipeline_compatibility(
-        self,
-        batch_pipeline: Dict[str, Any],
-        streaming_pipeline: Dict[str, Any],
-        nodes_config: Dict[str, Any],
-    ) -> List[str]:
-        warnings: List[str] = []
-
-        batch_nodes = set(batch_pipeline.get("nodes", []))
-        streaming_nodes = set(streaming_pipeline.get("nodes", []))
-        common_nodes = batch_nodes.intersection(streaming_nodes)
-
-        for node in common_nodes:
-            node_config = nodes_config.get(node, {})
-            output_format = node_config.get("output", {}).get("format")
-            if output_format and not self.policy.is_supported_output(output_format):
-                warnings.append(
-                    f"Node '{node}' used in both batch and streaming pipelines has incompatible output format: {output_format}"
-                )
-
-        return warnings
-
-
 class CrossValidator:
     """Cross-validation for dependencies between different types of nodes."""
 
     @staticmethod
     def _get_node_type(config: dict, policy: Optional["FormatPolicy"] = None) -> str:
-        """Infer node type from its configuration.
-
-        Uses the provided *policy* (or a default ``FormatPolicy()``) to resolve
-        supported streaming formats, so any runtime overrides are respected.
-        """
+        """Infer node type from its configuration."""
         if "model" in config:
             return "ml"
         _policy = policy or FormatPolicy()
@@ -459,12 +293,7 @@ class CrossValidator:
     def validate_hybrid_dependencies(
         nodes_config: dict, policy: Optional["FormatPolicy"] = None
     ) -> None:
-        """Validate cross-type node dependencies.
-
-        Accepts an optional *policy* so that ``FormatPolicy`` instances with
-        custom overrides are respected (instead of always using the class-level
-        defaults).
-        """
+        """Validate cross-type node dependencies."""
         errors: List[str] = []
 
         for node_name, config in nodes_config.items():
@@ -480,43 +309,6 @@ class CrossValidator:
                     CrossValidator._check_streaming_node_dependency(
                         node_name, dep, dep_config, errors, policy
                     )
-
-        if errors:
-            raise ConfigValidationError("\n".join(errors))
-
-
-class HybridValidator:
-    @staticmethod
-    def validate_context(context, streaming_ctx=None, ml_ctx=None) -> None:
-        """Centralized hybrid validation."""
-        errors: List[str] = []
-
-        _streaming_ctx = streaming_ctx
-        _ml_ctx = ml_ctx
-        _policy = getattr(context, "format_policy", None)
-
-        try:
-            CrossValidator.validate_hybrid_dependencies(context.nodes_config, policy=_policy)
-        except ConfigValidationError as e:
-            errors.append(str(e))
-
-        hybrid_pipelines = context.get_pipelines_by_type("hybrid")
-
-        for name, pipeline in hybrid_pipelines.items():
-            nodes = pipeline.get("nodes", [])
-
-            has_streaming = _streaming_ctx is not None and any(
-                _streaming_ctx._is_compatible_node(context.nodes_config[n])
-                for n in nodes
-                if n in context.nodes_config
-            )
-            has_ml = _ml_ctx is not None and any(
-                _ml_ctx._is_compatible_node(context.nodes_config[n])
-                for n in nodes
-                if n in context.nodes_config
-            )
-            if not (has_streaming and has_ml):
-                errors.append(f"Hybrid pipeline '{name}' must contain both streaming and ML nodes")
 
         if errors:
             raise ConfigValidationError("\n".join(errors))

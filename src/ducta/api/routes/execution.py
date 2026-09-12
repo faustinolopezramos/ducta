@@ -21,10 +21,8 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import asyncio
-import threading
-from datetime import date, datetime, timezone
-from decimal import Decimal
-from typing import Annotated, Any, List, Optional
+from datetime import datetime, timezone
+from typing import Annotated, List, Optional
 
 import msgpack  # type: ignore
 from fastapi import (  # type: ignore
@@ -42,12 +40,19 @@ from ducta.api.dependencies import (
     ExecutionManagerDep,
     SourcePathDep,
     WebSocketAuthError,
+    authenticate_websocket,
+    extract_ws_token,
     get_current_user,
     require_permission,
     resolve_websocket_user,
 )
 from ducta.api.exceptions import ExecutionNotFoundError, NotFoundError
 from ducta.api.execution.manager import ExecutionManager
+from ducta.api.execution.streaming_preview import (
+    StreamingPreviewCache,
+    read_streaming_data,
+    read_streaming_data_external,
+)
 from ducta.api.models.auth import User
 from ducta.api.models.execution import (
     BulkCancelRequest,
@@ -137,12 +142,10 @@ async def get_execution(
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
-    try:
-        # Durable read: falls back to the database and the on-disk run store, so
-        # an execution older than the in-memory retention window still resolves.
-        return await exec_manager.load_execution(execution_id, user_id=user_id)
-    except ExecutionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
+    # Durable read: falls back to the database and the on-disk run store, so
+    # an execution older than the in-memory retention window still resolves.
+    # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
+    return await exec_manager.load_execution(execution_id, user_id=user_id)
 
 
 @router.get(
@@ -158,24 +161,22 @@ async def get_execution_logs(
 ) -> List[LogEntry]:
     """Get execution logs, optionally filtered since a timestamp (ISO format)."""
     user_id = current_user.id if current_user else None
-    try:
-        all_logs = await exec_manager.load_logs(execution_id, user_id=user_id)
+    # ExecutionNotFoundError from load_logs propagates to the global DuctaAPIError handler.
+    all_logs = await exec_manager.load_logs(execution_id, user_id=user_id)
 
-        if since:
-            try:
-                since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-                all_logs = [
-                    log
-                    for log in all_logs
-                    if log.timestamp
-                    and datetime.fromisoformat(log.timestamp.replace("Z", "+00:00")) >= since_dt
-                ]
-            except (ValueError, AttributeError):
-                logger.warning(f"Invalid 'since' timestamp: {since}, returning all logs")
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            all_logs = [
+                log
+                for log in all_logs
+                if log.timestamp
+                and datetime.fromisoformat(log.timestamp.replace("Z", "+00:00")) >= since_dt
+            ]
+        except (ValueError, AttributeError):
+            logger.warning(f"Invalid 'since' timestamp: {since}, returning all logs")
 
-        return all_logs
-    except ExecutionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
+    return all_logs
 
 
 @router.get(
@@ -191,10 +192,8 @@ async def get_execution_errors(
     """Return categorized failures (type, category, full traceback, recovery plan)
     for a finished execution. Empty result when the run recorded no errors."""
     user_id = current_user.id if current_user else None
-    try:
-        summary = exec_manager.get_execution_errors(execution_id, user_id=user_id)
-    except ExecutionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
+    # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
+    summary = exec_manager.get_execution_errors(execution_id, user_id=user_id)
     if summary is None:
         return ExecutionErrorsResponse(
             execution_id=execution_id,
@@ -241,11 +240,9 @@ async def cancel_execution(
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
-    try:
-        exec_manager.cancel_execution(execution_id, user_id=user_id)
-        return exec_manager.get_execution(execution_id, user_id=user_id)
-    except ExecutionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
+    # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
+    exec_manager.cancel_execution(execution_id, user_id=user_id)
+    return exec_manager.get_execution(execution_id, user_id=user_id)
 
 
 @router.post(
@@ -287,10 +284,9 @@ async def retry_execution(
 ) -> ExecutionResponse:
     """Clone a terminal execution and re-enqueue it with the same parameters."""
     user_id = current_user.id if current_user else None
+    # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
     try:
         return exec_manager.retry(execution_id, source_path=source_path, user_id=user_id)
-    except ExecutionNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -422,7 +418,7 @@ async def clear_streaming_checkpoints(
         raise HTTPException(status_code=409, detail=str(exc))
     if engine is None:
         raise HTTPException(status_code=409, detail="Execution is already stopped")
-    pipeline_name = engine.context.global_settings.get("pipeline_name")
+    pipeline_name = engine.context.global_config.get("pipeline_name")
     if not pipeline_name:
         raise HTTPException(status_code=400, detail="Pipeline name not found in engine context")
 
@@ -436,226 +432,7 @@ async def clear_streaming_checkpoints(
     return result
 
 
-_STREAMING_DATA_TTL_SECONDS = 10.0
-_streaming_data_cache: dict[str, tuple[float, dict]] = {}
-_streaming_data_cache_lock = threading.RLock()
-_STREAMING_PREVIEW_SORT_COLS = ["event_time", "_ingested_at", "timestamp", "time", "created_at"]
-
-
-def _json_safe(value: Any) -> Any:
-    """Recursively coerce Spark/Delta row values into JSON-serializable types."""
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, (bytes, bytearray)):
-        return value.decode("utf-8", errors="replace")
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple, set)):
-        return [_json_safe(v) for v in value]
-    # numpy scalars (and similar) expose .item(); fall back to str otherwise.
-    item = getattr(value, "item", None)
-    if callable(item):
-        try:
-            return _json_safe(item())
-        except Exception:
-            pass
-    return str(value)
-
-
-def _read_delta_parquet_preview(path: str, max_rows: int = 20) -> list:
-    """Read recent rows from a Delta directory using pandas/pyarrow (no Spark needed)."""
-    import os
-
-    if not os.path.isdir(path):
-        return []
-
-    parquet_files: list[tuple[float, str]] = []
-    for root, dirs, files in os.walk(path):
-        dirs[:] = [d for d in dirs if d not in ("_delta_log", ".sparkStaging")]
-        for f in files:
-            if f.endswith(".parquet") and not f.startswith("."):
-                full = os.path.join(root, f)
-                parquet_files.append((os.path.getmtime(full), full))
-
-    if not parquet_files:
-        return []
-
-    parquet_files.sort(reverse=True)  # most-recent first
-
-    try:
-        import pandas as pd
-
-        dfs = []
-        total = 0
-        for _mtime, pf in parquet_files[:10]:
-            try:
-                df = pd.read_parquet(pf)
-                if len(df):
-                    dfs.append(df)
-                    total += len(df)
-                    if total >= max_rows * 2:
-                        break
-            except Exception:
-                continue
-
-        if not dfs:
-            return []
-
-        combined = pd.concat(dfs, ignore_index=True)
-        for col in _STREAMING_PREVIEW_SORT_COLS:
-            if col in combined.columns:
-                try:
-                    combined = combined.sort_values(col, ascending=False)
-                except Exception:
-                    pass
-                break
-
-        return [_json_safe(row) for row in combined.head(max_rows).to_dict(orient="records")]
-    except Exception as exc:
-        logger.debug("Could not read delta preview at {}: {}", path, exc)
-        return []
-
-
-def _read_streaming_data_external(source_path: str, execution: Any) -> dict:
-    """Read streaming output for CLI-started executions without an active engine.
-
-    Loads nodes config via TOML/YAML (no Spark) and reads Parquet files from the
-    Delta output directories using pandas.
-    """
-    import os
-    from pathlib import Path
-
-    pipeline_name = getattr(execution, "pipeline_name", None)
-    env = getattr(execution, "env", "base") or "base"
-
-    if not pipeline_name or not source_path:
-        return {}
-
-    try:
-        from ducta.api.execution.runner import resolve_project_source
-        from ducta.console.config import AppConfigManager
-        from ducta.setting.loaders import ConfigLoaderFactory
-
-        project_dir = resolve_project_source(Path(source_path), pipeline_name)
-        env_file: Optional[Path] = None
-        for name in ("environment.toml", "environment.yml", "environment.yaml"):
-            candidate = project_dir / name
-            if candidate.is_file():
-                env_file = candidate
-                break
-
-        if env_file is None:
-            return {}
-
-        app_config = AppConfigManager(str(env_file))
-        env_cfg = app_config.get_env_config(env)
-        loader = ConfigLoaderFactory()
-
-        nodes_path = env_cfg.get("nodes_config_path")
-        pipelines_path = env_cfg.get("pipelines_config_path")
-        if not nodes_path:
-            return {}
-
-        nodes_cfg = loader.load_config(nodes_path)
-
-        # Determine node order from pipeline definition
-        pipeline_nodes: list[str] = []
-        if pipelines_path:
-            try:
-                pipelines_cfg = loader.load_config(pipelines_path)
-                p = pipelines_cfg.get(pipeline_name, {})
-                pipeline_nodes = p.get("nodes", []) if isinstance(p, dict) else []
-            except Exception:
-                pass
-        if not pipeline_nodes:
-            pipeline_nodes = list(nodes_cfg.keys())
-
-        workspace_root = str(project_dir)
-        results: dict = {}
-        for node_name in pipeline_nodes:
-            node_cfg = nodes_cfg.get(node_name)
-            if not node_cfg:
-                continue
-            output = node_cfg.get("output", {}) or {}
-            if output.get("format") != "delta":
-                continue
-            path = output.get("path")
-            if not path:
-                continue
-            if not os.path.isabs(path):
-                resolved = os.path.abspath(os.path.join(workspace_root, path))
-            else:
-                resolved = os.path.abspath(path)
-            results[node_name] = _read_delta_parquet_preview(resolved)
-
-        return results
-    except Exception as exc:
-        logger.debug("External streaming data read failed: {}", exc)
-        return {}
-
-
-def _read_streaming_data(engine) -> dict:
-    """Blocking Delta reads for a streaming pipeline's output nodes.
-
-    Runs in a worker thread (Spark calls are blocking) so the API event loop is
-    never stalled. Returns a mapping of node_name -> recent rows.
-    """
-    import os
-
-    spark = getattr(engine.context, "spark", None)
-    if not spark:
-        return {}
-
-    pipeline_name = engine.context.global_settings.get("pipeline_name", "")
-    pipeline = {}
-    try:
-        pipeline = engine.batch_executor._get_pipeline_config(pipeline_name)
-    except Exception:
-        pass
-
-    from ducta.core.utils import extract_pipeline_nodes
-
-    try:
-        pipeline_nodes = extract_pipeline_nodes(pipeline)
-    except Exception:
-        pipeline_nodes = list(engine.context.nodes_config.keys())
-
-    workspace_root = getattr(engine.context, "workspace_root", "")
-    results: dict = {}
-    for node_name in pipeline_nodes:
-        node_cfg = engine.context.nodes_config.get(node_name)
-        if not node_cfg:
-            continue
-        output = node_cfg.get("output", {}) or {}
-        if output.get("format") != "delta":
-            continue
-        path = output.get("path")
-        if not path:
-            continue
-
-        if workspace_root and not os.path.isabs(path):
-            resolved_path = os.path.abspath(os.path.join(workspace_root, path))
-        else:
-            resolved_path = os.path.abspath(path)
-
-        try:
-            df = spark.read.format("delta").load(resolved_path)
-            cols = df.columns
-            sort_col = next((c for c in _STREAMING_PREVIEW_SORT_COLS if c in cols), None)
-            if sort_col:
-                df = df.orderBy(df[sort_col].desc())
-
-            rows = df.limit(20).collect()
-            results[node_name] = [_json_safe(row.asDict(recursive=True)) for row in rows]
-        except Exception as exc:
-            logger.debug("Could not read streaming preview for node '{}': {}", node_name, exc)
-            results[node_name] = []
-
-    return results
+_streaming_preview_cache = StreamingPreviewCache(ttl_seconds=10.0)
 
 
 @router.get(
@@ -676,37 +453,20 @@ async def get_streaming_data(
         # Pipeline started externally (CLI) — read Delta Parquet files directly.
         execution = exec_manager.get_execution(execution_id, user_id=user_id)
         cache_key = f"ext:{user_id or 'unknown'}:{execution_id}"
-        now = datetime.now(timezone.utc).timestamp()
-        with _streaming_data_cache_lock:
-            cached = _streaming_data_cache.get(cache_key)
-            if cached and (now - cached[0]) < _STREAMING_DATA_TTL_SECONDS:
-                return cached[1]
-        results = await run_in_threadpool(_read_streaming_data_external, source_path, execution)
-        with _streaming_data_cache_lock:
-            _streaming_data_cache[cache_key] = (now, results)
-        return results
+        return await run_in_threadpool(
+            _streaming_preview_cache.get_or_compute,
+            cache_key,
+            lambda: read_streaming_data_external(source_path, execution),
+        )
     if engine is None:
         return {}
 
     cache_key = f"{user_id or 'unknown'}:{execution_id}"
-
-    now = datetime.now(timezone.utc).timestamp()
-
-    with _streaming_data_cache_lock:
-        # Prune orphaned entries from executions that finished a while ago (thread-safe).
-        for stale_key in [k for k, (ts, _) in _streaming_data_cache.items() if now - ts > 60]:
-            _streaming_data_cache.pop(stale_key, None)
-
-        cached = _streaming_data_cache.get(cache_key)
-        if cached and (now - cached[0]) < _STREAMING_DATA_TTL_SECONDS:
-            return cached[1]
-
-    results = await run_in_threadpool(_read_streaming_data, engine)
-
-    with _streaming_data_cache_lock:
-        _streaming_data_cache[cache_key] = (now, results)
-
-    return results
+    return await run_in_threadpool(
+        _streaming_preview_cache.get_or_compute,
+        cache_key,
+        lambda: read_streaming_data(engine),
+    )
 
 
 ws_router = APIRouter(prefix="/ws", tags=["WebSocket"])
@@ -721,38 +481,12 @@ async def stream_logs_ws(
 ) -> None:
     # CORS does not apply to WebSocket handshakes, so this is the only thing
     # standing between a page on another site and this execution's log stream.
-    from ducta.api.middleware.origin import websocket_origin_allowed
-
-    if not await websocket_origin_allowed(websocket, settings):
+    user = await authenticate_websocket(websocket, settings, permission="execution.read")
+    if user is None:
         return
-
-    if settings.rate_limit_enabled:
-        from ducta.api.middleware.rate_limit import (
-            get_websocket_client_key,
-            get_websocket_connection_limiter,
-        )
-
-        limiter = get_websocket_connection_limiter(settings)
-        if not limiter.is_allowed(get_websocket_client_key(websocket)):
-            await websocket.close(code=1013, reason="Rate limit exceeded")
-            return
-
-    token: Optional[str] = None
-    auth_header = websocket.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header[7:]
-    if not token:
-        token = websocket.cookies.get("access_token")
-
-    try:
-        user = await resolve_websocket_user(settings, token)
-    except WebSocketAuthError as exc:
-        await websocket.close(code=exc.code, reason=exc.reason)
-        return
-
-    if settings.auth_enabled and not user.has_permission("execution.read"):
-        await websocket.close(code=1008, reason="Forbidden: insufficient permissions")
-        return
+    # Re-extracted (not returned by authenticate_websocket) for the periodic
+    # revalidation below — same token that just passed the handshake auth.
+    token = extract_ws_token(websocket)
 
     await websocket.accept()
     logger.info("WebSocket connected for execution {id}", id=execution_id)

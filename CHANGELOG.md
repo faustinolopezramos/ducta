@@ -7,6 +7,344 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A quality gate blocked runs on data it was configured to tolerate.**
+  `QualityGateSchema.min_pass_rate` defaulted to `1.0` while
+  `QualityGateEvaluator` reads the same key with a default of `0.0` (rule off) —
+  and `model_dump(exclude_none=True)` keeps a default, so every node declaring a
+  `quality_gate` had `min_pass_rate: 1.0` delivered to the evaluator as though
+  the user had typed it. The pass rate counts every failed check regardless of
+  severity, so **any** failing check blocked the node, contradicting the
+  `max_warnings: -1` sitting next to it. Measured on `medallion_basic`, with one
+  check set to `severity: warning`:
+
+  ```
+  node_id=transform status=gate_blocked
+    Quality gate 'quality_gate' blocked dataset 'transform':
+    Pass rate 0.6667 below min_pass_rate 1.0
+  skipping 1 descendant(s): ['load']     exit 4
+  ```
+
+  The same YAML evaluated outside the schema returned `PASS`, so a gate meant
+  different things depending on how the config had been loaded. The schema
+  default is now `0.0`, matching the evaluator. An ERROR still blocks — verified
+  — and an explicit `min_pass_rate` still applies.
+
+  Both defaults had tests (`tests/check/test_gate.py::TestDefaultsAreIndependent`
+  and `tests/setting/test_schemas.py::test_quality_gate_defaults`) and both
+  passed, because neither crossed the seam between them.
+  `tests/check/test_gate_schema_seam.py` now walks the whole path: YAML →
+  `NodeSchema` → dump → evaluator.
+
+- **`ducta config pipeline-info` crashed on every project.**
+  `Context.pipelines` is the *expanded* view, where each node name is replaced
+  by that node's whole config dict. `get_pipeline_info` passed it straight
+  through, so the CLI's `", ".join(info["nodes"])` raised
+  `TypeError: sequence item 0: expected str instance, dict found`, and
+  `config list-pipelines --format json` emitted entire node configs where names
+  belonged. `description` was dropped by the same expansion, so every caller
+  reported an empty one.
+
+  `get_pipeline_info` now returns node *names* via the existing
+  `extract_pipeline_nodes`, and the expansion carries `description` through.
+  Three callers had grown their own
+  `n if isinstance(n, str) else n.get("name")` coercion to work around this;
+  those are gone. A fourth had not, and `--node` membership was therefore tested
+  against dicts — so `ducta start --node <name>` warned "may not exist" for every
+  node that did exist.
+
+- **A streaming node could not depend on a batch node in a hybrid pipeline.**
+  Batch and ML nodes declare predecessors with `dependencies`; streaming nodes
+  use `depends_on`, and only one key was read in each place. In a hybrid
+  pipeline's streaming phase only the streaming node names are handed to the
+  manager, so `depends_on: [<a batch node>]` was rejected as an undefined node —
+  by the config validator, by the topological sort *and* by the wave loop. The
+  sort raises, so the whole streaming phase failed rather than one node being
+  deferred.
+
+  `get_node_dependencies` now returns the union of both keys, so dependency
+  inference and cross-type validation see every edge. `start_pipeline` accepts
+  `satisfied_dependencies` for predecessors completed outside the sub-pipeline,
+  which the hybrid executor fills with its completed batch nodes. A standalone
+  streaming pipeline still rejects a dependency nobody produces.
+
+- **Hybrid reported success for runs that started nothing.**
+  `_execute_streaming_phase` marked every node completed the moment
+  `start_pipeline` returned an execution id — but that call is asynchronous, and
+  the id means only that the startup work was queued. Combined with the
+  dependency bug above, a hybrid pipeline whose streaming node depended on a
+  batch node reported a clean success while doing nothing at all.
+
+  `StreamingPipelineManager` gained `wait_for_pipeline_started()`, signalled once
+  every node has started, been skipped, or failed to start — a different moment
+  from the terminal state `wait_for_pipeline_done()` tracks, which for a
+  long-running trigger never arrives. Hybrid now waits for it and mirrors the
+  real per-node outcome; a streaming phase that started no queries is a failure.
+
+- **`ducta stream run` exited 0 when every node failed to start.**
+  It printed the execution id and returned `SUCCESS` immediately after the
+  asynchronous submit, so no script wrapping `ducta` could tell a running
+  pipeline from one that had failed outright. It now waits for the startup pass,
+  logs each skipped or failed node with its reason, and returns
+  `EXECUTION_ERROR` when nothing started.
+
+- **Every batch run opened an experiment-tracking run.**
+  `_start_mlops_integration` consulted only `settings.mlops_enabled` and never
+  asked whether the pipeline contained any ML. The detection for exactly this —
+  `MLOpsAutoConfigurator.should_init_mlops_for_pipeline` — existed but sat on a
+  dead path: its only caller was a `BaseExecutor.mlops_context` property no
+  production code read. On the `medallion_basic` scaffold, which has no ML node,
+  every run created `data/<env>/experiment_tracking/` and logged:
+
+  ```
+  MLOpsContext initialized from execution context
+  Non-retryable exception in 'read_dataframe': .../runs/index.parquet not found
+  Ended MLOps run f3419051-… with status COMPLETED
+  ```
+
+  Detection is now wired into the execution path and scoped to *this pipeline's*
+  nodes (it was being handed every node in the project, so one ML node anywhere
+  turned tracking on for every batch pipeline sharing the config). It also
+  honours the flat `mlops_enabled` that `GlobalConfigSchema` documents, not
+  just the nested `mlops.enabled`. The dead property and its helpers are gone.
+
+  `mlops_enabled` is now `Optional[bool]` defaulting to `None`. It was `True`,
+  and — the same seam as `min_pass_rate` — a default reaches the engine
+  indistinguishable from a value the user typed, so auto-detection could never
+  run. Unset now means "decide per pipeline"; the resolved master switch in
+  `CoreSettings` is unchanged.
+
+- **A declared `sanity_gate` was never consulted.**
+  The sanity phase defaults to `fail_fast: true`, and that raise happens inside
+  the per-check loop — before the gate is evaluated. So
+  `sanity_gate: {behavior: warn_only}`, which says "log this and carry on",
+  hard-failed the node, and `skip_downstream` surfaced as a *failed* node rather
+  than a blocked one, meaning the run came back FAILED instead of GATE_BLOCKED
+  and no descendant-skip cascade ran. When a gate is declared it now decides,
+  matching the `data_quality` phase. With no gate declared, fail-fast is
+  untouched: that is this phase's documented behaviour.
+
+- **A blocked quality gate was rendered as `❌ Unknown Error`.**
+  `classify_error` matched regexes against the message and never looked at the
+  exception object it had always accepted, so an outcome the engine deliberately
+  produces — with the rules it tripped on attached — was reported as an unknown
+  failure. It now reports `⚠️ Quality Gate Blocked` with the triggered rules as
+  the suggested next step.
+
+- **`file_size_bytes` in the run certificate was the size of a directory entry.**
+  Every Spark-written dataset is a directory of `part-` files, and
+  `_capture_file_stat` called `os.stat` on it — 192 bytes, the same figure
+  whether the dataset held five rows or five million. In a document whose purpose
+  is to describe what a run produced, that is a field that looks like evidence
+  and carries none. It now sums the files, recursing into partition directories.
+  Measured on `medallion_basic`: 249 bytes for the 5-row gold output, 5,820 for
+  the 488-row silver one.
+
+### Removed
+
+- **The specialized context hierarchy.** `ContextFactory`, `MLContext`,
+  `StreamingContext`, `HybridContext` and `BaseSpecializedContext` (~250 lines)
+  were exported from `ducta.setting` and constructed by nothing: both the CLI and
+  the API build a plain `Context` through `ContextLoader`. Every validation they
+  carried therefore never ran.
+
+  Two of those validators could not simply be moved, because they encode a
+  configuration model the engine abandoned: `MLValidator` requires a `model`
+  block on every ML node, but the engine decides a node is ML from `ml_stage` /
+  `pipeline.type == ml` / `split` and never reads `model`; `HybridValidator`
+  requires a hybrid pipeline to contain streaming *and ML* nodes, while
+  `HybridExecutor` classifies into batch and streaming. Enabling either would
+  have rejected configurations that run correctly today, so both are removed
+  along with `setting.validators.StreamingValidator` (distinct from the live
+  `stream.validators.StreamingValidator`).
+
+  What was worth keeping is now in preflight, where it runs: streaming output
+  formats are validated against the format policy (previously only their
+  *presence* was checked), and `spark.streaming.*` keys are reported as a
+  warning — they belong to the legacy DStream API and are inert under Structured
+  Streaming, so the tuning a user believes they applied silently does not happen.
+
+  Removing public API is only appropriate before the schema is declared stable;
+  that is the gate to leaving alpha and this is on the near side of it.
+
+### Added
+
+- **A `streaming_basic` project template.** `ducta template --template
+  streaming_basic` scaffolds a working Structured Streaming project: a
+  `file_stream` source (so it runs with nothing installed but Spark), a
+  registered transform, per-node checkpoints, and seed events of which two are
+  dropped downstream so bronze and silver visibly differ — verified end to end at
+  5 rows and 3.
+
+  Streaming was the pipeline type with the least guessable configuration and the
+  only scaffold missing. Three shapes in particular fail late and unhelpfully,
+  and each was found by building this against the running engine rather than
+  from the docs: the trigger is `{type, interval}` rather than Spark's
+  `{processingTime: ...}`; a transform is referenced by `function.key`, not
+  `function.name`; and `file_stream` takes `file_format` and a top-level
+  `schema`, with the path under `options` — a schema nested in `options` reaches
+  Spark, is ignored, and surfaces as "Schema must be specified when creating a
+  streaming source DataFrame".
+
+  `TemplateFactory` now derives both its registry and `--list-templates` from one
+  table, so a new template cannot leave the listing behind, and the project
+  scaffolding common to every template moved to a `BaseTemplate`.
+
+- **`ducta config validate` gave false all-clears on configs that were plainly
+  wrong.** `QualityCheckEntrySchema` and `NodeSchema` are `extra="allow"` on
+  purpose — plugin checks registered through `register_check` define their own
+  parameters, and streaming nodes carry inline connector configs no fixed schema
+  can enumerate — so anything misspelled inside those blocks validated clean and
+  then changed behaviour in silence. Measured on the `medallion_basic` scaffold:
+
+  - `row_cont:` instead of `row_count:` reported *"✓ etl: OK"*, and the run then
+    failed as **"Quality gate blocked: 1 ERROR failure"** — a config typo
+    presented as a verdict about the data, discovered only after a full run.
+  - `row_count: {minimum: 400}` reported *OK*; the key is dropped, so the check
+    ran with no minimum and passed on any row count at all.
+  - `quality_gate: {behavior: halt_everything}` reported *OK*, then fell back to
+    `skip_downstream` at runtime, so the gate did not do what the config said.
+  - `dependencie:` instead of `dependencies:` reported *OK* and silently lost
+    the ordering it was meant to declare.
+
+  Preflight now validates check names against `QUALITY_CHECKS_REGISTRY`
+  (resolving `type:` exactly as the engine does), check parameters, and gate
+  behavior — as errors — and reports unknown node keys as a warning, since an
+  unrecognised key may be a forward-compatible extension rather than a mistake.
+  Shared `quality.profiles` are validated the same way. `extra="allow"` is
+  unchanged; the knowledge lives where the registry is.
+
+  The unknown-node-key warning's allow-list was built from `NodeSchema` plus a
+  short hand-written set, and missed keys other layers read: `source`,
+  `columns`, `where`, `sources` and `options` (ingestion — `source` is
+  *required* by preflight's own `_check_ingestion_node`), `depends_on`
+  (streaming wave ordering), `execution_mode` and `execution_mode_max_rows`
+  (vectorized execution), `metrics`, `model_artifacts`, `mlops_enabled` and
+  `ml`. So the warning fired on every ingestion node, every vectorized node,
+  every ML node and every streaming node, telling users their working
+  configuration was being dropped. Each entry now names the module that reads
+  it, because a warning nobody can trust is worse than no warning: it trains
+  people to ignore the one that is real.
+
+  For the parameter check, every built-in check now declares a `CONFIG_PARAMS`
+  class attribute. A check that declares none — any third-party check — has its
+  *name* validated and its parameters left alone, so no plugin is second-guessed.
+
+- **A one-character config typo cost a JVM startup.** `run_pipeline` read the
+  pipeline config through `self.batch_executor`, and that property builds
+  `BatchExecutor` → `DataOutputManager` → `UnityCatalogManager`, whose
+  constructor asked the session whether Unity Catalog was enabled. So preflight
+  rejected the config *after* a Spark session had been created and its banner
+  printed — about 10s, on projects that never touch Unity Catalog, and contrary
+  to the documented promise that "the session is created lazily on first genuine
+  access". `UnityCatalogManager` now resolves that answer lazily on first
+  `is_enabled()`, and preflight runs before anything constructs an executor. The
+  same typo now fails in **0.97s with no Spark output at all**.
+
+
+- **A certificate's signature could be removed without `verify` noticing.**
+  `signature` and `key_id` cannot live inside the hash they sign, so
+  `verify_certificate` excluded them from the content it recomputed. Deleting
+  both fields and recomputing `certificate_hash` therefore produced a forged
+  certificate that verified as *"hash matches — untampered"*, `ok=True`, exit
+  0 — **even when handed the correct signing key**. The README's claim that
+  "forging it requires the key" was defeated by removing two JSON fields.
+  Certificates are now schema `1.3` and carry `signed` *inside* the hashed
+  content, so signing changes the hash and a stripped signature no longer adds
+  up: `verify` rejects it with or without a key. A pre-1.3 certificate carries
+  no such marker — given a key, `verify` now reports it *unverifiable* rather
+  than passing it, because "never signed" and "signature removed" are
+  genuinely indistinguishable there.
+
+- **A node that produced zero rows was recorded as a success that wrote
+  data it never wrote.** `DataOutputManager.save_output` skipped the write
+  outright for an empty DataFrame, and the Spark writer rejected empty frames
+  besides. Zero rows is a legitimate result — a day with no orders, a filter
+  that matched nothing — so with `write_mode: overwrite` the target kept the
+  *previous* run's rows while the node was recorded `success`, the certificate
+  listed the dataset under that node's `outputs`, and `evidence_complete` said
+  `true`; only the missing entry in the certificate's `outputs` fingerprint map
+  contradicted it, and nothing checked that. Reproduced end to end on the
+  `medallion_basic` scaffold: exit 0, `status: success`, and gold on disk from
+  an earlier run. An empty result with `write_mode: overwrite` now truncates
+  the target, which is the period's actual answer; any other write mode is
+  still a genuine no-op but is recorded as an evidence gap, so the certificate
+  reports `evidence_complete: false` instead of looking complete.
+
+- **`gate_blocked` and `skipped` were lost on exactly the runs that needed
+  them.** `NodeExecutor.execute_nodes_parallel` assigned both after its
+  `try/finally`, and `coordinate()`/`cleanup()` raise on any node failure — so
+  a run where one branch was gate-blocked or skipped for missing inputs and
+  another failed reported a bare failure naming neither. Both are now assigned
+  inside the `finally`.
+
+- **A node still running when the run ended left no trace in the
+  certificate.** A started future cannot be cancelled and a thread cannot be
+  killed, so after a fail-fast abort those nodes keep writing datasets and
+  fingerprints past the point the certificate is sealed. The grace period is
+  unchanged, but a node that outlives it is now recorded as an evidence gap
+  rather than silently omitted from a certificate that claims to be complete.
+
+- **`ledger_for` built a fresh ledger on every call for dict-shaped
+  contexts.** `getattr`/`setattr` do not reach into a dict and the `setattr`
+  failure was swallowed, so no caller shared a ledger — and because
+  `_record_failures` lives per instance, `evidence_complete` was permanently
+  `true` and every gap was discarded. That is the one failure `RunLedger`
+  exists to prevent, on the one context shape where it silently did not apply.
+
+- **Malformed `input`/`output` declarations erased dependency edges in
+  silence.** `_normalize_dataset_keys` returned `[]` with no output for a dict
+  whose values are not dataset keys, while `gate.input._get_input_keys` raises
+  `ConfigurationError` on the same value — so the DAG scheduled the node with
+  no predecessors, ran it concurrently with the node that feeds it, and only
+  then failed, after wasting the producer's work. Inference still cannot raise
+  (it runs in read-only paths), but it now warns and names the node; an inline
+  connector config (`{format: ..., path: ...}`) is recognised as such instead
+  of having its values read as dataset names.
+
+- **`fingerprint_mode: sample` was not reproducible on Spark.** It hashed
+  `df.limit(n)`, and `limit` has no defined order on a distributed DataFrame,
+  so two runs over byte-identical data could hash different rows — and
+  `certify verify --reproduce` would report a divergence that had not happened.
+  The sample is now the N rows with the lowest row-hash, chosen by content, so
+  it is the same sample every time (`spark-minhash/v3`).
+
+- **`_code_fingerprint` compared mtimes, not code.** An mtime is a property of
+  the filesystem: it does not survive a clone or a container rebuild, and
+  anything that restores timestamps (`rsync -t`, `tar -p`, a restored backup)
+  can put *different* code on disk under a timestamp the chain-state marker
+  still recognises — reusing outputs the code on disk would not produce. It now
+  hashes module source content. Markers from the old scheme stop matching, so
+  the first run after upgrading recomputes once and re-records.
+
+- **The `${VAR}` credential guard missed obvious names.** Matching only whole
+  separator-delimited components let `${DB_PASS}` and `${APIKEY}` through.
+  Names are now split on camelCase boundaries too, and a short list of
+  unmistakable words is matched as a trailing word — so `${myApiKey}` and
+  `${dbpassword}` are refused while `${MONKEY_DIR}`, `${TOKENIZER_PATH}` and
+  `${PASSWORDLESS_MODE}` still interpolate.
+
+### Added
+
+- **`fingerprint_mode: exact_crypto`.** The default `exact` aggregates
+  `xxhash64` row hashes with count+sum+xor — an excellent detector of
+  *accidental* change, but xxhash64 is not a cryptographic hash, so someone who
+  can write the dataset could construct rows that land on the same digest with
+  different content. That is the same adversary the HMAC signature exists for.
+  `exact_crypto` hashes each row with SHA-256 and combines them with an
+  additive multiset digest: order-independent like `exact`, aggregated inside
+  Spark (no collecting row hashes to the driver, so memory is constant in the
+  row count), and duplicate-sensitive because addition — unlike XOR — does not
+  cancel. Opt-in; `exact` remains the default.
+
+- **`on_missing_input: skip | fail` on a node.** A missing input raises
+  `MissingDependencyError`, which the coordinator treats as a skip ("never a
+  failure") — so `fail_fast: true` was, confusingly, the setting that made a
+  node *not* fail. `fail_fast` still decides whether to pre-check;
+  `on_missing_input` now names what the result means, and defaults to `skip`,
+  the existing behaviour.
+
 ### Changed
 
 - **`certify show`/`certify verify` used to hide the one thing that most

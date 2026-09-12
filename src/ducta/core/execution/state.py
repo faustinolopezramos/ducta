@@ -40,7 +40,7 @@ class ThreadSafeExecutionState:
         self.first_failure: Optional[tuple] = None
         self.skipped: Dict[str, str] = {}
         self.gate_blocked: Dict[str, Any] = {}
-        from ducta.core.dependency_inference import resolve_node_dependencies
+        from ducta.setting.dependency_inference import resolve_node_dependencies
 
         self.node_deps: Dict[str, List[str]] = resolve_node_dependencies(
             execution_order, node_configs, warn=False

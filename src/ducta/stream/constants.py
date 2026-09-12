@@ -76,7 +76,7 @@ class StreamingConfigDefaults(TypedDict):
     options: Dict[str, Any]
 
 
-# Configuraciones por defecto para streaming
+# Default streaming configuration
 DEFAULT_STREAMING_CONFIG: StreamingConfigDefaults = {
     "trigger": {
         "type": StreamingTrigger.PROCESSING_TIME.value,
@@ -111,7 +111,7 @@ STREAMING_FORMAT_CONFIGS: Dict[str, Dict[str, Any]] = {
 # not set the corresponding option, to cap micro-batch size and avoid CPU spikes
 # (and partition skew) while a query catches up on a backlog. Override per node
 # via input.options, or disable globally with
-# global_settings.streaming_disable_backpressure_defaults = true.
+# global_config.streaming_disable_backpressure_defaults = true.
 STREAMING_BACKPRESSURE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     StreamingFormat.KAFKA.value: {"maxOffsetsPerTrigger": 1_000_000},
     StreamingFormat.FILE_STREAM.value: {"maxFilesPerTrigger": 1000},
@@ -119,7 +119,7 @@ STREAMING_BACKPRESSURE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 }
 
 # Base interval used by the "adaptive" trigger when no historical metrics are
-# available yet. Overridable via global_settings.streaming_adaptive_base_interval.
+# available yet. Overridable via global_config.streaming_adaptive_base_interval.
 DEFAULT_ADAPTIVE_BASE_INTERVAL = "5 seconds"
 
 # Format-specific validations

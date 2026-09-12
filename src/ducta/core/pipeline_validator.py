@@ -116,8 +116,8 @@ class PipelineValidator:
         miss a cycle created purely by two nodes' shared dataset input/output
         keys, letting it pass preflight and fail only once the pipeline starts.
         """
-        from ducta.core.dependency_inference import resolve_node_dependencies
         from ducta.core.dependency_resolver import detect_cycles_dfs
+        from ducta.setting.dependency_inference import resolve_node_dependencies
 
         resolved = resolve_node_dependencies(pipeline_nodes, node_configs)
 
@@ -175,11 +175,6 @@ class PipelineValidator:
             validation_result["warnings"].extend(
                 [issue for issue in format_issues if issue["severity"] == "warning"]
             )
-
-            bidirectional_errors = PipelineValidator._validate_hybrid_format_compatibility(
-                batch_nodes, streaming_nodes, node_configs, policy
-            )
-            validation_result["errors"].extend(bidirectional_errors)
 
             resource_conflicts = PipelineValidator._validate_resource_conflicts(
                 batch_nodes, streaming_nodes, node_configs
@@ -316,10 +311,13 @@ class PipelineValidator:
             for batch_dep in batch_deps:
                 batch_config = node_configs.get(batch_dep, {})
                 batch_output = _output_as_dict(batch_config)
-                batch_format = batch_output.get("format")
+                # Normalized to lowercase before comparing/displaying: format
+                # names are case-insensitive ("Kafka" vs "kafka" must not be
+                # treated as incompatible just because of casing).
+                batch_format = (batch_output.get("format") or "").lower() or None
 
                 streaming_input = streaming_config.get("input", {})
-                streaming_format = streaming_input.get("format")
+                streaming_format = (streaming_input.get("format") or "").lower() or None
 
                 if batch_format and streaming_format:
                     if policy.are_compatible(batch_format, streaming_format):
@@ -443,11 +441,6 @@ class PipelineValidator:
         """Checks a single streaming node for conflicts against batch resources."""
         warnings: List[str] = []
         input_config = node_config.get("input", {})
-        if input_config.get("format") == "file_stream":
-            input_path = input_config.get("options", {}).get("path")
-            if input_path and input_path in output_paths:
-                # Intentionally no warning here per original logic (kept for compatibility)
-                pass
 
         output_config = node_config.get("output", {})
         output_path = output_config.get("path")
@@ -525,56 +518,6 @@ class PipelineValidator:
                     )
 
             errors.extend(node_errors)
-        return errors
-
-    @staticmethod
-    def _validate_hybrid_format_compatibility(
-        batch_nodes: List[str],
-        streaming_nodes: List[str],
-        node_configs: Dict[str, Dict[str, Any]],
-        policy: FormatPolicy,
-    ) -> List[str]:
-        """Validate format compatibility in hybrid pipelines bidirectionally."""
-        errors = []
-
-        for streaming_node in streaming_nodes:
-            streaming_config = node_configs.get(streaming_node, {})
-            streaming_input = streaming_config.get("input", {})
-            streaming_format = streaming_input.get("format", "").lower()
-
-            dependencies = _get_node_dependencies_util(streaming_config)
-            batch_deps = [dep for dep in dependencies if dep in batch_nodes]
-
-            for batch_dep in batch_deps:
-                batch_config = node_configs.get(batch_dep, {})
-                batch_output = _output_as_dict(batch_config)
-                batch_format = batch_output.get("format", "").lower()
-
-                if batch_format and streaming_format:
-                    if not policy.are_compatible(batch_format, streaming_format):
-                        errors.append(
-                            f"Incompatible format in hybrid pipeline: batch node '{batch_dep}' "
-                            f"outputs format '{batch_format}' but streaming node '{streaming_node}' "
-                            f"expects format '{streaming_format}'. "
-                            f"Please ensure output format from batch matches expected input format for streaming."
-                        )
-                    else:
-                        logger.debug(
-                            f"Format compatibility OK: {batch_dep} ({batch_format}) -> "
-                            f"{streaming_node} ({streaming_format})"
-                        )
-                else:
-                    if not batch_format:
-                        logger.warning(
-                            f"Batch node '{batch_dep}' output format not specified. "
-                            f"Cannot validate compatibility with streaming node '{streaming_node}'."
-                        )
-                    if not streaming_format:
-                        logger.warning(
-                            f"Streaming node '{streaming_node}' input format not specified. "
-                            f"Cannot validate compatibility with batch node '{batch_dep}'."
-                        )
-
         return errors
 
     @staticmethod

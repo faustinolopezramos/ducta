@@ -12,7 +12,7 @@ Project Organization
 
    my_project/
    ├── config/              # Configuration files
-   │   ├── global_settings.yaml
+   │   ├── global_config.yaml
    │   ├── pipelines.yaml
    │   ├── nodes.yaml
    │   ├── inputs.yaml
@@ -618,7 +618,7 @@ Performance Tips
 
 .. code-block:: toml
 
-   # config/global_settings.toml
+   # config/global_config.toml
    # Ducta automatically runs independent nodes in parallel
    # Configure how many:
    max_parallel_nodes = 8  # Default is 4 (range 1-128)
@@ -737,7 +737,7 @@ Optimize Spark Configuration
 
 .. code-block:: toml
 
-   # config/global_settings.toml
+   # config/global_config.toml
    [spark_config]
    "spark.sql.adaptive.enabled" = true
    "spark.sql.adaptive.coalescePartitions.enabled" = true
@@ -818,7 +818,7 @@ expecting no exception, or by inspecting the actual output your nodes wrote:
    from ducta import PipelineExecutor, ContextLoader
 
    CONFIG_PATHS = {
-       "global_settings_path": "config/global_settings.yaml",
+       "global_config_path": "config/global_config.yaml",
        "pipelines_config_path": "config/pipelines.yaml",
        "nodes_config_path": "config/nodes.yaml",
        "input_config_path": "config/inputs.yaml",
@@ -867,13 +867,13 @@ Enable Monitoring
 ~~~~~~~~~~~~~~~~~
 
 Ducta does not ship a built-in monitoring/alerting config block. Set the log
-level through ``global_settings`` and wire metrics/log shipping with your own
+level through ``global_config`` and wire metrics/log shipping with your own
 infrastructure (the ``monitoring`` extra installs ``prometheus-client``, but
 you instrument it yourself):
 
 .. code-block:: toml
 
-   # config/global_settings.toml
+   # config/global_config.toml
    log_level = "WARNING"
 
 .. code-block:: bash
@@ -922,7 +922,7 @@ Set Resource Limits
 
 .. code-block:: toml
 
-   # config/global_settings.toml
+   # config/global_config.toml
    max_parallel_nodes = 16        # 1-128, default 4
    execution_timeout_seconds = 7200  # 60-86400, default 3600
 

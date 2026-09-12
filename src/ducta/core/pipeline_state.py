@@ -367,6 +367,19 @@ class UnifiedPipelineState:
             node = self._nodes.get(node_name)
             return node.status if node else None
 
+    def list_nodes(self, node_type: Optional[NodeType] = None) -> List[str]:
+        """Registered node names, optionally narrowed to one node type.
+
+        Callers that need "which batch nodes are in this run" were otherwise
+        reaching into ``_nodes`` directly, outside the lock that guards it.
+        """
+        with self._lock:
+            return [
+                name
+                for name, info in self._nodes.items()
+                if node_type is None or info.node_type == node_type
+            ]
+
     def get_ready_nodes(self) -> List[str]:
         """Get list of nodes ready for execution."""
         with self._lock:
@@ -424,6 +437,19 @@ class UnifiedPipelineState:
 
         return warnings
 
+    @staticmethod
+    def _stop_streaming_query(query_or_id: Any, stopper: Optional[Callable[[str], Any]]) -> bool:
+        """Stop a streaming query by handle (``.stop()``) or, for a string id,
+        via *stopper*. Returns whether the stop succeeded; exceptions from
+        ``.stop()``/*stopper* propagate to the caller, which owns logging and
+        any status bookkeeping."""
+        if hasattr(query_or_id, "stop"):
+            query_or_id.stop()
+            return True
+        if stopper is None:
+            return False
+        return bool(stopper(query_or_id))
+
     def _attempt_stop_by_handle(
         self,
         streaming_node: str,
@@ -434,7 +460,7 @@ class UnifiedPipelineState:
         """Called with no lock held — `.stop()` can block (e.g. Spark waits
         for the current micro-batch); only the status write is locked."""
         try:
-            streaming_query.stop()
+            self._stop_streaming_query(streaming_query, None)
             with self._lock:
                 self._nodes[streaming_node].status = NodeStatus.CANCELLED
             stopped_nodes.append(streaming_node)
@@ -459,7 +485,7 @@ class UnifiedPipelineState:
                 logger.error(f"No stopper configured to stop streaming node '{streaming_node}'")
                 return
 
-            if self._streaming_stopper(query_id):
+            if self._stop_streaming_query(query_id, self._streaming_stopper):
                 with self._lock:
                     self._nodes[streaming_node].status = NodeStatus.CANCELLED
                 stopped_nodes.append(streaming_node)
@@ -561,7 +587,7 @@ class UnifiedPipelineState:
 
     def _stop_query_by_handle(self, node_name: str, query: Any) -> None:
         try:
-            query.stop()
+            self._stop_streaming_query(query, None)
             logger.info(f"Stopped streaming query handle for node '{node_name}'")
         except Exception as e:
             logger.warning(f"Error stopping streaming query handle for '{node_name}': {e}")
@@ -569,7 +595,7 @@ class UnifiedPipelineState:
     def _stop_query_by_id(self, node_name: str, query_id: str) -> None:
         try:
             if self._streaming_stopper:
-                self._streaming_stopper(query_id)
+                self._stop_streaming_query(query_id, self._streaming_stopper)
                 logger.info(f"Requested stop by id for streaming node '{node_name}'")
             else:
                 logger.error(f"No stopper configured to stop streaming node '{node_name}'")

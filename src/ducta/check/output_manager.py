@@ -188,11 +188,11 @@ class QualityOutputManager:
                 Path(getattr(self.context, "workspace_path", ".ducta/quality")) / "quality"
             )
         if "${" in base_path:
-            global_settings = getattr(self.context, "global_settings", {}) or {}
-            if global_settings:
+            global_config = getattr(self.context, "global_config", {}) or {}
+            if global_config:
                 from ducta.setting.interpolator import VariableInterpolator
 
-                base_path = VariableInterpolator.interpolate(base_path, global_settings)
+                base_path = VariableInterpolator.interpolate(base_path, global_config)
         # Sanitize each identifier-derived path component (defense in depth,
         # matching check/storage.py and stream/checkpoints.py) so none of them
         # can escape base_path via "/" or "..". pipeline_name scopes reports

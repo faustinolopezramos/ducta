@@ -43,7 +43,7 @@ class ContextLoader:
         Delegates parallel loading and validation to the Context class.
         """
         required = (
-            "global_settings_path",
+            "global_config_path",
             "pipelines_config_path",
             "nodes_config_path",
             "input_config_path",
@@ -56,26 +56,22 @@ class ContextLoader:
 
         logger.debug("Delegating parallel configuration loading for env '{}' to Context", env)
 
-        # Environment override files are partial: deep-merge the env's global
-        # settings over the base's so omitted keys keep their base value instead
-        # of being dropped. Only kicks in when the resolved env supplied its own
-        # global_settings file distinct from base (see AppConfig._merge_base_and_env).
-        global_settings_source: Any = config_paths["global_settings_path"]
-        base_gs_path = config_paths.get("base_global_settings_path")
-        if base_gs_path and base_gs_path != global_settings_source:
+        global_config_source: Any = config_paths["global_config_path"]
+        base_gs_path = config_paths.get("base_global_config_path")
+        if base_gs_path and base_gs_path != global_config_source:
             from ducta.setting.utils import deep_merge_dicts
 
             base_settings = self._load_file(base_gs_path)
-            env_settings = self._load_file(global_settings_source)
-            global_settings_source = deep_merge_dicts(base_settings, env_settings)
+            env_settings = self._load_file(global_config_source)
+            global_config_source = deep_merge_dicts(base_settings, env_settings)
             logger.info(
-                "Merged '{}' global settings over base ({} override key(s))",
+                "Merged '{}' global config over base ({} override key(s))",
                 env,
                 len(env_settings),
             )
 
         ctx = Context(
-            global_settings=global_settings_source,
+            global_config=global_config_source,
             pipelines_config=config_paths["pipelines_config_path"],
             nodes_config=config_paths["nodes_config_path"],
             input_config=config_paths["input_config_path"],
@@ -90,8 +86,8 @@ class ContextLoader:
         # load_quality_extensions() imports arbitrary Python modules named in
         # config, same trust boundary as PythonConfigLoader — must not run
         # when allow_python_config=False (see ConfigLoaderFactory below).
-        global_settings = ctx.global_settings
-        extensions = (global_settings.get("quality") or {}).get("extensions") or []
+        global_config = ctx.global_config
+        extensions = (global_config.get("quality") or {}).get("extensions") or []
         if extensions and not self.allow_python_config:
             logger.warning(
                 "Skipping {} quality extension(s): allow_python_config is False, "

@@ -1,5 +1,7 @@
 import type { LogLevel, LogEntry } from "../../store/logsStore";
 import { colors } from "../../theme/tokens";
+import { formatDuration } from "../../utils/formatDuration";
+import { STATUS_META } from "../ui/statusMeta";
 
 export type { LogLevel, LogEntry };
 
@@ -38,35 +40,20 @@ export const LEVEL_BADGE_BG: Record<LogLevel, string> = {
   DEBUG: "transparent",
 };
 
-export const NODE_STATUS_ICON: Record<string, string> = {
-  running:   "▶",
-  pending:   "○",
-  success:   "✓",
-  failed:    "✕",
-  error:     "✕",
-  skipped:   "–",
-  cancelled: "■",
-};
+// Node/execution-run status → glyph/label/color, sourced from the shared
+// STATUS_META table (see components/ui/statusMeta.ts) so this view of a
+// status never drifts from StatusBadge's or the streaming monitor's.
+export const NODE_STATUS_ICON: Record<string, string> = Object.fromEntries(
+  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.glyph]),
+);
 
-export const NODE_STATUS_LABEL: Record<string, string> = {
-  running:   "Running",
-  pending:   "Pending",
-  success:   "Completed",
-  failed:    "Failed",
-  error:     "Error",
-  skipped:   "Skipped",
-  cancelled: "Cancelled",
-};
+export const NODE_STATUS_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.label]),
+);
 
-export const EXEC_STATE_COLOR: Record<string, string> = {
-  running:   colors.accent,
-  success:   colors.green,
-  error:     colors.red,
-  failed:    colors.red,
-  pending:   colors.textDim,
-  cancelled: colors.amber,
-  skipped:   colors.amber,
-};
+export const EXEC_STATE_COLOR: Record<string, string> = Object.fromEntries(
+  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.color]),
+);
 
 export const LEVELS: Array<LogLevel | "ALL"> = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR"];
 
@@ -88,10 +75,7 @@ export const fmt = (ts: number) =>
 export function formatElapsed(t0: number, t: number): string {
   const ms = t - t0;
   if (ms < 0) return "+0.0s";
-  if (ms < 60_000) return `+${(ms / 1000).toFixed(1)}s`;
-  const m = Math.floor(ms / 60_000);
-  const s = Math.floor((ms % 60_000) / 1000);
-  return `+${m}m ${s}s`;
+  return formatDuration(ms / 1000, "elapsed");
 }
 
 export function extractNodeStatus(msg: string): string {

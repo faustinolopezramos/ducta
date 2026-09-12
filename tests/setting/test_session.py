@@ -149,7 +149,9 @@ class TestSparkSessionFactory:
         # dropped by _apply_ml_configs's protected-config filter).
         mock_builder = MagicMock()
         mock_builder.config.return_value = mock_builder
-        result = SparkSessionFactory._apply_local_defaults(mock_builder)
+        result = SparkSessionFactory._apply_configs(
+            mock_builder, SparkSessionFactory.LOCAL_DEFAULT_CONFIGS
+        )
         result.config.assert_any_call("spark.sql.shuffle.partitions", "2")
         result.config.assert_any_call("spark.default.parallelism", "2")
         result.config.assert_any_call("spark.ui.enabled", "false")

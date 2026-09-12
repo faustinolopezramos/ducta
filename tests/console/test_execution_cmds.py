@@ -260,7 +260,7 @@ class TestRunTrialsParallelSharedPrefix:
         cmd.config = CLIConfig(env="dev", pipeline="p", sweep_parallel=2)
         exec_obj = SimpleNamespace(
             context=SimpleNamespace(
-                global_settings={"output_path": str(tmp_path)}, output_path=str(tmp_path)
+                global_config={"output_path": str(tmp_path)}, output_path=str(tmp_path)
             )
         )
         return cmd, exec_obj

@@ -11,7 +11,7 @@ from ducta.core.execution.runner import NodeExecutor
 
 def _node_executor(node_timeout_seconds) -> NodeExecutor:
     context = MagicMock()
-    context.global_settings = {"node_timeout_seconds": node_timeout_seconds}
+    context.global_config = {"node_timeout_seconds": node_timeout_seconds}
     context.is_ml_layer = False
     return NodeExecutor(context, MagicMock(), MagicMock(), max_workers=1)
 
@@ -27,7 +27,7 @@ class TestNodeTimeoutCap:
 
     def test_explicit_timeout_arg_is_also_clamped(self):
         context = MagicMock()
-        context.global_settings = {}
+        context.global_config = {}
         context.is_ml_layer = False
         ne = NodeExecutor(context, MagicMock(), MagicMock(), max_workers=1, timeout=999_999)
         assert ne.node_timeout == 86400

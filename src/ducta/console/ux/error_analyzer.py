@@ -222,6 +222,52 @@ def extract_error_message(error_msg: str) -> str:
     return error_msg[:200] + "..." if len(error_msg) > 200 else error_msg
 
 
+def _classify_quality_outcome(
+    exception: Optional[Exception], error_msg: str
+) -> Optional[Dict[str, Any]]:
+    """Classify a quality verdict, which is a decision rather than a defect.
+
+    A blocked quality gate is the system doing its job: the data did not meet
+    the rules the node declared, so the node was stopped. Falling through to the
+    regex table below rendered it as "❌ Unknown Error", which tells the reader
+    something broke and gives them nothing to act on — when in fact the gate has
+    the exact rules it tripped on.
+
+    ``classify_error`` has always accepted the exception object and never looked
+    at it; this is what it was for.
+    """
+    if exception is None:
+        return None
+    try:
+        from ducta.check.core import QualityChecksFailed, QualityGateBlocked
+    except Exception:  # noqa: BLE001 — the analyzer must never break on an import
+        return None
+
+    if isinstance(exception, QualityGateBlocked):
+        gate_result = getattr(exception, "gate_result", None)
+        rules = list(getattr(gate_result, "triggered_rules", None) or [])
+        return {
+            "error_type": "Quality Gate Blocked",
+            "emoji": "🚦",
+            "color": "bright_yellow",
+            "severity": "medium",
+            "suggestions": rules or ["Check the node's data_quality.quality_gate thresholds."],
+            "context": {"gate": getattr(gate_result, "gate_name", None)},
+        }
+
+    if isinstance(exception, QualityChecksFailed):
+        results = getattr(exception, "results", None) or []
+        failed = [getattr(r, "check_name", "?") for r in results if not getattr(r, "passed", True)]
+        return {
+            "error_type": "Quality Checks Failed",
+            "emoji": "🚦",
+            "color": "bright_yellow",
+            "severity": "medium",
+            "suggestions": [f"Failed check(s): {', '.join(failed)}"] if failed else [],
+        }
+    return None
+
+
 def classify_error(error_msg: str, exception: Optional[Exception] = None) -> Dict[str, Any]:
     result = {
         "error_type": "Unknown Error",
@@ -235,6 +281,15 @@ def classify_error(error_msg: str, exception: Optional[Exception] = None) -> Dic
         "context": {},
         "raw_error": error_msg,
     }
+
+    # Checked before the regex table: these are verdicts about the data, and the
+    # exception type says so exactly, where matching on message text would only
+    # guess.
+    quality = _classify_quality_outcome(exception, error_msg)
+    if quality is not None:
+        result.update(quality)
+        return result
+
     for key, config in ERROR_PATTERNS.items():
         match = re.search(config["pattern"], error_msg, re.IGNORECASE | re.DOTALL)
         if match:
@@ -385,3 +440,17 @@ def format_error_for_developer(
 ) -> None:
     analysis = classify_error(str(error), error)
     print_error_report(analysis, node_name, console)
+
+
+def try_format_error(error: Exception, label: str) -> bool:
+    """Attempt to render *error* via :func:`format_error_for_developer` on the
+    active Rich console. Returns whether it succeeded, so callers can fall
+    back to their own logging without duplicating the try/except/import
+    boilerplate."""
+    try:
+        from ducta.console.ux.rich_logger import RichLoggerManager
+
+        format_error_for_developer(error, label, RichLoggerManager.get_console())
+        return True
+    except Exception:
+        return False

@@ -1,4 +1,5 @@
 import { cloneElement, isValidElement, useId, type ReactElement, type ReactNode } from "react";
+import { cx } from "../../utils/classNames";
 import "./Field.css";
 
 export interface FieldProps {
@@ -54,7 +55,7 @@ export function Field({
     : children;
 
   return (
-    <div className={["tui-field", inline ? "tui-field--inline" : "", className ?? ""].filter(Boolean).join(" ")}>
+    <div className={cx("tui-field", inline && "tui-field--inline", className)}>
       <label className="tui-field__label" htmlFor={controlId}>
         {label}
         {required && (

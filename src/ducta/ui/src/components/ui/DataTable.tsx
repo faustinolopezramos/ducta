@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { IconChevronDown, IconChevronUp, IconSelector } from "@tabler/icons-react";
 import { Skeleton } from "./Skeleton";
+import { cx } from "../../utils/classNames";
 import "./DataTable.css";
 
 /**
@@ -240,13 +241,11 @@ export function DataTable<T>({
               return (
                 <tr
                   key={id}
-                  className={[
+                  className={cx(
                     "tui-table__row",
-                    clickable ? "tui-table__row--clickable" : "",
-                    isRowSelected?.(row) ? "is-selected" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
+                    clickable && "tui-table__row--clickable",
+                    isRowSelected?.(row) && "is-selected",
+                  )}
                   onClick={clickable ? () => onRowClick!(row) : undefined}
                   onKeyDown={
                     clickable
@@ -280,13 +279,11 @@ export function DataTable<T>({
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={[
+                      className={cx(
                         "tui-table__td",
                         `tui-table__td--${column.align ?? "left"}`,
-                        column.mono ? "tui-table__td--mono" : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" ")}
+                        column.mono && "tui-table__td--mono",
+                      )}
                     >
                       {column.cell ? column.cell(row) : (defaultValue(row, column.key) as ReactNode)}
                     </td>

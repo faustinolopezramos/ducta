@@ -180,6 +180,7 @@ class TimeoutManager:
 
 # Singleton instance
 _timeout_manager: Optional[TimeoutManager] = None
+_timeout_manager_lock = threading.Lock()
 
 
 def get_timeout_manager(
@@ -188,5 +189,7 @@ def get_timeout_manager(
     """Get or create the singleton TimeoutManager."""
     global _timeout_manager
     if _timeout_manager is None:
-        _timeout_manager = TimeoutManager(default_timeout_seconds)
+        with _timeout_manager_lock:
+            if _timeout_manager is None:
+                _timeout_manager = TimeoutManager(default_timeout_seconds)
     return _timeout_manager
