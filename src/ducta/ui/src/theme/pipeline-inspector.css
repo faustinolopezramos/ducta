@@ -1,0 +1,647 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   INSPECTORS — one anatomy, two objects.
+
+   Replaces pipeline-panels.css. Selecting a node opens the node inspector;
+   selecting a dataset chip opens the dataset inspector. Both use the same
+   shell — identity header, tabulated sections, actions at the foot — so
+   switching object costs no relearning.
+
+   Also holds the project map's supernode, which is the same grammar at
+   pipeline altitude.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes panel-slide-in {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.inspector {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  z-index: 20;
+  background: var(--surface-elevated);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: -8px 0 32px rgba(0, 0, 0, 0.08);
+  animation: panel-slide-in 0.2s var(--ease-out, ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .inspector { animation: none; }
+}
+
+/* ── Header ─────────────────────────────────────────────────────────────── */
+.inspector-head {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.inspector-title-group {
+  min-width: 0;
+}
+
+.inspector-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.01em;
+  color: var(--text);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A dataset's name *is* an identifier (`bronze.etl.raw_data`), so it is set in
+   mono; a node's name is a label and stays in the sans stack. */
+.inspector-title.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+}
+
+.inspector-subtitle {
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+  margin: 4px 0 0;
+}
+
+.inspector-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.inspector-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.inspector-pill.tone-bronze { color: var(--layer-bronze); }
+.inspector-pill.tone-silver { color: var(--layer-silver); }
+.inspector-pill.tone-gold   { color: var(--layer-gold); }
+.inspector-pill.tone-ok     { color: var(--success); }
+.inspector-pill.tone-warn   { color: var(--warning-strong); }
+.inspector-pill.tone-bad    { color: var(--danger); }
+
+.inspector-close {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+  flex-shrink: 0;
+}
+
+.inspector-close:hover {
+  background: var(--primary-light);
+  color: var(--text);
+}
+
+/* ── Body and sections ──────────────────────────────────────────────────── */
+.inspector-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.inspector-section {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.inspector-section:last-child {
+  border-bottom: none;
+}
+
+.inspector-section-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 0 0 var(--space-2);
+}
+
+.inspector-section-count {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+}
+
+/* ── Label/value rows ───────────────────────────────────────────────────────
+   Values are mono by default because most of them are identifiers, paths or
+   formats. Grid rather than a two-column dl so a long path wraps under its own
+   label instead of pushing the label column wide. */
+.inspector-kv {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inspector-kv-row {
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: baseline;
+}
+
+.inspector-kv dt {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.inspector-kv dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.inspector-kv dd.plain {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* "not declared" is the useful answer — it points at the config that needs
+   fixing, where a dash or an invented default leaves the user unaware. */
+.inspector-kv dd.absent {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.inspector-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warning-strong);
+}
+
+.inspector-empty {
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-dim);
+}
+
+.inspector-warning {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  margin: var(--space-3) var(--space-4) 0;
+  padding: var(--space-3);
+  background: var(--status-warning-bg);
+  border: 1px solid var(--status-warning-border);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text);
+}
+
+.inspector-warning svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--warning-strong);
+}
+
+.inspector-warning code {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  background: var(--bg);
+  border-radius: 3px;
+  padding: 0 3px;
+}
+
+/* ── Dataset / wiring rows ──────────────────────────────────────────────────
+   Every row is a link: a dataset opens the dataset inspector, a node selects
+   that node, a node in another pipeline opens that pipeline. */
+.inspector-io {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.inspector-io-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.inspector-io-row:hover {
+  border-color: var(--border-hover);
+  background: var(--surface);
+}
+
+.inspector-io-row:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.inspector-io-row[data-layer="bronze"] { border-left-color: var(--layer-bronze); }
+.inspector-io-row[data-layer="silver"] { border-left-color: var(--layer-silver); }
+.inspector-io-row[data-layer="gold"]   { border-left-color: var(--layer-gold); }
+
+.inspector-io-row.undeclared {
+  border-style: dashed;
+  border-left-style: solid;
+}
+
+.inspector-io-dir,
+.inspector-io-glyph {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: none;
+}
+
+.inspector-io-text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.inspector-io-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-io-meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-io-go {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.inspector-io-row:hover .inspector-io-go {
+  color: var(--primary);
+}
+
+/* ── Actions ────────────────────────────────────────────────────────────── */
+.inspector-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface-elevated);
+}
+
+/* ── Lineage rows ───────────────────────────────────────────────────────── */
+.lineage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.lineage-list + .lineage-list {
+  margin-top: var(--space-2);
+  padding-top: var(--space-2);
+  border-top: 1px dashed var(--border);
+}
+
+.lineage-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text);
+  transition: background 0.12s ease;
+}
+
+.lineage-row:hover {
+  background: var(--primary-light);
+}
+
+.lineage-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.lineage-dot-up { background: var(--lens-up); }
+.lineage-dot-down { background: var(--lens-down); }
+
+.lineage-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lineage-depth {
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.lineage-depth-up { color: var(--lens-up); }
+.lineage-depth-down { color: var(--lens-down); }
+
+/* ── Add Node form ──────────────────────────────────────────────────────── */
+.add-node-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: overlay-fade-in 0.12s ease-out;
+  backdrop-filter: blur(2px);
+}
+
+.add-node-form {
+  width: 380px;
+  background: var(--surface-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-6);
+  box-shadow: var(--shadow-xl);
+  animation: overlay-fade-in 0.15s ease-out;
+}
+
+.add-node-title {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  margin-bottom: var(--space-4);
+}
+
+.add-node-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.add-node-actions {
+  display: flex;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROJECT MAP — pipeline supernodes.
+
+   A supernode is a whole pipeline, so it is sized like the subject of the
+   screen: the name reads at a glance, the whole card is the hit target that
+   opens it, and the card states the pipeline's *data boundary* — what it
+   consumes from outside and what it publishes. That boundary is a pipeline's
+   interface with the rest of the project, and it replaced a list of up to six
+   truncated node names, which said nothing about how the pipelines fit
+   together.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.pipeline-supernode {
+  width: 300px;
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-hover);
+  border-radius: var(--radius-md);
+  padding: 14px 16px 15px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease,
+    opacity 0.15s ease;
+  box-shadow: var(--shadow-xs);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Hover and keyboard focus are the same state here: both mean "this pipeline",
+   both raise the card and both arm the dependency lens. */
+.pipeline-supernode:hover,
+.pipeline-supernode.focused {
+  border-color: var(--primary);
+  border-left-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--accent-a20), var(--shadow-sm);
+  transform: translateY(-2px);
+}
+
+.pipeline-supernode:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring), var(--shadow-sm);
+}
+
+/* Outside the lens: faded, but still hoverable — the next pipeline you want to
+   inspect is usually one of these, and a card you cannot point at is a card you
+   cannot open. */
+.pipeline-supernode.dag-dimmed {
+  opacity: 0.34;
+  pointer-events: auto;
+}
+
+.pipeline-supernode.dag-dimmed:hover {
+  opacity: 1;
+}
+
+.supernode-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.supernode-name {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The affordance for "this opens", not a separate button to hit. */
+.supernode-go {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+}
+
+.pipeline-supernode:hover .supernode-go,
+.pipeline-supernode:focus-visible .supernode-go,
+.pipeline-supernode.focused .supernode-go {
+  opacity: 1;
+  transform: none;
+  color: var(--primary);
+}
+
+.supernode-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.supernode-type {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  background: var(--bg);
+  flex-shrink: 0;
+  text-transform: lowercase;
+}
+
+.supernode-count {
+  font-family: var(--font-mono);
+}
+
+/* ── The data boundary ──────────────────────────────────────────────────── */
+.supernode-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.supernode-boundary-side {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.supernode-boundary-label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.supernode-dataset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-hover);
+  border-radius: var(--radius-sm);
+  padding: 4px 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.supernode-dataset[data-layer="bronze"] { border-left-color: var(--layer-bronze); }
+.supernode-dataset[data-layer="silver"] { border-left-color: var(--layer-silver); }
+.supernode-dataset[data-layer="gold"]   { border-left-color: var(--layer-gold); }
+
+.supernode-dataset-glyph {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.supernode-more {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  padding: 2px 9px;
+}
+
+/* ── Narrow viewports ───────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .inspector {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+    top: auto;
+    height: 62%;
+  }
+
+  .pipeline-supernode {
+    width: 250px;
+  }
+}

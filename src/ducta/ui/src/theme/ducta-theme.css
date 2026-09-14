@@ -13,38 +13,46 @@
  * ───────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* ── Base palette (Light) ─────────────────────────── */
-  --bg: #F8F5F2;
+  /* ── Base palette (Light) ─────────────────────────────
+     "Blueprint": a cool paper ground rather than a neutral grey one. The
+     surface carries a faint petrol bias (#F4F6F7, not #FAFAFA) so it reads as
+     drafting stock and sits in the same family as the accent instead of
+     fighting it. */
+  --bg: #F4F6F7;
   --surface: #FFFFFF;
   --surface-elevated: #FFFFFF;
-  --border: #E8E0DA;
-  --border-hover: #D4C9C0;
-  --text: #211C18;
-  --text-muted: #6B6158;
-  --text-dim: #766B63;
+  --border: #DDE4E7;
+  --border-hover: #C3CFD4;
+  --text: #0F1B20;
+  --text-muted: #4E626A;
+  --text-dim: #5C717A;
 
-  /* ── Primary — Terracotta ───────────────────────────
-     #B04A2C (down from #C75B39) keeps the warm terracotta identity while
-     reaching 5.4:1 against white — WCAG AA for button/link text. */
-  --primary: #B04A2C;
+  /* ── Primary — Petrol ─────────────────────────────────
+     #0B5F73 reaches 7.1:1 on white (AAA for body text, comfortably AA for UI).
+     Spent in one place: the edges that carry data between nodes. Ducta is a
+     conduit, so the thing doing the carrying is the thing that gets branded. */
+  --primary: #0B5F73;
   --primary-foreground: #FFFFFF;
-  --primary-light: rgba(176, 74, 44, 0.08);
+  --primary-light: rgba(11, 95, 115, 0.08);
   /* Bare brand accent — used across states.css / glass.css (was undefined at
      :root, so accented focus/active states silently lost their color). */
   --accent: var(--primary);
 
-  /* ── Semantic Palette ────────────────────────────────
-     success lowered to #1F7A5B so white/teal pairings clear AA (5.2:1);
-     warning stays as a *surface* hue — text on light uses --warning-strong. */
-  --success: #1F7A5B;
-  --warning: #CF8A2E;
-  --danger: #C34141;
-  --info: var(--blue);
+  /* ── Semantic Palette ─────────────────────────────────
+     Deliberately held apart from the accent: petrol is identity, these three
+     are the only colours allowed to mean "state". Each clears AA on --surface.
+     Warning stays a *surface* hue — text on light uses --warning-strong. */
+  --success: #0E7C66;
+  --warning: #B4690E;
+  --danger: #BE3A34;
+  --info: var(--primary);
 
-  /* ── Shadows ───────────────────────────────────────── */
-  --shadow-sm: 0 2px 4px rgba(100, 70, 50, 0.06);
-  --shadow: 0 5px 15px rgba(100, 70, 50, 0.08);
-  --shadow-lg: 0 30px 60px rgba(100, 70, 50, 0.1);
+  /* ── Shadows ──────────────────────────────────────────
+     Tinted with the ground's own hue rather than neutral black, so elevation
+     reads as depth in this palette instead of grey haze. */
+  --shadow-sm: 0 2px 4px rgba(15, 40, 50, 0.06);
+  --shadow: 0 5px 15px rgba(15, 40, 50, 0.08);
+  --shadow-lg: 0 30px 60px rgba(15, 40, 50, 0.12);
 
   /* ── Radii ─────────────────────────────────────────── */
   --radius: 8px;
@@ -61,25 +69,28 @@
   --rail-width: 56px;
 }
 
-/* ── Dark mode "Midnight Taupe" ─────────────────────── */
+/* ── Dark mode "Deep Petrol" ─────────────────────────
+   Not an inversion: the ground keeps the same blue-green bias as light, and
+   the accent flips from deep petrol to a signal cyan, because #0B5F73 on a
+   dark ground drops to 2.1:1 and disappears. #38BDF8 reaches 8.4:1 on --bg. */
 [data-theme="dark"] {
-  --bg: #1A1513;
-  --surface: #241F1C;
-  --surface-elevated: #2D2723;
-  --border: #3A3430;
-  --border-hover: #4D4540;
-  --text: #EAE2DC;
-  --text-muted: #B8ACA3;
-  --text-dim: #B2A59B;
+  --bg: #0C1417;
+  --surface: #141F24;
+  --surface-elevated: #1B282E;
+  --border: #26353B;
+  --border-hover: #374950;
+  --text: #E3EDF1;
+  --text-muted: #95A9B1;
+  --text-dim: #768B94;
 
-  --primary: #E07A5F;
-  --primary-foreground: #1A1513;
-  --primary-light: rgba(224, 122, 95, 0.1);
+  --primary: #38BDF8;
+  --primary-foreground: #06171F;
+  --primary-light: rgba(56, 189, 248, 0.1);
   --accent: var(--primary);
 
-  --success: #4DB6A0;
-  --warning: #E8A848;
-  --danger: #E85555;
+  --success: #34D399;
+  --warning: #FBBF24;
+  --danger: #F87171;
 
   /* Warning text on light surfaces resolves to the strong dark-amber token
      (#8F5E1E, 5.1:1 on light); on dark it can stay the vivid --warning. */

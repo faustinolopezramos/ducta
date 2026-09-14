@@ -59,6 +59,26 @@ export const useGitRevert = () => {
   });
 };
 
+/**
+ * Push local commits to the remote.
+ *
+ * Repointed from the removed `/repository/push`: that route went through the
+ * multi-cloud adapter stack (GitHub/Azure/CodeCommit), while `/git/push` drives
+ * the same local repository through GitSyncManager and takes no branch — it
+ * pushes the checked-out one.
+ */
+export const useGitPush = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () =>
+      client.post("/git/push").then((r) => r.data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["git"] });
+    },
+    onError: defaultOnError,
+  });
+};
+
 export const useGitPull = () => {
   const queryClient = useQueryClient();
   return useMutation({

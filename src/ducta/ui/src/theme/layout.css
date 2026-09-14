@@ -17,12 +17,35 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* See .ducta-content below — same reason, one level up. */
+  min-height: 0;
 }
 
+/* ── The app's scroll pane ───────────────────────────────────────────────────
+ * `min-height: 0` is what makes this actually scroll, and it is not optional.
+ *
+ * A flex item defaults to `min-height: auto`, which refuses to shrink below its
+ * content. Without the override this pane grew to the full height of whatever
+ * module was inside it, pushed `.ducta-app-layout` past its `100vh`, and got
+ * clipped by that ancestor's `overflow: hidden` — so `overflow-y: auto` never
+ * had anything to scroll and the bottom of every long page was simply
+ * unreachable. Two pages had tried to work around it locally by setting
+ * `min-height: 0` on themselves, which could not work: the constraint is on
+ * this element, not on its children.
+ *
+ * Anything that becomes a flex item in a column between here and a scrolling
+ * descendant needs the same line. */
 .ducta-content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   position: relative;
+}
+
+/* The chrome above the pane keeps its size; only the pane absorbs the slack. */
+.ducta-header,
+.ducta-breadcrumbs {
+  flex-shrink: 0;
 }
 
 /* ── Icon rail (primary navigation) ──────────────────── */

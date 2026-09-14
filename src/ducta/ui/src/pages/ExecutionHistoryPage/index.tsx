@@ -1,43 +1,77 @@
 import { useState } from "react";
-import { colors, styles } from "../../theme/tokens";
+import { useSearchParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { PageHeader } from "../../components/ui/PageHeader";
+import { PageContainer } from "../../components/ui/PageContainer";
 import { useExecutionList, type ExecutionListFilters } from "../../api/queries";
 import { useBulkCancelExecutions } from "../../api/mutations";
 import type { Execution } from "../../types";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { IconPlayerStop, IconClockHour4, IconSearch } from "@tabler/icons-react";
+import { IconPlayerStop, IconClockHour4, IconSearch, IconArrowsLeftRight } from "@tabler/icons-react";
 import { CertificateModal } from "../../components/Execution/CertificateModal";
 import { QueueIndicator } from "./QueueIndicator";
 import { FilterBar } from "./FilterBar";
 import { LogsDrawer } from "./LogsDrawer";
+import { CompareDrawer } from "./CompareDrawer";
+import { PipelineHealthStrip } from "./PipelineHealthStrip";
 import { DataTable } from "../../components/ui/DataTable";
-import { executionColumns, isActiveExecution, type ExecutionListItem } from "./executionColumns";
+import {
+  executionColumns,
+  isActiveExecution,
+  computeSweepStats,
+  ExecutionRowDetail,
+  type ExecutionListItem,
+} from "./executionColumns";
 
 // ─────────────────────────────────────────────
 // EXECUTION HISTORY PAGE — /workspace/executions
 // ─────────────────────────────────────────────
 
+const PAGE_SIZE = 50;
+
 export function ExecutionHistoryPage() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("run");
+  const selectExecution = (id: string | null) => {
+    const next = new URLSearchParams(searchParams);
+    if (id) next.set("run", id);
+    else next.delete("run");
+    setSearchParams(next, { replace: true });
+  };
+
   const [filters, setFilters] = useState<ExecutionListFilters>({});
+  const [limit, setLimit] = useState(PAGE_SIZE);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
   const [certModal, setCertModal] = useState<{ projectId: string; runId: string } | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [compareIds, setCompareIds] = useState<string[] | null>(null);
 
-  const { data, isLoading, error } = useExecutionList(filters);
+  // A new filter/search invalidates whatever page depth was reached before —
+  // start the incremental load over rather than asking for e.g. 200 rows of
+  // a now-different result set. Adjusted during render (not in an effect):
+  // the recommended way to reset state in response to a prop/state change.
+  const [prevFilters, setPrevFilters] = useState(filters);
+  if (prevFilters !== filters) {
+    setPrevFilters(filters);
+    setLimit(PAGE_SIZE);
+  }
+
+  const { data, isLoading, error } = useExecutionList({ ...filters, limit });
   const executions: (Execution & { project_id?: string; node_name?: string })[] =
     data?.executions ?? [];
+  const total = data?.total ?? executions.length;
   const { mutate: bulkCancel, isPending: isBulkCancelling } = useBulkCancelExecutions();
 
   const hasFilters = Object.values(filters).some((v) => v);
+  const sweepStats = computeSweepStats(executions);
 
   // Derive unique pipeline names for the filter dropdown
   const pipelineNames = Array.from(
     new Set(executions.map((e) => e.pipeline_name).filter(Boolean))
   ).sort();
 
-  // Only active executions are cancellable; DataTable owns the checkbox state
-  // itself, so this is just the subset the bulk action applies to.
+  // Any execution can be checked (comparison works across statuses); only
+  // the active subset is what bulk-cancel actually applies to.
   const checkedActive = executions
     .filter((e) => isActiveExecution(e) && checkedIds.has(e.id))
     .map((e) => e.id);
@@ -48,7 +82,7 @@ export function ExecutionHistoryPage() {
   };
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: "36px 48px", background: colors.bg, minHeight: 0 }}>
+    <PageContainer>
       <PageHeader
         title="Execution History"
         description="All pipeline runs — click any row to view its logs."
@@ -57,85 +91,127 @@ export function ExecutionHistoryPage() {
         actions={<QueueIndicator />}
       />
 
-      {/* Loading and error are rendered inside the table now — the filter bar
-          stays put and the rows become skeletons, instead of the whole view
-          being replaced by a centred "Loading…" and jumping when data lands. */}
-      <>
-          <FilterBar
-            filters={filters}
-            onChange={setFilters}
-            pipelines={pipelineNames}
-          />
+      <FilterBar
+        filters={filters}
+        onChange={setFilters}
+        pipelines={pipelineNames}
+      />
 
+      {filters.pipeline_name && (
+        <PipelineHealthStrip pipelineName={filters.pipeline_name} executions={executions} />
+      )}
+
+      {checkedIds.size > 0 && (
+        <div className="bulk-bar" role="region" aria-label="Bulk actions">
+          <span className="bulk-bar__count">{checkedIds.size} selected</span>
           {checkedActive.length > 0 && (
-            <div
-              role="region"
-              aria-label="Bulk actions"
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 12,
-                padding: "8px 12px",
-                marginBottom: 8,
-                borderRadius: 6,
-                background: colors.accentBg,
-                border: `1px solid ${colors.accentA30}`,
-              }}
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={handleBulkCancel}
+              disabled={isBulkCancelling}
+              loading={isBulkCancelling}
+              leftIcon={<IconPlayerStop size={13} />}
             >
-              <span style={{ ...styles.fontMono, fontSize: 12, color: colors.text }}>
-                {checkedActive.length} selected
-              </span>
-              <Button
-                variant="danger"
-                size="sm"
-                onClick={handleBulkCancel}
-                disabled={isBulkCancelling}
-                loading={isBulkCancelling}
-              >
-                <IconPlayerStop size={12} style={{ marginRight: 4 }} />
-                Cancel selected
-              </Button>
-              <button
-                onClick={() => setCheckedIds(new Set())}
-                style={{ background: "none", border: "none", cursor: "pointer", color: colors.textMuted, ...styles.fontSans, fontSize: 11 }}
-              >
-                Clear
-              </button>
-            </div>
+              Cancel selected
+            </Button>
           )}
+          {checkedIds.size >= 2 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setCompareIds(Array.from(checkedIds))}
+              leftIcon={<IconArrowsLeftRight size={13} />}
+            >
+              Compare
+            </Button>
+          )}
+          <Button variant="ghost" size="sm" onClick={() => setCheckedIds(new Set())}>
+            Clear
+          </Button>
+        </div>
+      )}
 
-          <DataTable<ExecutionListItem>
-            columns={executionColumns((projectId, runId) => setCertModal({ projectId, runId }))}
-            rows={executions}
-            rowKey={(ex) => ex.id}
-            minWidth={720}
-            stickyHeader
-            loading={isLoading}
-            error={error ? "Failed to load executions." : undefined}
-            onRowClick={(ex) => setSelectedId(selectedId === ex.id ? null : ex.id)}
-            isRowSelected={(ex) => selectedId === ex.id}
-            // Only a running or pending execution can be bulk-cancelled.
-            selection={{
-              selected: checkedIds,
-              onChange: setCheckedIds,
-              isSelectable: isActiveExecution,
-            }}
-            empty={
-              <EmptyState
-                icon={hasFilters ? IconSearch : IconClockHour4}
-                title={hasFilters ? "No executions match these filters" : "No executions yet"}
-                description={
-                  hasFilters
-                    ? "Try adjusting or clearing the filters above."
-                    : "Run a pipeline from the Pipeline page to see results here."
-                }
-              />
+      {/* Loading and error render inside the table: the filter bar stays put
+          and the rows become skeletons, instead of the whole view being
+          replaced by a centred "Loading…" that jumps when data lands. */}
+      <DataTable<ExecutionListItem>
+        columns={executionColumns(
+          (projectId, runId) => setCertModal({ projectId, runId }),
+          (id) => setExpandedId((prev) => (prev === id ? null : id)),
+          expandedId,
+          sweepStats
+        )}
+        rows={executions}
+        rowKey={(ex) => ex.id}
+        minWidth={720}
+        stickyHeader
+        loading={isLoading}
+        error={error ? "Failed to load executions." : undefined}
+        onRowClick={(ex) => selectExecution(selectedId === ex.id ? null : ex.id)}
+        isRowSelected={(ex) => selectedId === ex.id}
+        rowClassName={(ex) =>
+          ex.status === "failed"
+            ? "tui-table__row--accent-danger"
+            : ex.status === "running"
+            ? "tui-table__row--accent-info"
+            : undefined
+        }
+        expandedRowKey={expandedId}
+        renderRowDetail={(ex) => <ExecutionRowDetail execution={ex} sweepStats={sweepStats} />}
+        // Any execution can be checked — comparison works across statuses;
+        // bulk-cancel simply ignores non-active ones (see checkedActive).
+        selection={{
+          selected: checkedIds,
+          onChange: setCheckedIds,
+          isSelectable: () => true,
+        }}
+        empty={
+          <EmptyState
+            icon={hasFilters ? IconSearch : IconClockHour4}
+            title={hasFilters ? "No executions match these filters" : "No executions yet"}
+            description={
+              hasFilters
+                ? "Try adjusting or clearing the filters above."
+                : "Run a pipeline from the Pipeline page to see results here."
             }
           />
-      </>
+        }
+      />
+
+      {!isLoading && executions.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 10,
+            padding: "10px 0",
+            fontSize: 11,
+            fontFamily: "var(--font-mono)",
+            color: "var(--text-dim)",
+          }}
+        >
+          <span>
+            Showing {executions.length} of {total}
+          </span>
+          {executions.length < total && (
+            <Button variant="ghost" size="sm" onClick={() => setLimit((n) => n + PAGE_SIZE)}>
+              Load more
+            </Button>
+          )}
+        </div>
+      )}
 
       {selectedId && (
-        <LogsDrawer executionId={selectedId} onClose={() => setSelectedId(null)} />
+        <LogsDrawer executionId={selectedId} onClose={() => selectExecution(null)} />
+      )}
+
+      {compareIds && (
+        <CompareDrawer
+          executions={executions.filter((e) => compareIds.includes(e.id))}
+          onClose={() => setCompareIds(null)}
+        />
       )}
 
       {certModal && (
@@ -146,6 +222,6 @@ export function ExecutionHistoryPage() {
           onClose={() => setCertModal(null)}
         />
       )}
-    </div>
+    </PageContainer>
   );
 }

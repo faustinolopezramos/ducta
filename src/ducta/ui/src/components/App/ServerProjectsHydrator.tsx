@@ -1,33 +1,25 @@
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 import { useServerProjects } from "../../api/queries";
 import { useProjectStore } from "../../store/projectStore";
 import { serverProjectToItem } from "../../utils/projectAdapter";
-import type { ProjectItem } from "../../store/reducer";
 
 /**
- * On app boot (with a valid source), fetches server-persisted projects and
- * adds any missing from the local reducer — e.g. projects created from
- * another client session or from the CLI. Prevents duplicates.
+ * Keeps the local project list in step with the server's.
+ *
+ * Picks up projects created from another client session or from the CLI, and
+ * refreshes the server-owned fields — notably the pipeline count — on projects
+ * the store already has. It used to add only the missing ones, so a count went
+ * stale the moment a pipeline was created and stayed stale until a reload;
+ * reconciling in the reducer also means this no longer has to hold a ref to the
+ * local list just to diff against it.
  */
-export function ServerProjectsHydrator({ localProjects }: { localProjects: ProjectItem[] }) {
+export function ServerProjectsHydrator() {
   const { data } = useServerProjects();
   const dispatch = useProjectStore((s) => s.dispatch);
-  const localProjectsRef = useRef(localProjects);
-  // Written in an effect, not during render: the ref is only read from
-  // effects and callbacks that run later, so post-commit is soon enough,
-  // and a render-phase write is not safe under concurrent rendering.
-  useEffect(() => {
-    localProjectsRef.current = localProjects;
-  });
 
   useEffect(() => {
     if (!data?.projects?.length) return;
-    const localIds = new Set(localProjectsRef.current.map((p) => p.id));
-    for (const sp of data.projects) {
-      if (!localIds.has(sp.id)) {
-        dispatch({ type: "ADD_PROJECT", payload: serverProjectToItem(sp) });
-      }
-    }
+    dispatch({ type: "HYDRATE_PROJECTS", projects: data.projects.map(serverProjectToItem) });
   }, [data, dispatch]);
 
   return null;

@@ -95,7 +95,6 @@ _PUBLIC_API: dict[str, str] = {
     "PipelineNotFoundError": "ducta.api.exceptions",
     "ProjectAlreadyExistsError": "ducta.api.exceptions",
     "ProjectNotFoundError": "ducta.api.exceptions",
-    "RepositoryAdapterError": "ducta.api.exceptions",
     "SyntaxValidationError": "ducta.api.exceptions",
     "ValidationError": "ducta.api.exceptions",
     "WorkspaceNotFoundError": "ducta.api.exceptions",
@@ -125,10 +124,6 @@ _PUBLIC_API: dict[str, str] = {
     "GitStageResponse": "ducta.api.models",
     "GitStatusResponse": "ducta.api.models",
     "LoginRequest": "ducta.api.models",
-    "PushPullRequest": "ducta.api.models",
-    "PushPullResponse": "ducta.api.models",
-    "RepositoryConnectRequest": "ducta.api.models",
-    "RepositoryInfo": "ducta.api.models",
     "StructureInfo": "ducta.api.models",
     "TokenResponse": "ducta.api.models",
     "User": "ducta.api.models",
@@ -149,11 +144,6 @@ _PUBLIC_API: dict[str, str] = {
     "SourceInfo": "ducta.api.source",
     "SourceResolver": "ducta.api.source",
     # Version control adapters
-    "AWSAdapter": "ducta.api.vcs",
-    "AzureAdapter": "ducta.api.vcs",
-    "GitHubAdapter": "ducta.api.vcs",
-    "LocalAdapter": "ducta.api.vcs",
-    "RepositoryAdapter": "ducta.api.vcs",
     # Workspace
     "WorkspaceManager": "ducta.api.workspace",
 }
@@ -191,7 +181,6 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
         PipelineNotFoundError,
         ProjectAlreadyExistsError,
         ProjectNotFoundError,
-        RepositoryAdapterError,
         SyntaxValidationError,
         ValidationError,
         WorkspaceNotFoundError,
@@ -217,10 +206,6 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
         GitStageResponse,
         GitStatusResponse,
         LoginRequest,
-        PushPullRequest,
-        PushPullResponse,
-        RepositoryConnectRequest,
-        RepositoryInfo,
         StructureInfo,
         TokenResponse,
         User,
@@ -239,13 +224,6 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
         ProjectService,
     )
     from ducta.api.source import ResolvedSource, SourceInfo, SourceResolver
-    from ducta.api.vcs import (
-        AWSAdapter,
-        AzureAdapter,
-        GitHubAdapter,
-        LocalAdapter,
-        RepositoryAdapter,
-    )
     from ducta.api.workspace import WorkspaceManager
 
 
@@ -308,7 +286,6 @@ __all__ = [
     "PipelineNotFoundError",
     "ProjectAlreadyExistsError",
     "ProjectNotFoundError",
-    "RepositoryAdapterError",
     "SyntaxValidationError",
     "ValidationError",
     "WorkspaceNotFoundError",
@@ -334,10 +311,6 @@ __all__ = [
     "GitStageResponse",
     "GitStatusResponse",
     "LoginRequest",
-    "PushPullRequest",
-    "PushPullResponse",
-    "RepositoryConnectRequest",
-    "RepositoryInfo",
     "StructureInfo",
     "TokenResponse",
     "User",
@@ -353,10 +326,5 @@ __all__ = [
     "ResolvedSource",
     "SourceInfo",
     "SourceResolver",
-    "AWSAdapter",
-    "AzureAdapter",
-    "GitHubAdapter",
-    "LocalAdapter",
-    "RepositoryAdapter",
     "WorkspaceManager",
 ]

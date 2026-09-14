@@ -32,6 +32,36 @@ from ducta.api.models.execution import ExecutionResponse, LogEntry
 class _StreamingMixin:
     """Live status/log emission and the SSE log-streaming generator."""
 
+    #: Max entries per WebSocket message — keeps a large catch-up batch (e.g.
+    #: a fresh connection to a verbose, long-running execution) from becoming
+    #: a single multi-MB frame; each chunk is its own `yield`, so the consumer
+    #: (routes/execution.py's `async for`) sends and awaits one before the
+    #: generator produces the next.
+    _LOG_CHUNK_SIZE = 1000
+
+    @staticmethod
+    def _prepare_batches(entries: List[LogEntry], dropped: int) -> List[List[LogEntry]]:
+        """Split *entries* into page-sized batches, prefixed with a gap-notice
+        entry when *dropped* says the buffer already evicted earlier entries
+        this consumer never saw."""
+        batches: List[List[LogEntry]] = []
+        if dropped > 0:
+            batches.append(
+                [
+                    LogEntry(
+                        timestamp=datetime.now(tz=timezone.utc),
+                        level="WARNING",
+                        message=f"[log_gap] {dropped} earlier log line(s) were dropped "
+                        "(buffer overflow)",
+                        extra={"type": "log_gap", "dropped": dropped},
+                    )
+                ]
+            )
+        chunk_size = _StreamingMixin._LOG_CHUNK_SIZE
+        for i in range(0, len(entries), chunk_size):
+            batches.append(entries[i : i + chunk_size])
+        return batches
+
     def _emit(self, execution_id: str, entry: LogEntry) -> None:
         """Append a log entry and wake any `stream_logs` consumer waiting on it."""
         self._log_manager.append_log(execution_id, entry)
@@ -117,25 +147,25 @@ class _StreamingMixin:
         pos = 0
 
         while True:
-            batch, pos = self._log_manager.get_logs_from(execution_id, pos)
-
-            if batch:
-                yield batch
+            entries, pos, dropped = self._log_manager.get_logs_from(execution_id, pos)
+            for chunk in self._prepare_batches(entries, dropped):
+                yield chunk
 
             record = self._store.peek(execution_id)
             if record is None:
                 break
             if record.status in _TERMINAL_STATUSES:
-                final_batch, pos = self._log_manager.get_logs_from(execution_id, pos)
-                if final_batch:
-                    yield final_batch
+                entries, pos, dropped = self._log_manager.get_logs_from(execution_id, pos)
+                for chunk in self._prepare_batches(entries, dropped):
+                    yield chunk
                 break
 
             if event is not None:
                 event.clear()
-                batch, pos = self._log_manager.get_logs_from(execution_id, pos)
-                if batch:
-                    yield batch
+                entries, pos, dropped = self._log_manager.get_logs_from(execution_id, pos)
+                if entries or dropped:
+                    for chunk in self._prepare_batches(entries, dropped):
+                        yield chunk
                     continue
 
                 try:

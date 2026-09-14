@@ -1,0 +1,37 @@
+/* Small header block above the log viewer inside the historical-run drawer:
+   label/value pairs in sans (metadata, not log content), mirroring the
+   Quality report's key/value disclosure idiom but laid out as a horizontal
+   strip since this is a persistent header, not a collapsible detail row. */
+
+.logs-drawer-summary {
+  display: flex;
+  gap: var(--space-6);
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.logs-drawer-summary__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.logs-drawer-summary__label {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  font-weight: var(--weight-medium);
+}
+
+.logs-drawer-summary__value {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.logs-drawer-summary__value--mono {
+  font-family: var(--font-mono);
+}

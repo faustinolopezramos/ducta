@@ -1,0 +1,41 @@
+/* ── Page container ─────────────────────────────────────────────────────────
+   One padding for every module. `.ducta-content` owns the scrolling; this owns
+   the gutter and, when a page asks for it, the measure. */
+
+.page-container {
+  /* `width: 100%` is load-bearing, not decoration.
+   *
+   * The router wraps every page in `.page-transition`, which is a flex column
+   * (see index.css). In a flex container an item whose cross-axis margins are
+   * `auto` stops stretching and is sized to its content instead — so the
+   * `margin-inline: auto` below, on its own, collapsed each module to the
+   * intrinsic width of its widest child and centred it, leaving a narrow strip
+   * of UI in the middle of a wide screen. With an explicit width the item
+   * fills, and the auto margins resolve to zero unless `max-width` caps it. */
+  width: 100%;
+  padding: var(--space-6);
+  /* Only bites once `maxWidth` is set, which is what centres form-shaped pages. */
+  margin-inline: auto;
+}
+
+/* A page whose body is itself a pane (a canvas, a split view) takes the whole
+   content area and manages its own regions. */
+.page-container--fill {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+@media (max-width: 900px) {
+  .page-container {
+    padding: var(--space-4);
+  }
+}
+
+@media (max-width: 640px) {
+  .page-container {
+    padding: var(--space-4) var(--space-3);
+  }
+}

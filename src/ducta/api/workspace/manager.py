@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from ducta.api.exceptions import WorkspaceNotFoundError
+from ducta.api.exceptions import ValidationError, WorkspaceNotFoundError
 from ducta.api.utils.fsio import atomic_write
 from ducta.api.utils.git_utils import (
     GIT_AVAILABLE,
@@ -37,6 +37,7 @@ from ducta.api.utils.git_utils import (
     sanitize_git_remote_url,
 )
 from ducta.api.utils.platform_utils import posix_relative
+from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, load_environment_yaml
 from ducta.api.workspace.utils import find_config_files
 
@@ -50,9 +51,7 @@ class WorkspaceManager:
         original_path = Path(workspace_path).resolve()
         workspace_path = normalize_workspace_path(workspace_path)
         self.root = workspace_path.resolve()
-        # When the caller passes a project sub-directory (e.g. projects/example_str),
-        # normalize_workspace_path returns the workspace root. Keep the original path
-        # so load_context can prefer the project's own environment file.
+
         self._project_path: Optional[Path] = original_path if original_path != self.root else None
         if strict and not self.root.is_dir():
             raise WorkspaceNotFoundError(
@@ -72,6 +71,22 @@ class WorkspaceManager:
         env_settings = load_environment_yaml(self.root)
         return list(env_settings.get("env_config", {}).keys())
 
+    def for_project(self, project_id: Optional[str]) -> "WorkspaceManager":
+        """Return a manager scoped to *project_id* within this same workspace
+        root, or ``self`` unchanged when no override is given or it just
+        names this manager's own root project.
+        """
+        if not project_id or project_id == self.root.name:
+            return self
+        try:
+            validate_identifier(project_id, field="project_id")
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+        candidate = self.root / "projects" / project_id
+        if not candidate.is_dir():
+            return self
+        return WorkspaceManager(candidate)
+
     _CONTEXT_KEY_MAP: Dict[str, str] = {
         "global_config": "global_config_path",
         "pipelines": "pipelines_config_path",
@@ -83,10 +98,6 @@ class WorkspaceManager:
     def load_context(self, env: str) -> Any:
         from ducta.setting.context_loader import ContextLoader
 
-        # If we were given a project sub-directory that carries its own environment
-        # file, resolve configs relative to that directory so the project-level
-        # streaming/specialised configs are picked up instead of the workspace-root
-        # fallback stubs.
         config_root = self.root
         if self._project_path is not None:
             _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
@@ -100,10 +111,6 @@ class WorkspaceManager:
             original_key = self._CONTEXT_KEY_MAP.get(name, f"{name}_path")
             path_dict[original_key] = str(path)
 
-        # This workspace may be a repo cloned from a (host-allow-listed but
-        # otherwise untrusted) remote; its config paths are declared inside
-        # its own environment.yaml. allow_python_config=False keeps a `.py`
-        # config from executing no matter what the repo's own config says.
         ctx = ContextLoader(allow_python_config=False).load_from_paths(path_dict, env)
 
         env_dir = self.root / env if (self.root / env).is_dir() else self.root
@@ -303,10 +310,6 @@ class WorkspaceManager:
             except Exception:
                 pass
 
-        # Sanitized, never raw: a remote can carry embedded credentials
-        # (https://user:token@host/repo.git), and this value is shaped for a
-        # response body. `SourceResolver.get_info` and `routes/workspace.py`
-        # already sanitize the same field; this one did not.
         if git_remote is not None:
             git_remote = sanitize_git_remote_url(git_remote)
 

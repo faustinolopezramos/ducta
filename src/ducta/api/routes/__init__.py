@@ -36,10 +36,8 @@ from ducta.api.routes.mlops import router as mlops_router
 from ducta.api.routes.nodes import router as nodes_router
 from ducta.api.routes.projects import router as projects_router
 from ducta.api.routes.quality import router as quality_router
-from ducta.api.routes.repository import router as repository_router
 from ducta.api.routes.schedules import router as schedules_router
 from ducta.api.routes.templates import router as templates_router
-from ducta.api.routes.terminal import ws_router as terminal_ws_router
 from ducta.api.routes.workspace import router as workspace_router
 from ducta.api.routes.workspace_files import router as workspace_files_router
 
@@ -60,7 +58,6 @@ def register_routes(app: FastAPI) -> None:
       - Execution (run management + WebSocket logs)
       - Config / Environment (workspace config files)
       - Git (version control operations)
-      - Repository (remote repo adapters)
     """
     # Health probes — no prefix, must be reachable without auth
     app.include_router(health_router)
@@ -86,12 +83,8 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(certificates_router, prefix=API_PREFIX)
     app.include_router(schedules_router, prefix=API_PREFIX)
 
-    # Embedded web terminal (opt-in, default-disabled — see settings.terminal_enabled)
-    app.include_router(terminal_ws_router, prefix=API_PREFIX + "/ws")
-
     # Version control
     app.include_router(git_router, prefix=API_PREFIX)
-    app.include_router(repository_router, prefix=API_PREFIX)
 
     # MLOps — experiment tracking and model registry
     app.include_router(mlops_router, prefix=API_PREFIX)

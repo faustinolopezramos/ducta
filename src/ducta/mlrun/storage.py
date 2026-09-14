@@ -35,6 +35,25 @@ from uuid import uuid4
 import pandas as pd  # type: ignore
 from loguru import logger  # type: ignore
 
+# pandas lazily imports `pandas.core.arrays.arrow.extension_types` the first
+# time `pd.read_parquet`/`to_parquet(engine="pyarrow")` runs, and that module
+# registers pyarrow's "pandas.period"/"pandas.interval" extension types at
+# import time. If that first import is ever interrupted partway through (a
+# request cancelled mid-read, a concurrent import race), CPython evicts the
+# half-initialized module from `sys.modules`, so every later attempt re-runs
+# the same registration calls against pyarrow's process-global registry and
+# gets `ArrowKeyError: ... already defined` — permanently, for the rest of
+# the process's life, since the registry itself is never cleared. Forcing the
+# import here, once, single-threaded, at module load (long before request
+# threads exist), keeps it from ever starting concurrently or getting
+# cancelled mid-way.
+try:
+    import pandas.core.arrays.arrow.extension_types  # type: ignore  # noqa: F401
+    import pyarrow  # type: ignore  # noqa: F401
+    import pyarrow.parquet  # type: ignore  # noqa: F401
+except Exception:
+    pass
+
 from ducta.mlrun.exceptions import MLOpsException, StorageBackendError
 from ducta.mlrun.resilience import (
     STORAGE_RETRY_CONFIG,

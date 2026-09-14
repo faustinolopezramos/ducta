@@ -225,7 +225,7 @@ export default function IngestionPage() {
     setTestStates((s) => ({ ...s, [name]: { ok, at: Date.now() } }));
 
   return (
-    <PageContainer maxWidth={900}>
+    <PageContainer>
       <PageHeader
         title="Ingestion"
         description="Database connections and declarative ingestion nodes"

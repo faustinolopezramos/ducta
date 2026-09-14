@@ -57,6 +57,10 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("/node_modules/")) {
+            // Before vendor-react, or the `/react/` test swallows @xyflow/react
+            // and buries the canvas library in the chunk every page loads.
+            // Isolated, it only costs the two routes that draw a DAG.
+            if (id.includes("@xyflow")) return "vendor-flow";
             if (id.includes("/react-dom") || id.includes("/react/")) return "vendor-react";
             if (id.includes("react-router")) return "vendor-router";
             if (id.includes("@tanstack/react-query")) return "vendor-query";

@@ -28,15 +28,33 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from loguru import logger  # type: ignore
 
 from ducta.api.exceptions import NodeNotFoundError, PipelineNotFoundError
-from ducta.api.models.node_schema import IOItem, NodeSchemaResponse, PipelineNodeSchemaResponse
+from ducta.api.models.node_schema import (
+    IOItem,
+    NodeSchemaResponse,
+    PipelineNodeSchemaResponse,
+    QualityInfo,
+)
+from ducta.api.services.dataset_service import node_io
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from ducta.api.execution.manager import ExecutionManager
+    from ducta.api.services.dataset_service import DatasetService
     from ducta.api.services.node_service import NodeService
     from ducta.api.services.project import ProjectService
 
 # Fields merged from the global node config when the pipeline-level spec omits them.
-_MERGEABLE_FIELDS = ("module", "fn", "type", "description", "inputs", "outputs", "dependencies")
+_MERGEABLE_FIELDS = (
+    "module",
+    "fn",
+    "function",
+    "type",
+    "description",
+    "inputs",
+    "outputs",
+    "dependencies",
+    "data_quality",
+    "sanity_checks",
+)
 
 
 class NodeSchemaService:
@@ -47,10 +65,12 @@ class NodeSchemaService:
         project_svc: "ProjectService",
         node_svc: "NodeService",
         exec_manager: "ExecutionManager",
+        dataset_svc: "DatasetService",
     ) -> None:
         self._project_svc = project_svc
         self._node_svc = node_svc
         self._exec_manager = exec_manager
+        self._dataset_svc = dataset_svc
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -75,17 +95,15 @@ class NodeSchemaService:
         node_spec = copy.deepcopy(node_spec)
         self._merge_global_spec(node_spec, node_id)
 
-        edges = pipeline_spec.get("edges", [])
-        inputs_list = self._build_inputs(node_spec, node_id, edges)
-        outputs_list = self._build_outputs(node_spec)
+        inputs_list = self._build_io(node_spec, node_id, "input")
+        outputs_list = self._build_io(node_spec, node_id, "output")
 
         module, info, file_exists, file_size_bytes = self._resolve_file(node_spec, node_id)
 
         if not inputs_list and not outputs_list and file_exists and info and info.code:
-            inferred_inputs, inferred_outputs = self._infer_io_from_ast(
-                info.code, node_spec.get("fn", "execute"), node_id, edges
+            inputs_list, outputs_list = self._infer_io_from_ast(
+                info.code, node_spec.get("fn", "execute"), node_id
             )
-            inputs_list, outputs_list = inferred_inputs, inferred_outputs
 
         last_exec = self._last_execution(node_id)
 
@@ -97,14 +115,15 @@ class NodeSchemaService:
             node_id=node_spec.get("id", node_id),
             type=node_spec.get("type", "custom"),
             module=module,
-            fn=node_spec.get("fn", "execute"),
+            fn=self._fn_name(node_spec),
             description=node_spec.get("description"),
             inputs=inputs_list,
             outputs=outputs_list,
             dependencies=dependencies,
-            file_path=f"src/{module.replace('.', '/')}.py",
+            file_path=f"{module.replace('.', '/')}.py",
             file_size_bytes=file_size_bytes,
             file_exists=file_exists,
+            quality=self._quality(node_spec),
             last_execution_status=last_exec.get("status"),
             last_execution_time=last_exec.get("time"),
             last_execution_duration=last_exec.get("duration"),
@@ -139,41 +158,79 @@ class NodeSchemaService:
                 continue
             val = global_spec.get(key)
             if key in ("inputs", "outputs"):
-                val = val or global_spec.get(key.rstrip("s"))  # singular -> plural
+                val = val or global_spec.get(key[:-1])
             if val:
                 node_spec[key] = val
 
     @staticmethod
-    def _normalize_io_spec(spec: Any) -> List[Any]:
-        if isinstance(spec, dict):
-            return [{"id": k, "name": k} for k in spec.keys()]
-        return spec or []
+    def _fn_name(node_spec: Dict[str, Any]) -> str:
+        """Resolve the function name, which streaming nodes declare as a dict."""
+        fn = node_spec.get("fn") or node_spec.get("function")
+        if isinstance(fn, dict):
+            return str(fn.get("key") or fn.get("fn") or "execute")
+        return str(fn) if fn else "execute"
 
-    @classmethod
-    def _build_inputs(
-        cls, node_spec: Dict[str, Any], node_id: str, edges: List[Dict[str, Any]]
-    ) -> List[IOItem]:
+    def _build_io(self, node_spec: Dict[str, Any], node_id: str, side: str) -> List[IOItem]:
+        """Resolve a node's declared references on *side* into port items."""
+        names = node_io(node_spec, side)
+        refs = self._dataset_svc.resolve_refs(names, side)
         items: List[IOItem] = []
-        for inp in cls._normalize_io_spec(node_spec.get("inputs", [])):
-            inp_id = inp.get("id") if isinstance(inp, dict) else inp
-            name = inp.get("name") if isinstance(inp, dict) else inp
-            fmt = inp.get("format", "unknown") if isinstance(inp, dict) else "unknown"
-            # An input is "required" when nothing in the pipeline feeds it.
-            connected = any(
-                e.get("target") == node_id and e.get("targetHandle") == inp_id for e in edges
+        for index, ref in enumerate(refs):
+            items.append(
+                IOItem(
+                    id=f"{node_id}-{side}-{index}",
+                    name=ref.name,
+                    declared=ref.declared,
+                    format=ref.format,
+                    path=ref.path,
+                    write_mode=ref.write_mode,
+                    schema=ref.schema_,
+                    layer=ref.layer,
+                )
             )
-            items.append(IOItem(id=inp_id, name=name, format=fmt, required=not connected))
         return items
 
-    @classmethod
-    def _build_outputs(cls, node_spec: Dict[str, Any]) -> List[IOItem]:
-        items: List[IOItem] = []
-        for out in cls._normalize_io_spec(node_spec.get("outputs", [])):
-            out_id = out.get("id") if isinstance(out, dict) else out
-            name = out.get("name") if isinstance(out, dict) else out
-            fmt = out.get("format", "unknown") if isinstance(out, dict) else "unknown"
-            items.append(IOItem(id=out_id, name=name, format=fmt, required=False))
-        return items
+    @staticmethod
+    def _quality(node_spec: Dict[str, Any]) -> Optional[QualityInfo]:
+        """Summarize the node's checks and gate, when either is enabled."""
+        dq = node_spec.get("data_quality") or node_spec.get("dataQuality")
+        sanity = node_spec.get("sanity_checks") or node_spec.get("sanityChecks")
+        block = None
+        is_sanity = False
+        if isinstance(dq, dict) and dq.get("enabled"):
+            block = dq
+        elif isinstance(sanity, dict) and sanity.get("enabled"):
+            block = sanity
+            is_sanity = True
+        if block is None:
+            return None
+
+        checks = block.get("checks") or {}
+        if isinstance(checks, dict):
+            count = sum(
+                1
+                for c in checks.values()
+                if not isinstance(c, dict) or c.get("enabled") is not False
+            )
+        elif isinstance(checks, list):
+            count = len(checks)
+        else:
+            count = 0
+
+        gate_block = (
+            block.get("quality_gate")
+            or block.get("qualityGate")
+            or block.get("sanity_gate")
+            or block.get("sanityGate")
+        )
+        gate = None
+        if isinstance(gate_block, dict) and gate_block.get("enabled"):
+            behavior = gate_block.get("behavior")
+            gate = str(behavior) if behavior else None
+
+        if count == 0 and gate is None:
+            return None
+        return QualityInfo(check_count=count, gate_behavior=gate, is_sanity=is_sanity)
 
     def _resolve_file(
         self, node_spec: Dict[str, Any], node_id: str
@@ -205,9 +262,9 @@ class NodeSchemaService:
 
     @staticmethod
     def _infer_io_from_ast(
-        code: str, target_fn_name: str, node_id: str, edges: List[Dict[str, Any]]
+        code: str, target_fn_name: str, node_id: str
     ) -> tuple[List[IOItem], List[IOItem]]:
-        """Infer I/O from a function signature when the YAML spec defines none."""
+        """Infer I/O from a function signature when the config declares none."""
         inputs: List[IOItem] = []
         outputs: List[IOItem] = []
         try:
@@ -224,22 +281,21 @@ class NodeSchemaService:
             for arg in node_ast.args.args:
                 if arg.arg in ("self", "cls"):
                     continue
-                inp_id = f"{node_id}-input-{len(inputs)}"
-                connected = any(
-                    e.get("target") == node_id and e.get("targetHandle") == inp_id for e in edges
-                )
                 inputs.append(
-                    IOItem(id=inp_id, name=arg.arg, format="unknown", required=not connected)
+                    IOItem(
+                        id=f"{node_id}-input-{len(inputs)}",
+                        name=arg.arg,
+                        declared=False,
+                        description="Inferred from the function signature",
+                    )
                 )
-            fmt = "unknown"
-            if node_ast.returns is not None:
-                ret_str = ast.dump(node_ast.returns).lower()
-                if "dataframe" in ret_str:
-                    fmt = "parquet"
-                elif "str" in ret_str or "list" in ret_str:
-                    fmt = "json"
             outputs.append(
-                IOItem(id=f"{node_id}-output-0", name="output", format=fmt, required=False)
+                IOItem(
+                    id=f"{node_id}-output-0",
+                    name="output",
+                    declared=False,
+                    description="Inferred from the function signature",
+                )
             )
             break
         return inputs, outputs

@@ -24,7 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import (
@@ -35,7 +35,11 @@ from ducta.api.dependencies import (
     WorkspaceManagerDep,
     require_permission,
 )
-from ducta.api.exceptions import NodeNotFoundError, PipelineNotFoundError
+from ducta.api.exceptions import (
+    NodeNotFoundError,
+    PipelineNotFoundError,
+)
+from ducta.api.models.dataset import DatasetListResponse
 from ducta.api.models.execution import (
     ExecuteRequest,
     ExecutionResponse,
@@ -51,6 +55,13 @@ from ducta.api.models.project import (
     ProjectResponse,
     ProjectUpdateRequest,
 )
+from ducta.api.models.spec import (
+    PipelineSpec,
+    check_no_cycles,
+    validate_pipeline_nodes,
+    validate_pipeline_spec,
+)
+from ducta.api.services.dataset_service import DatasetService, io_names, node_io
 from ducta.api.services.node_schema_service import NodeSchemaService
 from ducta.api.services.project import ProjectService
 
@@ -62,6 +73,17 @@ def _project_svc(source_path: SourcePathDep) -> ProjectService:
 
 
 ProjectServiceDep = Annotated[ProjectService, Depends(_project_svc)]
+
+
+def _dataset_svc(
+    source_path: SourcePathDep,
+    project_svc: ProjectServiceDep,
+    node_svc: NodeServiceDep,
+) -> DatasetService:
+    return DatasetService(source_path, project_svc, node_svc)
+
+
+DatasetServiceDep = Annotated[DatasetService, Depends(_dataset_svc)]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -135,14 +157,29 @@ async def delete_project(project_id: str, svc: ProjectServiceDep, force: bool = 
 
 class ProjectPipelineResponse(BaseModel):
     name: str
-    spec: Dict[str, Any]
+    spec: PipelineSpec = Field(
+        description="Pipeline specification. Documented fields mirror the runtime "
+        "schema; unknown keys are preserved verbatim so the YAML round-trip is lossless."
+    )
     project_id: str
+    commit_sha: Optional[str] = Field(
+        default=None,
+        description="Commit SHA of pipelines.yaml right after this write — pass it "
+        "back as `expected_sha` on the next update/delete to detect a concurrent "
+        "edit instead of silently overwriting it.",
+    )
 
 
 class ProjectPipelinesListResponse(BaseModel):
     project_id: str
-    pipelines: Dict[str, Any]
+    pipelines: Dict[str, PipelineSpec] = Field(description="Pipeline name → specification")
     count: int
+    commit_sha: Optional[str] = Field(
+        default=None,
+        description="Commit SHA of this project's pipelines.yaml as a whole — all "
+        "pipelines in one project share one file, so OCC is file-scoped, not "
+        "per-pipeline. Pass back as `expected_sha` on update/delete.",
+    )
 
 
 class ProjectPipelineCreateRequest(BaseModel):
@@ -152,6 +189,12 @@ class ProjectPipelineCreateRequest(BaseModel):
 
 class ProjectPipelineUpdateRequest(BaseModel):
     spec: Dict[str, Any] = Field(description="Pipeline specification")
+    expected_sha: Optional[str] = Field(
+        default=None,
+        description="Commit SHA the caller last saw (from a previous "
+        "ProjectPipelineResponse.commit_sha). If the file changed since, "
+        "the update is rejected with 409 instead of overwriting it.",
+    )
 
 
 @router.get(
@@ -164,7 +207,10 @@ async def list_project_pipelines(
 ) -> ProjectPipelinesListResponse:
     pipelines = svc.list_project_pipelines(project_id)
     return ProjectPipelinesListResponse(
-        project_id=project_id, pipelines=pipelines, count=len(pipelines)
+        project_id=project_id,
+        pipelines=pipelines,
+        count=len(pipelines),
+        commit_sha=svc.get_pipelines_commit_sha(project_id),
     )
 
 
@@ -190,17 +236,6 @@ class ProjectDependenciesResponse(BaseModel):
     edges: List[DependencyEdge]
 
 
-def _as_name_list(value: Any) -> List[str]:
-    """Normalize a node-spec input/output/dependencies value to a list of names."""
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, (list, tuple)):
-        return [n if isinstance(n, str) else str(n.get("name") or n.get("id") or "") for n in value]
-    return []
-
-
 @router.get(
     "/{project_id}/dependencies",
     response_model=ProjectDependenciesResponse,
@@ -215,7 +250,7 @@ async def get_project_dependencies(
 
     # pipeline name → node names (as declared in the pipeline spec)
     pipeline_nodes: Dict[str, List[str]] = {
-        name: _as_name_list((spec or {}).get("nodes"))
+        name: io_names((spec or {}).get("nodes"))
         for name, spec in pipelines.items()
         if isinstance(spec, dict)
     }
@@ -248,16 +283,16 @@ async def get_project_dependencies(
     producers: Dict[str, str] = {}
     for node_name in node_pipeline:
         spec = node_specs.get(node_name) or {}
-        for out in _as_name_list(spec.get("outputs")):
+        for out in node_io(spec, "output"):
             if out:
                 producers.setdefault(out, node_name)
 
     for node_name in node_pipeline:
         spec = node_specs.get(node_name) or {}
-        for dep in _as_name_list(spec.get("dependencies")):
+        for dep in io_names(spec.get("dependencies")):
             if dep in node_pipeline:
                 add_edge(dep, node_name, None, "explicit")
-        for inp in _as_name_list(spec.get("inputs")):
+        for inp in node_io(spec, "input"):
             producer = producers.get(inp)
             if producer and producer in node_pipeline:
                 # Skip dataset edges that shadow an explicit dependency edge.
@@ -267,6 +302,34 @@ async def get_project_dependencies(
     return ProjectDependenciesResponse(project_id=project_id, pipelines=pipeline_nodes, edges=edges)
 
 
+# ═══════════════════════════════════════════════════════════
+# DATASET REGISTRY
+# ═══════════════════════════════════════════════════════════
+
+
+@router.get(
+    "/{project_id}/datasets",
+    response_model=DatasetListResponse,
+    dependencies=[Depends(require_permission("pipeline.read"))],
+    summary="Datasets referenced by a project's pipelines, with their wiring resolved",
+    description=(
+        "A node declares its I/O as reference names into `input_config` / "
+        "`output_config`; this resolves those references and returns the dataset "
+        "as a first-class resource — format, filepath, write mode, schema, plus "
+        "the node that produces it and every node that consumes it (possibly in "
+        "another pipeline of the same project).\n\n"
+        "A field is `null` when the registry does not declare it, and "
+        "`declared_in` is empty when the reference is dangling. Those are "
+        "answers, not gaps to paper over with a default."
+    ),
+)
+async def list_project_datasets(
+    project_id: str, svc: ProjectServiceDep, dataset_svc: DatasetServiceDep
+) -> DatasetListResponse:
+    svc.get_project(project_id)
+    return dataset_svc.list_for_project(project_id)
+
+
 @router.post(
     "/{project_id}/pipelines",
     response_model=ProjectPipelineResponse,
@@ -274,11 +337,20 @@ async def get_project_dependencies(
     dependencies=[Depends(require_permission("pipeline.write"))],
 )
 async def create_project_pipeline(
-    project_id: str, body: ProjectPipelineCreateRequest, svc: ProjectServiceDep
+    project_id: str,
+    body: ProjectPipelineCreateRequest,
+    svc: ProjectServiceDep,
+    node_svc: NodeServiceDep,
 ) -> ProjectPipelineResponse:
     svc.get_project(project_id)
-    svc.save_project_pipeline(project_id, body.name, body.spec)
-    return ProjectPipelineResponse(name=body.name, spec=body.spec, project_id=project_id)
+    validate_pipeline_spec(body.name, body.spec)
+    known_nodes = node_svc.list_nodes()
+    validate_pipeline_nodes(body.name, body.spec, known_nodes)
+    check_no_cycles(body.name, body.spec, known_nodes)
+    commit_sha = svc.save_project_pipeline(project_id, body.name, body.spec)
+    return ProjectPipelineResponse(
+        name=body.name, spec=body.spec, project_id=project_id, commit_sha=commit_sha or None
+    )
 
 
 @router.get(
@@ -292,7 +364,10 @@ async def get_project_pipeline(
     pipelines = svc.list_project_pipelines(project_id)
     if name not in pipelines:
         raise PipelineNotFoundError(f"Pipeline '{name}' not found in project '{project_id}'")
-    return ProjectPipelineResponse(name=name, spec=pipelines[name], project_id=project_id)
+    commit_sha = svc.get_pipelines_commit_sha(project_id)
+    return ProjectPipelineResponse(
+        name=name, spec=pipelines[name], project_id=project_id, commit_sha=commit_sha
+    )
 
 
 @router.put(
@@ -301,11 +376,23 @@ async def get_project_pipeline(
     dependencies=[Depends(require_permission("pipeline.write"))],
 )
 async def update_project_pipeline(
-    project_id: str, name: str, body: ProjectPipelineUpdateRequest, svc: ProjectServiceDep
+    project_id: str,
+    name: str,
+    body: ProjectPipelineUpdateRequest,
+    svc: ProjectServiceDep,
+    node_svc: NodeServiceDep,
 ) -> ProjectPipelineResponse:
     svc.get_project(project_id)
-    svc.save_project_pipeline(project_id, name, body.spec)
-    return ProjectPipelineResponse(name=name, spec=body.spec, project_id=project_id)
+    validate_pipeline_spec(name, body.spec)
+    known_nodes = node_svc.list_nodes()
+    validate_pipeline_nodes(name, body.spec, known_nodes)
+    check_no_cycles(name, body.spec, known_nodes)
+    commit_sha = svc.save_project_pipeline(
+        project_id, name, body.spec, expected_sha=body.expected_sha
+    )
+    return ProjectPipelineResponse(
+        name=name, spec=body.spec, project_id=project_id, commit_sha=commit_sha or None
+    )
 
 
 @router.delete(
@@ -313,9 +400,20 @@ async def update_project_pipeline(
     status_code=204,
     dependencies=[Depends(require_permission("pipeline.write"))],
 )
-async def delete_project_pipeline(project_id: str, name: str, svc: ProjectServiceDep) -> None:
+async def delete_project_pipeline(
+    project_id: str,
+    name: str,
+    svc: ProjectServiceDep,
+    expected_sha: Optional[str] = Query(
+        default=None,
+        description="Commit SHA the caller last saw. If pipelines.yaml changed "
+        "since, the delete is rejected with 409 instead of dropping it blind.",
+    ),
+) -> None:
     svc.get_project(project_id)
-    svc.delete_project_pipeline(project_id, name)
+    # ConcurrencyError propagates uncaught — see the comment in
+    # update_project_pipeline above.
+    svc.delete_project_pipeline(project_id, name, expected_sha=expected_sha)
 
 
 # ── Deep preflight ────────────────────────────────────────
@@ -577,14 +675,19 @@ async def get_node_schema_in_pipeline(
     svc: ProjectServiceDep,
     node_svc: NodeServiceDep,
     exec_manager: ExecutionManagerDep,
+    dataset_svc: DatasetServiceDep,
 ) -> PipelineNodeSchemaResponse:
     """
     Get enriched schema information for a node within a pipeline context.
 
     Includes:
     - Node metadata (type, module, function, description)
-    - Input/output specifications (with required flags derived from edges)
+    - Input/output datasets, resolved against ``input_config`` / ``output_config``
+      so each carries its real format, filepath, write mode and schema
     - File path, size, existence
+    - Quality checks and gate behavior
     - Last execution status, time, and duration
     """
-    return NodeSchemaService(svc, node_svc, exec_manager).build(project_id, pipeline_name, node_id)
+    return NodeSchemaService(svc, node_svc, exec_manager, dataset_svc).build(
+        project_id, pipeline_name, node_id
+    )

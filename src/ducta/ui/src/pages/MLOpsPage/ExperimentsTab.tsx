@@ -31,7 +31,19 @@ import {
 } from "@tabler/icons-react";
 import { formatDate, findProjectForPipeline } from "./shared";
 
-function RunActionsCell({ experimentId, run }: { experimentId: string; run: ExperimentRun }) {
+function RunActionsCell({
+  experimentId,
+  run,
+  env,
+  pipeline,
+  project,
+}: {
+  experimentId: string;
+  run: ExperimentRun;
+  env?: string;
+  pipeline?: string;
+  project?: string;
+}) {
   const navigate = useNavigate();
   const executePipeline = useExecutePipeline();
   const closeRun = useCloseMlopsRun();
@@ -75,7 +87,14 @@ function RunActionsCell({ experimentId, run }: { experimentId: string; run: Expe
             confirmLabel: "Mark failed",
           }}
           onAction={() =>
-            closeRun.mutateAsync({ experimentId, runId: run.run_id, status: "FAILED" })
+            closeRun.mutateAsync({
+              experimentId,
+              runId: run.run_id,
+              status: "FAILED",
+              env,
+              pipelineName: pipeline,
+              project,
+            })
           }
           successMessage="Run marked as failed"
           errorMessage="Could not close run"
@@ -93,7 +112,15 @@ function RunActionsCell({ experimentId, run }: { experimentId: string; run: Expe
           tone: "danger",
           confirmLabel: "Delete run",
         }}
-        onAction={() => deleteRun.mutateAsync({ experimentId, runId: run.run_id })}
+        onAction={() =>
+          deleteRun.mutateAsync({
+            experimentId,
+            runId: run.run_id,
+            env,
+            pipelineName: pipeline,
+            project,
+          })
+        }
         successMessage="Run deleted"
         errorMessage="Could not delete run"
       >
@@ -122,11 +149,17 @@ function runColumns({
   compareSelection,
   onToggleCompare,
   onOpenRun,
+  env,
+  pipeline,
+  project,
 }: {
   experimentId: string;
   compareSelection: Map<string, ExperimentRun>;
   onToggleCompare: (run: ExperimentRun) => void;
   onOpenRun: (run: ExperimentRun) => void;
+  env?: string;
+  pipeline?: string;
+  project?: string;
 }): DataTableColumn<ExperimentRun>[] {
   return [
     {
@@ -193,7 +226,9 @@ function runColumns({
       header: "",
       headerLabel: "Run actions",
       align: "right",
-      cell: (run) => <RunActionsCell experimentId={experimentId} run={run} />,
+      cell: (run) => (
+        <RunActionsCell experimentId={experimentId} run={run} env={env} pipeline={pipeline} project={project} />
+      ),
     },
   ];
 }
@@ -211,14 +246,25 @@ function ExperimentRow({
   compareSelection,
   onToggleCompare,
   onOpenRun,
+  env,
+  pipeline,
+  project,
 }: {
   exp: ExperimentSummary;
   compareSelection: Map<string, ExperimentRun>;
   onToggleCompare: (run: ExperimentRun) => void;
   onOpenRun: (run: ExperimentRun) => void;
+  env?: string;
+  pipeline?: string;
+  project?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const { data: detail, isLoading } = useMlopsExperiment(expanded ? exp.experiment_id : "");
+  const { data: detail, isLoading } = useMlopsExperiment(
+    expanded ? exp.experiment_id : "",
+    env,
+    pipeline,
+    project
+  );
 
   return (
     <Panel>
@@ -257,6 +303,9 @@ function ExperimentRow({
               compareSelection,
               onToggleCompare,
               onOpenRun,
+              env,
+              pipeline,
+              project,
             })}
             rows={detail?.runs ?? []}
             rowKey={(run) => String(run.run_id)}
@@ -270,8 +319,16 @@ function ExperimentRow({
   );
 }
 
-export function ExperimentsTab() {
-  const { data, isLoading, isError, refetch } = useMlopsExperiments();
+export function ExperimentsTab({
+  env,
+  pipeline,
+  project,
+}: {
+  env?: string;
+  pipeline?: string;
+  project?: string;
+}) {
+  const { data, isLoading, isError, refetch } = useMlopsExperiments(env, pipeline, project);
   const experiments = data ?? [];
   const [compareSelection, setCompareSelection] = useState<Map<string, ExperimentRun>>(new Map());
   const [openRun, setOpenRun] = useState<ExperimentRun | null>(null);
@@ -284,6 +341,17 @@ export function ExperimentsTab() {
       else next.set(run.run_id, run);
       return next;
     });
+
+  if (!pipeline) {
+    return (
+      <EmptyState
+        icon={IconFlask}
+        title="Select a pipeline to view experiments"
+        description="Pick an ML pipeline above to see its tracked experiments and runs."
+        size="lg"
+      />
+    );
+  }
 
   return (
     <div>
@@ -344,6 +412,9 @@ export function ExperimentsTab() {
           compareSelection={compareSelection}
           onToggleCompare={toggleCompare}
           onOpenRun={setOpenRun}
+          env={env}
+          pipeline={pipeline}
+          project={project}
         />
       ))}
 

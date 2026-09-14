@@ -1,40 +1,4 @@
 import { useRef } from "react";
-import { colors } from "../../../theme/tokens";
-import { EXEC_STATE_COLOR } from "../logUtils";
-
-// ── NodeChip component: shows node state in header ──────────────────────────────
-
-export function NodeChip({
-  name,
-  state,
-}: {
-  name: string;
-  state: string;
-}) {
-  const stateClass = `ilog__chip--${state || "idle"}`;
-  const dotColor = EXEC_STATE_COLOR[state ?? ""] ?? colors.textDim;
-
-  return (
-    <div className={`ilog__chip ${stateClass}`}>
-      <div className="ilog__chip-dot" style={{ background: dotColor }} />
-      <span>{name.slice(0, 12)}</span>
-    </div>
-  );
-}
-
-// ── StatusLabel: dynamic status indicator ──────────────────────────────────────
-
-export function StatusLabel({ isRunning }: { isRunning: boolean }) {
-  const dotClass = isRunning ? "ilog__status-dot--running" : "ilog__status-dot--idle";
-  const label = isRunning ? "LIVE" : "IDLE";
-
-  return (
-    <div className="ilog__status-label">
-      <div className={`ilog__status-dot ${dotClass}`} />
-      {label}
-    </div>
-  );
-}
 
 // ── ResizeHandle: draggable divider ────────────────────────────────────────────
 

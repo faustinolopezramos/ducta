@@ -89,13 +89,18 @@
   --ease-spring:   cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-futurist: cubic-bezier(0.7, 0, 0.3, 1);
 
-  /* ── Extended palette (node-type colors, harmonized with Terrazo) ────────── */
-  --blue:   #3B7DD8;
-  --green:  #2D8F6F;
-  --amber:  #D4872C;
-  --red:    #C73B3B;
-  --purple: #9B72AA;
-  --teal:   #1A8B7A;
+  /* ── Extended palette, harmonized with Blueprint ──────────────────────────
+     No longer the node-type palette (those are neutral now — see --node-*).
+     What survives is the dependency lens, which needs two colours that mean
+     *direction*, not status: upstream and downstream. They're pulled toward the
+     petrol family so the canvas stays one temperature, and kept clear of
+     --success / --warning / --danger so a lens can never be misread as state. */
+  --blue:   #2E6F99;
+  --green:  #0E7C66;
+  --amber:  #B4690E;
+  --red:    #BE3A34;
+  --purple: #6B6AA8;
+  --teal:   #0E7C8A;
 
   --teal-a15:   color-mix(in srgb, var(--teal) 15%, transparent);
   --blue-a12:   color-mix(in srgb, var(--blue) 12%, transparent);
@@ -113,6 +118,9 @@
   --accent-a08: color-mix(in oklab, var(--primary) 8%, transparent);
   --accent-a12: color-mix(in oklab, var(--primary) 12%, transparent);
   --accent-a20: color-mix(in oklab, var(--primary) 20%, transparent);
+  /* The 30% step was referenced by pages.css and the JS token map but never
+     declared here, so those borders resolved to nothing. */
+  --accent-a30: color-mix(in oklab, var(--primary) 30%, transparent);
   --accent-a40: color-mix(in oklab, var(--primary) 40%, transparent);
   --accent-dim: color-mix(in oklab, var(--primary) 8%, transparent);
   --accent-dark: color-mix(in oklab, var(--primary) 80%, black);
@@ -133,18 +141,51 @@
    *    Semantic per node type, so a card's accent, its port dots and its
    *    minimap dot always agree. These alias the extended palette above — the
    *    canvas gets its own names so it can be retuned on its own. ─────────── */
-  --node-source:    var(--blue);
-  --node-transform: var(--purple);
-  --node-ml:        var(--teal);
-  --node-sink:      var(--green);
-  --node-custom:    var(--amber);
+  /* All five resolve to the same muted ink on purpose. Giving each node *type*
+     its own hue put six competing colours on the canvas and left nothing for
+     the eye to land on: a failing pipeline looked exactly as busy as a healthy
+     one. Type is carried by the node's icon, which is unambiguous and needs no
+     legend; colour is reserved for the two things worth interrupting someone
+     over — brand (the edges carrying data) and state (ok / warning / error).
+     The tokens stay so every consumer keeps resolving; retuning one of them is
+     a one-line change if a type ever earns its own hue. */
+  --node-source:    var(--text-dim);
+  --node-transform: var(--text-dim);
+  --node-ml:        var(--text-dim);
+  --node-sink:      var(--text-dim);
+  --node-custom:    var(--text-dim);
+
+  /* ── Medallion layers ─────────────────────────────────────────────────────
+   *  The fourth and last colour role on the canvas, and the only one added by
+   *  the dataset redesign. A dataset's layer is the head of its namespace
+   *  (`bronze.etl.raw` → bronze), a convention ducta's own templates follow, so
+   *  it is real information — and unlike node *type* it is worth a hue, because
+   *  it says where in the pipeline a thing sits.
+   *
+   *  Spent only on a node card's top rule + eyebrow and a dataset chip's left
+   *  rule + pill. Never on an edge, never on a status: the four roles are
+   *  accent (selection), semantic (run state), medallion (layer) and the lens
+   *  (direction), and they must not be confusable. Each also carries a
+   *  non-colour encoding, so greyscale and colour blindness lose nothing. */
+  --layer-bronze: #8C5A2B;
+  --layer-silver: #6B7B85;
+  --layer-gold:   #A8801F;
 
   --edge:          var(--border-hover);
   --edge-hot:      var(--primary);
   --edge-dim-op:   0.15;
 
+  /* ── Aliases for names the app already used ──────────────────────────────
+   *  `--bg-surface` and `--bg-subtle` were referenced by SchedulesPage but
+   *  never defined: the schedule cards rendered with no surface at all (just a
+   *  border), and the cron chip fell back to a hardcoded `rgba(0,0,0,.15)`
+   *  that reads as a grey slab in light mode. Defined here rather than
+   *  rewritten at each call site so any other consumer is fixed too. */
+  --bg-surface: var(--surface);
+  --bg-subtle: var(--overlay-subtle);
+
   /* ── Canvas dot grid ─────────────────────────────────────────────────────── */
-  --canvas-dot: rgba(0, 0, 0, 0.10);
+  --canvas-dot: color-mix(in srgb, var(--text) 10%, transparent);
 
   /* ── Glows / focus emphasis ──────────────────────────────────────────────── */
   --glow-xs: 0 0 0 3px color-mix(in oklab, var(--primary) 12%, transparent);
@@ -166,7 +207,7 @@
   --overlay-light: rgba(255, 255, 255, 0.6);
   --overlay-light-strong: rgba(255, 255, 255, 0.85);
   --overlay-dark: rgba(0, 0, 0, 0.45);
-  --glass-border-3: rgba(24, 95, 165, 0.18);
+  --glass-border-3: color-mix(in srgb, var(--primary) 18%, transparent);
   --danger-hover: color-mix(in oklab, var(--danger) 12%, transparent);
 
   /* Text color to place on a filled accent / danger surface. */
@@ -178,10 +219,10 @@
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--primary);
 
   /* ── Warning text on light surfaces ─────────────────────────────────────────
-     --warning (#CF8A2E) is a *surface* hue (dots, tints); as text on light it
-     only reaches 2.6:1, so text uses --warning-strong (#8F5E1E ≈ 5.1:1 on bg).
-     In dark mode it resolves back to the vivid --warning (7.9:1). */
-  --warning-strong: #8F5E1E;
+     --warning (#B4690E) is a *surface* hue (dots, tints); as text on light it
+     is borderline, so text uses --warning-strong (#8A4F09 ≈ 5.4:1 on --bg).
+     In dark mode it resolves back to the vivid --warning. */
+  --warning-strong: #8A4F09;
 
   /* ── Semantic STATUS tokens (fg / bg / border) ───────────────────────────── */
   --status-idle-fg:     var(--text-dim);
@@ -220,7 +261,7 @@
 /* ── Dark-mode parity: only neutrals/overlays/contrast change; the vivid
  *    palette + status hues read well on dark as-is. ──────────────────────────── */
 [data-theme="dark"] {
-  --canvas-dot: rgba(255, 255, 255, 0.10);
+  --canvas-dot: color-mix(in srgb, var(--text) 10%, transparent);
   --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.4);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);
@@ -230,17 +271,23 @@
   --overlay-light: rgba(255, 240, 230, 0.06);
   --overlay-light-strong: rgba(255, 240, 230, 0.12);
   --overlay-dark: rgba(0, 0, 0, 0.65);
-  --glass-border-3: rgba(255, 240, 230, 0.14);
+  --glass-border-3: color-mix(in srgb, var(--primary) 22%, transparent);
 
   --bg-contrast: #1A1513;
   --bg-contrast-danger: #ffffff;
   --on-accent: #1A1513;
 
-  /* Slightly lift the palette so it stays legible on the warm dark surface. */
-  --blue:   #6A9EE0;
-  --green:  #4DB6A0;
-  --amber:  #E8A848;
-  --red:    #E85555;
-  --purple: #B892CB;
-  --teal:   #3DB8A8;
+  /* Lifted so the lens stays legible on the deep petrol surface. */
+  --blue:   #7FB4DB;
+  --green:  #34D399;
+  --amber:  #FBBF24;
+  --red:    #F87171;
+  --purple: #9E9DDB;
+  --teal:   #45C5D6;
+
+  /* Medallion layers, lifted for the same reason: the light-mode values are
+     dark metals and read as near-black against the deep petrol ground. */
+  --layer-bronze: #C08552;
+  --layer-silver: #9BB0BB;
+  --layer-gold:   #D9B44A;
 }

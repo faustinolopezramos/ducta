@@ -178,3 +178,194 @@
     order: 1;
   }
 }
+
+/* ── Source-type switch ──────────────────────────────────────────────────────
+   A local folder is something you find; a Git URL is something you paste. They
+   were behind one text field, which left the local case with no affordance at
+   all — you had to already know the absolute path. */
+.workspace-setup-modes {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.workspace-setup-mode {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.workspace-setup-mode:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.workspace-setup-mode.is-active {
+  background: var(--surface-elevated);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+.workspace-setup-mode:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workspace-setup-mode:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+/* ── Folder picker ───────────────────────────────────────────────────────── */
+.folder-picker {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.folder-picker--error {
+  padding: 12px 14px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.folder-picker__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.folder-picker__up {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.folder-picker__up:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-hover);
+}
+
+.folder-picker__up:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The path can be long; it truncates from the left so the *end* — the part
+   that identifies the folder — stays readable. */
+.folder-picker__path {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.folder-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 244px;
+  overflow-y: auto;
+}
+
+.folder-picker__empty {
+  padding: 18px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.folder-picker__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 9px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.folder-picker__item:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.folder-picker__item:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.folder-picker__icon {
+  flex: none;
+  color: var(--text-dim);
+}
+
+/* The only colour in the list, and it marks the one thing worth spotting: a
+   folder Ducta already recognises as a project. */
+.folder-picker__icon.is-workspace {
+  color: var(--primary);
+}
+
+.folder-picker__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-picker__badge {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.folder-picker__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--primary-light);
+  color: var(--primary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}

@@ -23,7 +23,7 @@ export function usePipelineKeyboardShortcuts(params: {
   runningNodeId: string | null;
   handleRunNode: (node: { id: string; name?: string }) => void;
   centerOnNode: (id: string) => void;
-  resetViewport: () => void;
+  fitCanvas: () => void;
 }) {
   const {
     paletteOpen,
@@ -40,7 +40,7 @@ export function usePipelineKeyboardShortcuts(params: {
     runningNodeId,
     handleRunNode,
     centerOnNode,
-    resetViewport,
+    fitCanvas,
   } = params;
 
   useEffect(() => {
@@ -63,7 +63,7 @@ export function usePipelineKeyboardShortcuts(params: {
       }
       if (e.key === "f" || e.key === "F") {
         e.preventDefault();
-        resetViewport();
+        fitCanvas();
         return;
       }
       if (e.key === "r" || e.key === "R") {
@@ -115,6 +115,6 @@ export function usePipelineKeyboardShortcuts(params: {
     runningNodeId,
     handleRunNode,
     centerOnNode,
-    resetViewport,
+    fitCanvas,
   ]);
 }

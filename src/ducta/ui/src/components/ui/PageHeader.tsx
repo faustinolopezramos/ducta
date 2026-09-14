@@ -1,8 +1,8 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
+import { IconArrowLeft } from "@tabler/icons-react";
 import { Button } from "./Button";
-import { ICONS } from "../icons";
-import { colors, styles } from "../../theme/tokens";
+import "./PageHeader.css";
 
 export interface PageHeaderProps {
   title: string;
@@ -10,6 +10,12 @@ export interface PageHeaderProps {
   backTo?: string;
   backLabel?: string;
   actions?: ReactNode;
+  /**
+   * A tab strip belonging to this page. Rendered flush with the header's
+   * bottom rule so the tabs read as part of the page's identity rather than as
+   * a second, unrelated bar — which is how MLOps' own strip looked.
+   */
+  tabs?: ReactNode;
 }
 
 export function PageHeader({
@@ -18,37 +24,30 @@ export function PageHeader({
   backTo,
   backLabel = "Back",
   actions,
+  tabs,
 }: PageHeaderProps) {
   const navigate = useNavigate();
   return (
-    <div style={{ marginBottom: 32 }}>
+    <header className={`page-header${tabs ? " page-header--tabbed" : ""}`}>
       {backTo && (
         <Button
           variant="ghost"
           size="sm"
+          className="page-header__back"
           onClick={() => navigate(backTo)}
-          style={{ marginBottom: 16 }}
+          leftIcon={<IconArrowLeft size={15} stroke={1.6} />}
         >
-          {ICONS.BACK} {backLabel}
+          {backLabel}
         </Button>
       )}
-      <div className="page-header__content" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16 }}>
+      <div className="page-header__content">
         <div className="page-header__copy">
-          <h1 style={{ ...styles.fontSans, margin: "0 0 6px", fontSize: 26, fontWeight: 700, color: colors.text }}>
-            {title}
-          </h1>
-          {description && (
-            <p style={{ ...styles.fontSans, margin: 0, fontSize: 13, color: colors.textMuted }}>
-              {description}
-            </p>
-          )}
+          <h1 className="page-header__title">{title}</h1>
+          {description && <p className="page-header__description">{description}</p>}
         </div>
-        {actions && (
-          <div className="page-header__actions" style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-            {actions}
-          </div>
-        )}
+        {actions && <div className="page-header__actions">{actions}</div>}
       </div>
-    </div>
+      {tabs && <div className="page-header__tabs">{tabs}</div>}
+    </header>
   );
 }

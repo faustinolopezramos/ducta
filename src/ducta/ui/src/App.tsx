@@ -40,7 +40,6 @@ const MLOpsPage            = lazy(() => import("./pages/MLOpsPage")          .th
 const QualityPage          = lazy(() => import("./pages/QualityPage"));
 const IngestionPage        = lazy(() => import("./pages/IngestionPage"));
 const SchedulesPage        = lazy(() => import("./pages/SchedulesPage"));
-const TerminalPage         = lazy(() => import("./pages/TerminalPage"));
 
 import { useUIStore } from "./store/uiStore";
 
@@ -133,7 +132,7 @@ export function AppContent() {
 
   return (
     <>
-      {selectedSource && <ServerProjectsHydrator localProjects={projects} />}
+      {selectedSource && <ServerProjectsHydrator />}
       <div className="ducta-app-root">
         <UnauthorizedRedirect />
         <GitSetupGate>
@@ -200,7 +199,6 @@ export default function App() {
                     { path: "git", element: <GitPage />, handle: { breadcrumb: () => "Git" } },
                     { path: "mlops", element: <MLOpsPage />, handle: { breadcrumb: () => "MLOps" } },
                     { path: "schedules", element: <SchedulesPage />, handle: { breadcrumb: () => "Schedules" } },
-                    { path: "terminal", element: <TerminalPage />, handle: { breadcrumb: () => "Terminal" } },
                   ],
                 },
                 { path: "*", element: <Navigate to="/" replace /> },

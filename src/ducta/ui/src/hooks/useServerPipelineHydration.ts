@@ -1,15 +1,19 @@
 import { useEffect } from "react";
 import { useServerProjectPipelines, useNodes } from "../api/queries";
-import { coerceFnSpec, deriveDatasetDependencies, inferNodeType } from "../utils/pipelineAdapter";
+import { coerceFnSpec, inferNodeType, nodeIoNames } from "../utils/pipelineAdapter";
 import type { Pipeline, Node } from "../types";
 
 /**
- * useServerPipelineHydration — Separates pipeline data transformation logic from UI layout.
+ * useServerPipelineHydration — server pipelines into the local project model.
  *
- * Fetches server-persisted pipelines and node specs, transforms them to local model,
- * and dispatches to the reducer when the project is initially empty.
+ * Fetches server-persisted pipelines and node specs, transforms them to the
+ * local model, and dispatches to the reducer.
  *
- * This hook extracts business logic from ProjectLayout, improving separation of concerns.
+ * Node I/O stays a list of *dataset reference names* here. The formats, paths
+ * and write modes live in `input_config` / `output_config` and are fetched
+ * separately by `useProjectDatasets` — this hook used to hard-code
+ * `format: "parquet"` on every entry, so a Kafka→Delta pipeline was presented
+ * as parquet→parquet.
  */
 /**
  * Coerce a pipeline `nodes` entry to a string name. The list is normally
@@ -43,50 +47,59 @@ export function useServerPipelineHydration(projectId: string | undefined, dispat
       type: spec.type ?? "batch",
       tags: spec.tags ?? [],
       active: spec.active ?? true,
-      nodes: deriveDatasetDependencies((spec.nodes ?? [])
+      nodes: (spec.nodes ?? [])
         .map((entry: any) => ({ name: toNodeName(entry), entry }))
-        .filter(({ name }: { name: string }) => name.length > 0)
+        .filter(({ name: nodeName }: { name: string }) => nodeName.length > 0)
         .map(({ name: nodeName, entry }: { name: string; entry: any }): Node => {
-        const entryObj = entry && typeof entry === "object" ? entry : {};
-        const ns = nodeSpecs[nodeName] ?? entryObj;
-        const rawInputs: any[] = ns.inputs ?? ns.input ?? [];
-        const rawOutputs: any[] = ns.outputs ?? ns.output ?? [];
-        // Streaming nodes carry `function: { key, module }` (object); coerce to
-        // string fn/module so the graph never renders an object (React #31).
-        const { fn, module } = coerceFnSpec(
-          ns.fn ?? ns.function ?? entryObj.function,
-          ns.module ?? entryObj.module,
-        );
-        return {
-          id: nodeName,
-          name: nodeName,
-          type: inferNodeType({
-            type: ns.type,
+          const entryObj = entry && typeof entry === "object" ? entry : {};
+          const ns = nodeSpecs[nodeName] ?? entryObj;
+          const inputNames = nodeIoNames(ns, "input");
+          const outputNames = nodeIoNames(ns, "output");
+          // Streaming nodes carry `function: { key, module }` (object); coerce to
+          // string fn/module so the graph never renders an object (React #31).
+          const { fn, module } = coerceFnSpec(
+            ns.fn ?? ns.function ?? entryObj.function,
+            ns.module ?? entryObj.module
+          );
+          return {
+            id: nodeName,
+            name: nodeName,
+            type: inferNodeType({
+              type: ns.type,
+              module,
+              fn,
+              ml_stage: ns.ml_stage,
+              inputs: inputNames,
+              outputs: outputNames,
+            }),
             module,
             fn,
-            ml_stage: ns.ml_stage,
-            inputs: rawInputs,
-            outputs: rawOutputs,
-          }),
-          module,
-          fn,
-          inputs: rawInputs.map((io: any, i: number) => ({
-            id: `${nodeName}-input-${i}`,
-            name: typeof io === "string" ? io : (io.name ?? `input_${i}`),
-            format: typeof io === "string" ? "parquet" : (io.format ?? "parquet"),
-          })),
-          outputs: rawOutputs.map((io: any, i: number) => ({
-            id: `${nodeName}-output-${i}`,
-            name: typeof io === "string" ? io : (io.name ?? `output_${i}`),
-            format: typeof io === "string" ? "parquet" : (io.format ?? "parquet"),
-          })),
-          active: true,
-          status: "idle",
-        };
-      })),
-      edges: [],
+            // Carried through so the canvas can show it without a second fetch;
+            // the old hydration dropped it, and the card read it from a `_raw`
+            // blob nothing populated, so no description ever rendered.
+            description: ns.description ?? undefined,
+            inputs: inputNames.map((dataset, i) => ({
+              id: `${nodeName}-input-${i}`,
+              name: dataset,
+            })),
+            outputs: outputNames.map((dataset, i) => ({
+              id: `${nodeName}-output-${i}`,
+              name: dataset,
+            })),
+            active: true,
+            status: "idle",
+            // Dependencies are the node's own declared ones. The canvas derives
+            // the dataset-wired edges itself, from the names above — deriving
+            // them here as well produced a second, unlabelled edge set.
+            dependencies: Array.isArray(ns.dependencies) ? ns.dependencies.map(String) : [],
+          };
+        }),
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      // The server just listed this one, so the reducer can safely drop it
+      // later if a future hydration stops listing it (deleted elsewhere) —
+      // see the `persisted` field's own doc comment on `Pipeline`.
+      persisted: true,
     }));
 
     dispatch({ type: "HYDRATE_PIPELINES", projectId, pipelines: converted });

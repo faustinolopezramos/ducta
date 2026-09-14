@@ -12,7 +12,13 @@ export interface QualityCheckInfo {
   origin: string;
 }
 
+export interface QualityDatasetRef {
+  pipeline_name: string;
+  dataset: string;
+}
+
 export interface QualityDatasetSummary {
+  pipeline_name: string;
   dataset: string;
   run_count: number;
   latest_run_id?: string | null;
@@ -42,6 +48,22 @@ export interface ValidateConfigResult {
   warnings: string[];
 }
 
+interface QualityScope {
+  env?: string;
+  pipelineName?: string;
+  project?: string;
+}
+
+/** Wire params shared by every /quality/* request — mirrors mlopsApi.ts's
+ *  `scopeParams`, which keeps `env`/`pipelineName`/`project` in one place
+ *  instead of re-spelling `{ env, pipeline_name: pipelineName, project }` at
+ *  every call site below. */
+const scopeParams = ({ env, pipelineName, project }: QualityScope) => ({
+  env,
+  pipeline_name: pipelineName,
+  project,
+});
+
 // ─── Query hooks ────────────────────────────────────────────────────────────────
 
 export const useQualityChecks = () =>
@@ -51,66 +73,141 @@ export const useQualityChecks = () =>
     staleTime: 60 * 1000,
   });
 
-export const useQualitySummary = () =>
+export const useQualitySummary = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<QualityDatasetSummary[]>({
-    queryKey: ["quality", sourceKey(), "summary"],
-    queryFn: () => client.get("/quality/summary").then((r) => r.data),
-    staleTime: 15 * 1000,
-  });
-
-export const useQualityDatasets = () =>
-  useQuery<string[]>({
-    queryKey: ["quality", sourceKey(), "datasets"],
-    queryFn: () => client.get("/quality/datasets").then((r) => r.data),
-    staleTime: 15 * 1000,
-  });
-
-export const useQualityRuns = (dataset: string, enabled = true) =>
-  useQuery<{ status: string; run_ids: string[] }>({
-    queryKey: ["quality", sourceKey(), "reports", dataset, "all"],
+    queryKey: ["quality", sourceKey(), "summary", env ?? null, pipelineName ?? null, project ?? null],
     queryFn: () =>
       client
-        .get(`/quality/reports/${encodeURIComponent(dataset)}`, { params: { all: true } })
+        .get("/quality/summary", { params: scopeParams({ env, pipelineName, project }) })
         .then((r) => r.data),
-    enabled: enabled && !!dataset,
     staleTime: 15 * 1000,
   });
 
-export const useQualityReport = (dataset: string, runId?: string, enabled = true) =>
-  useQuery({
-    queryKey: ["quality", sourceKey(), "reports", dataset, runId ?? "latest"],
+export const useQualityDatasets = (env?: string, pipelineName?: string, project?: string) =>
+  useQuery<QualityDatasetRef[]>({
+    queryKey: ["quality", sourceKey(), "datasets", env ?? null, pipelineName ?? null, project ?? null],
+    queryFn: () =>
+      client
+        .get("/quality/datasets", { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    staleTime: 15 * 1000,
+  });
+
+export const useQualityRuns = (
+  dataset: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string,
+  enabled = true
+) =>
+  useQuery<{ status: string; run_ids: string[] }>({
+    queryKey: [
+      "quality",
+      sourceKey(),
+      "reports",
+      dataset,
+      "all",
+      env ?? null,
+      pipelineName ?? null,
+      project ?? null,
+    ],
     queryFn: () =>
       client
         .get(`/quality/reports/${encodeURIComponent(dataset)}`, {
-          params: runId ? { run_id: runId } : {},
+          params: { all: true, ...scopeParams({ env, pipelineName, project }) },
         })
         .then((r) => r.data),
     enabled: enabled && !!dataset,
     staleTime: 15 * 1000,
   });
 
-export const useQualityTrend = (dataset: string, lastN = 20, enabled = true) =>
+export const useQualityReport = (
+  dataset: string,
+  runId?: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string,
+  enabled = true
+) =>
   useQuery({
-    queryKey: ["quality", sourceKey(), "trend", dataset, lastN],
+    queryKey: [
+      "quality",
+      sourceKey(),
+      "reports",
+      dataset,
+      runId ?? "latest",
+      env ?? null,
+      pipelineName ?? null,
+      project ?? null,
+    ],
     queryFn: () =>
       client
-        .get(`/quality/trend/${encodeURIComponent(dataset)}`, { params: { last_n: lastN } })
+        .get(`/quality/reports/${encodeURIComponent(dataset)}`, {
+          params: { run_id: runId, ...scopeParams({ env, pipelineName, project }) },
+        })
+        .then((r) => r.data),
+    enabled: enabled && !!dataset,
+    staleTime: 15 * 1000,
+  });
+
+export const useQualityTrend = (
+  dataset: string,
+  lastN = 20,
+  env?: string,
+  pipelineName?: string,
+  project?: string,
+  enabled = true
+) =>
+  useQuery({
+    queryKey: [
+      "quality",
+      sourceKey(),
+      "trend",
+      dataset,
+      lastN,
+      env ?? null,
+      pipelineName ?? null,
+      project ?? null,
+    ],
+    queryFn: () =>
+      client
+        .get(`/quality/trend/${encodeURIComponent(dataset)}`, {
+          params: { last_n: lastN, ...scopeParams({ env, pipelineName, project }) },
+        })
         .then((r) => r.data),
     enabled: enabled && !!dataset,
     staleTime: 15 * 1000,
   });
 
 /** Imperative one-off fetch (for the "Rerun" action, outside the query cache). */
-export const fetchQualityReport = (dataset: string, runId: string) =>
+export const fetchQualityReport = (
+  dataset: string,
+  runId: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string
+) =>
   client
-    .get(`/quality/reports/${encodeURIComponent(dataset)}`, { params: { run_id: runId } })
+    .get(`/quality/reports/${encodeURIComponent(dataset)}`, {
+      params: { run_id: runId, ...scopeParams({ env, pipelineName, project }) },
+    })
     .then((r) => r.data);
 
-export const useQualityScore = (runId: string, enabled = true) =>
+export const useQualityScore = (
+  runId: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string,
+  enabled = true
+) =>
   useQuery({
-    queryKey: ["quality", sourceKey(), "score", runId],
+    queryKey: ["quality", sourceKey(), "score", runId, env ?? null, pipelineName ?? null, project ?? null],
     queryFn: () =>
-      client.get(`/quality/score/${encodeURIComponent(runId)}`).then((r) => r.data),
+      client
+        .get(`/quality/score/${encodeURIComponent(runId)}`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then((r) => r.data),
     enabled: enabled && !!runId,
     staleTime: 15 * 1000,
   });
@@ -136,12 +233,19 @@ export const useValidateQualityConfig = () =>
     onError: defaultOnError,
   });
 
+interface DeleteQualityReportVars extends QualityScope {
+  dataset: string;
+  runId: string;
+}
+
 export const useDeleteQualityReport = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ dataset, runId }: { dataset: string; runId: string }) =>
+    mutationFn: ({ dataset, runId, env, pipelineName, project }: DeleteQualityReportVars) =>
       client
-        .delete(`/quality/reports/${encodeURIComponent(dataset)}/${encodeURIComponent(runId)}`)
+        .delete(`/quality/reports/${encodeURIComponent(dataset)}/${encodeURIComponent(runId)}`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
         .then(() => undefined),
     onSuccess: (_data, { dataset }) => {
       queryClient.invalidateQueries({ queryKey: ["quality", sourceKey(), "reports", dataset] });

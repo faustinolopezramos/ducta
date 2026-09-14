@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { IconChevronUp, IconChevronDown, IconTerminal2 } from "@tabler/icons-react";
 import { useLogsStore, useLogLevelCounts } from "../../store/logsStore";
 
@@ -26,16 +27,23 @@ export function LogsStatusBar({
   const warnings = levelCounts.WARNING ?? 0;
 
   let stateClass = "idle";
-  let summary = totalLogs > 0 ? `${totalLogs} entries` : "No runs yet";
+  // Numbers stay in mono (they're measurements, like elapsed time elsewhere in
+  // the log viewer); the surrounding words are sans — this bar used to be
+  // mono end-to-end, which read "Logs"/"Running" as data instead of chrome.
+  let summary: ReactNode = totalLogs > 0
+    ? <><span className="sb-mono">{totalLogs}</span> entries</>
+    : "No runs yet";
   if (isRunning) {
     stateClass = "running";
-    summary = `Running · ${doneNodes}/${nodeCount} nodes`;
+    summary = <>Running · <span className="sb-mono">{doneNodes}/{nodeCount}</span> nodes</>;
   } else if (failedNodes > 0 || execStatus === "failed" || execStatus === "error") {
     stateClass = "failed";
-    summary = failedNodes > 0 ? `Failed · ${failedNodes} node${failedNodes !== 1 ? "s" : ""}` : "Failed";
+    summary = failedNodes > 0
+      ? <>Failed · <span className="sb-mono">{failedNodes}</span> node{failedNodes !== 1 ? "s" : ""}</>
+      : "Failed";
   } else if (execStatus === "completed" || execStatus === "success") {
     stateClass = "success";
-    summary = `Completed · ${doneNodes}/${nodeCount} nodes`;
+    summary = <>Completed · <span className="sb-mono">{doneNodes}/{nodeCount}</span> nodes</>;
   }
 
   return (

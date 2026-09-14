@@ -10,17 +10,20 @@ import {
   IconPlayerStop,
   IconCheck,
   IconSitemap,
+  IconDatabase,
   IconCode,
-  IconActivity,
   IconSearch,
-  IconCalendarClock,
 } from "@tabler/icons-react";
 import { useBuilderStore } from "../../store/builderStore";
-import { Button } from "../ui/Button";
+import { useSourceStore } from "../../store/workspace";
+import { useEnvironments } from "../../api/queries";
+
+/** The three ways to look at a pipeline. */
+export type PipelineViewMode = "flow" | "data" | "config";
 
 interface HUDToolbarProps {
-  viewMode: "flow" | "yaml" | "streaming";
-  onViewModeChange: (mode: "flow" | "yaml" | "streaming") => void;
+  viewMode: PipelineViewMode;
+  onViewModeChange: (mode: PipelineViewMode) => void;
   pipelineType: string;
   onPipelineTypeChange: (type: string) => void;
   hasNodes: boolean;
@@ -30,9 +33,19 @@ interface HUDToolbarProps {
   onValidate: () => void;
   onAddNode: () => void;
   onFind: () => void;
+  /** Canvas viewport, handed up by DagCanvas. Absent in the Config view. */
+  onZoomIn?: () => void;
+  onZoomOut?: () => void;
+  onFitView?: () => void;
 }
 
 const PIPELINE_TYPES = ["batch", "streaming", "ml", "hybrid"] as const;
+
+const VIEWS: Array<{ id: PipelineViewMode; label: string; icon: React.ComponentType<any>; hint: string }> = [
+  { id: "flow", label: "Flow", icon: IconSitemap, hint: "Nodes, with each dataset on the edge it flows across" },
+  { id: "data", label: "Data", icon: IconDatabase, hint: "Datasets as the graph — lineage, across pipelines" },
+  { id: "config", label: "Config", icon: IconCode, hint: "The pipeline's YAML specification" },
+];
 
 export function HUDToolbar({
   viewMode,
@@ -46,31 +59,37 @@ export function HUDToolbar({
   onValidate,
   onAddNode,
   onFind,
+  onZoomIn,
+  onZoomOut,
+  onFitView,
 }: HUDToolbarProps) {
   const canUndo = useBuilderStore((s) => s.historyIndex > 0);
   const canRedo = useBuilderStore((s) => s.historyIndex < s.history.length - 1);
   const undo = useBuilderStore((s) => s.undo);
   const redo = useBuilderStore((s) => s.redo);
-  const zoomIn = useBuilderStore((s) => s.zoomIn);
-  const zoomOut = useBuilderStore((s) => s.zoomOut);
-  const resetViewport = useBuilderStore((s) => s.resetViewport);
 
-  const views = [
-    { id: "flow" as const, label: "Diagram", icon: IconSitemap },
-    { id: "yaml" as const, label: "Config", icon: IconCode },
-    { id: "streaming" as const, label: "Monitor", icon: IconActivity },
-  ];
+  const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
+  const setActiveEnv = useSourceStore((s) => s.setActiveEnv);
+  const { data: envsData } = useEnvironments();
+  const envList: string[] = envsData?.environments ?? [];
+  const availableEnvs = envList.length ? envList : [activeEnv];
+
+  // The zoom controls act on React Flow's own viewport, passed up from the
+  // canvas. They used to call into `builderStore`, which nothing applied to the
+  // DOM after the React Flow migration — so all three buttons did nothing.
+  const canZoom = Boolean(onZoomIn && onZoomOut && onFitView);
 
   return (
     <div className="hud-toolbar" data-no-pan>
       <div className="hud-section" role="tablist" aria-label="Pipeline view">
-        {views.map((v) => (
+        {VIEWS.map((v) => (
           <button
             key={v.id}
             className={`hud-tab ${viewMode === v.id ? "active" : ""}`}
             onClick={() => onViewModeChange(v.id)}
             role="tab"
             aria-selected={viewMode === v.id}
+            title={v.hint}
           >
             <v.icon size={14} stroke={1.5} />
             <span>{v.label}</span>
@@ -98,6 +117,18 @@ export function HUDToolbar({
       <div className="hud-divider" />
 
       <div className="hud-section">
+        <select
+          className="hud-env-select"
+          value={activeEnv}
+          onChange={(e) => setActiveEnv(e.target.value)}
+          disabled={isExecuting}
+          aria-label="Environment to run in"
+          title="Environment to run in"
+        >
+          {availableEnvs.map((e) => (
+            <option key={e} value={e}>{e}</option>
+          ))}
+        </select>
         {isExecuting ? (
           <button className="hud-btn hud-btn-danger" onClick={onCancel} title="Cancel execution">
             <IconPlayerStop size={15} stroke={1.5} />
@@ -105,7 +136,7 @@ export function HUDToolbar({
           </button>
         ) : (
           <>
-            <button className="hud-btn hud-btn-primary" onClick={onExecute} disabled={!hasNodes} title="Run pipeline">
+            <button className="hud-btn hud-btn-primary" onClick={onExecute} disabled={!hasNodes} title={`Run pipeline (${activeEnv})`}>
               <IconPlayerPlay size={15} stroke={1.5} />
               <span>Run</span>
             </button>
@@ -128,18 +159,19 @@ export function HUDToolbar({
         </button>
       </div>
 
-      <div className="hud-section">
-        <button className="hud-btn hud-icon-btn" onClick={zoomOut} title="Zoom out" aria-label="Zoom out">
-          <IconZoomOut size={16} stroke={1.5} />
-        </button>
-        <span className="hud-zoom-level">{Math.round(useBuilderStore.getState().viewportScale * 100)}%</span>
-        <button className="hud-btn hud-icon-btn" onClick={zoomIn} title="Zoom in" aria-label="Zoom in">
-          <IconZoomIn size={16} stroke={1.5} />
-        </button>
-        <button className="hud-btn hud-icon-btn" onClick={resetViewport} title="Reset view" aria-label="Reset view">
-          <IconMaximize size={15} stroke={1.5} />
-        </button>
-      </div>
+      {canZoom && (
+        <div className="hud-section">
+          <button className="hud-btn hud-icon-btn" onClick={onZoomOut} title="Zoom out" aria-label="Zoom out">
+            <IconZoomOut size={16} stroke={1.5} />
+          </button>
+          <button className="hud-btn hud-icon-btn" onClick={onZoomIn} title="Zoom in" aria-label="Zoom in">
+            <IconZoomIn size={16} stroke={1.5} />
+          </button>
+          <button className="hud-btn hud-icon-btn" onClick={onFitView} title="Fit graph (F)" aria-label="Fit graph">
+            <IconMaximize size={15} stroke={1.5} />
+          </button>
+        </div>
+      )}
 
       <div className="hud-divider" />
 

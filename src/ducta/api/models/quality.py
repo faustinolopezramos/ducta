@@ -34,9 +34,17 @@ class QualityCheckInfo(BaseModel):
     origin: str
 
 
+class QualityDatasetRef(BaseModel):
+    """A (pipeline, dataset) pair with at least one stored quality report."""
+
+    pipeline_name: str
+    dataset: str
+
+
 class QualityDatasetSummary(BaseModel):
     """Overview of a dataset's stored quality reports (latest + trend)."""
 
+    pipeline_name: str
     dataset: str
     run_count: int
     latest_run_id: Optional[str] = None
@@ -49,11 +57,7 @@ class QualityDatasetSummary(BaseModel):
 
 
 class RunChecksRequest(BaseModel):
-    """Run data-quality checks on a workspace file.
-
-    Provide either ``config_path`` (a workspace-relative checks config file) or
-    an inline ``checks`` mapping — one of the two is required.
-    """
+    """Run data-quality checks on a workspace file."""
 
     input_path: str = Field(description="Data file path relative to the workspace root")
     format: str = Field(default="parquet", description="Input format: parquet, csv, or json")

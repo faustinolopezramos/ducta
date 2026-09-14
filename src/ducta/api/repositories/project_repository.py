@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
 from ducta.api.exceptions import ProjectAlreadyExistsError, ProjectNotFoundError, ValidationError
+from ducta.api.utils.git_utils import commit_files, validate_occ
 from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, write_config_file
 from ducta.api.workspace.utils import find_ducta_config
@@ -50,10 +51,7 @@ class ProjectRepository:
     def project_dir(self, project_id: str) -> Path:
         if project_id == "." or project_id == self._root.name:
             return self._root
-        # `project_id` is attacker-controlled input from every `{project_id}`
-        # route. Without this, `project_id=".."` resolves to
-        # `projects_root().parent == workspace_root`, and e.g.
-        # `DELETE /api/projects/..?force=true` deletes the whole workspace.
+
         try:
             validate_identifier(project_id, field="project_id")
         except ValueError as e:
@@ -164,12 +162,7 @@ class ProjectRepository:
         return False
 
     def get_pipelines(self, project_id: str) -> Dict[str, Any]:
-        """Return pipeline dict for a project.
-
-        For layered projects (with ducta.yaml): aggregates pipelines from all layers.
-        For standard projects: searches in config/ and subdirectories.
-        Falls back to legacy base/pipeline/pipelines.yml if not found.
-        """
+        """Return pipeline dict for a project."""
         p_dir = self.project_dir(project_id)
         all_pipelines = {}
 
@@ -194,10 +187,6 @@ class ProjectRepository:
                             try:
                                 layer_pipelines = load_config_file(full_path)
                                 if isinstance(layer_pipelines, dict):
-                                    # Keep pipeline names as declared in the YAML — they
-                                    # already carry unique prefixes (e.g. "worldcup.bronze_backfill").
-                                    # Adding a layer prefix here would double-prefix names
-                                    # and break execution lookups.
                                     for pipe_name, pipe_spec in layer_pipelines.items():
                                         all_pipelines[pipe_name] = pipe_spec
                                     logger.debug(
@@ -299,19 +288,34 @@ class ProjectRepository:
         shutil.rmtree(pdir, ignore_errors=True)
         logger.info("Project '{id}' removed from disk", id=project_id)
 
-    def save_pipeline(self, project_id: str, name: str, spec: Dict[str, Any]) -> None:
+    def get_pipelines_commit_sha(self, project_id: str) -> str:
+        """Short SHA of the latest commit that touched this project's pipelines.yaml."""
+        from ducta.api.utils.git_utils import file_commit_sha
+
+        return file_commit_sha(self._root, self.pipelines_path(project_id))
+
+    def save_pipeline(
+        self, project_id: str, name: str, spec: Dict[str, Any], expected_sha: Optional[str] = None
+    ) -> str:
         """Add or update a pipeline entry in the project's pipelines.yaml."""
         if not self.exists(project_id):
             raise ProjectNotFoundError(
                 f"Project '{project_id}' not found",
                 detail={"project_id": project_id},
             )
+        path = self.pipelines_path(project_id)
+        validate_occ(self._root, path, expected_sha)
         current = self.get_pipelines(project_id)
         current[name] = spec
-        write_config_file(self.pipelines_path(project_id), current)
+        write_config_file(path, current)
+        return commit_files(self._root, [path], f"chore: update pipeline '{name}'")
 
-    def delete_pipeline(self, project_id: str, name: str) -> None:
+    def delete_pipeline(
+        self, project_id: str, name: str, expected_sha: Optional[str] = None
+    ) -> str:
         """Remove a pipeline entry. Raises ValidationError when absent."""
+        path = self.pipelines_path(project_id)
+        validate_occ(self._root, path, expected_sha)
         current = self.get_pipelines(project_id)
         if name not in current:
             raise ValidationError(
@@ -319,4 +323,5 @@ class ProjectRepository:
                 detail={"project_id": project_id, "pipeline": name},
             )
         del current[name]
-        write_config_file(self.pipelines_path(project_id), current)
+        write_config_file(path, current)
+        return commit_files(self._root, [path], f"chore: delete pipeline '{name}'")

@@ -100,52 +100,6 @@ class TestTheOriginRule:
         )
 
 
-class TestTerminalWebSocket:
-    """The endpoint that hands out a shell."""
-
-    def test_a_foreign_origin_is_closed_before_accept(self, monkeypatch):
-        from ducta.api.routes import terminal as terminal_module
-
-        monkeypatch.setattr(terminal_module, "get_settings", _settings)
-        ws = _ws(origin="http://evil.example")
-
-        asyncio.run(terminal_module.terminal_ws(ws))
-
-        ws.accept.assert_not_awaited()
-        ws.close.assert_awaited_once()
-        assert ws.close.call_args.kwargs["code"] == 1008
-
-    def test_the_feature_gate_still_wins(self, monkeypatch):
-        from ducta.api.routes import terminal as terminal_module
-
-        monkeypatch.setattr(
-            terminal_module, "get_settings", lambda: _settings(terminal_enabled=False)
-        )
-        ws = _ws(origin="http://localhost:5173")
-
-        asyncio.run(terminal_module.terminal_ws(ws))
-
-        ws.accept.assert_not_awaited()
-        assert ws.close.call_args.kwargs["reason"] == "Terminal disabled"
-
-    def test_an_allowed_origin_gets_past_the_origin_check(self, monkeypatch):
-        # Stop right after the check rather than forking a real PTY: reaching
-        # the shell resolution proves the handshake was not refused on Origin.
-        from ducta.api.routes import terminal as terminal_module
-
-        monkeypatch.setattr(terminal_module, "get_settings", _settings)
-        monkeypatch.setattr(
-            terminal_module, "_resolve_shell", lambda _s: "/nonexistent/shell-for-test"
-        )
-        ws = _ws(origin="http://localhost:5173")
-
-        asyncio.run(terminal_module.terminal_ws(ws))
-
-        ws.accept.assert_not_awaited()
-        # 1011 = the shell-not-found exit, i.e. we got past Origin and auth.
-        assert ws.close.call_args.kwargs["code"] == 1011
-
-
 class TestLogStreamWebSocket:
     """The log stream had no tests of any kind."""
 

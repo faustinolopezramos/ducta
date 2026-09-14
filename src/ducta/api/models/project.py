@@ -24,6 +24,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from ducta.api.utils.validators import validate_identifier
+
 
 class ProjectResponse(BaseModel):
     """Full representation of a project returned by the API."""
@@ -86,13 +88,7 @@ class ProjectCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        import re
-
-        if not re.match(r"^[a-zA-Z][a-zA-Z0-9_\-]*$", v):
-            raise ValueError(
-                f"Invalid project name '{v}'. "
-                "Must start with a letter and contain only letters, digits, hyphens or underscores."
-            )
+        validate_identifier(v, field="project name")
         return v.lower()
 
 

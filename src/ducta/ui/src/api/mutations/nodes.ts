@@ -1,7 +1,22 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "../client";
+import { sourceKey } from "../utils";
 import { toastStore } from "../../hooks/useModalStack";
 import { defaultOnError } from "./errors";
+
+/** Node identity is workspace-global, not project-scoped (PUT /nodes/{name}
+ *  has no project_id) — but a node's spec feeds a project's own node-schema
+ *  panel (`["server-projects", sourceKey(), projectId, "pipelines", ...,
+ *  "nodes", ..., "schema"]`) and its dataset graph
+ *  (`[..., projectId, "datasets"]`), neither of which shares the `["nodes"]`
+ *  prefix these mutations invalidated on their own. Invalidating the whole
+ *  `server-projects` tree too is the same generous, "just refetch everything
+ *  that could plausibly be stale" pattern `useCreatePipeline`/
+ *  `useDeletePipeline` already use (mutations/pipelines.ts). */
+function invalidateNodeConsumers(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ["nodes"] });
+  queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+}
 
 interface UpdateNodePayload {
   name: string;
@@ -25,9 +40,7 @@ export const useUpdateNode = () => {
   return useMutation({
     mutationFn: ({ name, spec, expected_commit_sha }: UpdateNodePayload) =>
       client.put(`/nodes/${name}`, { spec, expected_commit_sha }).then((r) => r.data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["nodes"] });
-    },
+    onSuccess: () => invalidateNodeConsumers(queryClient),
     onError: defaultOnError,
   });
 };
@@ -42,7 +55,7 @@ export const useUpdateNodeCode = () => {
     mutationFn: ({ name, code }: UpdateNodeCodePayload) =>
       client.put(`/nodes/${name}/code`, { code }).then((r) => r.data),
     onSuccess: (data: { commit_sha?: string }) => {
-      queryClient.invalidateQueries({ queryKey: ["nodes"] });
+      invalidateNodeConsumers(queryClient);
       queryClient.invalidateQueries({ queryKey: ["git"] });
       const sha = data?.commit_sha ? ` · ${data.commit_sha.slice(0, 7)}` : "";
       toastStore.getState().show(`Code saved${sha}`, "success");
@@ -59,9 +72,7 @@ export const useDeleteNode = () => {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (name: string) => client.delete(`/nodes/${name}`).then(() => {}),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["nodes"] });
-    },
+    onSuccess: () => invalidateNodeConsumers(queryClient),
     onError: defaultOnError,
   });
 };

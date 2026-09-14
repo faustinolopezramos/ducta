@@ -20,9 +20,9 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
@@ -42,9 +42,15 @@ class EnvironmentsResponse(BaseModel):
     summary="List environments",
     dependencies=[Depends(require_permission("workspace.read"))],
 )
-async def list_environments(manager: WorkspaceManagerDep) -> EnvironmentsResponse:
+async def list_environments(
+    manager: WorkspaceManagerDep,
+    project: Optional[str] = Query(
+        default=None, description="Project id to scope to, within the connected workspace"
+    ),
+) -> EnvironmentsResponse:
     """Return all environment names defined in environment.yaml."""
     try:
+        manager = manager.for_project(project)
         envs = manager.list_environments()
     except WorkspaceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)

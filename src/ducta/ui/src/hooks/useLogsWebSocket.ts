@@ -15,6 +15,21 @@ export function useLogsWebSocket(executionId: string | null) {
   const setExecutionStates = useBuilderStore((s) => s.setExecutionStates);
   const queryClient        = useQueryClient();
 
+  // Runs its cleanup exactly once, on true unmount — separate from the effect
+  // below (whose cleanup fires on every executionId/reconnectSignal change,
+  // where terminating the worker would be wrong: it's reused across those).
+  // Without this, navigating away mid-execution never calls terminate() and
+  // the dedicated Worker thread leaks for the life of the tab.
+  useEffect(() => {
+    return () => {
+      if (workerRef.current) {
+        workerRef.current.postMessage({ type: "STOP" });
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
+  }, []);
+
   useEffect(() => {
     if (!executionId) {
       if (workerRef.current) {

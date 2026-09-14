@@ -192,7 +192,16 @@ class QualityCheckExecutor:
             )
 
             dataset_name = dq_config.get("dataset_name", node_name)
-            run_id = dq_config.get("run_id")
+            # Default to the execution's own run id (the ledger's `_run_id`,
+            # the same value the API surfaces as `certificate_run_id`) so every
+            # node's data-quality report in one pipeline run shares one run_id.
+            # Without this, ValidationPhaseRunner.run() (ducta/check/engine.py)
+            # mints a fresh random id per node when none is given, so nothing
+            # ever ties a node's persisted report back to the execution that
+            # produced it — QualityService.get_score(run_id=<execution id>)
+            # (used by the "Quality" action in Execution History) could never
+            # find any report, since no report was ever saved under that id.
+            run_id = dq_config.get("run_id") or self._ledger.run_id
 
             run_kwargs = {"pipeline_name": pipeline_name} if pipeline_name else {}
             report = runner.run(

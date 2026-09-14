@@ -31,8 +31,6 @@ interface LogsState {
   // re-scan the whole currentLogs array on every 100ms log flush.
   levelCounts: LevelCounts;
   nodeLogCounts: Record<string, number>;
-  // Execution history (for persistence)
-  executionHistory: Record<string, LogEntry[]>;
   // UI state
   autoScroll: boolean;
   isConnected: boolean;
@@ -52,19 +50,14 @@ interface LogsState {
   bumpReconnectSignal: () => void;
   nodeFilter: string | null;
   setNodeFilter: (nodeId: string | null) => void;
-  saveExecutionLogs: (executionId: string) => void;
-  loadExecutionLogs: (executionId: string) => LogEntry[];
-  getFilteredLogs: () => LogEntry[];
 }
 
 const MAX_CURRENT_LOGS = 10000;
-const MAX_EXECUTION_HISTORY = 50; // Keep last 50 executions
 
 const storeCreator: StateCreator<LogsState> = (set, get) => ({
   currentLogs: [],
   levelCounts: emptyLevelCounts(),
   nodeLogCounts: {},
-  executionHistory: {},
   autoScroll: true,
   isConnected: false,
   searchFilter: "",
@@ -150,59 +143,15 @@ const storeCreator: StateCreator<LogsState> = (set, get) => ({
   setNodeFilter: (nodeId) => {
     set({ nodeFilter: nodeId });
   },
-
-  saveExecutionLogs: (executionId) => {
-    set((state) => {
-      const history = { ...state.executionHistory };
-      history[executionId] = [...state.currentLogs];
-
-      // Maintain max execution history size
-      const entries = Object.entries(history);
-      if (entries.length > MAX_EXECUTION_HISTORY) {
-        const oldest = entries.sort(
-          (a, b) =>
-            (a[1][0]?.timestamp ?? 0) - (b[1][0]?.timestamp ?? 0)
-        )[0];
-        delete history[oldest[0]];
-      }
-
-      return { executionHistory: history };
-    });
-  },
-
-  loadExecutionLogs: (executionId) => {
-    return get().executionHistory[executionId] ?? [];
-  },
-
-  getFilteredLogs: () => {
-    const state = get();
-    const { currentLogs, searchFilter, levelFilter, nodeFilter } = state;
-
-    return currentLogs.filter((log) => {
-      if (nodeFilter !== null && log.nodeId !== nodeFilter) return false;
-
-      // Level filter
-      if (levelFilter !== "ALL" && log.level !== levelFilter) {
-        return false;
-      }
-
-      // Search filter (case-insensitive)
-      if (searchFilter && !log.message.toLowerCase().includes(searchFilter.toLowerCase())) {
-        return false;
-      }
-
-      return true;
-    });
-  },
 });
 
 export const useLogsStore = create<LogsState>()(withDevtools(storeCreator, "LogsStore") as any);
 
 // Selector hooks for optimal performance
 export const useCurrentLogs = () => useLogsStore((s) => s.currentLogs);
-// Note: useFilteredLogs intentionally removed — calling getFilteredLogs() inside a selector
-// returns a new array every render and causes an infinite loop. Use useMemo with individual
-// state subscriptions instead.
+// Note: there's no useFilteredLogs selector — a filtering selector that derives a new
+// array every render causes an infinite loop. Filtering lives in useInlineLogsState.ts
+// via useMemo with individual state subscriptions instead.
 // Incrementally-maintained aggregates over all currentLogs (no per-render scan).
 export const useLogLevelCounts = () => useLogsStore((s) => s.levelCounts);
 export const useNodeLogCounts = () => useLogsStore((s) => s.nodeLogCounts);

@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
 from ducta.api.models.quality import (
     QualityCheckInfo,
+    QualityDatasetRef,
     QualityDatasetSummary,
     RunChecksRequest,
     ValidateConfigRequest,
@@ -48,6 +49,20 @@ _ENV_QUERY = Query(
     "run persisted.",
 )
 
+_PIPELINE_QUERY = Query(
+    default=None,
+    description="Pipeline that owns the dataset's reports. Required (together with "
+    "`env`) to reach a real pipeline run's reports; omitted defaults to the "
+    "ad-hoc/manual 'Run checks' bucket for single-dataset lookups, or "
+    "aggregates across every pipeline for the list/summary endpoints.",
+)
+
+_PROJECT_QUERY = Query(
+    default=None,
+    description="Project id to browse, within the connected workspace, instead of "
+    "whichever project the connected source itself belongs to.",
+)
+
 
 def _resolve_storage_from_env(manager: WorkspaceManagerDep, env: Optional[str]) -> Optional[Any]:
     """Mirror of the CLI's ``_resolve_storage_from_env`` (cli/commands/quality_cmds.py).
@@ -58,10 +73,20 @@ def _resolve_storage_from_env(manager: WorkspaceManagerDep, env: Optional[str]) 
     if not env:
         return None
 
+    from ducta.api.execution.runner import normalize_execution_context_paths
     from ducta.check.engine import ValidationPhaseRunner
 
     context = manager.load_context(env)
+    normalize_execution_context_paths(context, manager.root)
     return ValidationPhaseRunner(context=context).storage
+
+
+def _split_qualified(entry: str, pipeline_name: Optional[str]) -> QualityDatasetRef:
+    """Turn one ``storage.list_datasets()`` entry into a structured ref."""
+    if pipeline_name is not None:
+        return QualityDatasetRef(pipeline_name=pipeline_name, dataset=entry)
+    pl, _, ds = entry.partition("/")
+    return QualityDatasetRef(pipeline_name=pl, dataset=ds)
 
 
 @router.get(
@@ -76,13 +101,22 @@ async def list_checks() -> List[QualityCheckInfo]:
 
 @router.get(
     "/datasets",
-    response_model=List[str],
+    response_model=List[QualityDatasetRef],
     dependencies=[Depends(require_permission("quality.read"))],
     summary="List datasets that have at least one stored quality report",
 )
-async def list_datasets(manager: WorkspaceManagerDep, env: Optional[str] = _ENV_QUERY) -> List[str]:
+async def list_datasets(
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
+) -> List[QualityDatasetRef]:
+    manager = manager.for_project(project)
     storage = _resolve_storage_from_env(manager, env)
-    return QualityService.list_datasets(workspace=str(manager.root), storage=storage)
+    entries = QualityService.list_datasets(
+        workspace=str(manager.root), storage=storage, pipeline_name=pipeline_name
+    )
+    return [_split_qualified(entry, pipeline_name) for entry in entries]
 
 
 @router.get(
@@ -95,14 +129,22 @@ async def get_summary(
     manager: WorkspaceManagerDep,
     trend_n: int = Query(default=12, ge=1, le=100, description="Trend points per dataset"),
     env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
 ) -> List[QualityDatasetSummary]:
+    manager = manager.for_project(project)
     storage = _resolve_storage_from_env(manager, env)
-    return [
-        QualityDatasetSummary(**item)
-        for item in QualityService.get_summary(
-            workspace=str(manager.root), trend_n=trend_n, storage=storage
+    summaries = []
+    for item in QualityService.get_summary(
+        workspace=str(manager.root), trend_n=trend_n, storage=storage, pipeline_name=pipeline_name
+    ):
+        ref = _split_qualified(item["dataset"], pipeline_name)
+        summaries.append(
+            QualityDatasetSummary(
+                **{**item, "pipeline_name": ref.pipeline_name, "dataset": ref.dataset}
+            )
         )
-    ]
+    return summaries
 
 
 @router.post(
@@ -171,8 +213,11 @@ async def get_report(
     run_id: Optional[str] = Query(default=None, description="Specific run ID (default: latest)"),
     all: bool = Query(default=False, description="List all stored run IDs instead of a report"),
     env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
 ) -> Dict[str, Any]:
     try:
+        manager = manager.for_project(project)
         storage = _resolve_storage_from_env(manager, env)
         return QualityService.get_report(
             dataset=dataset,
@@ -180,6 +225,7 @@ async def get_report(
             run_id=run_id,
             all_reports=all,
             storage=storage,
+            pipeline_name=pipeline_name,
         )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -191,9 +237,24 @@ async def get_report(
     dependencies=[Depends(require_permission("quality.run"))],
     summary="Delete a stored quality report",
 )
-async def delete_report(dataset: str, run_id: str, manager: WorkspaceManagerDep) -> None:
+async def delete_report(
+    dataset: str,
+    run_id: str,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
+) -> None:
     try:
-        QualityService.delete_report(dataset=dataset, run_id=run_id, workspace=str(manager.root))
+        manager = manager.for_project(project)
+        storage = _resolve_storage_from_env(manager, env)
+        QualityService.delete_report(
+            dataset=dataset,
+            run_id=run_id,
+            workspace=str(manager.root),
+            storage=storage,
+            pipeline_name=pipeline_name,
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
@@ -208,10 +269,17 @@ async def get_trend(
     manager: WorkspaceManagerDep,
     last_n: int = Query(default=20, ge=1, le=500, description="Number of recent scores"),
     env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
 ) -> Dict[str, Any]:
+    manager = manager.for_project(project)
     storage = _resolve_storage_from_env(manager, env)
     return QualityService.get_trend(
-        dataset=dataset, workspace=str(manager.root), last_n=last_n, storage=storage
+        dataset=dataset,
+        workspace=str(manager.root),
+        last_n=last_n,
+        storage=storage,
+        pipeline_name=pipeline_name,
     )
 
 
@@ -221,11 +289,18 @@ async def get_trend(
     summary="Show the composite pipeline quality score for a run",
 )
 async def get_score(
-    run_id: str, manager: WorkspaceManagerDep, env: Optional[str] = _ENV_QUERY
+    run_id: str,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = _ENV_QUERY,
+    pipeline_name: Optional[str] = _PIPELINE_QUERY,
+    project: Optional[str] = _PROJECT_QUERY,
 ) -> Dict[str, Any]:
     try:
+        manager = manager.for_project(project)
         storage = _resolve_storage_from_env(manager, env)
-        return QualityService.get_score(run_id=run_id, workspace=str(manager.root), storage=storage)
+        return QualityService.get_score(
+            run_id=run_id, workspace=str(manager.root), storage=storage, pipeline_name=pipeline_name
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 

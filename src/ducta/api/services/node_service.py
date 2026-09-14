@@ -62,22 +62,13 @@ class NodeService:
         return self._repo.list_all()
 
     def get_node(self, name: str) -> tuple[Dict[str, Any], Optional[str]]:
-        """Return ``(spec, commit_sha)`` for a single node.
-
-        *commit_sha* is the short SHA of the last commit that modified the
-        nodes config file (used for OCC), or an empty string when unavailable.
-        Raises :exc:`NodeNotFoundError` when the node is absent.
-        """
+        """Return ``(spec, commit_sha)`` for a single node."""
         spec = self._repo.get(name)
         commit_sha = self._repo.get_commit_sha() or None
         return spec, commit_sha
 
     def get_node_python_file(self, name: str) -> NodeFileInfo:
-        """Resolve and optionally read the Python source file for a node.
-
-        Raises :exc:`NodeNotFoundError` when the node is not registered.
-        Raises :exc:`ValueError` on path-traversal attempts.
-        """
+        """Resolve and optionally read the Python source file for a node."""
         py_path = self._repo.resolve_python_file(name)
         exists = py_path.exists()
         code = py_path.read_text(encoding="utf-8") if exists else ""
@@ -91,17 +82,7 @@ class NodeService:
         )
 
     def get_node_python_file_by_module(self, module: str) -> NodeFileInfo:
-        """Resolve and optionally read the Python source file directly by module path.
-
-        This is useful for nodes that are only defined in pipelines (not in nodes.yaml).
-        Also searches project layer ``src/`` directories (via ducta.yaml) when the
-        file is not found at the workspace root.
-
-        Args:
-            module: Module path (e.g., "src.matches" or "nodes.extract")
-
-        Raises :exc:`ValueError` on path-traversal attempts.
-        """
+        """Resolve and optionally read the Python source file directly by module path."""
         from ducta.api.workspace.loaders import load_config_file
         from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
 
@@ -159,6 +140,9 @@ class NodeService:
         expected_sha: Optional[str] = None,
     ) -> str:
         """Save a node spec and git-commit.  Returns new commit SHA."""
+        from ducta.api.models.spec import validate_node_spec
+
+        validate_node_spec(name, spec)
         return self._repo.save(name, spec, expected_sha)
 
     def delete_node(self, name: str, expected_sha: Optional[str] = None) -> None:
@@ -166,12 +150,7 @@ class NodeService:
         self._repo.delete(name, expected_sha)
 
     def save_node_code(self, name: str, code: str) -> NodeFileInfo:
-        """Validate Python syntax, write source file, and git-commit.
-
-        Returns a :class:`NodeFileInfo` describing the written file.
-        Raises :exc:`SyntaxValidationError` on invalid Python.
-        Raises :exc:`NodeNotFoundError` when the node is not registered.
-        """
+        """Validate Python syntax, write source file, and git-commit."""
         from ducta.api.utils.validators import validate_python_syntax
 
         py_path = self._repo.resolve_python_file(name)

@@ -15,6 +15,7 @@ export * from "./StatusBadge";
 export * from "./Panel";
 export * from "./Toolbar";
 export * from "./PageHeader";
+export * from "./Tabs";
 export * from "./EmptyState";
 export * from "./SlidePanel";
 export * from "./ActionButton";

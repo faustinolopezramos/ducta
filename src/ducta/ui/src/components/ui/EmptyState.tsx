@@ -3,7 +3,7 @@ import { colors, styles } from "../../theme/tokens";
 
 interface EmptyStateProps {
   /** Tabler icon component (e.g. IconInbox). Typed loosely to match forwardRef icons. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   icon?: ComponentType<any>;
   title: string;
   description?: string;

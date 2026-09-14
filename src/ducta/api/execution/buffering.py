@@ -74,21 +74,24 @@ class CircularLogBuffer:
         with self._lock:
             return [e for e in self._buffer if e.timestamp > timestamp]
 
-    def get_from(self, seq: int) -> tuple[list[LogEntry], int]:
+    def get_from(self, seq: int) -> tuple[list[LogEntry], int, int]:
         """Return entries appended at or after absolute sequence *seq*.
 
-        Returns ``(entries, next_seq)`` where *next_seq* is the sequence to pass
-        on the next call. Unlike positional indexing into ``get_all()``, absolute
-        sequences stay correct after circular eviction, and only the new tail is
-        copied instead of the whole buffer.
+        Returns ``(entries, next_seq, dropped)`` where *next_seq* is the sequence
+        to pass on the next call, and *dropped* is how many entries at or after
+        *seq* were already evicted from the buffer (0 when none were). Unlike
+        positional indexing into ``get_all()``, absolute sequences stay correct
+        after circular eviction, and only the new tail is copied instead of the
+        whole buffer.
         """
         with self._lock:
             oldest_seq = self._total_appended - len(self._buffer)
+            dropped = max(0, oldest_seq - seq)
             start = max(seq, oldest_seq) - oldest_seq
             if start >= len(self._buffer):
-                return [], self._total_appended
+                return [], self._total_appended, dropped
             entries = list(islice(self._buffer, start, None))
-            return entries, self._total_appended
+            return entries, self._total_appended, dropped
 
     def get_last(self, count: int) -> list[LogEntry]:
         """Return the last N entries."""
@@ -185,10 +188,10 @@ class BufferedLogManager:
         buffer = self.get_buffer(execution_id)
         return buffer.get_all() if buffer else []
 
-    def get_logs_from(self, execution_id: str, seq: int) -> tuple[list[LogEntry], int]:
+    def get_logs_from(self, execution_id: str, seq: int) -> tuple[list[LogEntry], int, int]:
         """Incrementally fetch logs appended since absolute sequence *seq*."""
         buffer = self.get_buffer(execution_id)
-        return buffer.get_from(seq) if buffer else ([], seq)
+        return buffer.get_from(seq) if buffer else ([], seq, 0)
 
     def get_logs_after(self, execution_id: str, timestamp: datetime) -> list[LogEntry]:
         """Get logs for execution after a timestamp."""

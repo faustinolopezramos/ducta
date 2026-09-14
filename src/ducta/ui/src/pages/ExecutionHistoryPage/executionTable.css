@@ -18,12 +18,23 @@
 
 .exec-sweep {
   color: var(--primary);
+  background: none;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 0 var(--space-1);
+  cursor: pointer;
 }
 
-.exec-dry { color: var(--warning-strong); }
+.exec-sweep:hover { border-color: var(--border-hover); }
+
+/* Same inline-tag treatment as .exec-sweep right next to it, so the two read
+   as one family of tags in this column instead of one pill and one bare word. */
+.exec-dry {
+  color: var(--warning-strong);
+  border: 1px solid color-mix(in srgb, var(--warning-strong) 30%, transparent);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-1);
+}
 
 .exec-actions {
   display: flex;

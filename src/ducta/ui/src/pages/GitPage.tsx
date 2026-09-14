@@ -3,14 +3,15 @@ import { useNavigate } from "react-router-dom";
 import { colors, styles } from "../theme/tokens";
 import { Button } from "../components/ui/Button";
 import { PageHeader } from "../components/ui/PageHeader";
+import { PageContainer } from "../components/ui/PageContainer";
+import { Panel } from "../components/ui/Panel";
+import { SkeletonText } from "../components/ui/Skeleton";
 import { EmptyState } from "../components/ui/EmptyState";
-import { IconCircleCheck } from "@tabler/icons-react";
+import { IconCircleCheck, IconGitCommit } from "@tabler/icons-react";
 import { ICONS } from "../components/icons";
-import { RepositoryStatus } from "../components/RepositoryConfig/RepositoryStatus";
-import { RepositorySelector } from "../components/RepositoryConfig/RepositorySelector";
 import { FileTree } from "../components/FileTree";
 import { useGitStatus, useGitLog } from "../api/queries";
-import { useGitStage, useGitCommitChanges, useGitPull, useRepositoryPush } from "../api/mutations";
+import { useGitStage, useGitCommitChanges, useGitPull, useGitPush } from "../api/mutations";
 import { useSourceStore } from "../store/workspace";
 import type { SectionTitleProps } from "../types/pages";
 
@@ -69,7 +70,7 @@ export function GitPage() {
   const { mutate: stageAll, isPending: isStaging } = useGitStage();
   const { mutate: commitChanges, isPending: isCommitting } = useGitCommitChanges();
   const { mutate: pullLatest, isPending: isPulling } = useGitPull();
-  const { mutate: pushChanges, isPending: isPushing } = useRepositoryPush();
+  const { mutate: pushChanges, isPending: isPushing } = useGitPush();
 
   const staged   = gitStatus?.staged   ?? [];
   const unstaged = gitStatus?.unstaged ?? [];
@@ -86,7 +87,7 @@ export function GitPage() {
   };
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: "36px 48px", background: colors.bg, minHeight: 0 }}>
+    <PageContainer>
       <PageHeader
         title="Git &amp; Repository"
         description="Stage, commit, and push your workspace changes."
@@ -94,9 +95,7 @@ export function GitPage() {
         backLabel="Dashboard"
       />
 
-      {/* Two-column grid — collapses to single column below 900px */}
-      <style>{`@media (max-width: 900px) { .git-page-grid { grid-template-columns: 1fr !important; } }`}</style>
-      <div className="git-page-grid" style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 24, alignItems: "start" }}>
+      <div className="git-page-grid">
 
         {/* ── Left: working tree + commit + history ── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -104,9 +103,9 @@ export function GitPage() {
           {/* Working tree status */}
           <div>
             <SectionTitle>{ICONS.STREAM_LOG} Working tree</SectionTitle>
-            <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 10, padding: "16px 18px" }}>
+            <Panel>
               {statusLoading ? (
-                <div style={{ ...styles.fontMono, fontSize: 12, color: colors.textMuted }}>Loading status…</div>
+                <SkeletonText lines={3} />
               ) : totalChanged === 0 ? (
                 <EmptyState
                   icon={IconCircleCheck}
@@ -128,13 +127,13 @@ export function GitPage() {
                   )}
                 </>
               )}
-            </div>
+            </Panel>
           </div>
 
           {/* Commit */}
           <div>
             <SectionTitle>{ICONS.STREAM_LOG} Commit</SectionTitle>
-            <div style={{ background: colors.surface, border: `1px solid ${staged.length > 0 ? colors.accentA30 : colors.border}`, borderRadius: 10, padding: "16px 18px" }}>
+            <Panel className={staged.length > 0 ? "git-commit-panel--armed" : undefined}>
               <div style={{ ...styles.fontSans, fontSize: 12, color: colors.textMuted, marginBottom: 8 }}>
                 {staged.length > 0
                   ? `${staged.length} file${staged.length !== 1 ? "s" : ""} staged`
@@ -169,9 +168,9 @@ export function GitPage() {
                 disabled={!canCommit}
                 loading={isCommitting}
               >
-                Commit →
+                Commit
               </Button>
-            </div>
+            </Panel>
           </div>
 
           {/* Commit history */}
@@ -192,15 +191,22 @@ export function GitPage() {
                 </span>
               )}
             </SectionTitle>
-            <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 10, overflow: "hidden" }}>
+            <Panel flush>
               {logLoading ? (
-                <div style={{ ...styles.fontMono, fontSize: 12, color: colors.textMuted, padding: "16px 18px" }}>
-                  Loading commits…
+                <div className="git-loading-block">
+                  <SkeletonText lines={4} />
                 </div>
               ) : !gitLog?.commits?.length ? (
-                <div style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, padding: "24px 18px", textAlign: "center" }}>
-                  No commits yet.
-                </div>
+                <EmptyState
+                  icon={IconGitCommit}
+                  size="sm"
+                  title={browsePath ? "No commits touch this file" : "No commits yet"}
+                  description={
+                    browsePath
+                      ? "Clear the file filter to see the whole history."
+                      : "Commit your staged changes to start the history."
+                  }
+                />
               ) : (
                 gitLog.commits.map((commit: any, i: number) => (
                   <div
@@ -229,7 +235,7 @@ export function GitPage() {
                   </div>
                 ))
               )}
-            </div>
+            </Panel>
           </div>
         </div>
 
@@ -237,33 +243,28 @@ export function GitPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div>
             <SectionTitle>{ICONS.CONNECTIONS} Remote</SectionTitle>
-            <RepositoryStatus />
             {sourceType === "git" && (
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 <Button variant="ghost" size="sm" onClick={() => pullLatest(undefined)} disabled={isPulling} style={{ flex: 1 }}>
                   {isPulling ? "Pulling…" : "↓ Pull"}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={() => pushChanges({})} disabled={isPushing} style={{ flex: 1 }}>
+                <Button variant="ghost" size="sm" onClick={() => pushChanges(undefined)} disabled={isPushing} style={{ flex: 1 }}>
                   {isPushing ? "Pushing…" : "↑ Push"}
                 </Button>
               </div>
             )}
           </div>
           <div>
-            <SectionTitle>{ICONS.BROWSE} Connect repository</SectionTitle>
-            <RepositorySelector />
-          </div>
-          <div>
             <SectionTitle>{ICONS.BROWSE} Repository files</SectionTitle>
-            <div style={{ background: colors.surface, border: `1px solid ${colors.border}`, borderRadius: 10, padding: 8, maxHeight: 360, overflowY: "auto" }}>
+            <Panel flush className="git-filetree-panel">
               <FileTree activePath={browsePath} onSelectFile={setBrowsePath} />
-            </div>
+            </Panel>
             <p style={{ ...styles.fontSans, fontSize: 11, color: colors.textMuted, margin: "6px 2px 0" }}>
               Select a file to filter the commit history.
             </p>
           </div>
         </div>
       </div>
-    </div>
+    </PageContainer>
   );
 }

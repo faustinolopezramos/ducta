@@ -36,7 +36,7 @@ class TestResolveMlopsStoragePrecedence:
 
         class FakeWorkspaceManager:
             def __init__(self, source_path):
-                pass
+                self.root = source_path
 
             def load_context(self, env):
                 return ctx
@@ -69,7 +69,7 @@ class TestResolveGlobalConfigSharedWithPromotionPolicy:
 
         class FakeWorkspaceManager:
             def __init__(self, source_path):
-                pass
+                self.root = source_path
 
             def load_context(self, env):
                 return ctx

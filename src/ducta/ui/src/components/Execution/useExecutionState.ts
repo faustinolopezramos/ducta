@@ -31,7 +31,6 @@ export function useExecutionState(
   const logsOpen = useLogsStore((s) => s.logsOpen);
   const setLogsOpen = useLogsStore((s) => s.setLogsOpen);
   const currentLogs = useLogsStore((s) => s.currentLogs);
-  const saveExecutionLogs = useLogsStore((s) => s.saveExecutionLogs);
 
   const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
   const setActiveEnv = useSourceStore((s) => s.setActiveEnv);
@@ -106,12 +105,6 @@ export function useExecutionState(
   useEffect(() => {
     if (onActiveIdChange) onActiveIdChange(activeId);
   }, [activeId, onActiveIdChange]);
-
-  useEffect(() => {
-    if (isDone && activeId && currentLogs.length > 0) {
-      saveExecutionLogs(activeId);
-    }
-  }, [isDone, activeId, currentLogs.length, saveExecutionLogs]);
 
   // Raise the error panel when a new failure message arrives. Keyed on the
   // message itself, so dismissing it does not immediately re-open on the next

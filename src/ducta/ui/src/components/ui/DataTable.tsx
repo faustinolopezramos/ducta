@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { IconChevronDown, IconChevronUp, IconSelector } from "@tabler/icons-react";
 import { Skeleton } from "./Skeleton";
@@ -62,6 +62,14 @@ export interface DataTableProps<T> {
   /** Rows of skeleton to render while loading. */
   loadingRows?: number;
   caption?: string;
+  /** Extra class(es) for a row's <tr> — e.g. a left-accent rail for a failed
+   *  or running row. Returning undefined/"" leaves the row unstyled. */
+  rowClassName?: (row: T) => string | undefined;
+  /** Renders an expanded detail region in a full-width row directly under a
+   *  given row — a sweep's member runs, an inline error preview, etc. Only
+   *  the row matching `expandedRowKey` gets one. */
+  renderRowDetail?: (row: T) => ReactNode;
+  expandedRowKey?: string | null;
 }
 
 type SortState = { key: string; dir: "asc" | "desc" } | null;
@@ -95,6 +103,9 @@ export function DataTable<T>({
   minWidth,
   loadingRows = 5,
   caption,
+  rowClassName,
+  renderRowDetail,
+  expandedRowKey = null,
 }: Readonly<DataTableProps<T>>) {
   const [sort, setSort] = useState<SortState>(null);
 
@@ -238,13 +249,15 @@ export function DataTable<T>({
               const id = rowKey(row);
               const clickable = Boolean(onRowClick);
               const selectable = selection?.isSelectable?.(row) ?? true;
+              const detail = renderRowDetail && expandedRowKey === id ? renderRowDetail(row) : null;
               return (
+                <Fragment key={id}>
                 <tr
-                  key={id}
                   className={cx(
                     "tui-table__row",
                     clickable && "tui-table__row--clickable",
                     isRowSelected?.(row) && "is-selected",
+                    rowClassName?.(row),
                   )}
                   onClick={clickable ? () => onRowClick!(row) : undefined}
                   onKeyDown={
@@ -289,6 +302,14 @@ export function DataTable<T>({
                     </td>
                   ))}
                 </tr>
+                {detail && (
+                  <tr className="tui-table__row tui-table__row--detail">
+                    <td colSpan={totalColumns} className="tui-table__td tui-table__td--detail">
+                      {detail}
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
         </tbody>

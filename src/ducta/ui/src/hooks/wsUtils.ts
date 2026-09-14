@@ -18,7 +18,3 @@ function apiWebSocketUrl(path: string): string {
 export function buildWsUrl(executionId: string): string {
   return apiWebSocketUrl(`ws/logs/${encodeURIComponent(executionId)}`);
 }
-
-export function buildTerminalWsUrl(): string {
-  return apiWebSocketUrl("ws/terminal");
-}

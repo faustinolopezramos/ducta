@@ -9,6 +9,7 @@ import { StatusBadge } from "../../components/ui/StatusBadge";
 import {
   useQualityReport,
   useQualityRuns,
+  useDeleteQualityReport,
   fetchQualityReport,
   type RunChecksVars,
 } from "../../api/qualityApi";
@@ -24,21 +25,34 @@ import { Skeleton } from "../../components/ui/Skeleton";
 
 function RunHistoryRow({
   dataset,
+  env,
+  pipelineName,
+  project,
   runId,
   selected,
   onSelect,
   onDeleted,
 }: {
   dataset: string;
+  env?: string;
+  pipelineName?: string;
+  project?: string;
   runId: string;
   selected: boolean;
   onSelect: () => void;
   onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
+  const deleteReport = useDeleteQualityReport();
 
   const handleRerun = async () => {
-    const report = (await fetchQualityReport(dataset, runId)) as QualityReportData;
+    const report = (await fetchQualityReport(
+      dataset,
+      runId,
+      env,
+      pipelineName,
+      project
+    )) as QualityReportData;
     const source = report.source;
     if (!source?.input_path) {
       throw new Error("This report has no reproducible source (run before rerun support was added)");
@@ -102,10 +116,7 @@ function RunHistoryRow({
             confirmLabel: "Delete report",
           }}
           onAction={async () => {
-            await client.delete(
-              `/quality/reports/${encodeURIComponent(dataset)}/${encodeURIComponent(runId)}`
-            );
-            queryClient.invalidateQueries({ queryKey: ["quality"] });
+            await deleteReport.mutateAsync({ dataset, runId, env, pipelineName, project });
             onDeleted();
           }}
           successMessage="Report deleted"
@@ -118,18 +129,30 @@ function RunHistoryRow({
   );
 }
 
-export function DatasetDetail({ dataset, onClose }: { dataset: string; onClose: () => void }) {
+export function DatasetDetail({
+  dataset,
+  env,
+  pipelineName,
+  project,
+  onClose,
+}: {
+  dataset: string;
+  env?: string;
+  pipelineName?: string;
+  project?: string;
+  onClose: () => void;
+}) {
   const [runId, setRunId] = useState<string | undefined>(undefined);
-  const runs = useQualityRuns(dataset);
+  const runs = useQualityRuns(dataset, env, pipelineName, project);
   const runIds = useMemo(() => (runs.data?.run_ids ?? []).slice().sort().reverse(), [runs.data]);
-  const report = useQualityReport(dataset, runId);
+  const report = useQualityReport(dataset, runId, env, pipelineName, project);
 
   return (
     <Panel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconDatabase size={16} color={colors.accent} />
         <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
-          {dataset}
+          {pipelineName && pipelineName !== "_adhoc" ? `${pipelineName} / ${dataset}` : dataset}
         </h2>
         <Button variant="ghost" size="sm" onClick={onClose} leftIcon={<IconX size={14} />}>
           Close
@@ -143,6 +166,9 @@ export function DatasetDetail({ dataset, onClose }: { dataset: string; onClose: 
             <RunHistoryRow
               key={id}
               dataset={dataset}
+              env={env}
+              pipelineName={pipelineName}
+              project={project}
               runId={id}
               selected={(runId ?? runIds[0]) === id}
               onSelect={() => setRunId(id)}

@@ -21,12 +21,14 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from ducta.api.services.config_service import ConfigService
+from ducta.api.services.dataset_service import DatasetService
 from ducta.api.services.node_schema_service import NodeSchemaService
 from ducta.api.services.node_service import NodeFileInfo, NodeService
 from ducta.api.services.project import ProjectService
 
 __all__ = [
     "ConfigService",
+    "DatasetService",
     "NodeFileInfo",
     "NodeSchemaService",
     "NodeService",

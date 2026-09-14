@@ -123,11 +123,7 @@ def _build_response(
     settings: Dict[str, Any],
     repo: Optional[ProjectRepository] = None,
 ) -> ProjectResponse:
-    """Build a ProjectResponse with pipeline count.
-
-    Handles both standard and layered projects by using ProjectRepository.get_pipelines()
-    which understands ducta.yaml layer definitions.
-    """
+    """Build a ProjectResponse with pipeline count."""
     if repo is None:
         repo = ProjectRepository(workspace_path)
 
@@ -253,6 +249,15 @@ class ProjectService:
                 f"Project '{project_id}' not found", detail={"project_id": project_id}
             )
 
+        if pdir == self._workspace_path:
+            raise ValidationError(
+                f"'{project_id}' is the connected workspace itself, not a "
+                "sub-project under it — refusing to delete it via this "
+                "endpoint. Disconnect or delete the workspace directly if "
+                "that's really what you want.",
+                detail={"project_id": project_id},
+            )
+
         if not force:
             pipeline_count = self._repo.get_pipeline_count(project_id)
             if pipeline_count:
@@ -309,9 +314,6 @@ class ProjectService:
                 detail={"expected": str(expected_location), "actual": str(source)},
             )
 
-        # Created up front (idempotent) so ProjectRepository.settings_path/pipelines_path
-        # resolve into config/ below rather than falling back to the project root, which
-        # is what they'd do if config/ didn't exist yet at resolution time.
         config_dir = source / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
 
@@ -369,31 +371,26 @@ class ProjectService:
         self._repo.get_settings(project_id)
         return self._repo.get_pipelines(project_id)
 
+    def get_pipelines_commit_sha(self, project_id: str) -> Optional[str]:
+        """Current commit SHA of this project's pipelines.yaml, for OCC."""
+        return self._repo.get_pipelines_commit_sha(project_id) or None
+
     def save_project_pipeline(
-        self, project_id: str, pipeline_name: str, spec: Dict[str, Any], *, auto_commit: bool = True
-    ) -> None:
-        self._repo.save_pipeline(project_id, pipeline_name, spec)
-        if auto_commit:
-            _git_commit_files(
-                self._workspace_path,
-                f"feat: upsert pipeline '{pipeline_name}' in project '{project_id}'",
-                [
-                    self._repo.pipelines_path(project_id),
-                ],
-            )
+        self,
+        project_id: str,
+        pipeline_name: str,
+        spec: Dict[str, Any],
+        *,
+        expected_sha: Optional[str] = None,
+    ) -> str:
+        """Upsert a pipeline and return the new commit SHA."""
+        return self._repo.save_pipeline(project_id, pipeline_name, spec, expected_sha=expected_sha)
 
     def delete_project_pipeline(
-        self, project_id: str, pipeline_name: str, *, auto_commit: bool = True
-    ) -> None:
+        self, project_id: str, pipeline_name: str, *, expected_sha: Optional[str] = None
+    ) -> str:
+        """Delete a pipeline and return the new commit SHA (see ``save_project_pipeline``)."""
         pipelines = self._repo.get_pipelines(project_id)
         if pipeline_name not in pipelines:
-            return
-        self._repo.delete_pipeline(project_id, pipeline_name)
-        if auto_commit:
-            _git_commit_files(
-                self._workspace_path,
-                f"chore: delete pipeline '{pipeline_name}' from project '{project_id}'",
-                [
-                    self._repo.pipelines_path(project_id),
-                ],
-            )
+            return ""
+        return self._repo.delete_pipeline(project_id, pipeline_name, expected_sha=expected_sha)

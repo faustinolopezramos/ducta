@@ -24,7 +24,7 @@ import logging
 from typing import Any, Optional
 
 from ducta.api.execution.context import execution_id_var
-from ducta.api.execution.output_capture import format_cli_log_line, node_status_re
+from ducta.api.execution.output_capture import node_status_re
 from ducta.api.execution.resilience_helpers import get_current_node_id
 from ducta.api.models.execution import LogEntry
 
@@ -57,18 +57,23 @@ def make_log_sink(get_active_id: Any, log_manager: Any, on_append: Any = None): 
 
         record = message.record
         msg: str = record["message"]
+        # No `render: "cli"` / `display_message` here: this sink carries the
+        # app's own structured log calls (logger.info/.warning/etc. across the
+        # whole codebase) — the vast majority of what a run actually emits.
+        # It used to bake each one into a synthetic ANSI-colored terminal
+        # line ("ducta: [HH:MM:SS] LEVEL   message") and force the frontend's
+        # raw-CLI rendering path for it, which meant virtually every log line
+        # a user saw was a dense terminal dump regardless of how the
+        # structured row was designed — the redesigned row (level dot,
+        # elapsed-time column, sans chrome) never actually showed up. Genuine
+        # external process/stdout output (ProcessOutputCapture, which can
+        # contain arbitrary formatting we can't structure) still opts into
+        # `render: "cli"` itself in manager_streaming.py; this sink no longer
+        # does it on that path's behalf.
         entry = LogEntry(
             timestamp=record["time"],
             level=record["level"].name,
             message=msg,
-            extra={
-                "render": "cli",
-                "display_message": format_cli_log_line(
-                    record["time"],
-                    record["level"].name,
-                    msg,
-                ),
-            },
         )
 
         m = node_status_re.match(msg)

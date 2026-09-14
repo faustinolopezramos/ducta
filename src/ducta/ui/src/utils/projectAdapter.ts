@@ -21,6 +21,9 @@ export function serverProjectToItem(sp: WorkspaceProject): ProjectItem {
     id: sp.id,
     name: sp.name,
     description: sp.description,
+    // The server already counted them; the card would otherwise fetch each
+    // project's pipeline list to recount.
+    pipelineCount: sp.pipeline_count,
     pipelines: [],   // Loaded on-demand per project route
     connections: [],
     globalSettings: {

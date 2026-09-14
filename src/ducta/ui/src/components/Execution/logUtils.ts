@@ -15,29 +15,15 @@ export const LEVEL_COLOR: Record<LogLevel, string> = {
   DEBUG:   colors.textDim,
 };
 
-export const LEVEL_BG_TINT: Record<LogLevel, string> = {
-  ERROR:   "var(--ilog-red-bg)",
-  WARNING: "var(--ilog-amber-bg)",
-  SUCCESS: "var(--ilog-green-bg)",
-  INFO:    "transparent",
-  DEBUG:   "transparent",
-};
-
 export const LEVEL_SHORT: Record<LogLevel, string> = {
   ERROR: "ERR", WARNING: "WRN", INFO: "INF", DEBUG: "DBG", SUCCESS: "OK",
 };
 
-export const LEVEL_DOT_COLOR: Record<LogLevel, string> = {
-  ERROR: colors.red, WARNING: colors.amber, SUCCESS: colors.green,
-  INFO: colors.textDim, DEBUG: colors.textDim,
-};
-
-export const LEVEL_BADGE_BG: Record<LogLevel, string> = {
-  ERROR: "var(--ilog-red-bg)",
-  WARNING: "var(--ilog-amber-bg)",
-  SUCCESS: "var(--ilog-green-bg)",
-  INFO: "transparent",
-  DEBUG: "transparent",
+// Sentence-case labels for the level-filter toolbar — the pills are UI chrome
+// (sans), not log content, so they read as words rather than mono/uppercase
+// codes like the LEVEL_SHORT per-row markers do.
+export const LEVEL_LABEL: Record<LogLevel | "ALL", string> = {
+  ALL: "All", DEBUG: "Debug", INFO: "Info", SUCCESS: "Success", WARNING: "Warning", ERROR: "Error",
 };
 
 // Node/execution-run status → glyph/label/color, sourced from the shared
@@ -55,7 +41,13 @@ export const EXEC_STATE_COLOR: Record<string, string> = Object.fromEntries(
   Object.entries(STATUS_META).map(([status, meta]) => [status, meta.color]),
 );
 
-export const LEVELS: Array<LogLevel | "ALL"> = ["ALL", "DEBUG", "INFO", "WARNING", "ERROR"];
+export const LEVELS: Array<LogLevel | "ALL"> = ["ALL", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"];
+
+// Fixed width for the timestamp/elapsed-time column, shared by LogRow,
+// NodeStatusRow and SectionHeaderRow so timestamps line up in one column
+// regardless of row type — the log reads as a table, not a stack of
+// independently-laid-out lines.
+export const LOG_TIME_COL_WIDTH = 56;
 
 // ── Section type ──────────────────────────────────────────────────────────────
 

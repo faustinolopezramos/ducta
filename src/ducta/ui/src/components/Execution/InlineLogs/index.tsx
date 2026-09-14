@@ -1,47 +1,60 @@
 import { useRef, useState, useCallback } from "react";
+import { createPortal } from "react-dom";
 import {
   IconAlertTriangle,
   IconCopy,
   IconDownload,
   IconSearch,
   IconX,
-  IconChevronUp,
   IconArrowDown,
-  IconMinus,
   IconArrowsMaximize,
   IconArrowsMinimize,
   IconTerminal2,
 } from "@tabler/icons-react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { colors } from "../../../theme/tokens";
+import { StatusBadge } from "../../ui/StatusBadge";
+import { EmptyState } from "../../ui/EmptyState";
+import { Toolbar } from "../../ui/Toolbar";
 import { type LogLevel, type LogEntry } from "../../../store/logsStore";
 import { NodeListRow, NodeStatusRow, LogRow, SectionHeaderRow } from "../LogRows";
-import { EXEC_STATE_COLOR, LEVELS } from "../logUtils";
-import { NodeChip, StatusLabel, ResizeHandle } from "./subcomponents";
+import { LEVEL_COLOR, LEVEL_LABEL, LEVELS } from "../logUtils";
+import { ResizeHandle } from "./subcomponents";
 import { useInlineLogsState, type FlattenedItem } from "./useInlineLogsState";
 import "../InlineLogs.css";
 
-type LogSize = "normal" | "expanded" | "fullscreen";
+const DOCKED_MIN_HEIGHT = 160;
+const DOCKED_MAX_HEIGHT = 760;
+const DOCKED_DEFAULT_HEIGHT = 340;
+
+/**
+ * How the panel is hosted, each with one sizing contract:
+ *  - "docked": floats over the pipeline canvas. Owns its own height (resizable
+ *    by drag, toggled to fullscreen); the host only positions it.
+ *  - "fill": stretches to fill whatever space the host already allocated
+ *    (a drawer, a modal body). No resize handle — the host owns the box.
+ *  - "bounded": sits inline in a page's flow with a capped height and its own
+ *    internal scroll, never taller than its content warrants.
+ */
+export type LogPanelMode = "docked" | "fill" | "bounded";
 
 export function InlineLogs({
   isRunning,
   onClose,
-  variant = "inline",
+  mode = "bounded",
   nodes,
   executionStates = {},
   logs: propsLogs,
 }: {
   isRunning: boolean;
   onClose?: () => void;
-  variant?: "inline" | "footer";
+  mode?: LogPanelMode;
   nodes?: Array<{ id: string; name: string }>;
   executionStates?: Record<string, string>;
   logs?: LogEntry[];
 }) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
-  const [size, setSize] = useState<LogSize>("normal");
-  const [minimized, setMinimized] = useState(false);
-  const [customHeight, setCustomHeight] = useState<number | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [dockedHeight, setDockedHeight] = useState(DOCKED_DEFAULT_HEIGHT);
 
   const {
     searchFilter,
@@ -68,21 +81,8 @@ export function InlineLogs({
 
   const hasNodePanel = nodes != null && nodes.length > 0;
 
-  const handleClose = () => {
-    setNodeFilter(null);
-    onClose?.();
-  };
-
-  const cycleSize = () => {
-    setSize((prev) => {
-      if (prev === "normal") return "expanded";
-      if (prev === "expanded") return "fullscreen";
-      return "normal";
-    });
-  };
-
   const handleResize = useCallback((delta: number) => {
-    setCustomHeight((prev) => Math.max(150, (prev ?? 380) + delta));
+    setDockedHeight((prev) => Math.min(DOCKED_MAX_HEIGHT, Math.max(DOCKED_MIN_HEIGHT, prev + delta)));
   }, []);
 
   const handleCopy = () => {
@@ -126,89 +126,70 @@ export function InlineLogs({
     );
   }, [collapsedSections, searchFilter, nodeFilter, setNodeFilter, t0, toggleSection]);
 
-  const isFullscreen = size === "fullscreen";
-  const isExpanded = size === "expanded";
-  const bodyMaxHeight = isFullscreen
-    ? "calc(100vh - 120px)"
-    : isExpanded
-    ? customHeight != null ? `${customHeight}px` : "60vh"
-    : undefined;
-
-  const bodyClass = [
-    "ilog__body",
-    `ilog__body--${variant}`,
-    isExpanded && "ilog__body--expanded",
-    isFullscreen && "ilog__body--fullscreen",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
   const rootClass = [
     "ilog",
-    variant === "inline" && "ilog--inline",
+    `ilog--${mode}`,
     isFullscreen && "ilog--fullscreen",
   ]
     .filter(Boolean)
     .join(" ");
 
-  if (minimized) {
-    const errorCount = levelCounts.ERROR ?? 0;
-    const warnCount = levelCounts.WARNING ?? 0;
-    return (
-      <div className={`ilog ilog--minimized${variant === "inline" ? " ilog--inline" : ""}`}>
-        <button
-          className="ilog__minibar"
-          onClick={() => setMinimized(false)}
-          aria-expanded={false}
-          aria-label="Expand logs panel"
-        >
-          <IconTerminal2 size={14} color={colors.accent} stroke={2} />
-          <StatusLabel isRunning={isRunning} />
-          <span className="ilog__entry-count">{totalCount} entries</span>
-          {errorCount > 0 && <span className="ilog__mini-badge ilog__mini-badge--error">{errorCount} err</span>}
-          {warnCount > 0 && <span className="ilog__mini-badge ilog__mini-badge--warn">{warnCount} warn</span>}
-          <span className="ilog__minibar-spacer" />
-          <IconChevronUp size={16} />
-        </button>
-      </div>
-    );
-  }
+  // Fullscreen is an overlay sized by inset:0; a docked panel's own drag-to-
+  // resize height must not fight that, so it's only applied while docked.
+  const rootStyle = mode === "docked" && !isFullscreen ? { height: dockedHeight } : undefined;
 
-  return (
+  const emptyState = flattenedItems.length === 0 ? (
+    isRunning ? (
+      <EmptyState
+        icon={IconTerminal2}
+        size="sm"
+        title="Waiting for output"
+        description="Logs will appear here as nodes execute."
+      />
+    ) : (
+      <EmptyState
+        icon={IconTerminal2}
+        size="sm"
+        title={anyFilter ? "No matches found" : "No logs"}
+        description={anyFilter ? "Try adjusting your search or filters." : "Run a pipeline to see execution logs."}
+      />
+    )
+  ) : null;
+
+  const panel = (
     <>
       {isFullscreen && (
-        // Click-outside to leave fullscreen; the header keeps an explicit
-        // control for it, so the backdrop is scenery.
+        // Click-outside returns to the panel's normal size; the header keeps
+        // an explicit control for it too, so the backdrop is scenery.
+        //
+        // Rendered through the same portal as the panel below (see the
+        // return statement at the bottom): `.page-transition`, which wraps
+        // every page, plays a mount animation on `transform`, and per spec
+        // that gives it a containing block for any `position: fixed`
+        // descendant for as long as the animation (or its `forwards` fill)
+        // leaves any transform applied — including the identity matrix it
+        // ends on. Left un-ported, "fullscreen" would be clipped to the
+        // page's box instead of covering the viewport.
         <div
           className="ilog__backdrop"
           role="presentation"
-          onClick={() => setSize("expanded")}
+          onClick={() => setIsFullscreen(false)}
         />
       )}
-      <div className={rootClass}>
-        {/* Resize handle — only in expanded or footer mode, not in fullscreen */}
-        {!isFullscreen && (
+      <div className={rootClass} style={rootStyle}>
+        {mode === "docked" && !isFullscreen && (
           <ResizeHandle onResize={handleResize} />
         )}
 
         {/* Header */}
         <div className="ilog__header">
           <div className="ilog__header-left">
-            <IconTerminal2 size={16} color={colors.accent} stroke={2} />
-            <StatusLabel isRunning={isRunning} />
-
-            {/* Node chips */}
-            {nodes && nodes.length > 0 && (
-              <div className="ilog__chips-group">
-                {nodes.map((node) => (
-                  <NodeChip
-                    key={node.id}
-                    name={node.name || node.id}
-                    state={executionStates[node.id] ?? "idle"}
-                  />
-                ))}
-              </div>
-            )}
+            <IconTerminal2 size={16} color="var(--text-muted)" stroke={1.75} />
+            <StatusBadge
+              status={isRunning ? "running" : "idle"}
+              label={isRunning ? "Live" : "Idle"}
+              size="sm"
+            />
 
             <div className="ilog__divider" />
             <span className="ilog__entry-count">
@@ -223,7 +204,7 @@ export function InlineLogs({
               aria-label="Copy logs"
               className="ilog__btn"
             >
-              <IconCopy size={15} stroke={1.5} />
+              <IconCopy size={15} stroke={1.75} />
             </button>
             <button
               onClick={handleDownload}
@@ -231,86 +212,91 @@ export function InlineLogs({
               aria-label="Download logs"
               className="ilog__btn"
             >
-              <IconDownload size={15} stroke={1.5} />
+              <IconDownload size={15} stroke={1.75} />
             </button>
 
             <div className="ilog__divider" style={{ margin: "0 4px" }} />
 
             <button
-              onClick={() => setMinimized(true)}
-              title="Minimize"
-              aria-label="Minimize logs panel"
+              onClick={() => setIsFullscreen((prev) => !prev)}
+              title={isFullscreen ? "Exit fullscreen (Esc)" : "Fullscreen"}
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
               className="ilog__btn"
             >
-              <IconMinus size={18} />
-            </button>
-
-            <button
-              onClick={cycleSize}
-              title={isFullscreen ? "Exit fullscreen (Esc)" : size === "expanded" ? "Fullscreen" : "Expand"}
-              aria-label={isFullscreen ? "Exit fullscreen" : size === "expanded" ? "Enter fullscreen" : "Expand logs"}
-              className="ilog__btn"
-            >
-              {isFullscreen ? (
-                <IconArrowsMinimize size={16} />
-              ) : size === "expanded" ? (
-                <IconArrowsMaximize size={16} />
-              ) : (
-                <IconChevronUp size={18} />
-              )}
+              {isFullscreen ? <IconArrowsMinimize size={16} stroke={1.75} /> : <IconArrowsMaximize size={16} stroke={1.75} />}
             </button>
 
             {onClose && (
               <button
-                onClick={handleClose}
+                onClick={onClose}
                 className="ilog__btn ilog__btn--close"
                 title="Close"
                 aria-label="Close logs panel"
               >
-                <IconX size={18} />
+                <IconX size={18} stroke={1.75} />
               </button>
             )}
           </div>
         </div>
 
         {/* Body */}
-        <div className={bodyClass} style={bodyMaxHeight ? { maxHeight: bodyMaxHeight } : undefined}>
+        <div className="ilog__body">
           {/* Node panel */}
           {hasNodePanel && (
             <div className="ilog__sidebar">
               <NodeListRow
-                label="ALL NODES"
+                label="All nodes"
                 count={totalCount}
                 active={nodeFilter === null}
-                dotColor={isRunning ? colors.accent : colors.textDim}
+                status={isRunning ? "running" : "idle"}
                 onSelect={() => setNodeFilter(null)}
               />
               <div className="ilog__sidebar-divider" />
-              {nodes!.map((node) => {
-                const state = executionStates[node.id];
-                const dotColor = EXEC_STATE_COLOR[state ?? ""] ?? colors.textDim;
-                return (
-                  <NodeListRow
-                    key={node.id}
-                    label={node.name || node.id}
-                    count={nodeLogCounts[node.id] ?? 0}
-                    active={nodeFilter === node.id}
-                    dotColor={dotColor}
-                    onSelect={() => setNodeFilter(nodeFilter === node.id ? null : node.id)}
-                  />
-                );
-              })}
+              {nodes!.map((node) => (
+                <NodeListRow
+                  key={node.id}
+                  label={node.name || node.id}
+                  count={nodeLogCounts[node.id] ?? 0}
+                  active={nodeFilter === node.id}
+                  status={executionStates[node.id] ?? "idle"}
+                  onSelect={() => setNodeFilter(nodeFilter === node.id ? null : node.id)}
+                />
+              ))}
             </div>
           )}
 
           {/* Main content */}
           <div className="ilog__content">
             {/* Toolbar */}
-            <div className="ilog__toolbar">
+            <Toolbar
+              className="ilog__toolbar"
+              aria-label="Log filters"
+              end={
+                <div className="ilog__search-box">
+                  <IconSearch size={12} className="ilog__search-icon" />
+                  <input
+                    type="text"
+                    value={searchFilter}
+                    onChange={(e) => setSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === "Escape" && setSearch("")}
+                    placeholder="Search logs..."
+                    className="ilog__search-input"
+                  />
+                  {searchFilter && (
+                    <button
+                      onClick={() => setSearch("")}
+                      className="ilog__search-clear"
+                    >
+                      <IconX size={12} />
+                    </button>
+                  )}
+                </div>
+              }
+            >
               <div className="ilog__level-pills">
                 {LEVELS.map((lvl) => {
                   const active = levelFilter === lvl;
-                  const col = lvl === "ALL" ? colors.text : (EXEC_STATE_COLOR[lvl] ?? colors.textDim);
+                  const col = lvl === "ALL" ? "var(--text)" : (LEVEL_COLOR[lvl as LogLevel] ?? "var(--text-dim)");
                   const count = levelCounts[lvl as LogLevel | "ALL"];
                   const hasEntries = count != null && count > 0;
 
@@ -321,8 +307,9 @@ export function InlineLogs({
                       className={`ilog__level-pill${active ? " ilog__level-pill--active" : ""}${
                         !hasEntries && lvl !== "ALL" ? " ilog__level-pill--disabled" : ""
                       }`}
+                      style={{ color: col }}
                     >
-                      {lvl}
+                      {LEVEL_LABEL[lvl]}
                       {count != null && count > 0 && lvl !== "ALL" && (
                         <span className="ilog__level-badge">{count > 99 ? "99+" : count}</span>
                       )}
@@ -330,54 +317,12 @@ export function InlineLogs({
                   );
                 })}
               </div>
-
-              <div className="ilog__search-box">
-                <IconSearch size={12} className="ilog__search-icon" />
-                <input
-                  type="text"
-                  value={searchFilter}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={(e) => e.key === "Escape" && setSearch("")}
-                  placeholder="Search logs..."
-                  className="ilog__search-input"
-                />
-                {searchFilter && (
-                  <button
-                    onClick={() => setSearch("")}
-                    className="ilog__search-clear"
-                  >
-                    <IconX size={12} />
-                  </button>
-                )}
-              </div>
-            </div>
+            </Toolbar>
 
             {/* Log list */}
             <div className="ilog__list-container">
-              {flattenedItems.length === 0 ? (
-                <div className="ilog__list-empty">
-                  {isRunning ? (
-                    <>
-                      <IconTerminal2 size={24} stroke={1} className="ilog__list-empty-icon" style={{ opacity: 0.2 }} />
-                      <span className="ilog__list-empty-text">
-                        Waiting for output...
-                      </span>
-                      <span className="ilog__list-empty-hint">
-                        Logs will appear here as nodes execute
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <IconTerminal2 size={24} stroke={1} className="ilog__list-empty-icon" style={{ opacity: 0.2 }} />
-                      <span className="ilog__list-empty-text">
-                        {anyFilter ? "No matches found" : "No logs"}
-                      </span>
-                      <span className="ilog__list-empty-hint">
-                        {anyFilter ? "Try adjusting your search or filters" : "Run a pipeline to see execution logs"}
-                      </span>
-                    </>
-                  )}
-                </div>
+              {emptyState ? (
+                <div className="ilog__list-empty">{emptyState}</div>
               ) : (
                 <Virtuoso
                   ref={virtuosoRef}
@@ -401,8 +346,8 @@ export function InlineLogs({
                     }}
                     className="ilog__scroll-btn"
                   >
-                    <IconArrowDown size={12} stroke={3} />
-                    LATEST
+                    <IconArrowDown size={12} stroke={2.5} />
+                    Latest
                   </button>
                 </div>
               )}
@@ -411,19 +356,21 @@ export function InlineLogs({
         </div>
 
         {/* Connection lost banner */}
-      {!isConnected && isRunning && wasEverConnected.current && (
-        <div className="ilog__footer-error">
-          <IconAlertTriangle size={14} />
-          CONNECTION LOST — logs may be stale
-          <button
-            onClick={bumpReconnect}
-            className="ilog__reconnect-btn"
-          >
-            RECONNECT
-          </button>
-        </div>
-      )}
+        {!isConnected && isRunning && wasEverConnected.current && (
+          <div className="ilog__footer-error">
+            <IconAlertTriangle size={14} stroke={1.75} />
+            Connection lost — logs may be stale
+            <button
+              onClick={bumpReconnect}
+              className="ilog__reconnect-btn"
+            >
+              Reconnect
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
+
+  return isFullscreen ? createPortal(panel, document.body) : panel;
 }

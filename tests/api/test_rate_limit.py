@@ -75,32 +75,3 @@ class TestGetWebsocketClientKey:
         # `ipaddress` module itself classifies as `is_private`.
         ws = self._fake_ws("8.8.8.8", forwarded_for="198.51.100.9")
         assert get_websocket_client_key(ws) == "ip:8.8.8.8"
-
-
-class TestTerminalWsRejectsOverLimitBeforeAccept:
-    def test_closes_with_1013_and_returns_early(self, monkeypatch):
-        from ducta.api.routes import terminal as terminal_module
-
-        fake_limiter = MagicMock()
-        fake_limiter.is_allowed.return_value = False
-        monkeypatch.setattr(
-            terminal_module,
-            "get_settings",
-            lambda: _settings(terminal_enabled=True, auth_enabled=False),
-        )
-        monkeypatch.setattr(
-            "ducta.api.middleware.rate_limit.get_websocket_connection_limiter",
-            lambda settings: fake_limiter,
-        )
-
-        ws = MagicMock()
-        ws.close = AsyncMock()
-        ws.client = SimpleNamespace(host="203.0.113.5")
-        ws.headers = {}
-
-        asyncio.run(terminal_module.terminal_ws(ws))
-
-        ws.close.assert_awaited_once()
-        _, kwargs = ws.close.call_args
-        assert kwargs["code"] == 1013
-        fake_limiter.is_allowed.assert_called_once_with("ip:203.0.113.5")

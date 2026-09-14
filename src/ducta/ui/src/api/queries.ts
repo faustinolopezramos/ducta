@@ -43,11 +43,13 @@ export const useSourceInfo = () =>
 /**
  * GET /environments
  * Returns { environments: string[], count } — all envs defined in environment.yaml.
+ * `project`, when given, resolves the environments of a different project
+ * than the one the connected source belongs to (see WorkspaceManager.for_project).
  */
-export const useEnvironments = () =>
+export const useEnvironments = (project?: string) =>
   useQuery({
-    queryKey: ["environments", sourceKey()],
-    queryFn: () => client.get("/environments").then((r) => r.data),
+    queryKey: ["environments", sourceKey(), project ?? null],
+    queryFn: () => client.get("/environments", { params: { project } }).then((r) => r.data),
     staleTime: 5 * 60 * 1000, // 5 min — envs rarely change
   });
 
@@ -110,7 +112,9 @@ export const useWorkspaceConfig = (env: string, name: string) =>
 
 /**
  * GET /projects/{projectId}/pipelines
- * Returns { project_id, pipelines: { [name]: spec }, count }.
+ * Returns { project_id, pipelines: { [name]: spec }, count, commit_sha }.
+ * `commit_sha` is the whole project's pipelines.yaml version — pass it back
+ * as `expectedSha` on useUpdatePipeline/useDeletePipeline for OCC.
  */
 export const useServerProjectPipelines = (projectId: string) =>
   useQuery({
@@ -160,6 +164,118 @@ export const useProjectPipeline = (projectId: string, name: string) =>
       client.get(`/projects/${projectId}/pipelines/${name}`).then((r) => r.data),
     staleTime: 60 * 1000,
     enabled: !!projectId && !!name,
+  });
+
+// ─────────────────────────────────────────────
+// DATASET QUERIES
+// ─────────────────────────────────────────────
+
+export interface DatasetEndpoint {
+  node: string;
+  pipeline?: string | null;
+}
+
+/**
+ * A dataset with its `input_config` / `output_config` entry resolved.
+ * Every nullable field is null when the registry does not declare it — an
+ * answer, not a gap to fill with a default.
+ */
+export interface ProjectDataset {
+  name: string;
+  layer?: "bronze" | "silver" | "gold" | null;
+  format?: string | null;
+  path?: string | null;
+  write_mode?: string | null;
+  schema?: string | null;
+  options?: Record<string, unknown> | null;
+  declared_in: string[];
+  producers: DatasetEndpoint[];
+  consumers: DatasetEndpoint[];
+}
+
+export interface ProjectDatasets {
+  project_id: string;
+  datasets: ProjectDataset[];
+  count: number;
+}
+
+/**
+ * GET /projects/{projectId}/datasets
+ * The project's dataset registry: format, path, write mode, schema, plus the
+ * node that produces each dataset and every node that consumes it.
+ */
+export const useProjectDatasets = (projectId: string) =>
+  useQuery<ProjectDatasets>({
+    queryKey: ["server-projects", sourceKey(), projectId, "datasets"],
+    queryFn: () =>
+      client.get(`/projects/${projectId}/datasets`).then((r) => r.data),
+    staleTime: 30 * 1000,
+    enabled: !!projectId,
+  });
+
+// ─────────────────────────────────────────────
+// NODE SCHEMA
+// ─────────────────────────────────────────────
+
+export interface NodeSchemaIO {
+  id: string;
+  name: string;
+  declared: boolean;
+  format?: string | null;
+  path?: string | null;
+  write_mode?: string | null;
+  schema?: string | null;
+  layer?: "bronze" | "silver" | "gold" | null;
+  description?: string | null;
+}
+
+export interface NodeSchema {
+  name: string;
+  node_id: string;
+  type: string;
+  module: string;
+  fn: string;
+  description?: string | null;
+  inputs: NodeSchemaIO[];
+  outputs: NodeSchemaIO[];
+  dependencies: string[];
+  file_path: string;
+  file_size_bytes?: number | null;
+  file_exists: boolean;
+  quality?: {
+    check_count: number;
+    gate_behavior?: string | null;
+    is_sanity: boolean;
+  } | null;
+  last_execution_status?: string | null;
+  last_execution_time?: string | null;
+  last_execution_duration?: number | null;
+  last_execution_error_message?: string | null;
+}
+
+export interface PipelineNodeSchema {
+  project_id: string;
+  pipeline_name: string;
+  node: NodeSchema;
+}
+
+/**
+ * GET /projects/{projectId}/pipelines/{pipeline}/nodes/{node}/schema
+ *
+ * The node's full detail: datasets resolved against the registry, source-file
+ * state, quality checks and gate, and the last run. This endpoint existed for
+ * a long time and nothing called it, which is why the inspector could only
+ * show a name and an invented format.
+ */
+export const useNodeSchema = (projectId: string, pipeline: string, node: string) =>
+  useQuery<PipelineNodeSchema>({
+    queryKey: ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", node, "schema"],
+    queryFn: () =>
+      client
+        .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/${node}/schema`)
+        .then((r) => r.data),
+    staleTime: 15 * 1000,
+    enabled: !!projectId && !!pipeline && !!node,
   });
 
 
@@ -232,6 +348,11 @@ export interface ExecutionListFilters {
   until?: string;
   /** Only executions belonging to this sweep group. */
   sweep_id?: string;
+  project_id?: string;
+  /** Free-text search — matches id, pipeline/node name, error message, certificate run id. */
+  q?: string;
+  skip?: number;
+  limit?: number;
 }
 
 /**
@@ -407,18 +528,6 @@ export const useGitDiff = (sha: string) =>
     queryFn: () => client.get(`/git/diff/${sha}`).then((r) => r.data),
     enabled: !!sha,
     staleTime: Infinity, // diffs are immutable
-  });
-
-/**
- * GET /repository/
- * Returns RepositoryInfo { type, remote_url, branch, connected }.
- */
-export const useRepository = () =>
-  useQuery({
-    queryKey: ["repository", sourceKey()],
-    queryFn: () => client.get("/repository/").then((r) => r.data),
-    staleTime: 60 * 1000,
-    retry: 1,
   });
 
 

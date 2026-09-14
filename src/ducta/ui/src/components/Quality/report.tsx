@@ -82,33 +82,83 @@ export function RawJson({ data }: { data: unknown }) {
   );
 }
 
+/** One check result row, with an optional disclosure for its `details`. */
+function CheckResultRowView({ r }: { r: CheckResultRow }) {
+  const [open, setOpen] = useState(false);
+  const detailEntries = r.details ? Object.entries(r.details) : [];
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "8px 10px",
+        borderRadius: 6,
+        border: `1px solid ${colors.border}`,
+        background: colors.bg,
+      }}
+    >
+      <StatusBadge status={checkStatus(r)} size="sm" />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.text }}>
+          {r.check_name}
+        </div>
+        {r.message && (
+          <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{r.message}</div>
+        )}
+        {detailEntries.length > 0 && (
+          <div style={{ marginTop: 4 }}>
+            <button
+              onClick={() => setOpen((o) => !o)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 4,
+                background: "none",
+                border: "none",
+                padding: 0,
+                cursor: "pointer",
+                fontSize: 11,
+                color: colors.textMuted,
+              }}
+            >
+              {open ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />}
+              {open ? "Hide" : "Show"} details ({detailEntries.length})
+            </button>
+            {open && (
+              <div
+                style={{
+                  marginTop: 4,
+                  display: "grid",
+                  gridTemplateColumns: "auto 1fr",
+                  columnGap: 10,
+                  rowGap: 2,
+                }}
+              >
+                {detailEntries.map(([k, v]) => (
+                  <React.Fragment key={k}>
+                    <span style={{ fontSize: 11, color: colors.textMuted }}>{k}</span>
+                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: colors.text }}>
+                      {typeof v === "object" ? JSON.stringify(v) : String(v)}
+                    </span>
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /** Structured per-check result list. */
 export function CheckResultsList({ results }: { results: CheckResultRow[] }) {
   return (
     <div style={{ display: "grid", gap: 6 }}>
       {results.map((r) => (
-        <div
-          key={r.check_name}
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            gap: 10,
-            padding: "8px 10px",
-            borderRadius: 6,
-            border: `1px solid ${colors.border}`,
-            background: colors.bg,
-          }}
-        >
-          <StatusBadge status={checkStatus(r)} size="sm" />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.text }}>
-              {r.check_name}
-            </div>
-            {r.message && (
-              <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{r.message}</div>
-            )}
-          </div>
-        </div>
+        <CheckResultRowView key={r.check_name} r={r} />
       ))}
     </div>
   );

@@ -30,7 +30,6 @@ from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import ExecutionManagerDep, NodeServiceDep, require_permission
 from ducta.api.exceptions import (
-    ConcurrencyError,
     ConfigFileNotFoundError,
     ConfigValidationError,
     NodeNotFoundError,
@@ -39,22 +38,29 @@ from ducta.api.exceptions import (
 from ducta.api.models.execution import ExecutionListResponse
 
 _NODE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\.]+$")
+_PY_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _validate_node_name(name: str) -> None:
-    """Raise 400 if name is not a safe node identifier.
-
-    The regex alone allows a bare "." or ".." (both are single path
-    components made only of the allowed "." character) — reject those
-    explicitly so a node name can never resolve to "this directory" or
-    "parent directory" wherever it's later joined onto a filesystem path.
-    """
+def _validate_node_name(name: str, spec: Optional[Dict[str, Any]] = None) -> None:
+    """Raise 400 if name is not a safe node identifier."""
     if not _NODE_NAME_RE.match(name) or name in (".", ".."):
         raise HTTPException(
             status_code=400,
             detail=(
                 f"Invalid node name '{name}'. "
                 "Only alphanumeric characters, underscores, hyphens and dots are allowed."
+            ),
+        )
+    has_explicit_module = bool(spec and spec.get("module"))
+    if spec is not None and not has_explicit_module and not _PY_IDENTIFIER_RE.match(name):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid node name '{name}': without an explicit 'module' in the "
+                "spec, the name is used to derive one (nodes.<name>) and must be a "
+                "valid Python identifier — letters, digits and underscores, not "
+                "starting with a digit. Add 'module' to the spec to use a name "
+                "outside those rules."
             ),
         )
 
@@ -87,9 +93,6 @@ class NodeCodeResponse(BaseModel):
 
 
 class NodeCodeUpdateRequest(BaseModel):
-    # Unbounded `code` let a single request buffer an arbitrarily large string
-    # in memory — 10 MB matches WriteFileRequest.content's limit (see
-    # api/models/workspace.py), an already-generous ceiling for source code.
     code: str = Field(description="Python source code to save", max_length=10 * 1024 * 1024)
 
 
@@ -136,15 +139,11 @@ async def update_node(
     node_svc: NodeServiceDep,
 ) -> NodeResponse:
     """Update or create a node spec and commit to git."""
-    _validate_node_name(name)
+    _validate_node_name(name, body.spec)
     try:
-        commit_sha = node_svc.save_node(
-            name, body.spec, expected_commit_sha=body.expected_commit_sha
-        )
+        commit_sha = node_svc.save_node(name, body.spec, expected_sha=body.expected_commit_sha)
     except (ConfigFileNotFoundError, ConfigValidationError) as exc:
         raise HTTPException(status_code=400, detail=exc.message)
-    except ConcurrencyError as exc:
-        raise HTTPException(status_code=409, detail=exc.message)
     return NodeResponse(name=name, spec=body.spec, commit_sha=commit_sha)
 
 
@@ -167,8 +166,6 @@ async def delete_node(
         raise HTTPException(status_code=404, detail=exc.message)
     except (ConfigFileNotFoundError, ConfigValidationError) as exc:
         raise HTTPException(status_code=400, detail=exc.message)
-    except ConcurrencyError as exc:
-        raise HTTPException(status_code=409, detail=exc.message)
 
 
 @router.get(
@@ -183,15 +180,7 @@ async def get_node_code(
     module: Optional[str] = None,
     preview: Optional[int] = None,
 ) -> NodeCodeResponse:
-    """Return the Python source file for a node.
-
-    Args:
-        name: Node name/ID (for validation and response)
-        module: Optional module path (e.g., "uc.feature_preparation").
-                If provided, resolves directly without requiring node to be in nodes.yaml.
-                If not provided, looks up node in nodes.yaml and uses its module.
-        preview: If set, returns only the first N lines for a code preview.
-    """
+    """Return the Python source file for a node."""
     _validate_node_name(name)
     try:
         # If module is provided, use it directly (for nodes only in pipelines)
@@ -246,11 +235,7 @@ async def get_node_code_ast(
     node_svc: NodeServiceDep,
     module: Optional[str] = None,
 ) -> NodeAstResponse:
-    """Parse the node's Python source with ast.parse() and return structured info.
-
-    Returns function signatures, parameters, return types, decorators and imports.
-    This is more reliable than client-side regex extraction.
-    """
+    """Parse the node's Python source with ast.parse() and return structured info."""
     _validate_node_name(name)
     try:
         if module:

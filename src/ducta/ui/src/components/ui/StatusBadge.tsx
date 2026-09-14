@@ -102,7 +102,11 @@ export function StatusBadge({
 
   return (
     <span className={classes} style={style}>
-      <Icon className="tui-status__icon" aria-hidden="true" size={size === "sm" ? 12 : 14} />
+      <Icon
+        className={cx("tui-status__icon", meta.spin && "tui-status__icon--spin")}
+        aria-hidden="true"
+        size={size === "sm" ? 12 : 14}
+      />
       <span className="tui-status__label">{text}</span>
     </span>
   );

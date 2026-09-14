@@ -9,7 +9,7 @@ import {
 } from "@tabler/icons-react";
 import { useSchedules, useCreateSchedule, useDeleteSchedule, useToggleSchedule } from "../api/schedulesApi";
 import { useEnvironments, useServerProjects, useServerProjectPipelines } from "../api/queries";
-import { Button, Modal, PageHeader, EmptyState, Skeleton, ConfirmDialog } from "../components/ui";
+import { Button, Modal, PageHeader, PageContainer, StatusBadge, EmptyState, Skeleton, ConfirmDialog } from "../components/ui";
 
 export function SchedulesPage() {
   const { data, isLoading, isError, refetch } = useSchedules();
@@ -57,7 +57,7 @@ export function SchedulesPage() {
   };
 
   return (
-    <div className="schedules-page" style={{ padding: "var(--space-6)" }}>
+    <PageContainer>
       <PageHeader
         title="Automated Schedules"
         description="Configure autonomous background pipeline triggers powered by Ducta AsyncCronScheduler."
@@ -69,7 +69,7 @@ export function SchedulesPage() {
       />
 
       {isLoading ? (
-        <div style={{ display: "grid", gap: "var(--space-4)", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}>
+        <div className="schedules-grid">
           <Skeleton variant="block" height="180px" />
           <Skeleton variant="block" height="180px" />
         </div>
@@ -94,41 +94,33 @@ export function SchedulesPage() {
           }
         />
       ) : (
-        <div style={{ display: "grid", gap: "var(--space-4)", gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))" }}>
+        <div className="schedules-grid">
           {data.schedules.map((sched) => (
-            <div key={sched.id} style={{ padding: "var(--space-5)", background: "var(--bg-surface)", border: "1px solid var(--border)", borderRadius: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12 }}>
-                <div>
-                  <h4 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>{sched.pipeline_name}</h4>
-                  <span style={{ fontSize: 12, color: "var(--text-muted)", display: "inline-block", marginTop: 4 }}>
+            <article key={sched.id} className="schedule-card">
+              <header className="schedule-card__head">
+                <div className="schedule-card__id">
+                  <h4 className="schedule-card__pipeline">{sched.pipeline_name}</h4>
+                  <span className="schedule-card__scope">
                     {sched.project_id ? `Project: ${sched.project_id} · ` : ""}Environment: {sched.env}
                   </span>
                 </div>
-                <span
-                  style={{
-                    padding: "2px 8px",
-                    borderRadius: 12,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    backgroundColor: sched.enabled ? "var(--status-success-bg)" : "var(--status-idle-bg)",
-                    color: sched.enabled ? "var(--status-success-fg)" : "var(--status-idle-fg)",
-                    border: `1px solid ${sched.enabled ? "var(--status-success-border)" : "var(--status-idle-border)"}`,
-                  }}
-                >
-                  {sched.enabled ? "Active" : "Paused"}
-                </span>
+                <StatusBadge
+                  status={sched.enabled ? "success" : "idle"}
+                  label={sched.enabled ? "Active" : "Paused"}
+                  size="sm"
+                />
+              </header>
+
+              <div className="schedule-card__cron">
+                <IconClock size={15} aria-hidden="true" />
+                <code>{sched.cron}</code>
               </div>
 
-              <div style={{ fontFamily: "monospace", fontSize: 13, background: "var(--bg-subtle, rgba(0,0,0,0.15))", padding: "6px 10px", borderRadius: 4, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}>
-                <IconClock size={16} color="var(--primary)" />
-                {sched.cron}
+              <div className="schedule-card__lastrun">
+                Last run: {sched.last_run_at ? new Date(sched.last_run_at).toLocaleString() : "never"}
               </div>
 
-              <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 16 }}>
-                Last run: {sched.last_run_at ? new Date(sched.last_run_at).toLocaleString() : "Never"}
-              </div>
-
-              <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <div className="schedule-card__actions">
                 <Button
                   variant="secondary"
                   size="sm"
@@ -148,7 +140,7 @@ export function SchedulesPage() {
                   <IconTrash size={14} color="var(--danger)" />
                 </Button>
               </div>
-            </div>
+            </article>
           ))}
         </div>
       )}
@@ -218,7 +210,7 @@ export function SchedulesPage() {
         }
         onCancel={() => setScheduleToDelete(null)}
       />
-    </div>
+    </PageContainer>
   );
 }
 

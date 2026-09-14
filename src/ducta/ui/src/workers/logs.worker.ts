@@ -1,4 +1,5 @@
 import { decode } from "@msgpack/msgpack";
+import { nodeStatusFromExtra } from "../utils/nodeStatus";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -100,12 +101,11 @@ function processEntry(entry: WebSocketLogEntry) {
     return;
   }
 
-  const isNodeStatus = entry.extra?.type === "node_status" && Boolean(entry.extra.node_id);
+  const nodeStatusFrame = nodeStatusFromExtra(entry.extra);
+  const isNodeStatus = nodeStatusFrame !== null;
 
-  if (isNodeStatus && entry.extra!.node_id) {
-    const nodeId = entry.extra!.node_id;
-    const status = entry.extra!.status ?? "running";
-    nodeStates[nodeId] = status;
+  if (nodeStatusFrame) {
+    nodeStates[nodeStatusFrame.nodeId] = nodeStatusFrame.status;
     hasNodeStatusUpdate = true;
   }
 

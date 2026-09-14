@@ -31,10 +31,16 @@ import { Skeleton } from "../../components/ui/Skeleton";
 function PromoteModal({
   modelName,
   version,
+  env,
+  pipeline,
+  project,
   onClose,
 }: {
   modelName: string;
   version: number;
+  env?: string;
+  pipeline?: string;
+  project?: string;
   onClose: () => void;
 }) {
   const [stage, setStage] = useState<"staging" | "production" | "archived">("staging");
@@ -42,7 +48,10 @@ function PromoteModal({
   const promote = usePromoteModel();
 
   function handlePromote() {
-    promote.mutate({ name: modelName, version, stage, force }, { onSuccess: onClose });
+    promote.mutate(
+      { name: modelName, version, stage, force, env, pipelineName: pipeline, project },
+      { onSuccess: onClose }
+    );
   }
 
   // Escape to dismiss, focus trapped in the dialog, focus restored on unmount.
@@ -158,7 +167,17 @@ function PromoteModal({
   );
 }
 
-function GcModal({ onClose }: { onClose: () => void }) {
+function GcModal({
+  env,
+  pipeline,
+  project,
+  onClose,
+}: {
+  env?: string;
+  pipeline?: string;
+  project?: string;
+  onClose: () => void;
+}) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogA11y(dialogRef, onClose);
   const [dryRun, setDryRun] = useState(true);
@@ -167,7 +186,7 @@ function GcModal({ onClose }: { onClose: () => void }) {
 
   function handleGc() {
     gc.mutate(
-      { dry_run: dryRun },
+      { dry_run: dryRun, env, pipelineName: pipeline, project },
       {
         onSuccess: (data) => {
           setResult(data);
@@ -269,10 +288,16 @@ function DeleteVersionButton({
   modelName,
   version,
   stage,
+  env,
+  pipeline,
+  project,
 }: {
   modelName: string;
   version: number;
   stage: string;
+  env?: string;
+  pipeline?: string;
+  project?: string;
 }) {
   const del = useDeleteModelVersion();
   const inProduction = stage === "Production";
@@ -295,7 +320,9 @@ function DeleteVersionButton({
       size="sm"
       leftIcon={<IconTrash size={13} />}
       confirm={confirmSpec}
-      onAction={() => del.mutateAsync({ name: modelName, version })}
+      onAction={() =>
+        del.mutateAsync({ name: modelName, version, env, pipelineName: pipeline, project })
+      }
       successMessage={`Deleted v${version}`}
       errorMessage="Could not delete this version"
     >
@@ -307,7 +334,10 @@ function DeleteVersionButton({
 /** Column definitions for the per-model versions table. */
 function versionColumns(
   modelName: string,
-  onPromote: (version: number) => void
+  onPromote: (version: number) => void,
+  env?: string,
+  pipeline?: string,
+  project?: string
 ): DataTableColumn<ModelVersion>[] {
   const stageOf = (v: ModelVersion) => v.metadata?.stage ?? "Staging";
 
@@ -360,17 +390,39 @@ function versionColumns(
             <IconArrowUp size={13} />
             Promote
           </Button>
-          <DeleteVersionButton modelName={modelName} version={v.version} stage={stageOf(v)} />
+          <DeleteVersionButton
+            modelName={modelName}
+            version={v.version}
+            stage={stageOf(v)}
+            env={env}
+            pipeline={pipeline}
+            project={project}
+          />
         </div>
       ),
     },
   ];
 }
 
-function ModelCard({ model }: { model: ModelInfo }) {
+function ModelCard({
+  model,
+  env,
+  pipeline,
+  project,
+}: {
+  model: ModelInfo;
+  env?: string;
+  pipeline?: string;
+  project?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [promoteTarget, setPromoteTarget] = useState<number | null>(null);
-  const { data: versions, isLoading } = useMlopsModelVersions(expanded ? model.name : "");
+  const { data: versions, isLoading } = useMlopsModelVersions(
+    expanded ? model.name : "",
+    env,
+    pipeline,
+    project
+  );
 
   return (
     <>
@@ -416,7 +468,7 @@ function ModelCard({ model }: { model: ModelInfo }) {
           <div style={{ marginTop: "var(--space-3)" }}>
             <DataTable<ModelVersion>
               density="compact"
-              columns={versionColumns(model.name, setPromoteTarget)}
+              columns={versionColumns(model.name, setPromoteTarget, env, pipeline, project)}
               rows={versions ?? []}
               rowKey={(v) => String(v.version)}
               loading={isLoading}
@@ -431,6 +483,9 @@ function ModelCard({ model }: { model: ModelInfo }) {
         <PromoteModal
           modelName={model.name}
           version={promoteTarget}
+          env={env}
+          pipeline={pipeline}
+          project={project}
           onClose={() => setPromoteTarget(null)}
         />
       )}
@@ -438,8 +493,16 @@ function ModelCard({ model }: { model: ModelInfo }) {
   );
 }
 
-export function ModelRegistryTab() {
-  const { data, isLoading, isError, refetch } = useMlopsModels();
+export function ModelRegistryTab({
+  env,
+  pipeline,
+  project,
+}: {
+  env?: string;
+  pipeline?: string;
+  project?: string;
+}) {
+  const { data, isLoading, isError, refetch } = useMlopsModels(env, pipeline, project);
   const [showGc, setShowGc] = useState(false);
   const models = data ?? [];
 
@@ -452,6 +515,17 @@ export function ModelRegistryTab() {
     const s = m.stage ?? "Staging";
     if (!byStage[s]) byStage[s] = [];
     byStage[s].push(m);
+  }
+
+  if (!pipeline) {
+    return (
+      <EmptyState
+        icon={IconBrain}
+        title="Select a pipeline to view registered models"
+        description="Pick an ML pipeline above to see its registered models and versions."
+        size="lg"
+      />
+    );
   }
 
   return (
@@ -515,13 +589,15 @@ export function ModelRegistryTab() {
               {stage} ({byStage[stage].length})
             </h3>
             {byStage[stage].map((m) => (
-              <ModelCard key={m.name} model={m} />
+              <ModelCard key={m.name} model={m} env={env} pipeline={pipeline} project={project} />
             ))}
           </div>
         ) : null
       )}
 
-      {showGc && <GcModal onClose={() => setShowGc(false)} />}
+      {showGc && (
+        <GcModal env={env} pipeline={pipeline} project={project} onClose={() => setShowGc(false)} />
+      )}
     </div>
   );
 }

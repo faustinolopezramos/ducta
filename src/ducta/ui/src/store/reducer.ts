@@ -9,6 +9,16 @@ export interface ProjectItem {
   id: string;
   name: string;
   description?: string;
+  /**
+   * How many pipelines the project has, as reported by `GET /projects`.
+   *
+   * `pipelines` below is loaded on demand and stays empty until you open the
+   * project, so a dashboard card cannot count it. Carrying the server's own
+   * count means the card does not have to fetch each project's pipeline list
+   * just to render a number — which is what it used to do, one request per
+   * card, on the app's landing page.
+   */
+  pipelineCount?: number;
   pipelines: Pipeline[];
   connections?: Connection[];
   globalSettings?: ProjectGlobalSettings;
@@ -22,6 +32,7 @@ export type ReducerAction =
   | { type: "SELECT_PROJECT"; payload: string | null }
   | { type: "UPDATE_PROJECT"; payload: Partial<ProjectItem> }
   | { type: "HYDRATE_PIPELINES"; projectId: string; pipelines: Pipeline[] }
+  | { type: "HYDRATE_PROJECTS"; projects: ProjectItem[] }
   | { type: "UPDATE_SETTINGS"; payload: Partial<ProjectGlobalSettings> }
   | { type: "ADD_PIPELINE"; payload: Pipeline }
   | { type: "UPDATE_PIPELINE"; payload: Partial<Pipeline> & { id: string } }
@@ -73,6 +84,7 @@ const NON_UNDOABLE = new Set([
   "RUN_PIPELINE",
   "FINISH_PIPELINE_RUN",
   "HYDRATE_PIPELINES",
+  "HYDRATE_PROJECTS",
 ]);
 /**
  * Core reducer that operates on the BASE_STATE (present slice).
@@ -90,6 +102,29 @@ function handleProjectAction(draft: StatePresent, action: ReducerAction): boolea
       draft.projects.push(action.payload);
       draft.selectedProjectId = action.payload.id;
       return true;
+
+    /**
+     * The server is authoritative for a project's identity and its pipeline
+     * count. This adds the ones the store is missing and refreshes the fields
+     * the server owns on the ones it already has — the hydrator used to skip
+     * an existing project entirely, so a card's pipeline count never moved
+     * after the first load.
+     */
+    case "HYDRATE_PROJECTS": {
+      const byId = new Map(draft.projects.map((p) => [p.id, p]));
+      for (const incoming of action.projects) {
+        const local = byId.get(incoming.id);
+        if (!local) {
+          draft.projects.push(incoming);
+          continue;
+        }
+        local.name = incoming.name;
+        local.description = incoming.description;
+        local.pipelineCount = incoming.pipelineCount;
+        local.updatedAt = incoming.updatedAt;
+      }
+      return true;
+    }
 
     case "DELETE_PROJECT": {
       const idx = draft.projects.findIndex(p => p.id === action.payload);
@@ -117,17 +152,44 @@ function handleProjectAction(draft: StatePresent, action: ReducerAction): boolea
     // On incremental sync: adds pipelines that exist on the server but not locally
     // (e.g. created from CLI or another browser session) without overwriting local state.
     // Does not create an undo snapshot (see NON_UNDOABLE).
+    /**
+     * The server is authoritative for a pipeline's nodes and wiring.
+     *
+     * This used to add only pipelines the store did not already have, so a
+     * pipeline that existed locally never took the server's version: saving in
+     * the Config tab refetched, re-hydrated, and the reducer threw the result
+     * away — the diagram kept showing the old graph until a full page reload.
+     * A pipeline the server has never confirmed (created locally, not yet
+     * persisted) is left alone no matter what this hydration lists — see
+     * `Pipeline.persisted`'s doc comment. One the server *did* confirm before
+     * (this reducer set `persisted` on it) and no longer lists was deleted
+     * server-side (another tab/client) and is removed here too — this used
+     * to only ever add/update, never remove, so a pipeline deleted elsewhere
+     * stayed visible/navigable until something unrelated reloaded the store.
+     */
     case "HYDRATE_PIPELINES": {
       const target = draft.projects.find(p => p.id === action.projectId);
-      if (!target || !action.pipelines?.length) return true;
-      if (target.pipelines.length === 0) {
-        target.pipelines = action.pipelines;
-      } else {
-        const localIds = new Set(target.pipelines.map((p) => p.id));
-        for (const sp of action.pipelines) {
-          if (!localIds.has(sp.id)) target.pipelines.push(sp);
+      if (!target) return true;
+      const incoming = action.pipelines ?? [];
+      const incomingIds = new Set(incoming.map((p) => p.id));
+      const byId = new Map(target.pipelines.map((p) => [p.id, p]));
+      for (const pipeline of incoming) {
+        const local = byId.get(pipeline.id);
+        if (!local) {
+          target.pipelines.push(pipeline);
+          continue;
         }
+        // Keep client-only run bookkeeping; replace everything the server owns.
+        Object.assign(local, pipeline, {
+          createdAt: local.createdAt,
+          lastRun: local.lastRun,
+          lastRunDuration: local.lastRunDuration,
+          runStatus: local.runStatus,
+        });
       }
+      target.pipelines = target.pipelines.filter(
+        (p) => !p.persisted || incomingIds.has(p.id)
+      );
       return true;
     }
 

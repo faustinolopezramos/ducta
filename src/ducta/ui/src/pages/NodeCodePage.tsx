@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useCallback, lazy, Suspense } from "react";
 import { useParams, useNavigate, useLocation, useBlocker } from "react-router-dom";
 import { IconArrowLeft, IconCode, IconLoader2 } from "@tabler/icons-react";
 import { colors, styles } from "../theme/tokens";
@@ -9,7 +9,8 @@ import { useWriteWorkspaceFile, useRunNode, apiErrorMessage } from "../api/mutat
 const CodeEditor = lazy(() => import("../components/CodeEditor").then(m => ({ default: m.CodeEditor })));
 import { FileTree } from "../components/FileTree";
 import { useLogsWebSocket } from "../hooks/useLogsWebSocket";
-import { useCurrentLogs, useLogsConnected } from "../store/logsStore";
+import { useCurrentLogs } from "../store/logsStore";
+import { InlineLogs } from "../components/Execution/InlineLogs";
 import { useBuilderStore } from "../store/builderStore";
 import { useQueries } from "@tanstack/react-query";
 import client from "../api/client";
@@ -32,7 +33,6 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
   const [executionId, setExecutionId] = useState<string | null>(null);
   const [showLogs, setShowLogs]       = useState(false);
   const [errorMsg, setErrorMsg]       = useState<string | null>(null);
-  const logsEndRef                    = useRef<HTMLDivElement>(null);
 
   const { data: projectsData } = useServerProjects();
 
@@ -76,12 +76,18 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
   // Migrate to worker-based WebSocket via useLogsWebSocket + logsStore
   useLogsWebSocket(executionId);
   const currentLogs = useCurrentLogs();
-  const logLines = currentLogs.map(e => e.message);
   const executionStates = useBuilderStore(s => s.executionStates);
   const nodeStatuses = executionStates;
-  const isConnected = useLogsConnected();
-  const isFinished = !isConnected && executionId !== null;
   const { data: execStatus } = useExecutionStatus(executionId ?? "");
+  // Only a terminal status from the server counts as "finished" — a dropped
+  // WebSocket connection (network blip, tab backgrounded) is not the same
+  // thing, and used to be conflated here via `!isConnected`.
+  const isFinished =
+    executionId !== null &&
+    (execStatus?.status === "success" ||
+      execStatus?.status === "failed" ||
+      execStatus?.status === "cancelled" ||
+      execStatus?.status === "skipped");
 
   const pipelines: string[] = pipelinesData
     ? Object.keys(pipelinesData.pipelines ?? {})
@@ -93,10 +99,6 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
     nodeStatus === "error" || nodeStatus === "failed" ? (colors.danger ?? "#ef4444") :
     nodeStatus === "running" ? (colors.accent) :
     colors.textDim;
-
-  useEffect(() => {
-    if (showLogs) logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logLines, showLogs]);
 
   const handleRun = () => {
     if (!projectId || !pipelineName) return;
@@ -204,7 +206,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
         )}
 
         {/* Logs toggle */}
-        {(logLines.length > 0 || executionId) && (
+        {(currentLogs.length > 0 || executionId) && (
           <button
             onClick={() => setShowLogs(v => !v)}
             style={{
@@ -219,57 +221,32 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
               padding: "2px 8px",
             }}
           >
-            {showLogs ? "▲ Logs" : `▼ Logs${logLines.length ? ` (${logLines.length})` : ""}`}
+            {showLogs ? "▲ Logs" : `▼ Logs${currentLogs.length ? ` (${currentLogs.length})` : ""}`}
           </button>
         )}
       </div>
 
-      {/* Log panel */}
+      {/* Log panel — shares InlineLogs with PipelinePage/LogsDrawer instead of a
+          hand-rolled renderer, so this view gets virtualization, ANSI, search,
+          per-level color and timestamps for free instead of a plain list of
+          <div>s. isRunning is driven by isFinished (a real terminal status),
+          not WebSocket connectivity, so a network blip can't read as "done". */}
       {showLogs && (
-        <div
-          style={{
-            height: 180,
-            overflowY: "auto",
-            background: colors.bg,
-            borderTop: `1px solid ${colors.border}`,
-            padding: "6px 12px",
-          }}
-        >
-          {errorMsg ? (
+        errorMsg ? (
+          <div
+            style={{
+              padding: "6px 12px",
+              background: colors.bg,
+              borderTop: `1px solid ${colors.border}`,
+            }}
+          >
             <span style={{ fontSize: 11, color: colors.danger ?? "#ef4444", fontFamily: "var(--font-mono)" }}>
               Error: {errorMsg}
             </span>
-          ) : logLines.length === 0 ? (
-            <span style={{ fontSize: 11, color: colors.textDim, fontFamily: "var(--font-mono)" }}>
-              {executionId ? "Connecting…" : "No logs yet."}
-            </span>
-          ) : (
-            logLines.map((line, i) => (
-              <div key={i} style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: colors.textMuted, lineHeight: 1.6 }}>
-                {line}
-              </div>
-            ))
-          )}
-          {isFinished && (
-            <div style={{ fontSize: 11, fontFamily: "var(--font-mono)", marginTop: 4 }}>
-              {execStatus?.status === "failed" ? (
-                <>
-                  <span style={{ color: colors.danger ?? "#ef4444" }}>— failed —</span>
-                  {execStatus.error_message && (
-                    <div style={{ color: colors.danger ?? "#ef4444", marginTop: 2, whiteSpace: "pre-wrap" }}>
-                      {execStatus.error_message}
-                    </div>
-                  )}
-                </>
-              ) : execStatus?.status === "cancelled" ? (
-                <span style={{ color: colors.textDim }}>— cancelled —</span>
-              ) : (
-                <span style={{ color: colors.textDim }}>— done —</span>
-              )}
-            </div>
-          )}
-          <div ref={logsEndRef} />
-        </div>
+          </div>
+        ) : (
+          <InlineLogs mode="bounded" isRunning={executionId !== null && !isFinished} />
+        )
       )}
     </div>
   );

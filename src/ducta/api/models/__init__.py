@@ -32,12 +32,6 @@ from ducta.api.models.git_sync import (
     GitStageResponse,
     GitStatusResponse,
 )
-from ducta.api.models.repository import (
-    PushPullRequest,
-    PushPullResponse,
-    RepositoryConnectRequest,
-    RepositoryInfo,
-)
 from ducta.api.models.workspace import ConnectRequest, StructureInfo
 
 __all__ = [
@@ -59,10 +53,6 @@ __all__ = [
     "GitStageRequest",
     "GitStageResponse",
     "GitStatusResponse",
-    "PushPullRequest",
-    "PushPullResponse",
-    "RepositoryConnectRequest",
-    "RepositoryInfo",
     "ConnectRequest",
     "StructureInfo",
 ]

@@ -52,18 +52,7 @@ class Settings(BaseSettings):
     @field_validator("environment", mode="before")
     @classmethod
     def _normalise_environment(cls, value: Any) -> Any:
-        """Fold case/whitespace, then reject anything outside the three known values.
-
-        `is_production()` compares with `== "production"`, so every production
-        guard below (`_check_production_secrets`: no default JWT secret, auth on,
-        debug off) is keyed to that exact spelling. An unrecognised value did not
-        fail — it silently landed in the non-production branch, which is how
-        `ENVIRONMENT=prod` produced a deployment serving traffic with
-        `jwt_secret_key="change-me-in-production"` and `auth_enabled=False`.
-        Folding case accepts `PRODUCTION`/`Production` as the operator clearly
-        meant them; anything else is a typo worth failing on at startup rather
-        than silently downgrading.
-        """
+        """Fold case/whitespace, then reject anything outside the three known values."""
         if not isinstance(value, str):
             return value
         normalised = value.strip().lower()
@@ -87,13 +76,6 @@ class Settings(BaseSettings):
     workers: int = Field(default=1, description="Number of uvicorn worker processes (prod)")
     reload: bool = Field(default=False, description="Enable auto-reload (dev only)")
 
-    # Explicit loopback allow-list, NOT "*". The API is unauthenticated by default
-    # and binds to loopback, but loopback is not a security boundary against a web
-    # page: a browser on this machine can reach 127.0.0.1. A wildcard origin would
-    # let any site the user visits read and write the workspace and launch
-    # pipelines. The only cross-origin caller Ducta actually needs is the Vite dev
-    # server (5173) / preview (4173); the packaged UI is same-origin and needs no
-    # CORS entry at all. See `register_middleware` for the wildcard downgrade.
     cors_origins: List[str] = Field(
         default=[
             "http://localhost:5173",
@@ -192,30 +174,11 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ── Embedded web terminal (opt-in, security-sensitive) ──────────────────────
-    terminal_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable the embedded web terminal (PTY over WebSocket). DISABLED by "
-            "default: it grants arbitrary shell command execution on the host. "
-            "Only enable it behind authentication (AUTH_ENABLED=true) on trusted hosts."
-        ),
-    )
-    terminal_shell: Optional[str] = Field(
-        default=None,
-        description="Shell to launch for the web terminal. Defaults to $SHELL or /bin/bash.",
-    )
-
     max_git_log: int = Field(
         default=500, description="Maximum commits to return in git log endpoints"
     )
     config_cache_ttl_seconds: int = Field(
         default=300, description="TTL for in-memory config cache (5 min)"
-    )
-
-    default_repo_type: str = Field(
-        default="local",
-        description="Default repository type: local | github | azure | aws",
     )
 
     git_clone_allowed_hosts: List[str] = Field(
@@ -229,29 +192,11 @@ class Settings(BaseSettings):
         ),
     )
 
-    # GitHub
-    github_token: Optional[str] = Field(default=None, description="GitHub personal access token")
-    github_org: Optional[str] = Field(default=None, description="GitHub organization or user")
-
-    # Azure Repos
-    azure_token: Optional[str] = Field(default=None, description="Azure DevOps PAT")
-    azure_org: Optional[str] = Field(default=None, description="Azure DevOps organization URL")
-    azure_project: Optional[str] = Field(default=None, description="Azure DevOps project name")
-
-    # AWS CodeCommit
-    aws_region: Optional[str] = Field(default=None, description="AWS region for CodeCommit")
-    aws_access_key_id: Optional[str] = Field(default=None, description="AWS access key ID")
-    aws_secret_access_key: Optional[str] = Field(default=None, description="AWS secret access key")
-
     jwt_secret_key: str = Field(
         default="change-me-in-production",
         description="Secret key for JWT signing. MUST be overridden in production.",
     )
-    # Restricted to the HMAC family: `jwt_secret_key` is a shared secret, and the
-    # asymmetric families (RS*/ES*/PS*) need a PEM key PyJWT cannot parse from
-    # it. Unconstrained, a typo here was accepted at startup and only surfaced
-    # later as an InvalidKeyError/NotImplementedError from the first login
-    # attempt — a runtime 500 instead of a config error.
+
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(default="HS256")
     jwt_expiration_hours: int = Field(default=24)
     auth_enabled: bool = Field(
@@ -302,12 +247,7 @@ class Settings(BaseSettings):
                 "Set workers=1 or switch to PostgreSQL (DATABASE_URL=postgresql+asyncpg://...).",
                 stacklevel=2,
             )
-        # `auth_enabled` without `rate_limit_enabled` leaves login (and every
-        # other authenticated route) open to unlimited brute-force attempts —
-        # rate limiting was an independent opt-in that most operators turning
-        # on auth wouldn't think to also flip. Auto-enable it unless the
-        # operator explicitly set it themselves (env var present), in which
-        # case respect that choice but make the tradeoff visible.
+
         if self.auth_enabled and not self.rate_limit_enabled:
             import warnings
 
@@ -331,13 +271,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _expand_runs_dir(self) -> "Settings":
-        """Expand `~` in runs_dir so consumers get a usable absolute path.
-
-        `Path("~/.ducta/runs")` does NOT resolve `~` on its own — left
-        unexpanded, it's treated as a relative path whose first component is
-        literally named "~", creating a `./~/.ducta/runs/...` directory under
-        whatever the process cwd happens to be instead of under $HOME.
-        """
+        """Expand `~` in runs_dir so consumers get a usable absolute path."""
         if self.runs_dir and self.runs_dir.strip():
             self.runs_dir = str(Path(self.runs_dir.strip()).expanduser())
         return self
@@ -354,17 +288,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _default_git_clone_hosts(self) -> "Settings":
-        """Close the clone allow-list by default outside development.
-
-        An empty list meant "any host", and the clone target comes straight from
-        a caller-supplied `?source=` — so a networked deployment would clone
-        whatever internal URL it was pointed at (SSRF), with the server's own
-        network position. The field documented that risk but shipped the
-        permissive value.
-
-        Development keeps the open behaviour: cloning from a LAN mirror or a
-        local bare repo is normal there, and the API binds to loopback.
-        """
+        """Close the clone allow-list by default outside development."""
         if self.git_clone_allowed_hosts or self.is_development():
             return self
 

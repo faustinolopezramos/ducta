@@ -11,6 +11,7 @@ import {
 } from "@tabler/icons-react";
 import { useWorkspaceFiles, type FileEntry } from "../api/queries";
 import { useWriteWorkspaceFile } from "../api/mutations";
+import { SkeletonText } from "./ui/Skeleton";
 import { colors, styles } from "../theme/tokens";
 
 interface FileTreeProps {
@@ -238,10 +239,14 @@ export function FileTree({ activePath, onSelectFile }: FileTreeProps) {
         </button>
       </div>
 
-      {/* Tree */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+      {/* Tree. `minHeight: 0` is what lets this scroll: a flex item defaults to
+          `min-height: auto` and will not shrink below its content, so without it
+          the list grows past the panel and is clipped instead of scrolled. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "4px 0" }}>
         {isLoading ? (
-          <div style={{ padding: "8px 12px", fontSize: 11, color: colors.textDim }}>Loading…</div>
+          <div style={{ padding: "8px 12px" }}>
+            <SkeletonText lines={4} />
+          </div>
         ) : !data?.entries?.length ? (
           <div style={{ padding: "14px 12px", fontSize: 12, color: colors.textDim, lineHeight: 1.5 }}>
             No files found in this workspace.

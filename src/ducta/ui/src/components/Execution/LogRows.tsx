@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { styles } from "../../theme/tokens";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { StatusBadge } from "../ui/StatusBadge";
 import type { LogEntry } from "../../store/logsStore";
 import { HighlightedText } from "./HighlightedText";
 import { AnsiText } from "./AnsiText";
@@ -8,33 +9,19 @@ import {
   formatElapsed,
   extractNodeStatus,
   LEVEL_COLOR,
-  LEVEL_SHORT,
-  LEVEL_BADGE_BG,
-  NODE_STATUS_ICON,
-  NODE_STATUS_LABEL,
-  EXEC_STATE_COLOR,
+  LOG_TIME_COL_WIDTH,
   type Section,
 } from "./logUtils";
 
 // ── NodeListRow ───────────────────────────────────────────────────────────────
 
-const NODE_LIST_STATE_COLOR: Record<string, string> = {
-  running:   "var(--ilog-accent)",
-  success:   "var(--ilog-green)",
-  failed:    "var(--ilog-red)",
-  error:     "var(--ilog-red)",
-  pending:   "var(--ilog-text-muted)",
-  cancelled: "var(--ilog-amber)",
-  skipped:   "var(--ilog-amber)",
-};
-
 export function NodeListRow({
-  label, count, active, dotColor, onSelect,
+  label, count, active, status, onSelect,
 }: {
   label: string;
   count: number;
   active: boolean;
-  dotColor: string;
+  status: string;
   onSelect: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
@@ -51,43 +38,35 @@ export function NodeListRow({
         alignItems: "center",
         gap: 8,
         padding: "7px 12px",
-        background: active ? "var(--ilog-hover)" : hovered ? "var(--ilog-overlay)" : "transparent",
+        background: active ? "var(--surface-hover)" : hovered ? "var(--overlay-subtle)" : "transparent",
         cursor: "pointer",
         userSelect: "none",
         outline: "none",
         transition: "all 0.1s",
         flexShrink: 0,
-        borderLeft: active ? "2px solid var(--ilog-accent)" : "2px solid transparent",
+        borderLeft: active ? "2px solid var(--primary)" : "2px solid transparent",
       }}
     >
-      <div style={{
-        width: 6, height: 6, borderRadius: "50%", background: dotColor,
-        boxShadow: active ? `0 0 6px ${dotColor}80` : "none",
-        flexShrink: 0,
-        transition: "box-shadow 0.2s",
-      }} />
+      <StatusBadge status={status} variant="dot" size="sm" />
       <span style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: active ? "var(--ilog-text)" : hovered ? "var(--ilog-text)" : "var(--ilog-text-dim)",
+        fontFamily: "var(--font-sans)",
+        fontSize: "var(--text-xs)",
+        color: active ? "var(--text)" : hovered ? "var(--text)" : "var(--text-dim)",
         flex: 1,
         minWidth: 0,
         overflow: "hidden",
         textOverflow: "ellipsis",
         whiteSpace: "nowrap",
         fontWeight: active ? 600 : 400,
-        letterSpacing: "0.01em",
-        textTransform: "uppercase",
       }}>
         {label}
       </span>
       {count > 0 && (
         <span style={{
-          fontFamily: "var(--font-mono)", fontSize: 11,
-          background: active ? "var(--ilog-hover)" : "var(--ilog-overlay)",
-          color: active ? "var(--ilog-text)" : "var(--ilog-text-dim)",
-          padding: "1px 6px", borderRadius: 4, flexShrink: 0,
-          border: "1px solid var(--ilog-border)",
+          fontFamily: "var(--font-sans)", fontSize: "var(--text-xs)",
+          background: active ? "var(--surface-hover)" : "var(--overlay-subtle)",
+          color: active ? "var(--text)" : "var(--text-dim)",
+          padding: "1px 6px", borderRadius: "var(--radius-sm)", flexShrink: 0,
         }}>
           {count > 99 ? "99+" : count}
         </span>
@@ -108,28 +87,24 @@ export function NodeStatusRow({
 }) {
   const [hovered, setHovered] = useState(false);
   const status = extractNodeStatus(entry.message);
-  const icon = NODE_STATUS_ICON[status] ?? "·";
-  const label = NODE_STATUS_LABEL[status] ?? status;
   const isRunning = status === "running";
   const isSuccess = status === "success";
   const isFailed = status === "failed" || status === "error";
 
-  let stateColor = "var(--ilog-text-dim)";
+  // Sourced from the shared --status-* tokens (not hardcoded rgba literals)
+  // so this band actually adapts to light mode instead of always rendering
+  // the dark-theme tint regardless of the active theme.
   let bgColor = "transparent";
-  let borderColor = "var(--ilog-border)";
-
+  let borderColor = "var(--border)";
   if (isRunning) {
-    stateColor = "var(--ilog-accent)";
-    bgColor = "var(--ilog-blue-bg)";
-    borderColor = "rgba(88, 166, 255, 0.2)";
+    bgColor = "var(--status-running-bg)";
+    borderColor = "var(--status-running-border)";
   } else if (isSuccess) {
-    stateColor = "var(--ilog-green)";
-    bgColor = "var(--ilog-green-bg)";
-    borderColor = "rgba(63, 185, 80, 0.2)";
+    bgColor = "var(--status-success-bg)";
+    borderColor = "var(--status-success-border)";
   } else if (isFailed) {
-    stateColor = "var(--ilog-red)";
-    bgColor = "var(--ilog-red-bg)";
-    borderColor = "rgba(248, 81, 73, 0.2)";
+    bgColor = "var(--status-failed-bg)";
+    borderColor = "var(--status-failed-border)";
   }
 
   return (
@@ -145,65 +120,33 @@ export function NodeStatusRow({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "9px 16px",
+        padding: "var(--space-2) var(--space-4)",
         marginTop: 4,
         marginBottom: 4,
-        background: active ? "var(--ilog-hover)" : hovered ? bgColor || "var(--ilog-hover)" : bgColor,
+        background: active ? "var(--surface-hover)" : hovered ? bgColor || "var(--surface-hover)" : bgColor,
         borderTop: `1px solid ${borderColor}`,
         borderBottom: `1px solid ${borderColor}`,
         cursor: "pointer",
         transition: "all 0.15s",
       }}
     >
-      <span style={{
-        fontFamily: "var(--font-mono)",
-        color: stateColor,
-        fontSize: 11,
-        fontWeight: 700,
-        flexShrink: 0,
-        width: 18,
-        textAlign: "center",
-      }}>
-        {icon}
-      </span>
+      <StatusBadge status={status} size="sm" />
 
       <span style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--ilog-text)",
-        fontWeight: 600,
+        fontFamily: "var(--font-sans)",
+        fontSize: "var(--text-sm)",
+        color: "var(--text)",
+        fontWeight: "var(--weight-medium)",
         flex: 1,
-        textTransform: "uppercase",
-        letterSpacing: "0.02em",
       }}>
         {entry.nodeId}
       </span>
 
       <span style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 4,
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: stateColor,
-        fontWeight: 600,
-        padding: "2px 8px",
-        borderRadius: 4,
-        background: isRunning ? "rgba(88, 166, 255, 0.1)" : "transparent",
-      }}>
-        {isRunning && <span style={{
-          width: 4, height: 4, borderRadius: "50%",
-          background: "var(--ilog-accent)",
-          animation: "ilog-pulse 1.6s ease-in-out infinite",
-        }} />}
-        {label}
-      </span>
-
-      <span style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--ilog-text-muted)",
-        minWidth: 50,
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
+        minWidth: LOG_TIME_COL_WIDTH,
         textAlign: "right",
       }}>
         {t0 ? formatElapsed(t0, entry.timestamp) : fmt(entry.timestamp)}
@@ -217,8 +160,7 @@ export function NodeStatusRow({
 export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuery: string; t0?: number }) {
   const [hovered, setHovered] = useState(false);
   const isCliLine = entry.render === "cli";
-  const levelColor = LEVEL_COLOR[entry.level] ?? "var(--ilog-text-dim)";
-  const levelShort = LEVEL_SHORT[entry.level] ?? "???";
+  const levelColor = LEVEL_COLOR[entry.level] ?? "var(--text-dim)";
   const isError   = entry.level === "ERROR";
   const isWarning = entry.level === "WARNING";
   const isDebug   = entry.level === "DEBUG";
@@ -229,25 +171,30 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
     navigator.clipboard.writeText(entry.message);
   };
 
-  let messageColor = "var(--ilog-text)";
-  let rowBg = "transparent";
-  let rowBgHover = "var(--ilog-hover)";
+  // Color carries signal, not decoration: an error/warning line gets a left
+  // rail plus colored text, and a background tint only on hover (the same
+  // interactive affordance every other row gets) — never a persistent
+  // full-row wash, which would compete with the rail for attention.
+  let messageColor = "var(--text)";
+  let rowBgHover = "var(--surface-hover)";
+  let railColor = "transparent";
 
   const isTracebackLine = isError || /Traceback \(most recent call last\)|Exception:|Error:|Faillure:/i.test(entry.message);
 
   if (isError || isTracebackLine) {
-    messageColor = "var(--ilog-red)";
-    rowBg = "color-mix(in srgb, var(--danger) 8%, transparent)";
-    rowBgHover = "color-mix(in srgb, var(--danger) 14%, transparent)";
+    messageColor = "var(--status-failed-fg)";
+    rowBgHover = "var(--status-failed-bg)";
+    railColor = "var(--status-failed-fg)";
   } else if (isWarning) {
-    messageColor = "var(--ilog-amber)";
-    rowBgHover = "var(--ilog-amber-bg)";
+    messageColor = "var(--status-warning-fg)";
+    rowBgHover = "var(--status-warning-bg)";
+    railColor = "var(--status-warning-fg)";
   } else if (isSuccess) {
-    messageColor = "var(--ilog-green)";
+    messageColor = "var(--status-success-fg)";
   } else if (isDebug) {
-    messageColor = "var(--ilog-text-dim)";
+    messageColor = "var(--text-dim)";
   } else if (isCliLine) {
-    messageColor = "var(--ilog-text)";
+    messageColor = "var(--text)";
   }
 
   return (
@@ -257,59 +204,45 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
       style={{
         display: "flex",
         gap: isCliLine ? 0 : 8,
-        lineHeight: "1.5",
+        lineHeight: "var(--leading-relaxed)",
         alignItems: "flex-start",
-        padding: isCliLine ? "1px 16px" : "3px 16px",
-        background: isCliLine ? "var(--ilog-overlay)" : hovered ? rowBgHover : rowBg,
-        borderLeft: isTracebackLine ? "3px solid var(--danger)" : "3px solid transparent",
+        padding: isCliLine ? "1px var(--space-4)" : "var(--space-2) var(--space-4)",
+        background: isCliLine ? "var(--overlay-subtle)" : hovered ? rowBgHover : "transparent",
+        borderLeft: `3px solid ${railColor}`,
         transition: "background 0.08s",
         position: "relative",
-        borderBottom: hovered ? "1px solid var(--ilog-border)" : "1px solid transparent",
+        borderBottom: hovered ? "1px solid var(--border)" : "1px solid transparent",
       }}
     >
       {!isCliLine && (
         <>
           <span style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: "var(--ilog-text-muted)",
+            fontSize: "var(--text-xs)",
+            color: "var(--text-muted)",
             flexShrink: 0,
-            minWidth: 52,
-            paddingTop: 1,
+            minWidth: LOG_TIME_COL_WIDTH,
+            textAlign: "right",
+            paddingTop: 3,
             opacity: 0.7,
           }}>
             {t0 ? formatElapsed(t0, entry.timestamp) : fmt(entry.timestamp)}
           </span>
-          <span style={{
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            fontFamily: "var(--font-mono)",
-            fontSize: 8,
-            fontWeight: 700,
-            color: levelColor,
-            background: LEVEL_BADGE_BG[entry.level] || "transparent",
-            padding: "1px 5px",
-            borderRadius: 3,
-            flexShrink: 0,
-            minWidth: 28,
-            textAlign: "center",
-            letterSpacing: "0.04em",
-            marginTop: 1,
-            border: isDebug ? "1px solid transparent" : undefined,
-          }}>
-            {levelShort}
-          </span>
+          <span
+            title={entry.level}
+            className="ilog__level-dot"
+            style={{ background: levelColor, marginTop: 7 }}
+          />
         </>
       )}
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: "var(--text-sm)",
         color: messageColor,
         wordBreak: "break-word",
         whiteSpace: "pre-wrap",
         flex: 1,
-        lineHeight: "1.5",
+        lineHeight: "var(--leading-relaxed)",
       }}>
         <HighlightedText text={entry.message} query={searchQuery} renderer={(t) => <AnsiText text={t} />} />
       </span>
@@ -317,23 +250,23 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
         <button
           onClick={handleCopyLine}
           style={{
-            background: "var(--ilog-hover)",
-            border: "1px solid var(--ilog-border)",
-            borderRadius: 4,
-            color: "var(--ilog-text-dim)",
+            background: "var(--surface-hover)",
+            border: "1px solid var(--border)",
+            borderRadius: "var(--radius-sm)",
+            color: "var(--text-dim)",
             cursor: "pointer",
-            fontSize: 11,
-            fontFamily: "var(--font-mono)",
+            fontSize: "var(--text-xs)",
+            fontFamily: "var(--font-sans)",
             padding: "2px 7px",
             position: "absolute",
             right: 8,
             top: 1,
             zIndex: 10,
             transition: "all 0.1s",
-            fontWeight: 500,
+            fontWeight: "var(--weight-medium)",
           }}
         >
-          copy
+          Copy
         </button>
       )}
     </div>
@@ -353,6 +286,7 @@ export function SectionHeaderRow({
 }) {
   const [hovered, setHovered] = useState(false);
   const header = section.headerEntry!;
+  const Chevron = isCollapsed ? IconChevronRight : IconChevronDown;
 
   return (
     <div
@@ -366,12 +300,12 @@ export function SectionHeaderRow({
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "7px 16px",
+        padding: "var(--space-2) var(--space-4)",
         marginTop: 6,
         marginBottom: 2,
-        background: hovered ? "var(--ilog-hover)" : "var(--ilog-surface)",
-        borderTop: "1px solid var(--ilog-border-strong)",
-        borderBottom: "1px solid var(--ilog-border)",
+        background: hovered ? "var(--surface-hover)" : "var(--surface)",
+        borderTop: "1px solid var(--border)",
+        borderBottom: "1px solid var(--border)",
         cursor: "pointer",
         transition: "background 0.1s",
         position: "sticky",
@@ -379,42 +313,33 @@ export function SectionHeaderRow({
         zIndex: 5,
       }}
     >
+      <Chevron size={14} stroke={1.75} color="var(--text-dim)" style={{ flexShrink: 0 }} />
       <span style={{
-        fontSize: 11,
-        color: "var(--ilog-text-dim)",
-        transition: "transform 0.15s",
-        transform: isCollapsed ? "rotate(-90deg)" : "rotate(0deg)",
-        flexShrink: 0,
-        width: 12,
-        textAlign: "center",
-      }}>
-        ▼
-      </span>
-      <span style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--ilog-text)",
-        fontWeight: 700,
+        fontFamily: "var(--font-sans)",
+        fontSize: "var(--text-sm)",
+        color: "var(--text)",
+        fontWeight: "var(--weight-semibold)",
         flex: 1,
-        letterSpacing: "0.02em",
       }}>
         <HighlightedText text={header.message} query={searchQuery} renderer={(t) => <AnsiText text={t} />} />
       </span>
       <span style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--ilog-text-muted)",
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
         flexShrink: 0,
+        minWidth: LOG_TIME_COL_WIDTH,
+        textAlign: "right",
       }}>
         {t0 ? formatElapsed(t0, header.timestamp) : fmt(header.timestamp)}
       </span>
       <span style={{
-        fontFamily: "var(--font-mono)",
-        fontSize: 11,
-        color: "var(--ilog-text-muted)",
-        background: "var(--ilog-overlay)",
+        fontFamily: "var(--font-sans)",
+        fontSize: "var(--text-xs)",
+        color: "var(--text-muted)",
+        background: "var(--overlay-subtle)",
         padding: "1px 6px",
-        borderRadius: 4,
+        borderRadius: "var(--radius-sm)",
         flexShrink: 0,
       }}>
         {section.entries.length}

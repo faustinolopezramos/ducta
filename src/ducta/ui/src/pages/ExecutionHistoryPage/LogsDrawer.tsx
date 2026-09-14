@@ -1,11 +1,31 @@
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { StatusBadge } from "../../components/ui/StatusBadge";
-import { useExecutionLogs, useExecutionStatus } from "../../api/queries";
+import { useExecutionLogs, useExecutionStatus, useServerProjectPipelines } from "../../api/queries";
 import { useCancelExecution, useRetryExecution } from "../../api/mutations";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
+import { type LogEntry, type LogLevel } from "../../store/logsStore";
+import { deriveNodeStates } from "../../utils/nodeStatus";
 import { SlidePanel } from "../../components/ui/SlidePanel";
 import { IconPlayerStop, IconRefresh } from "@tabler/icons-react";
+import "./LogsDrawer.css";
+
+// The REST payload (models/execution.py LogEntry) carries `timestamp` as an ISO
+// string and has no `id`; InlineLogs (and the elapsed-time math in LogRows.tsx)
+// expects the same shape the live WebSocket path already produces in
+// logs.worker.ts — epoch-ms `timestamp`, an `id`, and node/render info read out
+// of `extra`. Without this, every row's elapsed time renders as "+NaNs".
+function toStoreLogEntry(raw: any, index: number): LogEntry {
+  return {
+    id: `${raw.timestamp ?? index}-${index}`,
+    timestamp: new Date(raw.timestamp).getTime(),
+    level: (raw.level?.toUpperCase?.() ?? "INFO") as LogLevel,
+    message: raw.extra?.display_message ?? raw.message ?? "",
+    nodeId: raw.extra?.node_id,
+    isNodeStatus: raw.extra?.type === "node_status",
+    render: raw.extra?.render === "cli" || raw.extra?.display_message ? "cli" : "default",
+  };
+}
 
 export function LogsDrawer({ executionId, onClose }: { executionId: string; onClose: () => void }) {
   const { data: logsData, isLoading: logsLoading } = useExecutionLogs(executionId);
@@ -13,11 +33,23 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
   const { mutate: cancel, isPending: isCancelling } = useCancelExecution();
   const { mutate: retry, isPending: isRetrying } = useRetryExecution();
 
-  const logs = Array.isArray(logsData) ? logsData : logsData?.logs ?? [];
+  const rawLogs = Array.isArray(logsData) ? logsData : logsData?.logs ?? [];
+  const logs: LogEntry[] = rawLogs.map(toStoreLogEntry);
   const isActive = statusData?.status === "running" || statusData?.status === "pending";
   const isTerminal = statusData?.status === "failed" || statusData?.status === "cancelled" || statusData?.status === "success" || statusData?.status === "skipped";
 
-  const errorCount = logs.filter((l: any) => l.level === "ERROR" || /error|exception|failed/i.test(l.message)).length;
+  // Give the historical view the same per-node sidebar the live view has.
+  // The node_status frames that drive it in logs.worker.ts are ordinary log
+  // entries — already present in `rawLogs` — so the node states can be
+  // derived here instead of needing a dedicated backend endpoint. The node
+  // *list* itself isn't in the execution record, so it comes from the
+  // pipeline spec this run belongs to (same source NodeCodePage/PipelinePage
+  // already use).
+  const { data: pipelinesData } = useServerProjectPipelines(statusData?.project_id ?? "");
+  const nodeNames: string[] = pipelinesData?.pipelines?.[statusData?.pipeline_name ?? ""]?.nodes ?? [];
+  const nodes = nodeNames.map((name) => ({ id: name, name }));
+  const executionStates = deriveNodeStates(rawLogs);
+
   const duration = statusData?.duration_seconds
     ? `${statusData.duration_seconds.toFixed(1)}s`
     : statusData?.started_at && statusData?.finished_at
@@ -68,34 +100,25 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
         </>
       }
     >
-      {/* Execution Summary Banner */}
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 16px",
-          background: colors.surface,
-          borderBottom: `1px solid ${colors.border}`,
-          fontSize: 11,
-          fontFamily: "var(--font-mono)",
-          color: colors.textMuted,
-          gap: 12,
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span>Pipeline: <strong style={{ color: colors.text }}>{statusData?.pipeline_name || "—"}</strong></span>
-          <span>Env: <strong style={{ color: colors.text }}>{statusData?.env || "base"}</strong></span>
-          {duration !== "—" && <span>Duration: <strong style={{ color: colors.text }}>{duration}</strong></span>}
+      {/* Execution summary — pipeline/env/duration only. Line and error
+          counts live in InlineLogs' own header below, which counts strictly
+          by level; duplicating a looser text-match count here just produced
+          two different numbers for "how many errors" in the same drawer. */}
+      <div className="logs-drawer-summary">
+        <div className="logs-drawer-summary__field">
+          <span className="logs-drawer-summary__label">Pipeline</span>
+          <span className="logs-drawer-summary__value">{statusData?.pipeline_name || "—"}</span>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span>{logs.length} lines</span>
-          {errorCount > 0 && (
-            <span style={{ padding: "1px 6px", borderRadius: 4, background: "color-mix(in srgb, var(--danger) 15%, transparent)", color: "var(--danger)", fontWeight: 600 }}>
-              {errorCount} {errorCount === 1 ? "Error" : "Errors"}
-            </span>
-          )}
+        <div className="logs-drawer-summary__field">
+          <span className="logs-drawer-summary__label">Environment</span>
+          <span className="logs-drawer-summary__value">{statusData?.env || "base"}</span>
         </div>
+        {duration !== "—" && (
+          <div className="logs-drawer-summary__field">
+            <span className="logs-drawer-summary__label">Duration</span>
+            <span className="logs-drawer-summary__value logs-drawer-summary__value--mono">{duration}</span>
+          </div>
+        )}
       </div>
 
       {logsLoading ? (
@@ -106,8 +129,10 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
         <InlineLogs
           isRunning={isActive}
           logs={logs}
+          nodes={nodes}
+          executionStates={executionStates}
           onClose={onClose}
-          variant="inline"
+          mode="fill"
         />
       )}
     </SlidePanel>

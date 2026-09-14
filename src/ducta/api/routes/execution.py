@@ -32,7 +32,6 @@ from fastapi import (  # type: ignore
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.concurrency import run_in_threadpool  # type: ignore
 from loguru import logger  # type: ignore
 
 from ducta.api.config import Settings, get_settings
@@ -46,13 +45,8 @@ from ducta.api.dependencies import (
     require_permission,
     resolve_websocket_user,
 )
-from ducta.api.exceptions import ExecutionNotFoundError, NotFoundError
+from ducta.api.exceptions import ExecutionNotFoundError
 from ducta.api.execution.manager import ExecutionManager
-from ducta.api.execution.streaming_preview import (
-    StreamingPreviewCache,
-    read_streaming_data,
-    read_streaming_data_external,
-)
 from ducta.api.models.auth import User
 from ducta.api.models.execution import (
     BulkCancelRequest,
@@ -112,6 +106,8 @@ async def list_executions(
     since: Optional[str] = None,
     until: Optional[str] = None,
     sweep_id: Optional[str] = None,
+    project_id: Optional[str] = None,
+    q: Optional[str] = None,
 ) -> ExecutionListResponse:
     user_id = current_user.id if current_user else None
     executions, total = exec_manager.list_executions_paginated(
@@ -125,6 +121,8 @@ async def list_executions(
         since=since,
         until=until,
         sweep_id=sweep_id,
+        project_id=project_id,
+        q=q,
     )
     return ExecutionListResponse(
         executions=executions, count=len(executions), total=total, skip=skip, limit=limit
@@ -142,9 +140,7 @@ async def get_execution(
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
-    # Durable read: falls back to the database and the on-disk run store, so
-    # an execution older than the in-memory retention window still resolves.
-    # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
+
     return await exec_manager.load_execution(execution_id, user_id=user_id)
 
 
@@ -167,13 +163,10 @@ async def get_execution_logs(
     if since:
         try:
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            all_logs = [
-                log
-                for log in all_logs
-                if log.timestamp
-                and datetime.fromisoformat(log.timestamp.replace("Z", "+00:00")) >= since_dt
-            ]
-        except (ValueError, AttributeError):
+            if since_dt.tzinfo is None:
+                since_dt = since_dt.replace(tzinfo=timezone.utc)
+            all_logs = [log for log in all_logs if log.timestamp and log.timestamp >= since_dt]
+        except (ValueError, AttributeError, TypeError):
             logger.warning(f"Invalid 'since' timestamp: {since}, returning all logs")
 
     return all_logs
@@ -293,182 +286,6 @@ async def retry_execution(
 
 _TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})
 
-_STOPPED_STREAMING_STATUS = {
-    "status": "stopped",
-    "queries": [],
-    "pipeline": None,
-}
-
-
-def _resolve_active_streaming(
-    exec_manager: ExecutionManager, execution_id: str, user_id: Optional[str] = None
-):
-    """Resolve the active engine and the streaming manager's *internal* execution_id.
-
-    Returns (engine, internal_id) when the pipeline is running.
-    Returns (None, None) when the execution is in a terminal state and the engine
-    has already been unregistered — callers should return a "stopped" response.
-    Raises NotFoundError when the execution is active but the engine is not yet
-    registered (pipeline still warming up — UI shows "waiting").
-    """
-    execution = exec_manager.get_execution(execution_id, user_id=user_id)
-    engine = exec_manager.get_active_engine(execution_id)
-    if not engine:
-        exec_status = getattr(getattr(execution, "status", None), "value", None)
-        if exec_status in _TERMINAL_STATUSES:
-            return None, None
-        logger.debug("Streaming resolution: engine not yet active for execution {}", execution_id)
-        raise NotFoundError(f"Streaming engine not yet active for execution {execution_id}")
-
-    internal_id = engine.get_active_streaming_execution_id()
-    if not internal_id:
-        logger.debug(
-            "Streaming resolution: no active streaming pipeline for engine in execution {}",
-            execution_id,
-        )
-        raise NotFoundError("No active streaming pipeline for this execution")
-    return engine, internal_id
-
-
-_EXTERNAL_STREAMING_STATUS = {
-    "status": "running",
-    "queries": [],
-    "query_statuses": {},
-    "total_queries": 0,
-    "failed_queries": 0,
-}
-
-
-@router.get(
-    "/{execution_id}/streaming/status",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def get_streaming_status(
-    execution_id: str,
-    exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
-):
-    user_id = current_user.id if current_user else None
-    try:
-        engine, internal_id = _resolve_active_streaming(exec_manager, execution_id, user_id)
-    except NotFoundError:
-        # Pipeline started externally (CLI) — engine not in this process.
-        # Return a partial "running" status so the UI shows "running" instead of 404.
-        return {**_EXTERNAL_STREAMING_STATUS, "execution_id": execution_id}
-    if engine is None:
-        return {**_STOPPED_STREAMING_STATUS, "execution_id": execution_id}
-    return await run_in_threadpool(engine.get_streaming_pipeline_status, internal_id)
-
-
-@router.get(
-    "/{execution_id}/streaming/metrics",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def get_streaming_metrics(
-    execution_id: str,
-    exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
-):
-    user_id = current_user.id if current_user else None
-    try:
-        engine, internal_id = _resolve_active_streaming(exec_manager, execution_id, user_id)
-    except NotFoundError:
-        return {}
-    if engine is None:
-        return {}
-    return await run_in_threadpool(engine.get_streaming_pipeline_metrics, internal_id)
-
-
-@router.post(
-    "/{execution_id}/streaming/nodes/{node_name}/restart",
-    dependencies=[Depends(require_permission("execution.write"))],
-)
-async def restart_streaming_node(
-    execution_id: str,
-    node_name: str,
-    exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
-):
-    user_id = current_user.id if current_user else None
-    try:
-        engine, internal_id = _resolve_active_streaming(exec_manager, execution_id, user_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    if engine is None:
-        raise HTTPException(status_code=409, detail="Execution is already stopped")
-    success = await run_in_threadpool(engine.restart_streaming_node, internal_id, node_name)
-    if not success:
-        raise HTTPException(status_code=500, detail=f"Failed to restart node '{node_name}'")
-    return {"status": "success", "message": f"Node '{node_name}' restart initiated"}
-
-
-@router.delete(
-    "/{execution_id}/streaming/checkpoints",
-    dependencies=[Depends(require_permission("execution.write"))],
-)
-async def clear_streaming_checkpoints(
-    execution_id: str,
-    exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
-):
-    user_id = current_user.id if current_user else None
-    try:
-        engine, internal_id = _resolve_active_streaming(exec_manager, execution_id, user_id)
-    except NotFoundError as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
-    if engine is None:
-        raise HTTPException(status_code=409, detail="Execution is already stopped")
-    pipeline_name = engine.context.global_config.get("pipeline_name")
-    if not pipeline_name:
-        raise HTTPException(status_code=400, detail="Pipeline name not found in engine context")
-
-    # The manager's clear_pipeline_checkpoints handles the actual deletion (and
-    # refuses to run while queries for the pipeline are still active).
-    result = await run_in_threadpool(
-        engine.streaming_executor.streaming_manager.clear_pipeline_checkpoints, pipeline_name
-    )
-    if result.get("status") == "error":
-        raise HTTPException(status_code=500, detail=result.get("message"))
-    return result
-
-
-_streaming_preview_cache = StreamingPreviewCache(ttl_seconds=10.0)
-
-
-@router.get(
-    "/{execution_id}/streaming/data",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def get_streaming_data(
-    execution_id: str,
-    exec_manager: ExecutionManagerDep,
-    source_path: SourcePathDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
-):
-    # Enforces ownership and validates the engine exists with a running pipeline.
-    user_id = current_user.id if current_user else None
-    try:
-        engine, _ = _resolve_active_streaming(exec_manager, execution_id, user_id)
-    except NotFoundError:
-        # Pipeline started externally (CLI) — read Delta Parquet files directly.
-        execution = exec_manager.get_execution(execution_id, user_id=user_id)
-        cache_key = f"ext:{user_id or 'unknown'}:{execution_id}"
-        return await run_in_threadpool(
-            _streaming_preview_cache.get_or_compute,
-            cache_key,
-            lambda: read_streaming_data_external(source_path, execution),
-        )
-    if engine is None:
-        return {}
-
-    cache_key = f"{user_id or 'unknown'}:{execution_id}"
-    return await run_in_threadpool(
-        _streaming_preview_cache.get_or_compute,
-        cache_key,
-        lambda: read_streaming_data(engine),
-    )
-
-
 ws_router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 
@@ -479,13 +296,10 @@ async def stream_logs_ws(
     exec_manager: ExecutionManager = Depends(_get_exec_manager_ws),
     settings: Settings = Depends(get_settings),
 ) -> None:
-    # CORS does not apply to WebSocket handshakes, so this is the only thing
-    # standing between a page on another site and this execution's log stream.
     user = await authenticate_websocket(websocket, settings, permission="execution.read")
     if user is None:
         return
-    # Re-extracted (not returned by authenticate_websocket) for the periodic
-    # revalidation below — same token that just passed the handshake auth.
+
     token = extract_ws_token(websocket)
 
     await websocket.accept()

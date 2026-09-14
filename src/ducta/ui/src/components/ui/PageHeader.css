@@ -1,0 +1,81 @@
+/* ── Page header ────────────────────────────────────────────────────────────
+   Title, one line of orientation, the page's actions, and optionally its tab
+   strip. Every module gets the same block so moving between them costs no
+   re-reading. */
+
+.page-header {
+  margin-bottom: var(--space-8);
+}
+
+/* With tabs the header owns the rule they sit on, so it needs no gap of its
+   own below — the tab strip is the bottom edge. */
+.page-header--tabbed {
+  margin-bottom: var(--space-6);
+}
+
+.page-header__back {
+  margin-bottom: var(--space-3);
+}
+
+.page-header__content {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.page-header__copy {
+  min-width: 0;
+}
+
+.page-header__title {
+  font-family: var(--font-sans);
+  font-size: 26px;
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  color: var(--text);
+  margin: 0;
+  text-wrap: balance;
+}
+
+.page-header__description {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+  margin: 6px 0 0;
+  /* Keeps the orientation line readable rather than running the width of a
+     wide table page. */
+  max-width: 76ch;
+}
+
+.page-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.page-header__tabs {
+  margin-top: var(--space-5);
+}
+
+@media (max-width: 900px) {
+  .page-header {
+    margin-bottom: var(--space-6);
+  }
+
+  .page-header__content {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .page-header__title {
+    font-size: 22px;
+  }
+
+  .page-header__actions {
+    flex-wrap: wrap;
+  }
+}

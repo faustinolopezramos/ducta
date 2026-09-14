@@ -3,7 +3,7 @@ import { useMemo, useState, useEffect, useCallback, useRef, lazy, Suspense } fro
 import { useProjectStore } from "../../store/projectStore";
 import { selectPresent } from "../../store/reducer";
 import { useServerPipelineHydration } from "../../hooks/useServerPipelineHydration";
-import { useServerProjectPipelines } from "../../api/queries";
+import { useServerProjectPipelines, useProjectDatasets, useNodes } from "../../api/queries";
 import { resolveDepId, computeLevels } from "../../utils/dagValidation";
 import { computeLineage, lensEdgeClass } from "../../utils/lineage";
 import { useRunNode, useUpdateNodeCode, useUpdatePipeline, useUpdateNode, useCancelExecution, apiErrorMessage } from "../../api/mutations";
@@ -14,6 +14,9 @@ import { useLogsWebSocket } from "../../hooks/useLogsWebSocket";
 import { useToastStack } from "../../hooks/useModalStack";
 import yaml from "js-yaml";
 import type { EditorMarker } from "../../components/CodeEditor";
+import type { CanvasDataset, CanvasSelection } from "../../components/Pipeline/types";
+import type { PipelineViewMode } from "../../components/Pipeline/HUDToolbar";
+import type { CanvasViewport } from "../../components/Pipeline/useCanvasViewport";
 
 export function usePipelinePageState() {
   const { projectId, pipelineId } = useParams<{ projectId: string; pipelineId: string }>();
@@ -21,8 +24,10 @@ export function usePipelinePageState() {
   const state = useProjectStore(selectPresent);
   const dispatch = useProjectStore(s => s.dispatch);
   const projects = state.projects;
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"flow" | "yaml" | "streaming">("flow");
+  // Nodes and datasets are both selectable, so selection carries which kind
+  // it is and the page picks the inspector from that.
+  const [selection, setSelection] = useState<CanvasSelection>(null);
+  const [viewMode, setViewMode] = useState<PipelineViewMode>("flow");
   const [yamlMarkers, setYamlMarkers] = useState<EditorMarker[]>([]);
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
   const [isCodeEditorOpen, setIsCodeEditorOpen] = useState(false);
@@ -38,6 +43,16 @@ export function usePipelinePageState() {
   const { mutate: updatePipeline } = useUpdatePipeline();
   const { mutate: updateNode } = useUpdateNode();
   const { data: pipelinesData } = useServerProjectPipelines(projectId ?? "");
+  const { data: datasetsData, isLoading: datasetsLoading } = useProjectDatasets(projectId ?? "");
+  // Node identity is workspace-global (PUT /nodes/{name} has no project_id),
+  // so "does this name already exist" has to check the whole workspace, not
+  // just this pipeline — AddNodeForm uses this to stop a typo from silently
+  // overwriting an unrelated existing node via the same upsert endpoint.
+  const { data: nodesData } = useNodes();
+  const existingNodeNames = useMemo(
+    () => Object.keys(nodesData?.nodes ?? {}),
+    [nodesData]
+  );
   const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
   const executionStates = useBuilderStore((s) => s.executionStates);
   const isDirty = useBuilderStore((s) => s.isDirty);
@@ -111,6 +126,30 @@ export function usePipelinePageState() {
     // Execution failed → keep logs open (no auto-close), do nothing
   }, [execStatus, errorCount, logsOpen, setLogsOpen]);
 
+  // The canvas needs a dataset by reference name for each edge chip; the
+  // inspector needs the full record. Both come from the same request.
+  const datasetList = datasetsData?.datasets ?? [];
+  const datasetMap = useMemo(() => {
+    const map = new Map<string, CanvasDataset>();
+    for (const d of datasetList) {
+      map.set(d.name, {
+        name: d.name,
+        declared: (d.declared_in?.length ?? 0) > 0,
+        format: d.format ?? null,
+        path: d.path ?? null,
+        writeMode: d.write_mode ?? null,
+        schema: d.schema ?? null,
+        layer: d.layer ?? null,
+      });
+    }
+    return map;
+  }, [datasetList]);
+
+  const datasetByName = useMemo(
+    () => new Map(datasetList.map((d) => [d.name, d])),
+    [datasetList]
+  );
+
   const rawPipelineSpec = pipelinesData?.pipelines?.[pipelineId ?? ""];
 
   // A live run of a streaming/hybrid pipeline implies the streaming view; it
@@ -122,7 +161,6 @@ export function usePipelinePageState() {
   const [lastStreamingRun, setLastStreamingRun] = useState(isStreamingRun);
   if (isStreamingRun !== lastStreamingRun) {
     setLastStreamingRun(isStreamingRun);
-    if (isStreamingRun) setViewMode("streaming");
   }
 
   const yamlString = useMemo(() => {
@@ -131,15 +169,21 @@ export function usePipelinePageState() {
     catch (e) { console.error("Failed to serialize pipeline spec to YAML:", e); return ""; }
   }, [rawPipelineSpec]);
 
+  // Shared by every updatePipeline() call below: pipelines.yaml is one file
+  // per project, so OCC is scoped to the whole file, not per-pipeline —
+  // `pipelinesData.commit_sha` is always "the version this page last saw."
+  const pipelinesCommitSha = pipelinesData?.commit_sha;
+
   const handleSaveYaml = (newYaml: string) => {
     if (!projectId || !pipelineId) return;
     try {
       const parsedSpec = yaml.load(newYaml) as Record<string, any>;
       updatePipeline(
-        { projectId, name: pipelineId, spec: parsedSpec },
+        { projectId, name: pipelineId, spec: parsedSpec, expectedSha: pipelinesCommitSha },
         {
           onSuccess: () => showToast(`Updated pipeline "${pipelineId}" specification`, "success"),
-          onError: (err: any) => showToast(err?.message || "Failed to update pipeline", "error"),
+          onError: (err: any) =>
+            showToast(apiErrorMessage(err, "Failed to update pipeline"), "error"),
         }
       );
     } catch (e: any) {
@@ -151,10 +195,16 @@ export function usePipelinePageState() {
     if (!projectId || !pipelineId || !rawPipelineSpec) return;
     if (newType === (rawPipelineSpec.type ?? "batch")) return;
     updatePipeline(
-      { projectId, name: pipelineId, spec: { ...rawPipelineSpec, type: newType } },
+      {
+        projectId,
+        name: pipelineId,
+        spec: { ...rawPipelineSpec, type: newType },
+        expectedSha: pipelinesCommitSha,
+      },
       {
         onSuccess: () => showToast(`Pipeline type set to "${newType}"`, "success"),
-        onError: (err: any) => showToast(err?.message || "Failed to update pipeline type", "error"),
+        onError: (err: any) =>
+          showToast(apiErrorMessage(err, "Failed to update pipeline type"), "error"),
       }
     );
   };
@@ -164,12 +214,19 @@ export function usePipelinePageState() {
   const handleAddNode = (name: string, mod: string) => {
     if (!name || !mod || !projectId || !pipelineId) return;
     updateNode(
-      { name, spec: { module: mod, type: "batch" } },
+      // `function` is what makes the node addressable; the old payload sent
+      // `type: "batch"`, which is a pipeline field a node has no use for.
+      { name, spec: { module: mod, function: "run", input: [], output: [] } },
       {
         onSuccess: () => {
           const currentNodes: string[] = Array.isArray(rawPipelineSpec?.nodes) ? rawPipelineSpec.nodes : [];
           updatePipeline(
-            { projectId, name: pipelineId, spec: { ...(rawPipelineSpec ?? {}), nodes: [...currentNodes, name] } },
+            {
+              projectId,
+              name: pipelineId,
+              spec: { ...(rawPipelineSpec ?? {}), nodes: [...currentNodes, name] },
+              expectedSha: pipelinesCommitSha,
+            },
             {
               onSuccess: () => {
                 dispatch({ type: "ADD_NODE", pipelineId, node: { id: name, name, module: mod, type: "batch" } });
@@ -177,7 +234,7 @@ export function usePipelinePageState() {
                 setAddNodeOpen(false);
               },
               onError: (err: any) => showToast(
-                `Node "${name}" was created but could not be linked to the pipeline. Add it manually via the YAML tab. Error: ${err?.message || "Unknown error"}`,
+                `Node "${name}" was created but could not be linked to the pipeline. Add it manually via the YAML tab. Error: ${apiErrorMessage(err, "Unknown error")}`,
                 "error"
               ),
             }
@@ -210,6 +267,9 @@ export function usePipelinePageState() {
     }
     return parents;
   }, [pipelineNodes]);
+
+  const selectedNodeId = selection?.kind === "node" ? selection.id : null;
+  const selectedDatasetName = selection?.kind === "dataset" ? selection.id : null;
 
   const lineage = useMemo(
     () => computeLineage(selectedNodeId, parentsMap),
@@ -290,21 +350,49 @@ export function usePipelinePageState() {
     }
   };
 
-  const clearSelection = useCallback(() => setSelectedNodeId(null), []);
+  const clearSelection = useCallback(() => setSelection(null), []);
+  const selectNodeById = useCallback(
+    (id: string | null) => setSelection(id ? { kind: "node", id } : null),
+    []
+  );
+  const selectDatasetByName = useCallback(
+    (name: string) => setSelection({ kind: "dataset", id: name }),
+    []
+  );
+
+  /**
+   * Viewport controls, handed up by the canvas once React Flow has mounted.
+   * Kept in a ref so the toolbar and the keyboard shortcuts share one instance
+   * without re-rendering the page each time the canvas re-registers.
+   */
+  const viewportRef = useRef<CanvasViewport | null>(null);
+  const onViewportReady = useCallback((v: CanvasViewport) => {
+    viewportRef.current = v;
+  }, []);
+  const centerOnNode = useCallback((id: string, offsetX?: number) => {
+    viewportRef.current?.centerOnNode(id, offsetX);
+  }, []);
+  const fitCanvas = useCallback(() => viewportRef.current?.fitCanvas(), []);
+  const zoomIn = useCallback(() => viewportRef.current?.zoomIn(), []);
+  const zoomOut = useCallback(() => viewportRef.current?.zoomOut(), []);
 
   return {
     projectId, pipelineId, navigate, state, dispatch, projects,
-    selectedNodeId, setSelectedNodeId, viewMode, setViewMode,
+    selection, setSelection, selectedNodeId, selectedDatasetName,
+    selectNodeById, selectDatasetByName, viewMode, setViewMode,
     yamlMarkers, setYamlMarkers, activeExecutionId, setActiveExecutionId,
     isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode,
     runningNodeId, setRunningNodeId, nodeExecId, execStatus, setExecStatus,
     addNodeOpen, setAddNodeOpen, paletteOpen, setPaletteOpen,
-    pipelinesData, activeEnv, executionStates, isDirty, showToast,
+    pipelinesData, datasetList, datasetMap, datasetByName, datasetsLoading,
+    existingNodeNames,
+    activeEnv, executionStates, isDirty, showToast,
     logsOpen, setLogsOpen: setLogsOpenSmart, rawPipelineSpec, yamlString,
     handleSaveYaml, handleChangeType, handleAddNode,
     currentProject, currentPipeline, pipelineNodes, dagItems,
     parentsMap, lineage, navMaps, lineageLists, isExecuting,
     handleRunNode, handleExecute, handleValidate, handleCancel, clearSelection,
+    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
     blocker,
   };
 }

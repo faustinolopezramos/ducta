@@ -25,7 +25,6 @@ import os
 import re
 import sys
 import threading
-from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
@@ -69,29 +68,6 @@ def infer_process_output_level(line: str) -> str:
     if " DEBUG " in upper or upper.startswith("DEBUG"):
         return "DEBUG"
     return "INFO"
-
-
-def format_cli_log_line(timestamp: datetime, level: str, message: str) -> str:
-    """Format a log line for CLI display inside the execution log stream."""
-    display_message = message
-    node_match = node_status_re.match(display_message)
-    if node_match:
-        display_message = f" node_id={node_match.group(1)} status={node_match.group(2)}"
-
-    prefix = "\x1b[1;96mducta:\x1b[0m "
-    time_tag = f"\x1b[2m[{timestamp:%H:%M:%S}]\x1b[0m "
-
-    level_styles = {
-        "DEBUG": "\x1b[2;37m",
-        "INFO": "\x1b[1;94m",
-        "WARNING": "\x1b[1;93m",
-        "ERROR": "\x1b[1;91m",
-        "SUCCESS": "\x1b[1;92m",
-        "CRITICAL": "\x1b[1;97;41m",
-    }
-    level_tag = f"{level_styles.get(level.upper(), '')}{level.upper(): <8}\x1b[0m "
-
-    return f"{prefix}{time_tag}{level_tag}{display_message}"
 
 
 class ProcessOutputCapture:

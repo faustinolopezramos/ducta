@@ -26,15 +26,43 @@ from pydantic import BaseModel, Field
 
 
 class IOItem(BaseModel):
-    """Input or output specification with connectivity hints."""
+    """One side of a node's dataset wiring, with the registry entry resolved."""
 
-    id: str
-    name: str
-    format: str = Field(default="unknown")
-    path: Optional[str] = None
-    schema_: Optional[Dict[str, Any]] = Field(default=None, alias="schema")
-    required: bool = Field(default=True, description="Whether this input is required")
+    id: str = Field(description="Stable port id, used to anchor canvas edges")
+    name: str = Field(description="Dataset reference name, as declared on the node")
+    declared: bool = Field(
+        default=False,
+        description="False when no registry entry exists for this reference name",
+    )
+    format: Optional[str] = Field(default=None, description="Declared format, or null")
+    path: Optional[str] = Field(
+        default=None, description="Declared filepath, with ${VAR} placeholders intact"
+    )
+    write_mode: Optional[str] = Field(
+        default=None, description="Declared write mode (outputs only)"
+    )
+    schema_: Optional[Dict[str, Any]] | Optional[str] = Field(
+        default=None, alias="schema", description="Declared schema definition"
+    )
+    layer: Optional[str] = Field(
+        default=None, description="Medallion layer read from the reference's namespace"
+    )
     description: Optional[str] = None
+
+    model_config = {"populate_by_name": True}
+
+
+class QualityInfo(BaseModel):
+    """Quality checks and gate configured on a node."""
+
+    check_count: int = Field(default=0, description="Number of enabled checks")
+    gate_behavior: Optional[str] = Field(
+        default=None,
+        description="Gate behavior when a gate is enabled (e.g. skip_downstream)",
+    )
+    is_sanity: bool = Field(
+        default=False, description="True when the checks run before the node rather than after"
+    )
 
 
 class NodeSchemaResponse(BaseModel):
@@ -47,7 +75,7 @@ class NodeSchemaResponse(BaseModel):
     fn: str = Field(default="execute")
     description: Optional[str] = None
 
-    # Input/Output specifications
+    # Input/Output specifications, resolved against the dataset registries
     inputs: List[IOItem] = Field(default_factory=list)
     outputs: List[IOItem] = Field(default_factory=list)
 
@@ -60,6 +88,11 @@ class NodeSchemaResponse(BaseModel):
     file_path: str = Field(description="Relative path to source file")
     file_size_bytes: Optional[int] = None
     file_exists: bool = Field(default=True, description="Whether the Python source file exists")
+
+    # Quality checks and gate
+    quality: Optional[QualityInfo] = Field(
+        default=None, description="Quality/sanity checks and gate, when configured"
+    )
 
     # Execution hints
     last_execution_status: Optional[str] = None

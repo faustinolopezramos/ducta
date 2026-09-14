@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
@@ -33,18 +33,9 @@ from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
 
 
 def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) -> Dict[str, Any]:
-    """Normalize node spec from various formats to frontend-compatible format.
-
-    Converts:
-    - TOML format: {input: {...}, output: {...}} → {inputs: [{...}], outputs: [{...}]}
-    - Legacy array format: {inputs: [{...}]} → as-is (already compatible)
-    - Ensures module and fn have values (with sensible defaults)
-    """
+    """Normalize node spec from various formats to frontend-compatible format."""
     normalized = dict(spec)
 
-    # Convert singular 'input' to plural 'inputs'. A list is already in the
-    # expected shape — only a scalar (str/dict) needs wrapping, otherwise we'd
-    # produce a nested list like [["bronze.x"]] and the UI loses the real names.
     if "input" in normalized and "inputs" not in normalized:
         input_spec = normalized.pop("input")
         if input_spec:
@@ -64,10 +55,6 @@ def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) 
     if "outputs" in normalized and not isinstance(normalized["outputs"], list):
         normalized["outputs"] = [normalized["outputs"]]
 
-    # Streaming nodes declare the Python module under function.module (TOML format):
-    #   [silver_clean_events.function]
-    #   module = "pipelines.streaming_fraud_realtime"
-    # Promote to top-level so resolve_python_file can find the source file.
     if not normalized.get("module") and isinstance(normalized.get("function"), dict):
         fn_module = normalized["function"].get("module")
         if fn_module:
@@ -82,12 +69,7 @@ def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) 
 
 
 def _find_standard_project_nodes_file(project_dir: Path) -> Optional[Path]:
-    """Return the nodes config file for a standard (non-layered) project.
-
-    Resolution order:
-    1. Parse environment.* to get the exact ``nodes_config_path`` declared by the project.
-    2. Fall back to the convention-based ``config/nodes.*`` path.
-    """
+    """Return the nodes config file for a standard (non-layered) project."""
     _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
 
     # 1. Read environment file to get the declared nodes path
@@ -126,15 +108,15 @@ class NodeRepository(YamlRecordRepository):
 
     def __init__(self, root: Path) -> None:
         self._root = root
+        self._node_source: Dict[str, Tuple[Path, Optional[str]]] = {}
 
-    # ── Internal helpers ──────────────────────────────────────────────────────
-
-    def _load_layer_nodes(self) -> Dict[str, Any]:
+    def _load_layer_nodes(self) -> Tuple[Dict[str, Any], Dict[str, Tuple[Path, Optional[str]]]]:
         """Load node definitions from all projects: layered (ducta.yaml) and standard."""
         layer_nodes: Dict[str, Any] = {}
+        layer_sources: Dict[str, Tuple[Path, Optional[str]]] = {}
         projects_dir = self._root / "projects"
         if not projects_dir.is_dir():
-            return layer_nodes
+            return layer_nodes, layer_sources
 
         for project_dir in sorted(projects_dir.iterdir()):
             if not project_dir.is_dir():
@@ -172,6 +154,8 @@ class NodeRepository(YamlRecordRepository):
                                 if not normalized.get("module"):
                                     normalized["module"] = f"src.{node_key.split('.')[-1]}"
                                 layer_nodes[prefixed_name] = normalized
+                                record_key = node_key if node_key != prefixed_name else None
+                                layer_sources[prefixed_name] = (full_path, record_key)
                             logger.debug(
                                 "Loaded {count} nodes from layer '{layer}' in project '{proj}'",
                                 count=len(raw),
@@ -192,9 +176,6 @@ class NodeRepository(YamlRecordRepository):
                         exc=exc,
                     )
             else:
-                # Standard project (no ducta.yaml): resolve nodes file via the
-                # environment file first (handles custom paths like base/node/nodes.yml
-                # or config/streaming/nodes.toml), then fall back to config/nodes.*.
                 nodes_file = _find_standard_project_nodes_file(project_dir)
                 if not nodes_file:
                     continue
@@ -203,6 +184,7 @@ class NodeRepository(YamlRecordRepository):
                     for node_key, node_spec in raw.items():
                         normalized = _normalize_node_spec(dict(node_spec), node_name=node_key)
                         layer_nodes[node_key] = normalized
+                        layer_sources[node_key] = (nodes_file, None)
                     logger.debug(
                         "Loaded {count} nodes from standard project '{proj}' ({file})",
                         count=len(raw),
@@ -216,29 +198,28 @@ class NodeRepository(YamlRecordRepository):
                         exc=exc,
                     )
 
-        return layer_nodes
-
-    # ── Queries ───────────────────────────────────────────────────────────────
+        return layer_nodes, layer_sources
 
     def list_all(self) -> Dict[str, Any]:
-        """Return all node definitions keyed by name, normalized to frontend format.
-
-        Merges nodes from the base environment config with nodes from project
-        layer configs (defined via ducta.yaml). Project layer nodes are prefixed
-        with ``{layer_name}.`` (e.g. ``bronze.intl_results``).
-        """
+        """Return all node definitions keyed by name, normalized to frontend format."""
         nodes: Dict[str, Any] = {}
+        sources: Dict[str, Tuple[Path, Optional[str]]] = {}
 
         # 1. Load base environment nodes
+        base_path = self._get_path()
         base_nodes = super().list_all()
         for name, spec in base_nodes.items():
             nodes[name] = _normalize_node_spec(spec, node_name=name)
+            if base_path is not None:
+                sources[name] = (base_path, None)
 
         # 2. Load project layer nodes
-        layer_nodes = self._load_layer_nodes()
+        layer_nodes, layer_sources = self._load_layer_nodes()
         # Layer nodes take precedence over base nodes with the same name
         nodes.update(layer_nodes)
+        sources.update(layer_sources)
 
+        self._node_source = sources
         return nodes
 
     def get_commit_sha(self) -> str:
@@ -249,13 +230,7 @@ class NodeRepository(YamlRecordRepository):
         return file_commit_sha(self._root, path)
 
     def resolve_python_file(self, name: str) -> Path:
-        """Return the absolute ``.py`` path for a node's Python source.
-
-        Searches in order:
-        1. Workspace root (flat layout)
-        2. Project sub-directories (standard project layout)
-        3. Project layer ``src/`` directories (layered project layout)
-        """
+        """Return the absolute ``.py`` path for a node's Python source."""
         nodes = self.list_all()
         if name not in nodes:
             raise NodeNotFoundError(
@@ -315,6 +290,70 @@ class NodeRepository(YamlRecordRepository):
 
         return py_path
 
-    # ── Commands ──────────────────────────────────────────────────────────────
+    def _fast_locate_layer_node(self, name: str) -> Optional[Tuple[Path, Optional[str]]]:
+        """Resolve a dotted ``layer.node`` name's file without scanning every
+        project's node registry (see ``_load_layer_nodes``).
 
-    # save() and delete() are inherited from YamlRecordRepository.
+        Only project ``ducta.yaml`` files are read here (cheap — no node specs
+        parsed) to find the layer whose name prefixes *name*; only that one
+        layer's nodes file is then parsed. Returns ``None`` when *name* has no
+        dotted layer prefix or no matching layer is found, so callers can fall
+        back to the exhaustive :meth:`list_all` scan.
+        """
+        if "." not in name:
+            return None
+        projects_dir = self._root / "projects"
+        if not projects_dir.is_dir():
+            return None
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            ducta_file = find_ducta_config(project_dir)
+            if not ducta_file:
+                continue
+            try:
+                layers = load_config_file(ducta_file).get("layers", {})
+            except Exception:
+                continue
+            for layer_name, layer_cfg in layers.items():
+                if not name.startswith(f"{layer_name}."):
+                    continue
+                nodes_path = layer_cfg.get("nodes")
+                if not nodes_path:
+                    config_dir = layer_cfg.get("config")
+                    if config_dir:
+                        nodes_path = str(Path(config_dir) / "nodes.yaml")
+                if not nodes_path:
+                    continue
+                full_path = project_dir / nodes_path
+                if not full_path.exists():
+                    continue
+                try:
+                    raw = load_config_file(full_path) or {}
+                except Exception:
+                    continue
+                if name in raw:
+                    return full_path, None
+                node_key = name[len(layer_name) + 1 :]
+                if node_key in raw:
+                    return full_path, node_key
+        return None
+
+    def _locate_source(self, name: str) -> Tuple[Optional[Path], Optional[str]]:
+        fast = self._fast_locate_layer_node(name)
+        if fast is not None:
+            return fast
+        if not self._node_source:
+            self.list_all()
+        target = self._node_source.get(name)
+        return target if target else (None, None)
+
+    def save(self, name: str, spec: Dict[str, Any], expected_sha: Optional[str] = None) -> str:
+        """Update or create a node, writing back to wherever it actually lives."""
+        path, record_key = self._locate_source(name)
+        return super().save(name, spec, expected_sha, path=path, record_key=record_key)
+
+    def delete(self, name: str, expected_sha: Optional[str] = None) -> str:
+        """Delete a node from wherever it actually lives (see ``save``)."""
+        path, record_key = self._locate_source(name)
+        return super().delete(name, expected_sha, path=path, record_key=record_key)

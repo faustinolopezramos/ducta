@@ -72,14 +72,20 @@ export const lastMetricValues = (run: ExperimentRun): Record<string, number> => 
 
 type ModelStage = "staging" | "production" | "archived";
 
-interface PromoteModelVars {
+interface MlopsScope {
+  env?: string;
+  pipelineName?: string;
+  project?: string;
+}
+
+interface PromoteModelVars extends MlopsScope {
   name: string;
   version: number;
   stage: ModelStage;
   force?: boolean;
 }
 
-interface GcVars {
+interface GcVars extends MlopsScope {
   dry_run?: boolean;
 }
 
@@ -90,37 +96,87 @@ interface GcResult {
   dry_run: boolean;
 }
 
+/** Wire params shared by every /mlops/* request — `pipeline`/`project` are the
+ *  route's actual query-param names (routes/mlops.py), distinct from this
+ *  file's `pipelineName` to keep call sites readable. */
+const scopeParams = ({ env, pipelineName, project }: MlopsScope) => ({
+  env,
+  pipeline: pipelineName,
+  project,
+});
+
 // ─── MLOps query hooks ────────────────────────────────────────────────────────
 
-export const useMlopsExperiments = () =>
+export const useMlopsExperiments = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<ExperimentSummary[]>({
-    queryKey: ["mlops", sourceKey(), "experiments"],
-    queryFn: () => client.get("/mlops/experiments").then((r) => r.data),
-    staleTime: 30 * 1000,
-  });
-
-export const useMlopsExperiment = (experimentId: string) =>
-  useQuery<ExperimentDetail>({
-    queryKey: ["mlops", sourceKey(), "experiments", experimentId],
+    queryKey: ["mlops", sourceKey(), "experiments", env ?? null, pipelineName ?? null, project ?? null],
     queryFn: () =>
-      client.get(`/mlops/experiments/${experimentId}`).then((r) => r.data),
+      client
+        .get("/mlops/experiments", { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    enabled: !!pipelineName,
     staleTime: 30 * 1000,
-    enabled: !!experimentId,
   });
 
-export const useMlopsModels = () =>
+export const useMlopsExperiment = (
+  experimentId: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string
+) =>
+  useQuery<ExperimentDetail>({
+    queryKey: [
+      "mlops",
+      sourceKey(),
+      "experiments",
+      experimentId,
+      env ?? null,
+      pipelineName ?? null,
+      project ?? null,
+    ],
+    queryFn: () =>
+      client
+        .get(`/mlops/experiments/${experimentId}`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then((r) => r.data),
+    staleTime: 30 * 1000,
+    enabled: !!experimentId && !!pipelineName,
+  });
+
+export const useMlopsModels = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<ModelInfo[]>({
-    queryKey: ["mlops", sourceKey(), "models"],
-    queryFn: () => client.get("/mlops/models").then((r) => r.data),
+    queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+    queryFn: () =>
+      client
+        .get("/mlops/models", { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    enabled: !!pipelineName,
     staleTime: 30 * 1000,
   });
 
-export const useMlopsModelVersions = (name: string) =>
+export const useMlopsModelVersions = (
+  name: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string
+) =>
   useQuery<ModelVersion[]>({
-    queryKey: ["mlops", sourceKey(), "models", name],
-    queryFn: () => client.get(`/mlops/models/${name}`).then((r) => r.data),
+    queryKey: [
+      "mlops",
+      sourceKey(),
+      "models",
+      name,
+      env ?? null,
+      pipelineName ?? null,
+      project ?? null,
+    ],
+    queryFn: () =>
+      client
+        .get(`/mlops/models/${name}`, { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
     staleTime: 30 * 1000,
-    enabled: !!name,
+    enabled: !!name && !!pipelineName,
   });
 
 // ─── MLOps mutation hooks ─────────────────────────────────────────────────────
@@ -128,13 +184,29 @@ export const useMlopsModelVersions = (name: string) =>
 export const usePromoteModel = () => {
   const queryClient = useQueryClient();
   return useMutation<unknown, unknown, PromoteModelVars>({
-    mutationFn: ({ name, version, stage, force = false }: PromoteModelVars) =>
+    mutationFn: ({ name, version, stage, force = false, env, pipelineName, project }) =>
       client
-        .post(`/mlops/models/${name}/promote`, { version, stage, force })
+        .post(
+          `/mlops/models/${name}/promote`,
+          { version, stage, force },
+          { params: scopeParams({ env, pipelineName, project }) }
+        )
         .then((r) => r.data),
-    onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models"] });
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models", name] });
+    onSuccess: (_data, { name, env, pipelineName, project }) => {
+      queryClient.invalidateQueries({
+        queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [
+          "mlops",
+          sourceKey(),
+          "models",
+          name,
+          env ?? null,
+          pipelineName ?? null,
+          project ?? null,
+        ],
+      });
       toastStore.getState().show(`Model '${name}' promoted successfully`, "success");
     },
     onError: defaultOnError,
@@ -146,14 +218,28 @@ export const useCloseMlopsRun = () => {
   return useMutation<
     { run_id: string; status: string },
     unknown,
-    { experimentId: string; runId: string; status: "COMPLETED" | "FAILED" }
+    MlopsScope & { experimentId: string; runId: string; status: "COMPLETED" | "FAILED" }
   >({
-    mutationFn: ({ experimentId, runId, status }) =>
+    mutationFn: ({ experimentId, runId, status, env, pipelineName, project }) =>
       client
-        .post(`/mlops/experiments/${experimentId}/runs/${runId}/close`, { status })
+        .post(
+          `/mlops/experiments/${experimentId}/runs/${runId}/close`,
+          { status },
+          { params: scopeParams({ env, pipelineName, project }) }
+        )
         .then((r) => r.data),
-    onSuccess: (_data, { experimentId }) => {
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "experiments", experimentId] });
+    onSuccess: (_data, { experimentId, env, pipelineName, project }) => {
+      queryClient.invalidateQueries({
+        queryKey: [
+          "mlops",
+          sourceKey(),
+          "experiments",
+          experimentId,
+          env ?? null,
+          pipelineName ?? null,
+          project ?? null,
+        ],
+      });
     },
     onError: defaultOnError,
   });
@@ -161,11 +247,25 @@ export const useCloseMlopsRun = () => {
 
 export const useDeleteMlopsRun = () => {
   const queryClient = useQueryClient();
-  return useMutation<void, unknown, { experimentId: string; runId: string }>({
-    mutationFn: ({ experimentId, runId }) =>
-      client.delete(`/mlops/experiments/${experimentId}/runs/${runId}`).then(() => undefined),
-    onSuccess: (_data, { experimentId }) => {
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "experiments", experimentId] });
+  return useMutation<void, unknown, MlopsScope & { experimentId: string; runId: string }>({
+    mutationFn: ({ experimentId, runId, env, pipelineName, project }) =>
+      client
+        .delete(`/mlops/experiments/${experimentId}/runs/${runId}`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then(() => undefined),
+    onSuccess: (_data, { experimentId, env, pipelineName, project }) => {
+      queryClient.invalidateQueries({
+        queryKey: [
+          "mlops",
+          sourceKey(),
+          "experiments",
+          experimentId,
+          env ?? null,
+          pipelineName ?? null,
+          project ?? null,
+        ],
+      });
     },
     onError: defaultOnError,
   });
@@ -173,12 +273,28 @@ export const useDeleteMlopsRun = () => {
 
 export const useDeleteModelVersion = () => {
   const queryClient = useQueryClient();
-  return useMutation<void, unknown, { name: string; version: number }>({
-    mutationFn: ({ name, version }) =>
-      client.delete(`/mlops/models/${name}/versions/${version}`).then(() => undefined),
-    onSuccess: (_data, { name }) => {
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models"] });
-      queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models", name] });
+  return useMutation<void, unknown, MlopsScope & { name: string; version: number }>({
+    mutationFn: ({ name, version, env, pipelineName, project }) =>
+      client
+        .delete(`/mlops/models/${name}/versions/${version}`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then(() => undefined),
+    onSuccess: (_data, { name, env, pipelineName, project }) => {
+      queryClient.invalidateQueries({
+        queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+      });
+      queryClient.invalidateQueries({
+        queryKey: [
+          "mlops",
+          sourceKey(),
+          "models",
+          name,
+          env ?? null,
+          pipelineName ?? null,
+          project ?? null,
+        ],
+      });
     },
     onError: defaultOnError,
   });
@@ -187,11 +303,15 @@ export const useDeleteModelVersion = () => {
 export const useRunMlopsGc = () => {
   const queryClient = useQueryClient();
   return useMutation<GcResult, unknown, GcVars>({
-    mutationFn: ({ dry_run = true }: GcVars) =>
-      client.post("/mlops/gc", { dry_run }).then((r) => r.data),
-    onSuccess: (data, { dry_run }) => {
+    mutationFn: ({ dry_run = true, env, pipelineName, project }) =>
+      client
+        .post("/mlops/gc", { dry_run }, { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    onSuccess: (data, { dry_run, env, pipelineName, project }) => {
       if (!dry_run) {
-        queryClient.invalidateQueries({ queryKey: ["mlops", sourceKey(), "models"] });
+        queryClient.invalidateQueries({
+          queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+        });
       }
       const removed = data.versions_removed ?? 0;
       const msg = dry_run

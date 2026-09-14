@@ -9,7 +9,6 @@ import {
   IconShieldCheck,
   IconDatabaseImport,
   IconCalendarEvent,
-  IconTerminal,
 } from "@tabler/icons-react";
 import { SourceSwitcher } from "./SourceSwitcher";
 
@@ -28,7 +27,6 @@ export function Sidebar() {
     { label: "Dashboard", icon: IconLayoutDashboard, path: "/projects" },
     { label: "History", icon: IconHistory, path: "/workspace/executions", divideBefore: true },
     { label: "Schedules", icon: IconCalendarEvent, path: "/workspace/schedules" },
-    { label: "Terminal", icon: IconTerminal, path: "/workspace/terminal" },
     { label: "Quality", icon: IconShieldCheck, path: "/workspace/quality" },
     { label: "Ingestion", icon: IconDatabaseImport, path: "/workspace/ingestion" },
     { label: "MLOps", icon: IconFlask, path: "/workspace/mlops" },

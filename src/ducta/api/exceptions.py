@@ -113,13 +113,6 @@ class ConcurrencyError(ConflictError):
     error_code = ErrorCode.CONCURRENCY_ERROR
 
 
-class RepositoryAdapterError(DuctaAPIError):
-    """Remote repository adapter (GitHub/Azure/AWS) encountered an error."""
-
-    status_code = 500
-    error_code = ErrorCode.REPOSITORY_ADAPTER_ERROR
-
-
 class ExecutionError(DuctaAPIError):
     """Pipeline execution failed unexpectedly."""
 

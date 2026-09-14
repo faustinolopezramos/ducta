@@ -17,12 +17,17 @@ export interface UpdatePipelinePayload {
   projectId: string;
   name: string;
   spec: Record<string, unknown>;
+  /** Commit SHA last seen for this project's pipelines.yaml (from
+   *  `useServerProjectPipelines`' `commit_sha`). Omit to skip the check;
+   *  pass it to get a 409 instead of silently overwriting a concurrent edit. */
+  expectedSha?: string;
 }
 
 /** Delete a pipeline from a project. */
 export interface DeletePipelinePayload {
   projectId: string;
   name: string;
+  expectedSha?: string;
 }
 
 /** Execute a pipeline inside a project. */
@@ -97,14 +102,19 @@ export const useCreatePipeline = () => {
 export const useUpdatePipeline = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ projectId, name, spec }: UpdatePipelinePayload) =>
+    mutationFn: ({ projectId, name, spec, expectedSha }: UpdatePipelinePayload) =>
       client
-        .put(`/projects/${projectId}/pipelines/${name}`, { spec })
+        .put(`/projects/${projectId}/pipelines/${name}`, { spec, expected_sha: expectedSha })
         .then((r) => r.data),
     onSuccess: (_data, { projectId }) => {
+      // A pipeline edit can change which datasets it declares/consumes, and
+      // the project's own summary (pipeline_count etc.) — invalidate the
+      // whole project subtree, same as create/delete already do, not just
+      // the narrow "pipelines" key.
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId, "pipelines"],
+        queryKey: ["server-projects", sourceKey(), projectId],
       });
+      queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
     },
     onError: defaultOnError,
   });
@@ -117,8 +127,12 @@ export const useUpdatePipeline = () => {
 export const useDeletePipeline = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ projectId, name }: DeletePipelinePayload) =>
-      client.delete(`/projects/${projectId}/pipelines/${name}`).then(() => {}),
+    mutationFn: ({ projectId, name, expectedSha }: DeletePipelinePayload) =>
+      client
+        .delete(`/projects/${projectId}/pipelines/${name}`, {
+          params: { expected_sha: expectedSha },
+        })
+        .then(() => {}),
     onSuccess: (_data, { projectId }) => {
       queryClient.invalidateQueries({
         queryKey: ["server-projects", sourceKey(), projectId, "pipelines"],

@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconPackage, IconPlus, IconTrash, IconDotsVertical } from "@tabler/icons-react";
-import { useCreateServerProject, useDeleteServerProject, useServerProjectPipelines } from "../api/queries";
+import { useCreateServerProject, useDeleteServerProject } from "../api/queries";
 import { useTemplates, useGenerateFromTemplate } from "../api/templatesApi";
 import { toastStore } from "../hooks/useModalStack";
-import { Button, Modal, ConfirmDialog } from "./ui";
+import { Button, Modal, ConfirmDialog, PageContainer, PageHeader } from "./ui";
 import { EmptyState } from "./ui/EmptyState";
 import type { ProjectItem } from "../store/reducer";
 
@@ -16,8 +16,10 @@ interface ProjectsListProps {
 
 function ProjectCard({ project, onNavigate, onDelete }: { project: ProjectItem; onNavigate: () => void; onDelete: () => void }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const { data: pipelinesData } = useServerProjectPipelines(project.id);
-  const pipelineCount = pipelinesData?.pipelines ? Object.keys(pipelinesData.pipelines).length : project.pipelines.length;
+  // `GET /projects` already reports the count. Each card used to fire its own
+  // `GET /projects/{id}/pipelines` to recount it — one request per card, on the
+  // landing page, for a number the list response was already carrying.
+  const pipelineCount = project.pipelineCount ?? project.pipelines.length;
 
   return (
     <div
@@ -26,7 +28,12 @@ function ProjectCard({ project, onNavigate, onDelete }: { project: ProjectItem; 
       tabIndex={0}
       aria-label={`Open project ${project.name}`}
       onClick={onNavigate}
-      onKeyDown={(e) => { if (e.key === "Enter") onNavigate(); }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onNavigate();
+        }
+      }}
     >
       <div className="project-card__body">
         <div className="project-card__info">
@@ -62,7 +69,9 @@ function ProjectCard({ project, onNavigate, onDelete }: { project: ProjectItem; 
       <div className="project-card__stats">
         <div className="project-card__stat">
           <span className="project-card__stat-value">{pipelineCount}</span>
-          <span className="project-card__stat-label">Pipelines</span>
+          <span className="project-card__stat-label">
+            {pipelineCount === 1 ? "Pipeline" : "Pipelines"}
+          </span>
         </div>
         {project.createdAt && (
           <div className="project-card__stat">
@@ -145,25 +154,31 @@ export function ProjectsList({
   };
 
   return (
-    <div className="projects-page">
-      <header className="projects-header">
-        <div className="projects-header__left">
-          <h1 className="projects-header__title">Projects</h1>
-          <p className="projects-header__subtitle">
-            {workspacePath ? `Workspace: ${workspacePath}` : "Select a project to begin."}
-          </p>
-        </div>
-        <div className="projects-header__actions">
-          <Button variant="secondary" onClick={() => setShowTemplate(true)}>
-            <IconPlus size={16} stroke={1.5} />
-            New from template
-          </Button>
-          <Button variant="primary" onClick={() => setShowCreate(true)}>
-            <IconPlus size={16} stroke={1.5} />
-            Create Project
-          </Button>
-        </div>
-      </header>
+    <PageContainer className="projects-page">
+      <PageHeader
+        title="Projects"
+        description={
+          workspacePath ? `Workspace: ${workspacePath}` : "Select a project to begin."
+        }
+        actions={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setShowTemplate(true)}
+              leftIcon={<IconPlus size={16} stroke={1.5} />}
+            >
+              New from template
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => setShowCreate(true)}
+              leftIcon={<IconPlus size={16} stroke={1.5} />}
+            >
+              Create project
+            </Button>
+          </>
+        }
+      />
 
       {projects.length === 0 ? (
         <div className="projects-empty">
@@ -251,6 +266,6 @@ export function ProjectsList({
         onConfirm={handleDelete}
         onCancel={() => setConfirmDelete(null)}
       />
-    </div>
+    </PageContainer>
   );
 }

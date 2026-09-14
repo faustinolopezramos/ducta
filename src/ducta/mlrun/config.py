@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import os
 import threading
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
 
@@ -176,6 +176,16 @@ class MLOpsConfig:
             enable_retry=cls._env_bool("Ducta_MLOPS_ENABLE_RETRY", True),
             enable_circuit_breaker=cls._env_bool("Ducta_MLOPS_CIRCUIT_BREAKER", False),
         )
+
+    def with_overrides(self, overrides: Dict[str, Any]) -> "MLOpsConfig":
+        """Apply a project-level override dict (e.g. ``global_config['mlops']['gc']``)
+        on top of the env-var-resolved values. Same filtering pattern as
+        ``PromotionPolicy.from_dict`` (mlrun/model_registry.py:75-77): unknown
+        keys are ignored rather than raising, since this is meant to accept a
+        loosely-shaped user config."""
+        valid = {f.name for f in fields(self)}
+        clean = {k: v for k, v in overrides.items() if k in valid and v is not None}
+        return replace(self, **clean) if clean else self
 
     def validate(self) -> None:
         """Validate configuration."""

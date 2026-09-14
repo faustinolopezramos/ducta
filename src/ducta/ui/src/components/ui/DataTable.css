@@ -98,6 +98,20 @@
 
 .tui-table__row.is-selected { background: var(--primary-light); }
 
+/* Row accent rail — the same "color as signal, not decoration" left-border
+   language the log viewer uses for error/warning lines, so a failed or
+   running execution reads at a glance without leaning on the status badge
+   color alone. Border, not box-shadow: `border-collapse: collapse` makes it
+   render correctly on <tr> without disturbing column widths. */
+.tui-table__row--accent-danger { border-left: 3px solid var(--danger); }
+.tui-table__row--accent-info { border-left: 3px solid var(--primary); }
+
+.tui-table__row--detail { border-bottom: 1px solid var(--border); }
+.tui-table__td--detail {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+  padding: var(--space-3) var(--space-4);
+}
+
 .tui-table__td {
   color: var(--text-muted);
   vertical-align: middle;

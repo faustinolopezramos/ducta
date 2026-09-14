@@ -36,6 +36,15 @@ export interface LayoutInputEdge {
   fromPort?: number;
   /** Index into the target node's input ports. Falls back to fan order. */
   toPort?: number;
+  /**
+   * Distinguishes parallel edges between the same pair of nodes.
+   *
+   * Edges are de-duplicated by this key, so two nodes wired by two different
+   * datasets stay two lines instead of collapsing into one. Defaults to
+   * `from->to`, which is the pair-dedupe the layout did before typed ports:
+   * a node declaring the same dependency twice is still one line.
+   */
+  key?: string;
 }
 
 export interface LayoutPoint {
@@ -112,6 +121,8 @@ interface Segment {
 }
 
 const edgeId = (from: string, to: string) => `${from}->${to}`;
+/** An edge's identity: its own `key` when it has one, else its node pair. */
+const edgeKey = (e: LayoutInputEdge) => e.key ?? edgeId(e.from, e.to);
 const centerX = (c: Cell) => c.x + c.width / 2;
 
 /**
@@ -143,12 +154,13 @@ export function layoutDag(
   const byId = new Map(nodes.map((n) => [n.id, n]));
 
   // Keep only edges whose endpoints both exist, drop self-loops, and dedupe by
-  // pair (a node declaring the same dependency twice is one line, not two).
+  // edge key (a node declaring the same dependency twice is one line, not two —
+  // but two datasets flowing between the same pair are two lines).
   const seenPair = new Set<string>();
   const realEdges: LayoutInputEdge[] = [];
   for (const e of edges) {
     if (e.from === e.to || !byId.has(e.from) || !byId.has(e.to)) continue;
-    const key = edgeId(e.from, e.to);
+    const key = edgeKey(e);
     if (seenPair.has(key)) continue;
     seenPair.add(key);
     realEdges.push(e);
@@ -222,7 +234,7 @@ export function layoutDag(
   };
 
   for (const e of realEdges) {
-    const id = edgeId(e.from, e.to);
+    const id = edgeKey(e);
     const source = cells.get(e.from)!;
     const target = cells.get(e.to)!;
     const span = target.layer - source.layer;
@@ -477,24 +489,28 @@ export function layoutDag(
   // appear left to right, so parallel edges stop stacking on the centre line.
   const outFan = new Map<string, string[]>();
   const inFan = new Map<string, string[]>();
+  /** Edge key → its endpoints, so the fan anchor never has to parse the key. */
+  const endsOf = new Map<string, { from: string; to: string }>();
   for (const e of realEdges) {
+    const id = edgeKey(e);
+    endsOf.set(id, { from: e.from, to: e.to });
     if (!outFan.has(e.from)) outFan.set(e.from, []);
-    outFan.get(e.from)!.push(edgeId(e.from, e.to));
+    outFan.get(e.from)!.push(id);
     if (!inFan.has(e.to)) inFan.set(e.to, []);
-    inFan.get(e.to)!.push(edgeId(e.from, e.to));
+    inFan.get(e.to)!.push(id);
   }
   /** First waypoint of an edge on the given side — what its fan sorts by. */
   const fanAnchor = (id: string, side: "out" | "in"): number => {
     const chain = chainOf.get(id)!;
     if (chain.length > 0) return centerX(side === "out" ? chain[0] : chain[chain.length - 1]);
-    const [from, to] = id.split("->");
-    return centerX(cells.get(side === "out" ? to : from)!);
+    const ends = endsOf.get(id)!;
+    return centerX(cells.get(side === "out" ? ends.to : ends.from)!);
   };
   for (const [, ids] of outFan) ids.sort((a, b) => fanAnchor(a, "out") - fanAnchor(b, "out"));
   for (const [, ids] of inFan) ids.sort((a, b) => fanAnchor(a, "in") - fanAnchor(b, "in"));
 
   const routed: RoutedEdge[] = realEdges.map((e) => {
-    const id = edgeId(e.from, e.to);
+    const id = edgeKey(e);
     const source = cells.get(e.from)!;
     const target = cells.get(e.to)!;
     const sourceNode = byId.get(e.from)!;

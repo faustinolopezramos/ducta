@@ -4,38 +4,75 @@ import { useProjectStore } from "../store/projectStore";
 import { selectPresent } from "../store/reducer";
 import { useServerPipelineHydration } from "../hooks/useServerPipelineHydration";
 import { useCreatePipeline, useDeletePipeline } from "../api/mutations";
-import { useProjectDependencies, useServerProjectPipelines } from "../api/queries";
+import {
+  useProjectDatasets,
+  useProjectDependencies,
+  useServerProjectPipelines,
+} from "../api/queries";
 import { computeLineage, lensEdgeClass } from "../utils/lineage";
-import { useBuilderStore } from "../store/builderStore";
 import { Button } from "../components/ui/Button";
 import { EmptyState } from "../components/ui/EmptyState";
 import { Skeleton } from "../components/ui/Skeleton";
 import { DagCanvas } from "../components/Pipeline/DagCanvas";
+import { RunPipelineModal } from "../components/Pipeline/RunPipelineModal";
+import { formatGlyph } from "../utils/nodePresentation";
 import {
   IconChevronRight,
   IconPlus,
   IconTrash,
+  IconPlayerPlay,
   IconLayoutGrid,
   IconSitemap,
   IconArrowRight,
 } from "@tabler/icons-react";
 
-const MAX_PREVIEW_NODES = 6;
+/** Boundary datasets listed per side before the rest are summarised. */
+const MAX_BOUNDARY = 3;
 
-/** Project map: pipelines as supernodes, edges labelled with the shared
- *  datasets. Click selects (dependency lens), double-click previews the
- *  pipeline's nodes in place, "Open" navigates to the full workspace. */
+interface DatasetRef {
+  name: string;
+  format: string | null;
+  layer: "bronze" | "silver" | "gold" | null;
+}
+
+/** One side of a pipeline's data boundary, as read off its supernode card. */
+function BoundaryList({ label, refs }: { label: string; refs: DatasetRef[] }) {
+  if (refs.length === 0) return null;
+  const shown = refs.slice(0, MAX_BOUNDARY);
+  const rest = refs.length - shown.length;
+  return (
+    <div className="supernode-boundary-side">
+      <span className="supernode-boundary-label">{label}</span>
+      {shown.map((ref) => (
+        <span key={ref.name} className="supernode-dataset" data-layer={ref.layer ?? undefined}>
+          <span className="supernode-dataset-glyph" aria-hidden="true">
+            {formatGlyph(ref.format)}
+          </span>
+          {ref.name}
+        </span>
+      ))}
+      {rest > 0 && <span className="supernode-more">+{rest} more</span>}
+    </div>
+  );
+}
+
+/**
+ * Project map: the pipelines of a project as supernodes, edges labelled with
+ * the datasets they share.
+ *
+ * The pipelines are the subject of this screen, so they get the whole window
+ * and the whole click: a card opens its pipeline, no small target inside it to
+ * hit. The dependency lens — which pipelines feed this one, which consume it —
+ * follows hover and focus instead of costing a click, which leaves the single
+ * click free for the one thing you actually come here to do.
+ */
 function ProjectDependenciesView({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const { data, isLoading, isError } = useProjectDependencies(projectId);
   const { data: pipelinesData } = useServerProjectPipelines(projectId);
-  const [selectedPipeline, setSelectedPipeline] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
-
-  // The DAG canvas shares the builder-store viewport; start the map at 1:1
-  // instead of inheriting the zoom/pan of the last pipeline workspace.
-  const resetViewport = useBuilderStore((s) => s.resetViewport);
-  useEffect(() => { resetViewport(); }, [resetViewport]);
+  const { data: datasetsData } = useProjectDatasets(projectId);
+  /** Pipeline under the cursor or keyboard focus — drives the lens, not selection. */
+  const [focused, setFocused] = useState<string | null>(null);
 
   const { items, labels, parents } = useMemo(() => {
     const pipelines = Object.keys(data?.pipelines ?? {});
@@ -67,50 +104,79 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
     };
   }, [data]);
 
-  const lineage = useMemo(
-    () => computeLineage(selectedPipeline, parents),
-    [selectedPipeline, parents]
-  );
+  /**
+   * Each pipeline's interface with the rest of the project: the datasets it
+   * consumes from outside itself, and the ones it publishes for others.
+   *
+   * This is what a pipeline *is* at project altitude. The card used to list up
+   * to six truncated node names instead, which says nothing about how the
+   * pipelines fit together.
+   */
+  const boundary = useMemo(() => {
+    const result = new Map<string, { consumes: DatasetRef[]; publishes: DatasetRef[] }>();
+    for (const d of datasetsData?.datasets ?? []) {
+      const producerPipelines = new Set(
+        d.producers.map((p) => p.pipeline).filter(Boolean) as string[]
+      );
+      const consumerPipelines = new Set(
+        d.consumers.map((c) => c.pipeline).filter(Boolean) as string[]
+      );
+      const ref: DatasetRef = { name: d.name, format: d.format ?? null, layer: d.layer ?? null };
 
-  const toggleExpanded = (id: string) => {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
+      for (const pipeline of consumerPipelines) {
+        // Read from outside this pipeline: nobody inside it writes the dataset.
+        if (producerPipelines.has(pipeline)) continue;
+        const entry = result.get(pipeline) ?? { consumes: [], publishes: [] };
+        entry.consumes.push(ref);
+        result.set(pipeline, entry);
+      }
+      for (const pipeline of producerPipelines) {
+        // Published: somebody outside this pipeline reads it, or nobody does
+        // (a terminal output is still this pipeline's product).
+        const readElsewhere = [...consumerPipelines].some((c) => c !== pipeline);
+        if (consumerPipelines.size > 0 && !readElsewhere) continue;
+        const entry = result.get(pipeline) ?? { consumes: [], publishes: [] };
+        entry.publishes.push(ref);
+        result.set(pipeline, entry);
+      }
+    }
+    return result;
+  }, [datasetsData]);
+
+  const lineage = useMemo(() => computeLineage(focused, parents), [focused, parents]);
+
+  const open = (pipelineId: string) => navigate(`/project/${projectId}/pipeline/${pipelineId}`);
 
   if (isLoading) {
     return (
-      <div style={{ padding: 24 }}>
-        <Skeleton variant="block" height="200px" />
+      <div className="project-map project-map--placeholder">
+        <Skeleton variant="block" height="100%" />
       </div>
     );
   }
   if (isError) {
     return (
-      <EmptyState
-        icon={IconSitemap}
-        title="Couldn't load the project map"
-        description="Check that the API is reachable and try again."
-      />
+      <div className="project-map project-map--placeholder">
+        <EmptyState
+          icon={IconSitemap}
+          title="Couldn't load the project map"
+          description="Check that the API is reachable and try again."
+        />
+      </div>
     );
   }
   if (items.length === 0) {
-    return <EmptyState icon={IconSitemap} title="No pipelines in this project yet" />;
+    return (
+      <div className="project-map project-map--placeholder">
+        <EmptyState icon={IconSitemap} title="No pipelines in this project yet" />
+      </div>
+    );
   }
 
   const hasCrossEdges = labels.size > 0 || items.some((i) => i.dependsOn.length > 0);
 
   return (
-    <div style={{ position: "relative" }}>
-      {!hasCrossEdges && (
-        <p style={{ margin: "12px 0 0", fontSize: 12, color: "var(--text-muted)" }}>
-          No cross-pipeline dependencies detected — pipelines neither declare dependencies on each
-          other's nodes nor consume each other's output datasets.
-        </p>
-      )}
+    <div className="project-map">
       <DagCanvas
         items={items}
         edgeLabel={(from, to) => labels.get(`${from}->${to}`) ?? null}
@@ -126,69 +192,58 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
             lensDir === "up"
               ? lineage!.upstream.get(item.id)
               : lineage?.downstream.get(item.id);
-          const dimmed = lineage ? item.id !== lineage.selectedId && !lensDir : false;
-          const isSelected = selectedPipeline === item.id;
-          const isExpanded = expanded.has(item.id);
-          const previewNodes = (item.nodes as string[]).slice(0, MAX_PREVIEW_NODES);
+          const isFocused = focused === item.id;
+          const dimmed = lineage ? !isFocused && !lensDir : false;
+          const edges = boundary.get(item.id);
           return (
             <div
               role="button"
               tabIndex={0}
-              aria-pressed={isSelected}
-              aria-label={`Pipeline ${item.id}, ${item.nodeCount} nodes`}
-              className={`pipeline-supernode ${isSelected ? "selected" : ""} ${dimmed ? "dag-dimmed" : ""} ${lensDir ? `lens-${lensDir}` : ""}`}
-              onClick={() => setSelectedPipeline((cur) => (cur === item.id ? null : item.id))}
-              onDoubleClick={() => {
-                setSelectedPipeline(item.id);
-                toggleExpanded(item.id);
-              }}
+              aria-label={`Open pipeline ${item.id}, ${item.nodeCount} nodes`}
+              className={`pipeline-supernode ${isFocused ? "focused" : ""} ${dimmed ? "dag-dimmed" : ""} ${lensDir ? `lens-${lensDir}` : ""}`}
+              onClick={() => open(item.id)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" || e.key === " ") {
                   e.preventDefault();
-                  navigate(`/project/${projectId}/pipeline/${item.id}`);
-                }
-                if (e.key === " ") {
-                  e.preventDefault();
-                  setSelectedPipeline((cur) => (cur === item.id ? null : item.id));
+                  open(item.id);
                 }
               }}
+              onMouseEnter={() => setFocused(item.id)}
+              onMouseLeave={() => setFocused((cur) => (cur === item.id ? null : cur))}
+              onFocus={() => setFocused(item.id)}
+              onBlur={() => setFocused((cur) => (cur === item.id ? null : cur))}
             >
               {lensDir && lensDepth != null && (
                 <span className={`lens-tag lens-tag-${lensDir}`}>
-                  {lensDir === "up" ? "↑" : "↓"}{lensDepth}
+                  {lensDir === "up" ? "\u2191" : "\u2193"}{lensDepth}
                 </span>
               )}
               <div className="supernode-head">
                 <span className="supernode-name">{item.id}</span>
-                <span className="supernode-type">{pipelineType}</span>
+                <IconArrowRight className="supernode-go" size={16} stroke={2} />
               </div>
               <div className="supernode-meta">
-                <span>{item.nodeCount} node{item.nodeCount !== 1 ? "s" : ""}</span>
-                <button
-                  className="supernode-open"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    navigate(`/project/${projectId}/pipeline/${item.id}`);
-                  }}
-                  aria-label={`Open pipeline ${item.id}`}
-                >
-                  Open <IconArrowRight size={11} />
-                </button>
+                <span className="supernode-type">{pipelineType}</span>
+                <span className="supernode-count">
+                  {item.nodeCount} node{item.nodeCount !== 1 ? "s" : ""}
+                </span>
               </div>
-              {isExpanded && (
-                <div className="supernode-inner">
-                  {previewNodes.map((n) => (
-                    <span key={n} className="supernode-mini-node">{n}</span>
-                  ))}
-                  {item.nodes.length > MAX_PREVIEW_NODES && (
-                    <span className="supernode-more">+{item.nodes.length - MAX_PREVIEW_NODES} more</span>
-                  )}
+              {edges && (edges.consumes.length > 0 || edges.publishes.length > 0) && (
+                <div className="supernode-boundary">
+                  <BoundaryList label="Consumes" refs={edges.consumes} />
+                  <BoundaryList label="Publishes" refs={edges.publishes} />
                 </div>
               )}
             </div>
           );
         }}
       />
+      {!hasCrossEdges && (
+        <p className="project-map-hint">
+          No cross-pipeline dependencies detected — pipelines neither declare dependencies on each
+          other's nodes nor consume each other's output datasets.
+        </p>
+      )}
     </div>
   );
 }
@@ -205,6 +260,7 @@ export function ProjectPage() {
   const [view, setView] = useState<"pipelines" | "dependencies">("dependencies");
   const [createName, setCreateName] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [runPipelineId, setRunPipelineId] = useState<string | null>(null);
   const createInputRef = useRef<HTMLInputElement>(null);
   const { mutate: createPipeline, isPending: isCreating } = useCreatePipeline();
   const { mutate: deletePipeline, isPending: isDeleting } = useDeletePipeline();
@@ -228,6 +284,8 @@ export function ProjectPage() {
 
   const handleOpenCreate = () => {
     setCreateName("");
+    // The form lives in the list view, so asking for a pipeline goes there.
+    setView("pipelines");
     setShowCreate(true);
   };
 
@@ -246,7 +304,6 @@ export function ProjectPage() {
               id: name,
               name,
               nodes: [],
-              edges: [],
               active: true,
               createdAt: Date.now(),
               updatedAt: Date.now(),
@@ -262,7 +319,7 @@ export function ProjectPage() {
   const handleDeletePipeline = (pipelineId: string) => {
     if (!projectId) return;
     deletePipeline(
-      { projectId, name: pipelineId },
+      { projectId, name: pipelineId, expectedSha: serverPipelines?.commit_sha },
       {
         onSuccess: () => {
           dispatch({ type: "DELETE_PIPELINE", payload: pipelineId });
@@ -290,17 +347,52 @@ export function ProjectPage() {
     );
   }
 
+  const isMap = view === "dependencies" && Boolean(projectId);
+
   return (
-    <div className="page-transition project-page">
-      {/* Header with breadcrumb */}
+    <div className={`page-transition project-page${isMap ? " project-page--map" : ""}`}>
+      {/* The only chrome the map keeps: where you are, how you look at it, and
+          the one action that creates something. Everything else the page used
+          to stack above the canvas (title, id, pipeline count, section
+          heading) repeated what the breadcrumb and the cards already say, and
+          it was costing the map most of its height. */}
       <div className="project-header">
-        <div className="breadcrumbs">
-          <Link to="/projects" className="breadcrumb-item">Projects</Link>
-          <IconChevronRight size={14} className="separator" />
-          <span className="breadcrumb-current">{currentProject.name}</span>
-        </div>
+        {/* MainLayout already renders the trail (Projects > this project) right
+            above this bar, so in map view the left slot drops the duplicate and
+            keeps only what the trail does not say. */}
+        {isMap ? (
+          <span className="project-header-count">
+            {pipelineCount} pipeline{pipelineCount !== 1 ? "s" : ""}
+          </span>
+        ) : (
+          <div className="breadcrumbs">
+            <Link to="/projects" className="breadcrumb-item">Projects</Link>
+            <IconChevronRight size={14} className="separator" />
+            <span className="breadcrumb-current">{currentProject.name}</span>
+          </div>
+        )}
 
         <div className="header-actions">
+          <div className="view-switch" role="group" aria-label="Project view">
+            <Button
+              variant={isMap ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setView("dependencies")}
+              title="Cross-pipeline dependency map (explicit deps + shared datasets)"
+            >
+              <IconSitemap size={14} />
+              Map
+            </Button>
+            <Button
+              variant={!isMap ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setView("pipelines")}
+              title="Pipelines as a list"
+            >
+              <IconLayoutGrid size={14} />
+              List
+            </Button>
+          </div>
           <Button variant="primary" size="sm" onClick={handleOpenCreate}>
             <IconPlus size={16} stroke={2} />
             <span>New Pipeline</span>
@@ -308,8 +400,10 @@ export function ProjectPage() {
         </div>
       </div>
 
+      {isMap && <ProjectDependenciesView projectId={projectId!} />}
+
+      {!isMap && (
       <div className="project-content t-container">
-        {/* Project Intro */}
         <section className="project-intro">
           <h1 className="t-h1">{currentProject.name}</h1>
           <div className="project-meta">
@@ -321,33 +415,6 @@ export function ProjectPage() {
 
         {/* Pipelines List */}
         <section className="pipelines-section">
-          <div className="section-header" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <h2 className="t-h2">{view === "pipelines" ? "Pipelines" : "Project map"}</h2>
-            <div style={{ display: "flex", gap: 6 }}>
-              <Button
-                variant={view === "dependencies" ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => setView("dependencies")}
-                title="Cross-pipeline dependency map (explicit deps + shared datasets)"
-              >
-                <IconSitemap size={14} />
-                Map
-              </Button>
-              <Button
-                variant={view === "pipelines" ? "secondary" : "ghost"}
-                size="sm"
-                onClick={() => setView("pipelines")}
-              >
-                <IconLayoutGrid size={14} />
-                List
-              </Button>
-            </div>
-          </div>
-
-          {view === "dependencies" && projectId ? (
-            <ProjectDependenciesView projectId={projectId} />
-          ) : (
-            <>
           {/* Inline create form */}
           {showCreate && (
             <div className="create-pipeline-card t-card">
@@ -420,6 +487,17 @@ export function ProjectPage() {
                     </div>
 
                     <button
+                      className="run-btn"
+                      title="Run pipeline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRunPipelineId(pipeline.id);
+                      }}
+                    >
+                      <IconPlayerPlay size={16} />
+                    </button>
+
+                    <button
                       className="delete-btn"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -450,10 +528,17 @@ export function ProjectPage() {
               ))}
             </div>
           )}
-            </>
-          )}
         </section>
       </div>
+      )}
+
+      {runPipelineId && projectId && (
+        <RunPipelineModal
+          projectId={projectId}
+          pipelineName={runPipelineId}
+          onClose={() => setRunPipelineId(null)}
+        />
+      )}
     </div>
   );
 }

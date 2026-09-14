@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -58,17 +59,7 @@ class SourceValidateResponse(BaseModel):
     dependencies=[Depends(require_permission("workspace.read"))],
 )
 async def auto_detect_workspace() -> dict:
-    """Return the workspace the server was launched from.
-
-    Checks (in order):
-      1. ``DUCTA_WORKSPACE`` environment variable — set by ``ducta ui`` when it
-         auto-detects or receives an explicit ``--source`` argument.
-      2. ``_detect_ducta_workspace()`` — walks up from the server's CWD looking
-         for ``environment.yaml`` / ``config/`` directories (same logic the CLI uses).
-
-    Returns 200 with ``{ path, auto_detected }`` when a workspace is found, or
-    404 when the server has no context about which workspace to use.
-    """
+    """Return the workspace the server was launched from."""
     source = os.environ.get("DUCTA_WORKSPACE")
     auto_detected = False
 
@@ -121,6 +112,96 @@ async def get_source_info(
         raise HTTPException(status_code=400, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+class BrowseEntry(BaseModel):
+    """One directory the caller may descend into or open as a workspace."""
+
+    name: str
+    path: str
+    is_workspace: bool = False
+    has_git: bool = False
+
+
+class BrowseResponse(BaseModel):
+    """A directory listing, plus where the caller is inside the reachable tree."""
+
+    path: str
+    parent: Optional[str] = None
+    root: str
+    entries: list[BrowseEntry]
+
+
+#: Directories never worth showing in a workspace picker.
+_BROWSE_SKIP = frozenset(
+    {
+        ".git",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".idea",
+        ".vscode",
+    }
+)
+
+
+@router.get(
+    "/browse",
+    response_model=BrowseResponse,
+    summary="List directories the server can open as a source",
+    dependencies=[Depends(require_permission("workspace.read"))],
+)
+async def browse_directories(
+    path: Annotated[Optional[str], Query(description="Directory to list")] = None,
+) -> BrowseResponse:
+    """Back the local-folder picker in the connect screen."""
+    root = SourceResolver._confinement_base()
+    target = root if not path or not path.strip() else Path(path.strip())
+
+    try:
+        target = target.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid path: {exc}") from exc
+
+    if not target.is_relative_to(root):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{target}' is outside the directory this server can reach "
+                f"('{root}'). Restart the server from there to browse it."
+            ),
+        )
+    if not target.is_dir():
+        raise HTTPException(status_code=400, detail=f"Not a directory: {target}")
+
+    entries: list[BrowseEntry] = []
+    try:
+        for item in sorted(target.iterdir(), key=lambda p: p.name.lower()):
+            if not item.is_dir() or item.name.startswith(".") or item.name in _BROWSE_SKIP:
+                continue
+            entries.append(
+                BrowseEntry(
+                    name=item.name,
+                    path=str(item),
+                    is_workspace=SourceResolver._looks_like_workspace(item),
+                    has_git=(item / ".git").exists(),
+                )
+            )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=f"Cannot read {target}: {exc}") from exc
+
+    return BrowseResponse(
+        path=str(target),
+        parent=str(target.parent) if target != root else None,
+        root=str(root),
+        entries=entries,
+    )
 
 
 @router.get(

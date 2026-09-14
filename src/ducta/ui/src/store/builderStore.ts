@@ -51,11 +51,6 @@ export interface BuilderState {
   edges: Edge[];
   selectedNodeId: string | null;
 
-  // Canvas viewport (zoom/pan)
-  viewportScale: number;
-  viewportX: number;
-  viewportY: number;
-
   // Panel visibility
   paletteOpen: boolean;
 
@@ -96,10 +91,6 @@ export interface BuilderState {
   setExecutionStates: (states: Record<string, string>) => void;
   addNodeExecution: (nodeId: string, executionId: string) => void;
   removeNodeExecution: (nodeId: string) => void;
-  setViewport: (scale: number, x: number, y: number) => void;
-  zoomIn: () => void;
-  zoomOut: () => void;
-  resetViewport: () => void;
   reset: () => void;
 }
 
@@ -114,9 +105,6 @@ const initialState = {
   nodes: [] as Node[],
   edges: [] as Edge[],
   selectedNodeId: null as string | null,
-  viewportScale: 1,
-  viewportX: 0,
-  viewportY: 0,
   paletteOpen: true,
   history: [] as BuilderSnapshot[],
   historyIndex: -1,
@@ -242,32 +230,6 @@ const storeCreator = immer<BuilderState>((set, get) => ({
   removeNodeExecution: (nodeId: string) =>
     set((s) => {
       delete s.activeNodeExecutions[nodeId];
-    }),
-
-  setViewport: (scale, x, y) =>
-    set((s) => {
-      s.viewportScale = scale;
-      s.viewportX = x;
-      s.viewportY = y;
-    }),
-
-  zoomIn: () =>
-    set((s) => {
-      const newScale = Math.min(s.viewportScale * 1.25, 3);
-      s.viewportScale = newScale;
-    }),
-
-  zoomOut: () =>
-    set((s) => {
-      const newScale = Math.max(s.viewportScale / 1.25, 0.25);
-      s.viewportScale = newScale;
-    }),
-
-  resetViewport: () =>
-    set((s) => {
-      s.viewportScale = 1;
-      s.viewportX = 0;
-      s.viewportY = 0;
     }),
 
   reset: () => set(initialState),

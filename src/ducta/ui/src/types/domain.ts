@@ -9,12 +9,19 @@ export interface NodeAdditionalFile {
   [key: string]: unknown;
 }
 
+/**
+ * One side of a node's dataset wiring.
+ *
+ * `name` is a *reference* into `input_config` / `output_config`; the format,
+ * path, write mode and schema live there and are fetched with
+ * `useProjectDatasets`. They are deliberately absent here: carrying them
+ * meant inventing them, and the hydration used to hard-code `"parquet"` for
+ * every dataset in the app.
+ */
 export interface NodeInputOutput {
   id: string;
+  /** Dataset reference name, e.g. `bronze.raw_results`. */
   name: string;
-  format: string;
-  path?: string;
-  schema?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -35,15 +42,6 @@ export interface Node {
   dataQuality?: Record<string, unknown>;
   executionConfig?: Record<string, unknown>;
   files?: NodeAdditionalFile[];
-}
-
-export interface Edge {
-  id: string;
-  source: string;
-  target: string;
-  sourceHandle?: string | null;
-  targetHandle?: string | null;
-  animated?: boolean;
 }
 
 export interface Connection {
@@ -79,7 +77,6 @@ export interface Pipeline {
   type?: string;
   tags?: string[];
   nodes: Node[];
-  edges: Edge[];
   active: boolean;
   purpose?: 'etl' | 'ml' | 'dq' | 'reporting' | 'custom';
   temporal?: boolean;
@@ -93,4 +90,11 @@ export interface Pipeline {
   lastRun?: string | Execution;
   lastRunDuration?: string | number | null;
   runStatus?: 'idle' | 'running' | 'success' | 'failed';
+  /** Set once `useServerPipelineHydration` has seen this pipeline come back
+   *  from the server. A locally-created pipeline the server hasn't
+   *  confirmed yet stays `undefined` so a later hydration that doesn't list
+   *  it (still saving, or the create request hasn't landed) never deletes
+   *  it — only a pipeline that *was* confirmed and later disappears from
+   *  the server's list (deleted elsewhere) gets removed. */
+  persisted?: boolean;
 }

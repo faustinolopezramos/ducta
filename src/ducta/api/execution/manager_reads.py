@@ -87,6 +87,8 @@ class _ReadsMixin:
         since: Optional[str] = None,
         until: Optional[str] = None,
         sweep_id: Optional[str] = None,
+        project_id: Optional[str] = None,
+        q: Optional[str] = None,
     ) -> tuple[List[ExecutionResponse], int]:
         all_executions = self.list_executions(user_id=user_id)
         if pipeline_name:
@@ -99,6 +101,27 @@ class _ReadsMixin:
             all_executions = [e for e in all_executions if e.env == env]
         if sweep_id:
             all_executions = [e for e in all_executions if e.sweep_id == sweep_id]
+        if project_id:
+            all_executions = [e for e in all_executions if e.project_id == project_id]
+        if q:
+            needle = q.strip().lower()
+            all_executions = [
+                e
+                for e in all_executions
+                if needle
+                in " ".join(
+                    filter(
+                        None,
+                        [
+                            e.id,
+                            e.pipeline_name,
+                            e.node_name,
+                            e.error_message,
+                            e.certificate_run_id,
+                        ],
+                    )
+                ).lower()
+            ]
 
         since_dt = _parse_iso(since)
         until_dt = _parse_iso(until)
@@ -172,7 +195,19 @@ class _ReadsMixin:
 
         if self._db_store is not None:
             try:
-                from_db = await self._db_store.get_logs(execution_id)
+                from_db: List[LogEntry] = []
+                page_size = 500
+                offset = 0
+                for _ in range(40):  # ~20,000 lines, on the same order as the live buffer cap
+                    page = await self._db_store.get_logs(
+                        execution_id, limit=page_size, offset=offset
+                    )
+                    if not page:
+                        break
+                    from_db.extend(page)
+                    if len(page) < page_size:
+                        break
+                    offset += page_size
                 if from_db:
                     return from_db
             except Exception as exc:  # noqa: BLE001

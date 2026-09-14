@@ -1,5 +1,5 @@
 export type {
-  NodeAdditionalFile, NodeInputOutput, Node, Edge,
+  NodeAdditionalFile, NodeInputOutput, Node,
   Connection, ProjectGlobalSettings, Pipeline, Project,
 } from './domain';
 

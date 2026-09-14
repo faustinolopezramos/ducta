@@ -1,13 +1,19 @@
 import { useCallback, useEffect, lazy, Suspense } from "react";
 import { Link } from "react-router-dom";
-import { DagCanvas, HUDToolbar, NodeDetailSidebar, CommandPalette } from "../../components/Pipeline";
+import {
+  DagCanvas,
+  DataGraph,
+  HUDToolbar,
+  NodeInspector,
+  DatasetInspector,
+  CommandPalette,
+} from "../../components/Pipeline";
 import { useUpdateNodeCode, useUpdatePipeline, useUpdateNode } from "../../api/mutations";
 const CodeEditorModal = lazy(() => import("../../components/CodeEditorModal").then(m => ({ default: m.CodeEditorModal })));
 const CodeEditor = lazy(() => import("../../components/CodeEditor").then(m => ({ default: m.CodeEditor })));
 import type { EditorMarker } from "../../components/CodeEditor";
 import { ExecutionControls } from "../../components/Execution";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
-import { LiveMedallionMonitor } from "../../components/Execution/LiveMedallionMonitor";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
@@ -17,39 +23,41 @@ import { lensEdgeClass } from "../../utils/lineage";
 import { validatePipelineYaml } from "./yamlValidation";
 import { AddNodeForm } from "./AddNodeForm";
 import { LogsStatusBar } from "./LogsStatusBar";
-import { useCanvasPanZoom } from "./useCanvasPanZoom";
 import { usePipelineKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { usePipelinePageState } from "./usePipelinePageState";
 
 export function PipelinePage() {
   const {
     projectId, pipelineId, navigate,
-    selectedNodeId, setSelectedNodeId, viewMode, setViewMode,
+    selection, selectedNodeId, selectedDatasetName,
+    selectNodeById, selectDatasetByName, setSelection, viewMode, setViewMode,
     yamlMarkers, setYamlMarkers, activeExecutionId, setActiveExecutionId,
     isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode,
     runningNodeId, setRunningNodeId, execStatus, setExecStatus,
     addNodeOpen, setAddNodeOpen, paletteOpen, setPaletteOpen,
     activeEnv, executionStates, showToast, logsOpen, setLogsOpen,
+    datasetList, datasetMap, datasetByName, datasetsLoading,
     pipelinesData, rawPipelineSpec, yamlString, handleSaveYaml, handleChangeType, handleAddNode,
+    existingNodeNames,
     currentProject, currentPipeline, pipelineNodes, dagItems,
     parentsMap, lineage, navMaps, lineageLists, isExecuting,
     handleRunNode, handleExecute, handleValidate, handleCancel, clearSelection,
+    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
     blocker,
   } = usePipelinePageState();
 
-  const { flowRef, centerOnNode, resetViewport } = useCanvasPanZoom(clearSelection);
-
   usePipelineKeyboardShortcuts({
     paletteOpen, setPaletteOpen, isCodeEditorOpen, addNodeOpen,
-    viewMode, selectedNodeId, setSelectedNodeId, pipelineNodes,
+    viewMode, selectedNodeId, setSelectedNodeId: selectNodeById, pipelineNodes,
     navMaps, parentsMap, isExecuting, runningNodeId, handleRunNode,
-    centerOnNode, resetViewport,
+    centerOnNode, fitCanvas,
   });
 
-  // Auto-center node when detail sidebar opens (shifting node left of drawer)
+  // Shift the selected node clear of the inspector drawer. The offset is
+  // negative because the drawer is on the right, so the node moves left.
   useEffect(() => {
     if (selectedNodeId && viewMode === "flow") {
-      const timer = setTimeout(() => centerOnNode(selectedNodeId, -120), 50);
+      const timer = setTimeout(() => centerOnNode(selectedNodeId, -170), 60);
       return () => clearTimeout(timer);
     }
   }, [selectedNodeId, viewMode, centerOnNode]);
@@ -139,13 +147,16 @@ export function PipelinePage() {
           onValidate={handleValidate}
           onAddNode={() => setAddNodeOpen(true)}
           onFind={() => setPaletteOpen(true)}
+          onZoomIn={viewMode === "config" ? undefined : zoomIn}
+          onZoomOut={viewMode === "config" ? undefined : zoomOut}
+          onFitView={viewMode === "config" ? undefined : fitCanvas}
         />
 
         {paletteOpen && (
           <CommandPalette
             nodes={pipelineNodes}
             pipelines={Object.keys(pipelinesData?.pipelines ?? {}).filter((p) => p !== pipelineId)}
-            onSelectNode={(id) => { setSelectedNodeId(id); centerOnNode(id); }}
+            onSelectNode={(id) => { selectNodeById(id); centerOnNode(id); }}
             onOpenPipeline={(name) => navigate(`/project/${projectId}/pipeline/${name}`)}
             onClose={() => setPaletteOpen(false)}
           />
@@ -156,13 +167,15 @@ export function PipelinePage() {
             <EmptyState icon={IconCircleDotted} title="No nodes yet"
               description="Add your first node to build this pipeline."
               action={<Button variant="ghost" size="sm" onClick={() => setAddNodeOpen(true)}>+ Add first node</Button>} />
-            {addNodeOpen && <AddNodeForm onAdd={handleAddNode} onCancel={() => setAddNodeOpen(false)} />}
+            {addNodeOpen && (
+              <AddNodeForm
+                onAdd={handleAddNode}
+                onCancel={() => setAddNodeOpen(false)}
+                existingNames={existingNodeNames}
+              />
+            )}
           </div>
-        ) : viewMode === "streaming" ? (
-          <div className="pipeline-streaming">
-            <LiveMedallionMonitor executionId={activeExecutionId} executionStatus={execStatus} onCancel={handleCancel} />
-          </div>
-        ) : viewMode === "yaml" ? (
+                ) : viewMode === "config" ? (
           <div className="pipeline-yaml-editor">
             <div className="yaml-editor-header">
               <span className="yaml-editor-label"><span className="status-dot-small" />{currentPipeline.name || currentPipeline.id} (YAML Spec)</span>
@@ -185,32 +198,77 @@ export function PipelinePage() {
             </div>
           </div>
         ) : (
-          <div className="pipeline-flow" ref={flowRef}>
-            <DagCanvas items={dagItems}
-              edgeClassName={(from: string, to: string) => lensEdgeClass(lineage, from, to)}
-              executionStates={executionStates} selectedNodeId={selectedNodeId}
-              lineage={lineage} onNodeSelect={setSelectedNodeId} />
+          <div className="pipeline-flow">
+            {viewMode === "data" ? (
+              <DataGraph
+                datasets={datasetList}
+                pipelineId={pipelineId}
+                selection={selection}
+                onSelect={setSelection}
+              />
+            ) : (
+              <DagCanvas
+                items={dagItems}
+                datasets={datasetMap}
+                edgeClassName={(from: string, to: string) => lensEdgeClass(lineage, from, to)}
+                executionStates={executionStates}
+                selection={selection}
+                lineage={lineage}
+                onSelect={setSelection}
+                onViewportReady={onViewportReady}
+              />
+            )}
 
-            {addNodeOpen && <AddNodeForm onAdd={handleAddNode} onCancel={() => setAddNodeOpen(false)} />}
+            {addNodeOpen && (
+              <AddNodeForm
+                onAdd={handleAddNode}
+                onCancel={() => setAddNodeOpen(false)}
+                existingNames={existingNodeNames}
+              />
+            )}
 
-            {selectedNodeId && (() => {
-              const selectedNode = pipelineNodes.find((n) => n.id === selectedNodeId);
-              if (!selectedNode) return null;
-              return (
-                <NodeDetailSidebar node={selectedNode}
-                  projectId={projectId ?? ""} pipelineId={pipelineId ?? ""}
-                  activeEnv={activeEnv} runningNodeId={runningNodeId}
-                  lineage={lineageLists} onSelectNode={setSelectedNodeId}
-                  onClose={() => setSelectedNodeId(null)} onRunNode={handleRunNode}
-                  onEditCode={(code: string) => { setOpenedNodeCode(code); setIsCodeEditorOpen(true); }} />
-              );
-            })()}
+            {/* One inspector slot, two objects. Which panel opens follows the
+                selection's `kind`, so nodes and datasets are equally reachable. */}
+            {selectedNodeId && (
+              <NodeInspector
+                nodeId={selectedNodeId}
+                projectId={projectId ?? ""}
+                pipelineId={pipelineId ?? ""}
+                fallback={pipelineNodes.find((n) => n.id === selectedNodeId)}
+                runningNodeId={runningNodeId}
+                lineage={lineageLists}
+                onSelectNode={selectNodeById}
+                onSelectDataset={selectDatasetByName}
+                onClose={clearSelection}
+                onRunNode={handleRunNode}
+                onEditCode={(code: string) => { setOpenedNodeCode(code); setIsCodeEditorOpen(true); }}
+                onViewQualityReports={({ dataset, pipelineName }) =>
+                  navigate(
+                    `/workspace/quality?env=${encodeURIComponent(activeEnv ?? "")}` +
+                      `&pipeline_name=${encodeURIComponent(pipelineName)}` +
+                      `&dataset=${encodeURIComponent(dataset)}`
+                  )
+                }
+              />
+            )}
+
+            {selectedDatasetName && (
+              <DatasetInspector
+                name={selectedDatasetName}
+                dataset={datasetByName.get(selectedDatasetName) ?? null}
+                isLoading={datasetsLoading}
+                currentPipeline={pipelineId}
+                onClose={clearSelection}
+                onSelectNode={selectNodeById}
+                onOpenPipeline={(name) => navigate(`/project/${projectId}/pipeline/${name}`)}
+              />
+            )}
           </div>
         )}
 
         {logsOpen && (
           <div className="pipeline-logs-layer">
-            <InlineLogs isRunning={isExecuting} onClose={() => setLogsOpen(false)} variant="footer"
+            <InlineLogs isRunning={isExecuting} onClose={() => setLogsOpen(false)} mode="docked"
               nodes={pipelineNodes} executionStates={executionStates} />
           </div>
         )}

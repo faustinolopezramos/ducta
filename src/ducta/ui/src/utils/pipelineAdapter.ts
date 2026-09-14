@@ -1,8 +1,7 @@
 // ─────────────────────────────────────────────
 // PIPELINE ADAPTER
-// Converts raw API spec objects (from GET /nodes, GET /pipelines)
-// into the shape expected by PipelineGraph / PipelineView.
-// Also converts back for PUT /nodes and PUT /pipelines.
+// Normalizes raw API spec objects (GET /nodes, GET /projects/…/pipelines)
+// into the shapes the canvas and the project model expect.
 // ─────────────────────────────────────────────
 
 /**
@@ -32,45 +31,39 @@ export function coerceFnSpec(
 }
 
 /**
- * Derive node-to-node dependencies from dataset wiring.
+ * Dataset reference names for one side of a node spec.
  *
- * ducta node configs express edges implicitly: a node consumes datasets
- * (`input`) that other nodes in the same pipeline produce (`output`). The
- * canvas only draws explicit `dependencies`, so dataset-wired pipelines (e.g.
- * worldcup's medallion layers) render as disconnected nodes without this step.
+ * The canonical config spells these `input`/`output` as a list of strings; the
+ * API's repository layer normalizes to `inputs`/`outputs`, and a hand-edited
+ * YAML can carry a scalar, a dict keyed by name, or a list of objects. Every
+ * caller wants the same list of plain names, so the rule lives here.
  *
- * Each node's dependencies become the union of any already-declared
- * dependencies and every same-pipeline node that outputs one of its input
- * datasets (self-edges excluded). Pure: returns new node objects, inputs
- * untouched. Mirrors, at node granularity, the dataset producer→consumer
- * matching the backend already does for the cross-pipeline project map.
+ * Mirrors `io_names`/`node_io` in api/services/dataset_service.py.
  */
-export function deriveDatasetDependencies<
-  T extends {
-    id: string;
-    inputs?: { name?: string }[];
-    outputs?: { name?: string }[];
-    dependencies?: string[];
-  },
->(nodes: T[]): T[] {
-  const producers = new Map<string, string[]>();
-  for (const node of nodes) {
-    for (const out of node.outputs ?? []) {
-      if (!out?.name) continue;
-      (producers.get(out.name) ?? producers.set(out.name, []).get(out.name)!).push(node.id);
-    }
+export function ioNames(value: unknown): string[] {
+  if (value == null) return [];
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => {
+        if (typeof entry === "string") return entry;
+        if (entry && typeof entry === "object") {
+          const obj = entry as { name?: unknown; id?: unknown };
+          return String(obj.name ?? obj.id ?? "");
+        }
+        return "";
+      })
+      .filter(Boolean);
   }
+  if (typeof value === "object") return Object.keys(value as Record<string, unknown>);
+  return [];
+}
 
-  return nodes.map((node) => {
-    const deps = new Set(node.dependencies ?? []);
-    for (const input of node.inputs ?? []) {
-      if (!input?.name) continue;
-      for (const producer of producers.get(input.name) ?? []) {
-        if (producer !== node.id) deps.add(producer);
-      }
-    }
-    return { ...node, dependencies: [...deps] };
-  });
+/** Dataset names a node spec declares on `side` ("input" or "output"). */
+export function nodeIoNames(spec: any, side: "input" | "output"): string[] {
+  if (!spec) return [];
+  const plural = `${side}s`;
+  return ioNames(spec[plural] ?? spec[side]);
 }
 
 const ML_HINT = /(^|[._-])(ml|model|train|predict|infer|forecast|classif|regress|simulat|cluster|embed)/i;
@@ -79,7 +72,7 @@ const ML_HINT = /(^|[._-])(ml|model|train|predict|infer|forecast|classif|regress
  * Infer a node's semantic type when the spec doesn't declare one. ducta nodes
  * carry their role implicitly (datasets in/out + module path), so every node
  * defaulting to "custom" left the whole canvas a flat grey. This recovers the
- * type — and therefore the per-type accent colour — from that existing data:
+ * type from that existing data:
  *   • an explicit valid `type` always wins
  *   • ML modules / stages → "ml"
  *   • only produces (no inputs) → "source"; only consumes (no outputs) → "sink"
@@ -106,48 +99,4 @@ export function inferNodeType(spec: {
   if (nOut === 0 && nIn > 0) return "sink";
   if (nIn > 0 || nOut > 0) return "transform";
   return "custom";
-}
-
-/**
- * Transform a single node spec from the API into the
- * PipelineGraph node shape.
- *
- * API format:   { module, fn, status, dependencies, inputs:[{name,format,path}], outputs:[...] }
- * Graph format: { id, name, module, fn, status, dependencies, inputs:[{id,name,format,filepath,mode}], outputs:[...] }
- *
- * @param {string} name  - node key from GET /nodes
- * @param {Object} spec  - raw spec dict
- * @returns {Object}
- */
-export function adaptApiNode(name: string, spec: any = {}) {
-  const mapIO = (ios: any, mode: string) => {
-    if (!ios) return [];
-    const arr = Array.isArray(ios) ? ios : [ios];
-    return arr.map((io, i) => {
-      const isStr = typeof io === "string";
-      const ioName = isStr ? io : (io.name ?? `${mode}_${i}`);
-      return {
-        id:       `${name}-${mode}-${ioName}`,
-        name:     ioName,
-        format:   isStr ? "parquet" : (io.format ?? "parquet"),
-        filepath: isStr ? "" : (io.path ?? io.filepath ?? ""),
-        mode,
-      };
-    });
-  };
-
-  const { fn, module } = coerceFnSpec(spec.fn ?? spec.function, spec.module, "run");
-
-  return {
-    id:           name,
-    name,
-    module,
-    fn,
-    status:       spec.status ?? "active",
-    dependencies: spec.dependencies ?? [],
-    inputs:       mapIO(spec.inputs ?? spec.input, "read"),
-    outputs:      mapIO(spec.outputs ?? spec.output, "write"),
-    // Preserve extra spec keys (dataQuality, executionConfig, etc.)
-    _raw: spec,
-  };
 }
