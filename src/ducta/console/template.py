@@ -284,7 +284,7 @@ class MedallionBasicTemplate(BaseTemplate):
                 },
             },
             "transform": {
-                "description": "Silver: deduplicate and drop incomplete rows",
+                "description": "Silver: deduplicate, drop incomplete and invalid rows",
                 "module": PIPELINES_ETL_MODULE,
                 "function": "transform",
                 "input": ["bronze.etl.raw_data"],
@@ -306,6 +306,15 @@ class MedallionBasicTemplate(BaseTemplate):
                             "enabled": True,
                             "columns": ["order_id"],
                             "max_duplicate_rate": 0.0,
+                        },
+                        # A negative amount is a refund or entry error, not a
+                        # missing value — null_rate and duplicates both pass on
+                        # these rows untouched, so this is the check that would
+                        # actually notice if `transform` stopped filtering them.
+                        "range": {
+                            "enabled": True,
+                            "column": "amount",
+                            "min": 0,
                         },
                         # A floor, not a ceiling: catches a transform that
                         # silently drops most of the data.
@@ -397,6 +406,10 @@ class MedallionBasicTemplate(BaseTemplate):
     #: Orders repeated verbatim at the end of the file, so deduplication is a
     #: visible step rather than a claim.
     _DUPLICATED_ORDERS = (12, 74, 155, 219, 288, 341, 409, 468)
+    #: Rows with a negative ``amount`` — a refund or entry error, not a missing
+    #: value — so the silver `range` check has a defect only *it* catches
+    #: (null_rate and duplicates would both pass on these rows untouched).
+    _NEGATIVE_AMOUNT_ROWS = frozenset({15, 60, 120, 175, 260, 305, 355, 390, 430, 475})
     _CATEGORIES = ("electronics", "grocery", "apparel", "home", "toys")
 
     def get_sample_data(self) -> str:
@@ -405,8 +418,14 @@ class MedallionBasicTemplate(BaseTemplate):
         rows = []
         for order_id in range(1, 501):
             category = self._CATEGORIES[order_id % len(self._CATEGORIES)]
-            # Blank (not 0) — a missing amount, which is what null_rate is about.
-            amount = "" if order_id in self._NULL_ROWS else f"{50 + (order_id * 7) % 450}.00"
+            base_amount = f"{50 + (order_id * 7) % 450}.00"
+            if order_id in self._NULL_ROWS:
+                # Blank (not 0) — a missing amount, which is what null_rate is about.
+                amount = ""
+            elif order_id in self._NEGATIVE_AMOUNT_ROWS:
+                amount = f"-{base_amount}"
+            else:
+                amount = base_amount
             day = (order_id % 28) + 1
             rows.append(f"{order_id},{category},{amount},2025-01-{day:02d}")
 
@@ -894,16 +913,16 @@ Medallion ETL: bronze -> silver -> gold
 
 Each layer does real work, and the quality checks in ``config/nodes.yaml``
 verify that it did. The sample data ships deliberately dirty (12 rows with a
-missing amount, 8 verbatim duplicates), so:
+missing amount, 8 verbatim duplicates, 10 rows with a negative amount), so:
 
     bronze  508 rows   raw, exactly as it arrived
-    silver  488 rows   deduplicated and missing amounts dropped
+    silver  478 rows   deduplicated, missing and negative amounts dropped
     gold      5 rows   one row per category
 
-The silver checks (null_rate, duplicates) pass *because* `transform` cleaned the
-data. Break `transform` and the quality gate blocks the run before anything is
-written -- that is the point of the demo, and you can try it: comment out the
-dropna() below and re-run.
+The silver checks (null_rate, duplicates, range) pass *because* `transform`
+cleaned the data. Break `transform` and the quality gate blocks the run before
+anything is written -- that is the point of the demo, and you can try it:
+comment out the dropna() below and re-run.
 """
 from typing import Any, Optional
 
@@ -948,35 +967,55 @@ def transform(
 ) -> Any:
     """Silver: make the data trustworthy.
 
-    Two operations, both schema-agnostic, so this node keeps working when you
-    point the pipeline at your own table:
+    Three operations. The first two are schema-agnostic, so they keep working
+    when you point the pipeline at your own table; the third only fires on the
+    column this template's sample data is actually dirty in:
 
       1. drop exact duplicate rows
       2. drop rows with a missing value in any column
+      3. drop rows where ``VALUE_COLUMN`` is negative, if that column exists --
+         a refund or entry error, not a value `dropna()` would ever catch
 
-    The ``data_quality`` checks on this node assert the result: null_rate 0 and
-    no duplicate order_id. They are not decoration -- they fail if this function
-    stops doing its job, and the gate stops the run before gold is written.
+    The ``data_quality`` checks on this node assert the result: null_rate 0, no
+    duplicate order_id, and no negative amount. They are not decoration -- they
+    fail if this function stops doing its job, and the gate stops the run
+    before gold is written.
     """
     if raw_data is None:
         raise ValueError("raw_data cannot be None")
 
+    # `cleaned` is reassigned at each stage (not chained through separate
+    # names) so that commenting out any *one* of the three lines below to try
+    # the quality gate still leaves it bound to the previous stage's result --
+    # not undefined. That is the whole point of the exercise in the README.
     before = _row_count(raw_data)
 
-    deduplicated = (
-        raw_data.dropDuplicates() if hasattr(raw_data, "dropDuplicates") else raw_data.drop_duplicates()
-    )
-    after_dedup = _row_count(deduplicated)
+    cleaned = raw_data.dropDuplicates() if hasattr(raw_data, "dropDuplicates") else raw_data.drop_duplicates()
+    after_dedup = _row_count(cleaned)
 
-    cleaned = deduplicated.dropna()
+    cleaned = cleaned.dropna()
+    after_dropna = _row_count(cleaned)
+
+    if VALUE_COLUMN in list(getattr(cleaned, "columns", [])):
+        # `IS NULL OR ... >= 0`, not just `>= 0`: SQL's three-valued logic
+        # would otherwise silently drop null amounts here too, so commenting
+        # out the dropna() line above would stop demonstrating anything -- the
+        # range filter would have already removed the rows null_rate expects
+        # to catch. Each cleaning step should only remove the defect it owns.
+        cleaned = (
+            cleaned.filter(f"{VALUE_COLUMN} IS NULL OR {VALUE_COLUMN} >= 0")
+            if hasattr(cleaned, "filter")
+            else cleaned[cleaned[VALUE_COLUMN].isna() | (cleaned[VALUE_COLUMN] >= 0)]
+        )
     after = _row_count(cleaned)
 
     logger.info(
-        "Silver: {:,} -> {:,} rows ({:,} duplicates, {:,} incomplete)",
+        "Silver: {:,} -> {:,} rows ({:,} duplicates, {:,} incomplete, {:,} invalid)",
         before,
         after,
         before - after_dedup,
-        after_dedup - after,
+        after_dedup - after_dropna,
+        after_dropna - after,
     )
     return cleaned
 
@@ -1189,12 +1228,13 @@ pip install -r requirements.txt
 ducta start --env dev --pipeline etl
 ```
 
-The sample data is **deliberately dirty** — 12 rows with a missing `amount` and
-8 verbatim duplicates — so the run has something real to do:
+The sample data is **deliberately dirty** — 12 rows with a missing `amount`,
+8 verbatim duplicates, and 10 rows with a negative `amount` — so the run has
+something real to do:
 
 ```
 bronze  508 rows   raw, exactly as it arrived
-silver  488 rows   deduplicated, incomplete rows dropped
+silver  478 rows   deduplicated, incomplete and invalid rows dropped
 gold      5 rows   one row per category
 ```
 
@@ -1212,11 +1252,12 @@ two runs with `ducta certify diff <run-a> <run-b>`.
 
 ## See the quality gate work
 
-`config/nodes{ext}` asserts on the silver layer that `amount` has no nulls and
-`order_id` has no duplicates, with `quality_gate.max_errors: 0`. Those checks
-pass because `transform` cleaned the data. To watch them fail:
+`config/nodes{ext}` asserts on the silver layer that `amount` has no nulls, no
+negative values, and `order_id` has no duplicates, with `quality_gate.max_errors:
+0`. Those checks pass because `transform` cleaned the data. To watch them fail:
 
-1. Open `pipelines/etl.py` and comment out the `.dropna()` line in `transform`.
+1. Open `pipelines/etl.py` and comment out the `cleaned.dropna()` line (or the
+   `filter(...)` block right below it) in `transform`.
 2. Re-run `ducta start --env dev --pipeline etl`.
 
 The gate blocks, `load` is skipped, and **gold is never written** — the checks
@@ -1237,10 +1278,11 @@ back to a passing run.
 ├── pipelines/
 │   ├── etl.py                # your transformations (plain functions)
 │   └── checks/custom_checks.py
-├── data/
-│   ├── input.csv             # sample source
-│   └── dev/                  # bronze/ silver/ gold/ written per environment
-└── .ducta/runs/              # run certificates
+└── data/
+    ├── input.csv             # sample source
+    └── dev/                  # bronze/ silver/ gold/ written per environment
+        ├── quality/           # quality reports, baselines, history
+        └── .ducta/            # run certificates, chain state (framework state)
 ```
 
 ## What to change first

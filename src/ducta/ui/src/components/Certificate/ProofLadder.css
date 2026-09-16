@@ -1,0 +1,205 @@
+/* ── ProofLadder ───────────────────────────────────────────────────────────────
+ * The certificate's one deliberate "bold" moment: a full-bleed tinted verdict
+ * masthead, plus three connected cards for the three independent, non-
+ * collapsible proof levels (integrity / authenticity / reproducibility).
+ * Everywhere else in the certificate UI stays a calm bordered surface — this
+ * is the one place that breaks into a tinted field, on purpose. */
+
+.proof-ladder-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── Hero ──────────────────────────────────────────────────────────────────── */
+
+.proof-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--space-2);
+  padding: var(--space-8) var(--space-6);
+  border-radius: var(--radius-lg);
+}
+
+.proof-hero__icon {
+  margin-bottom: var(--space-2);
+}
+
+.proof-hero__title {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  color: var(--text);
+}
+
+.proof-hero__caption {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  max-width: 560px;
+}
+
+.proof-hero--pass {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+}
+.proof-hero--pass .proof-hero__icon { color: var(--status-success-fg); }
+
+.proof-hero--fail {
+  background: var(--status-failed-bg);
+}
+.proof-hero--fail .proof-hero__icon { color: var(--status-failed-fg); }
+.proof-hero--fail .proof-hero__title { color: var(--status-failed-fg); }
+
+.proof-hero--partial {
+  background: var(--status-warning-bg);
+}
+.proof-hero--partial .proof-hero__icon { color: var(--status-warning-fg); }
+.proof-hero--partial .proof-hero__title { color: var(--status-warning-fg); }
+
+.proof-hero--neutral,
+.proof-hero--pending {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.proof-hero--neutral .proof-hero__icon,
+.proof-hero--pending .proof-hero__icon {
+  color: var(--text-dim);
+}
+
+/* ── Stepper ───────────────────────────────────────────────────────────────── */
+
+.proof-ladder {
+  display: flex;
+  align-items: stretch;
+  gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+  .proof-ladder {
+    flex-direction: column;
+  }
+  .proof-ladder__connector {
+    width: 2px;
+    height: var(--space-4);
+    margin: 0 auto;
+  }
+}
+
+.proof-ladder__connector {
+  flex: 0 0 auto;
+  align-self: center;
+  width: var(--space-6);
+  height: 1px;
+  background: var(--border);
+}
+
+.proof-ladder__connector.is-dashed {
+  background: repeating-linear-gradient(to right, var(--border) 0 4px, transparent 4px 8px);
+}
+
+@media (max-width: 720px) {
+  .proof-ladder__connector.is-dashed {
+    background: repeating-linear-gradient(to bottom, var(--border) 0 4px, transparent 4px 8px);
+  }
+}
+
+.proof-ladder__node {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.proof-ladder__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--overlay-subtle);
+  color: var(--text-dim);
+}
+
+.proof-ladder__node--pass .proof-ladder__icon {
+  background: var(--status-success-bg);
+  color: var(--status-success-fg);
+}
+.proof-ladder__node--fail .proof-ladder__icon {
+  background: var(--status-failed-bg);
+  color: var(--status-failed-fg);
+}
+.proof-ladder__node--partial .proof-ladder__icon {
+  background: var(--status-warning-bg);
+  color: var(--status-warning-fg);
+}
+.proof-ladder__node--neutral .proof-ladder__icon {
+  background: var(--overlay-subtle);
+  color: var(--text-dim);
+}
+.proof-ladder__node--pending .proof-ladder__icon {
+  color: var(--text-dim);
+}
+
+.proof-ladder__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.proof-ladder__label {
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+}
+
+.proof-ladder__desc {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+
+.proof-ladder__action {
+  margin-top: var(--space-1);
+}
+
+/* ── Compact variant (Execution History modal) ──────────────────────────────
+ * Tight horizontal row of icon+label chips — no hero, no connectors, no
+ * inline actions. Still three distinct cards, so the "three levels" framing
+ * stays consistent everywhere the certificate appears. */
+
+.proof-ladder-wrap--compact .proof-ladder {
+  gap: var(--space-2);
+}
+
+.proof-ladder--compact .proof-ladder__connector {
+  display: none;
+}
+
+.proof-ladder__node--compact {
+  flex-direction: row;
+  align-items: center;
+  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+}
+
+.proof-ladder__node--compact .proof-ladder__icon {
+  width: 22px;
+  height: 22px;
+}
+
+.proof-ladder__node--compact .proof-ladder__label {
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}

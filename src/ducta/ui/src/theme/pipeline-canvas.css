@@ -1,70 +1,78 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   PIPELINE CANVAS — nodes, datasets, edges, React Flow integration.
+   PIPELINE CANVAS — nodes, dataset tags, edges, React Flow integration,
+   project-map supernodes.
 
-   Consolidates what used to be pipeline-diagram.css and pipeline-flow.css.
+   Drawn like a piping diagram: edges are graphite pipes, nodes are quiet
+   boxes, and a dataset is a tag written on the pipe that carries it. Colour
+   is spent on four roles only, and they must never be confusable:
 
-   The canvas spends exactly four colour roles, and they must never be
-   confusable with one another:
+     accent (petrol)                selection and the live run
+     semantic (green/amber/red)     run state
+     medallion (bronze/silver/gold) a dataset's layer, as a 6px swatch
+     lens (amber/blue)              lineage direction
 
-     accent (petrol)          selection and interaction, nothing else
-     semantic (green/amber/red) run state, nothing else
-     medallion (bronze/silver/gold) a dataset's layer, nothing else
-     lens (amber/blue)        lineage *direction*, never status
-
-   Everything else is neutral ink — which is what lets those four read at all.
-   Each role also carries a non-colour encoding (a ring, an icon + duration, a
-   glyph + label, an arrow + depth), so the canvas survives greyscale and
-   colour blindness. Node *type* deliberately gets no hue: it is carried by the
-   card's icon, and giving five types five colours left nothing for the eye to
-   land on.
-
-   Shape separates the two objects: a node is an outlined rectangle with a
-   layer rule across its top; a dataset is a tinted pill with a format glyph
-   and a layer rule down its left edge.
+   Each role also has a non-colour encoding (ring, dot + duration, label,
+   arrow + depth), so the canvas survives greyscale and colour blindness.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── Node card ──────────────────────────────────────────────────────────────
- * Narrower than it was (236px → 208px): the datasets moved to the edges, so
- * the card no longer has to fit a namespaced dataset name. It now holds only
- * what a function alone knows. */
+/* ── Node card ──────────────────────────────────────────────────────────── */
 .node-card {
   width: 208px;
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--node-radius);
   cursor: pointer;
   transition:
-    border-color var(--dur-fast, 120ms) var(--ease-out, ease-out),
-    box-shadow var(--dur-fast, 120ms) var(--ease-out, ease-out),
-    transform var(--dur-fast, 120ms) var(--ease-out, ease-out);
-  box-shadow: var(--shadow-xs);
-  position: relative;
-  overflow: hidden;
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
 }
 
 .node-card-body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 9px 11px 10px;
+  gap: 3px;
+  padding: 10px 12px 11px;
 }
 
 .node-card:hover {
-  border-color: var(--border-hover);
-  box-shadow: var(--shadow-sm);
-  transform: translateY(-1px);
+  border-color: var(--edge);
 }
 
 .node-card:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-  transform: translateY(-1px);
 }
 
+.node-card.lens-up {
+  border-color: var(--lens-up);
+}
+
+.node-card.lens-down {
+  border-color: var(--lens-down);
+}
+
+/* After the lens: where a node stands is a fact about the run, and it must not
+   be traded away for the direction it happens to sit in. */
+.node-card.status-running {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--accent-a12);
+}
+
+.node-card.status-error,
+.node-card.status-failed {
+  border-color: var(--danger);
+}
+
+.node-card.status-pending {
+  border-style: dashed;
+}
+
+/* Declared after run state and lens: selection is what the user asked for. */
 .node-card.selected {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--accent-a20), var(--shadow-sm);
-  transform: translateY(-1px);
+  box-shadow: 0 0 0 3px var(--accent-a20);
 }
 
 .node-card.dag-dimmed {
@@ -72,123 +80,72 @@
   pointer-events: none;
 }
 
-/* ── The layer rule ─────────────────────────────────────────────────────────
- * Across the top, not down the left: the left edge now belongs to the dataset
- * chip, and keeping the two shapes distinct is what stops a glance from
- * confusing them. It carries the same fact as the eyebrow text, so the layer
- * still reads at `shape` zoom where text does not. */
-.node-card-layerbar {
-  display: block;
-  height: 3px;
-  background: var(--border-hover);
-  transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out);
-}
-
-.node-card[data-layer="bronze"] .node-card-layerbar { background: var(--layer-bronze); }
-.node-card[data-layer="silver"] .node-card-layerbar { background: var(--layer-silver); }
-.node-card[data-layer="gold"]   .node-card-layerbar { background: var(--layer-gold); }
-
-.node-card[data-layer="bronze"] .node-card-eyebrow { color: var(--layer-bronze); }
-.node-card[data-layer="silver"] .node-card-eyebrow { color: var(--layer-silver); }
-.node-card[data-layer="gold"]   .node-card-eyebrow { color: var(--layer-gold); }
-
-/* ── Dependency lens: directional tint (run-state rules below win) ───────── */
-.node-card.lens-up,
-.pipeline-supernode.lens-up {
-  background: linear-gradient(180deg, var(--lens-up-soft), var(--surface) 55%);
-}
-
-.node-card.lens-down,
-.pipeline-supernode.lens-down {
-  background: linear-gradient(180deg, var(--lens-down-soft), var(--surface) 55%);
-}
-
+/* Straddles the top border like a callout on a drawing, clear of the head row. */
 .lens-tag {
   position: absolute;
-  top: 5px;
-  right: 7px;
+  top: -8px;
+  right: 8px;
   z-index: 1;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  line-height: 1;
   padding: 3px 6px;
   border-radius: var(--radius-pill);
-  color: #fff;
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--on-accent);
   pointer-events: none;
 }
 
 .lens-tag-up { background: var(--lens-up); }
 .lens-tag-down { background: var(--lens-down); }
 
-[data-theme="dark"] .lens-tag { color: #0b0e14; }
-
-/* ── Run state ──────────────────────────────────────────────────────────────
- * A tint from the top, so it never competes with the layer rule for the same
- * pixels — and always alongside the status dot and the duration, never colour
- * alone. */
-.node-card.status-success {
-  background: linear-gradient(180deg, var(--green-a10), transparent 42%), var(--surface);
-}
-
-.node-card.status-error,
-.node-card.status-failed {
-  background: linear-gradient(180deg, var(--red-a12), transparent 42%), var(--surface);
-}
-
-.node-card.status-running {
-  box-shadow: var(--glow-sm);
-  border-color: var(--primary);
-  animation: node-running-pulse 1.6s ease-in-out infinite;
-}
-
-.node-card.status-pending {
-  opacity: 0.55;
-  border-style: dashed;
-}
-
-@keyframes node-running-pulse {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--primary) 18%, transparent); }
-  50% { box-shadow: 0 0 0 5px color-mix(in oklab, var(--primary) 8%, transparent); }
-}
-
-/* ── Card contents ────────────────────────────────────────────────────────── */
+/* ── Card contents ──────────────────────────────────────────────────────── */
 .node-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  min-width: 0;
 }
 
 .node-card-eyebrow {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: var(--tracking-wider);
-  text-transform: uppercase;
-  color: var(--text-dim);
+  gap: 6px;
+  min-width: 0;
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  line-height: 1.4;
+  color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .node-card-eyebrow-icon {
   flex: none;
-  opacity: 0.8;
+  color: var(--text-dim);
+}
+
+.node-card-swatch,
+.ds-chip-swatch,
+.supernode-swatch {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 1px;
+  background: var(--edge);
 }
 
 .node-card-run {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex: none;
 }
 
 .node-card-duration {
-  font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
 }
@@ -202,150 +159,263 @@
 }
 
 .node-card-name {
-  font-family: var(--font-mono);
+  min-width: 0;
   font-size: 13px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: var(--weight-semibold);
+  line-height: 1.35;
+  letter-spacing: -0.005em;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
 
 .node-card-fn {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Status as a dot, so the node name keeps the width it needs. */
 .node-card-status {
   width: 7px;
   height: 7px;
-  border-radius: 50%;
   flex: none;
+  border-radius: 50%;
   background: var(--border-hover);
 }
 
 .node-card-status.status-dot-success,
-.node-card-status.status-dot-completed { background: var(--green); }
+.node-card-status.status-dot-completed { background: var(--success); }
 .node-card-status.status-dot-error,
-.node-card-status.status-dot-failed  { background: var(--red); }
+.node-card-status.status-dot-failed { background: var(--danger); }
+.node-card-status.status-dot-running { background: var(--primary); }
 .node-card-status.status-dot-skipped { background: var(--text-dim); }
 .node-card-status.status-dot-pending { background: var(--border-hover); }
-.node-card-status.status-dot-running {
-  background: var(--primary);
-  animation: pulse 1.4s ease-in-out infinite;
-}
 
 /* ── Gate and checks ────────────────────────────────────────────────────────
- * A gate decides whether anything downstream runs at all. That is the thing
- * ducta does which a generic DAG tool does not, so it is read off the graph
- * rather than out of a panel. It is drawn in the warning hue *with* its shield
- * icon: a gate is a condition, not a failure, and the icon is what says so. */
+ * A gate decides whether anything downstream runs at all, so it is read off
+ * the graph. Warning hue with its shield: a condition, not a failure. */
 .node-card-foot {
   display: flex;
   align-items: center;
-  gap: 7px;
   flex-wrap: wrap;
-  margin-top: 2px;
+  gap: 4px 10px;
+  margin-top: 6px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .node-card-gate {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+  gap: 4px;
   font-weight: var(--weight-medium);
-  line-height: 1.4;
   color: var(--warning-strong);
-  border: 1px solid color-mix(in srgb, var(--warning-strong) 45%, transparent);
-  border-radius: var(--radius-sm);
-  padding: 1px 4px;
   white-space: nowrap;
 }
 
 .node-card-checks {
-  font-size: 10px;
-  color: var(--text-dim);
   white-space: nowrap;
 }
 
-/* ── Semantic-zoom tiers ────────────────────────────────────────────────────
- * Three of them, because the datasets on the edges gave the canvas more to
- * graduate. Widths shrink with the content so a zoomed-out graph is compact
- * as well as terse. */
+/* ── Semantic-zoom tiers ────────────────────────────────────────────────── */
+.node-card--flow {
+  width: 186px;
+}
+
 .node-card--shape {
   width: 150px;
 }
 
 .node-card--shape .node-card-body {
-  padding: 7px 9px 8px;
+  padding: 8px 10px;
 }
 
-.node-card--flow {
-  width: 186px;
-}
-
-/* ── Port rails ─────────────────────────────────────────────────────────────
- * The connectors the edges land on. Offsets match `portOffset` in
- * utils/dagLayout.ts and the handle positions in DuctaNode; all three have to
- * agree or an edge arrives next to its dot instead of on it. */
+/* ── Ports ──────────────────────────────────────────────────────────────────
+ * Offsets match `portOffset` in utils/dagLayout.ts and the handles in
+ * DuctaNode; all three have to agree or an edge lands beside its dot. */
 .node-port {
   position: absolute;
-  transform: translateX(-50%);
-  pointer-events: none;
   line-height: 0;
+  pointer-events: none;
 }
 
-.node-port-in { top: -1px; }
-.node-port-out { bottom: -1px; }
+.node-port-in {
+  top: 0;
+  transform: translate(-50%, -50%);
+}
+
+.node-port-out {
+  bottom: 0;
+  transform: translate(-50%, 50%);
+}
+
+/* Left to right, the ports move to the sides: inputs down the left edge,
+   outputs down the right, spread along the card's height by the same rule. */
+.node-card[data-orientation="horizontal"] .node-port-in {
+  top: auto;
+  left: 0;
+  transform: translate(-50%, -50%);
+}
+
+.node-card[data-orientation="horizontal"] .node-port-out {
+  bottom: auto;
+  left: auto;
+  right: 0;
+  transform: translate(50%, -50%);
+}
+
+/* ── The card's one fact, and upstream context ─────────────────────────── */
+.node-card-fact {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.node-card-fact--failed {
+  font-weight: var(--weight-medium);
+  color: var(--danger);
+}
+
+/* A node from an earlier pipeline of the chain: read as context, not hidden —
+   it stays clickable, which a dimmed (lens) card deliberately is not. */
+.node-card--context {
+  opacity: 0.62;
+}
+
+.node-card--context:hover,
+.node-card--context.selected,
+.node-card--context.status-failed,
+.node-card--context.status-running {
+  opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   STRATA — one band per pipeline of the chain, drawn behind the cards.
+
+   A rule on the band's leading edge and a label; the page's own pipeline gets a
+   faint accent ground. The medallion colour is a 10px stroke beside the label,
+   never a fill, so it cannot be mistaken for state.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.strata-band {
+  position: absolute;
+  pointer-events: none;
+  border: 0 solid var(--border);
+}
+
+.strata-band[data-orientation="vertical"] {
+  border-top-width: 1px;
+}
+
+.strata-band[data-orientation="horizontal"] {
+  border-left-width: 1px;
+}
+
+.strata-band.current {
+  background: color-mix(in srgb, var(--primary) 3%, transparent);
+}
+
+.strata-band-label {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  line-height: 1;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.strata-band[data-orientation="vertical"] .strata-band-label {
+  top: 10px;
+  left: 16px;
+}
+
+.strata-band[data-orientation="horizontal"] .strata-band-label {
+  top: 14px;
+  left: 14px;
+}
+
+.strata-band-pipe {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-regular);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+.strata-band.current .strata-band-pipe {
+  color: var(--text);
+}
+
+.strata-band-swatch {
+  width: 10px;
+  height: 2px;
+  background: var(--edge);
+}
+
+.strata-band[data-layer="bronze"] .strata-band-swatch { background: var(--layer-bronze); }
+.strata-band[data-layer="silver"] .strata-band-swatch { background: var(--layer-silver); }
+.strata-band[data-layer="gold"] .strata-band-swatch { background: var(--layer-gold); }
+
+/* React Flow mounts the viewport portal after the nodes. Inside the viewport's
+   own stacking context a negative z-index puts the bands behind the edges and
+   cards without leaving the transformed layer that pans and zooms them. */
+.dag-canvas-root .react-flow__viewport-portal {
+  z-index: -1;
+}
 
 .port-dot {
   display: block;
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: var(--primary);
+  background: var(--edge-strong);
   box-shadow: 0 0 0 2px var(--surface);
 }
 
+.node-card.selected .port-dot,
+.node-card.status-running .port-dot {
+  background: var(--primary);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
-   DATASET CHIP — the dataset, on the edge it flows across.
+   DATASET TAG — the dataset, written on the pipe that carries it.
 
-   The edge exists *because* of the dataset: a node that writes `silver.clean`
-   and one that reads it are wired by that name. Putting the dataset here
-   rather than inside the card is what makes it selectable, lets its real
-   format come from the registry, and keeps two shared datasets as two edges.
+   Its ground is the canvas ground, so it interrupts the line the way a label
+   does on a drawing instead of floating over it as a card.
    ═══════════════════════════════════════════════════════════════════════════ */
-
 .ds-chip {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   max-width: 240px;
-  padding: 5px 10px 5px 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--border-hover);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-xs);
-  cursor: pointer;
-  text-align: left;
+  padding: 3px 7px;
+  background: var(--bg);
+  border: 1px solid transparent;
+  border-radius: var(--tag-radius);
+  color: var(--text);
   font-family: inherit;
+  text-align: left;
+  cursor: pointer;
   transition:
-    border-color var(--dur-fast, 120ms) var(--ease-out, ease-out),
-    box-shadow var(--dur-fast, 120ms) var(--ease-out, ease-out);
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .ds-chip:hover {
   border-color: var(--border-hover);
-  box-shadow: var(--shadow-sm);
+  background: var(--surface);
 }
 
 .ds-chip:focus-visible {
@@ -353,9 +423,18 @@
   box-shadow: var(--focus-ring);
 }
 
+/* No entry in input_config / output_config: marked by shape as well as by the
+   meta line's wording. */
+.ds-chip--undeclared {
+  border-color: var(--border-hover);
+  border-style: dashed;
+}
+
 .ds-chip.selected {
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px var(--accent-a20), var(--shadow-sm);
+  border-style: solid;
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--accent-a20);
 }
 
 .ds-chip.dag-dimmed {
@@ -363,36 +442,25 @@
   pointer-events: none;
 }
 
-.ds-chip--bronze { border-left-color: var(--layer-bronze); }
-.ds-chip--silver { border-left-color: var(--layer-silver); }
-.ds-chip--gold   { border-left-color: var(--layer-gold); }
-
-/* An undeclared reference is a config problem, not a styling edge case: the
-   dashed border says "this is not fully specified" without shouting. */
-.ds-chip--undeclared {
-  border-style: dashed;
-  border-left-style: solid;
-}
-
 .ds-chip-glyph {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 1;
-  color: var(--text-muted);
   flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+  color: var(--text-dim);
 }
 
 .ds-chip-text {
-  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  min-width: 0;
 }
 
 .ds-chip-name {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: var(--weight-medium);
+  line-height: 1.35;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -400,8 +468,8 @@
 }
 
 .ds-chip-meta {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
+  line-height: 1.35;
   font-variant-numeric: tabular-nums;
   color: var(--text-dim);
   white-space: nowrap;
@@ -410,109 +478,118 @@
 }
 
 .ds-chip-meta--absent {
-  font-style: italic;
+  color: var(--warning-strong);
 }
 
-/* At `flow` zoom the chip keeps its name and drops the metadata line. */
 .ds-chip--flow {
   max-width: 190px;
-  padding: 4px 9px 4px 7px;
+  padding: 2px 6px;
 }
 
-/* At `shape` zoom it collapses to a dot: the name is unreadable at that scale,
-   and what still carries meaning is that *a* dataset sits on this edge. */
+/* At `shape` zoom the name is unreadable; what still carries meaning is that a
+   dataset sits on this pipe, and its layer. */
 .ds-chip--shape {
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   min-width: 0;
   max-width: none;
   padding: 0;
   gap: 0;
   border: none;
-  border-radius: 50%;
-  background: var(--border-hover);
+  border-radius: 1px;
+  background: var(--edge);
   box-shadow: 0 0 0 2px var(--bg);
   cursor: default;
 }
 
-.ds-chip--shape.ds-chip--bronze { background: var(--layer-bronze); }
-.ds-chip--shape.ds-chip--silver { background: var(--layer-silver); }
-.ds-chip--shape.ds-chip--gold   { background: var(--layer-gold); }
-
-/* The wrapper React Flow positions the chip inside. */
+/* The wrapper React Flow positions the tag inside. */
 .dag-edge-slot {
   z-index: 2;
 }
 
+/* ── Medallion swatches, shared by node, tag and supernode ─────────────── */
+.node-card[data-layer="bronze"] .node-card-swatch,
+.ds-chip--bronze .ds-chip-swatch,
+.ds-chip--shape.ds-chip--bronze,
+.supernode-dataset[data-layer="bronze"] .supernode-swatch {
+  background: var(--layer-bronze);
+}
+
+.node-card[data-layer="silver"] .node-card-swatch,
+.ds-chip--silver .ds-chip-swatch,
+.ds-chip--shape.ds-chip--silver,
+.supernode-dataset[data-layer="silver"] .supernode-swatch {
+  background: var(--layer-silver);
+}
+
+.node-card[data-layer="gold"] .node-card-swatch,
+.ds-chip--gold .ds-chip-swatch,
+.ds-chip--shape.ds-chip--gold,
+.supernode-dataset[data-layer="gold"] .supernode-swatch {
+  background: var(--layer-gold);
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
-   React Flow integration.
-
-   React Flow ships an unstyled-but-opinionated base (light grey controls, a
-   white minimap, hard-coded blues on selection). None of that tracks a theme,
-   so everything it draws is re-pointed at Ducta's tokens here.
+   React Flow integration — its base styles track no theme, so everything it
+   draws is re-pointed at Ducta's tokens here.
    ═══════════════════════════════════════════════════════════════════════════ */
-
 .dag-canvas-root {
   position: relative;
   width: 100%;
   height: 100%;
-  /* React Flow positions its whole tree absolutely, so this element's *content*
-     height is always 0. Inside a parent with a definite height (PipelinePage's
-     `flex: 1` pane) `height: 100%` resolves and the floor below never applies.
-     Inside a parent with auto height — ProjectPage wraps the map in a plain
-     relative div — `100%` resolves to `auto`, the box collapses, and the canvas
-     renders nothing at all. */
+  /* React Flow positions its tree absolutely, so this box's content height is
+     0; under an auto-height parent (ProjectPage) `100%` collapses and the
+     canvas would render nothing without a floor. */
   min-height: 420px;
 }
 
-/* Fill the root's box directly instead of inheriting a percentage height that
-   resolves to `auto` the moment an ancestor is auto-sized. */
 .dag-canvas-root > .react-flow {
   position: absolute;
   inset: 0;
 }
 
-/* The pane paints its own ground so the dotted grid reads against it. */
 .dag-canvas-root .react-flow__pane {
   background: var(--bg);
 }
 
-/* ── Edges ─────────────────────────────────────────────────────────────────
-   Default state: the brand. Ducta is a conduit — the thing carrying data
-   between nodes is the thing that carries the identity. */
+/* ── Edges ──────────────────────────────────────────────────────────────── */
 .dag-canvas-root .react-flow__edge-path {
-  stroke: var(--primary);
-  stroke-width: 1.75;
-  stroke-linecap: round;
   fill: none;
-  transition: stroke 0.2s ease, stroke-width 0.2s ease, opacity 0.2s ease;
+  stroke: var(--edge);
+  stroke-width: 1.25;
+  stroke-linecap: round;
+  transition:
+    stroke var(--dur-base) ease,
+    stroke-width var(--dur-base) ease,
+    opacity var(--dur-base) ease;
 }
 
-/* React Flow marks the hovered/selected edge; lift it rather than recolour it,
-   so the canvas never gains a colour that means nothing. */
 .dag-canvas-root .react-flow__edge.selected .react-flow__edge-path,
 .dag-canvas-root .react-flow__edge:hover .react-flow__edge-path {
-  stroke-width: 2.75;
+  stroke: var(--edge-strong);
+  stroke-width: 1.75;
 }
 
-/* Dependency lens. `lensEdgeClass` puts these on the edge group, so the stroke
-   has to be reached through the group rather than set on the path's own class. */
+/* `lensEdgeClass` puts these on the edge group, so the stroke is reached
+   through the group rather than set on the path's own class. */
 .dag-canvas-root .react-flow__edge.dag-edge-up .react-flow__edge-path {
   stroke: var(--lens-up);
-  stroke-width: 2.5;
+  stroke-width: 2;
 }
+
 .dag-canvas-root .react-flow__edge.dag-edge-down .react-flow__edge-path {
   stroke: var(--lens-down);
-  stroke-width: 2.5;
+  stroke-width: 2;
 }
+
 .dag-canvas-root .react-flow__edge.dag-edge-dimmed .react-flow__edge-path {
   opacity: var(--edge-dim-op);
 }
 
-/* The live front of a run: a dashed stroke travelling toward the node that is
-   currently executing — the one moment the canvas should move. */
+/* The one ambient motion on the canvas: the pipe feeding the running node. */
 .dag-canvas-root .react-flow__edge.dag-edge-running .react-flow__edge-path {
-  stroke-width: 2.5;
+  stroke: var(--edge-hot);
+  stroke-width: 2;
   stroke-dasharray: 6 5;
   animation: dag-flow 0.7s linear infinite;
 }
@@ -523,37 +600,34 @@
   }
 }
 
-/* Plain text edge label, used by the project map for its shared-dataset
-   summary where a full chip per dataset would be too much. */
+/* Plain text label, used by the project map for its shared-dataset summary. */
 .dag-edge-label {
+  padding: 2px 6px;
+  border-radius: var(--tag-radius);
+  background: var(--bg);
   font-family: var(--font-mono);
   font-size: 10px;
   color: var(--text-muted);
-  background: var(--bg);
-  padding: 1px 5px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
   white-space: nowrap;
 }
 
-/* ── Nodes ─────────────────────────────────────────────────────────────────
+/* ── Nodes ──────────────────────────────────────────────────────────────────
    React Flow wraps each node in its own box; the card inside owns all the
-   visuals, so the wrapper has to contribute nothing. */
+   visuals, so the wrapper contributes nothing. */
 .dag-canvas-root .react-flow__node {
   width: auto;
-  font-family: inherit;
-  font-size: inherit;
-  color: inherit;
+  padding: 0;
   background: transparent;
   border: none;
   border-radius: 0;
-  padding: 0;
   box-shadow: none;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
   cursor: pointer;
 }
 
-/* React Flow's own selected/focus ring would sit alongside the one .node-card
-   already draws. One ring, from the card. */
+/* One ring, drawn by the card, not a second one from React Flow. */
 .dag-canvas-root .react-flow__node.selected,
 .dag-canvas-root .react-flow__node:focus,
 .dag-canvas-root .react-flow__node:focus-visible {
@@ -561,7 +635,6 @@
   box-shadow: none;
 }
 
-/* Keyboard focus still has to be visible — it just belongs on the card. */
 .dag-canvas-root .react-flow__node:focus-visible .node-card {
   outline: 2px solid var(--primary);
   outline-offset: 2px;
@@ -572,14 +645,11 @@
   pointer-events: none;
 }
 
-/* ── Minimap ───────────────────────────────────────────────────────────────
-   Node dots inherit --text-dim (set in DagCanvas), matching the neutral cards:
-   the minimap is for locating yourself, not for re-encoding node type. */
+/* ── Minimap ────────────────────────────────────────────────────────────── */
 .dag-canvas-root .react-flow__minimap {
-  background: var(--surface-elevated);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-sm);
 }
 
 .dag-canvas-root .react-flow__minimap-mask {
@@ -597,9 +667,9 @@
   color: var(--text-dim);
 }
 
-/* ── Cycle fallback ────────────────────────────────────────────────────────
-   Shown in place of the canvas when `layoutDag` returns null: a cyclic graph
-   has no layering, and drawing an arbitrary one would look authoritative. */
+/* ── Cycle fallback ─────────────────────────────────────────────────────────
+   A cyclic graph has no layering; drawing an arbitrary one would look
+   authoritative. */
 .dag-cycle-fallback {
   display: flex;
   gap: 10px;
@@ -620,18 +690,15 @@
   .dag-canvas-root .react-flow__edge-path {
     transition: none;
   }
+
   /* The dash stays — it still reads as "in transit" — only the travel stops. */
   .dag-canvas-root .react-flow__edge.dag-edge-running .react-flow__edge-path {
     animation: none;
   }
-  .node-card.status-running {
-    animation: none;
-  }
 }
 
-/* ── Data graph ────────────────────────────────────────────────────────────
-   The Data view: datasets as the graph, functions on the edges. Same canvas,
-   same layout engine, inverted subject. */
+/* ── Data graph ─────────────────────────────────────────────────────────────
+   Datasets as the graph, functions on the edges. Same canvas, inverted. */
 .data-graph {
   position: relative;
   flex: 1;
@@ -653,9 +720,7 @@
   padding: 24px;
 }
 
-/* ── Project map ─────────────────────────────────────────────────────────────
-   The cross-pipeline view. Given real height rather than left to the canvas'
-   own floor: this map is the page's subject, not a widget on it. */
+/* ── Project map ────────────────────────────────────────────────────────── */
 .project-map {
   position: relative;
   flex: 1;
@@ -669,7 +734,6 @@
   min-height: 0;
 }
 
-/* Loading / error / empty states still want the room, just centred in it. */
 .project-map--placeholder {
   display: flex;
   align-items: center;
@@ -677,16 +741,176 @@
   padding: 24px;
 }
 
-/* Floats over the canvas rather than taking a row above it. */
 .project-map-hint {
   position: absolute;
   left: 16px;
-  bottom: 14px;
   right: 220px;
-  margin: 0;
+  bottom: 14px;
   max-width: 560px;
+  margin: 0;
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--text-dim);
   pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROJECT MAP — pipeline supernodes: the node card's grammar at pipeline
+   altitude. The whole card opens the pipeline, and it states the pipeline's
+   data boundary — what it consumes from outside and what it publishes.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pipeline-supernode {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 300px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--node-radius);
+  cursor: pointer;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    opacity var(--dur-fast) var(--ease-out);
+}
+
+.pipeline-supernode.lens-up {
+  border-color: var(--lens-up);
+}
+
+.pipeline-supernode.lens-down {
+  border-color: var(--lens-down);
+}
+
+/* Hover and keyboard focus are one state here: both mean "this pipeline" and
+   both arm the dependency lens. */
+.pipeline-supernode:hover,
+.pipeline-supernode.focused {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--accent-a20);
+}
+
+.pipeline-supernode:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Outside the lens: faded but still hoverable — the next pipeline you want to
+   inspect is usually one of these. */
+.pipeline-supernode.dag-dimmed {
+  opacity: 0.34;
+  pointer-events: auto;
+}
+
+.pipeline-supernode.dag-dimmed:hover {
+  opacity: 1;
+}
+
+.supernode-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.supernode-name {
+  min-width: 0;
+  font-size: 15px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supernode-go {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  opacity: 0;
+  transition:
+    opacity var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.pipeline-supernode:hover .supernode-go,
+.pipeline-supernode:focus-visible .supernode-go,
+.pipeline-supernode.focused .supernode-go {
+  opacity: 1;
+  color: var(--primary);
+}
+
+.supernode-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.supernode-type {
+  text-transform: capitalize;
+}
+
+.supernode-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.supernode-boundary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.supernode-boundary-side {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.supernode-boundary-label {
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  color: var(--text-dim);
+}
+
+.supernode-dataset {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.supernode-dataset-glyph {
+  flex: none;
+  color: var(--text-dim);
+}
+
+.supernode-dataset-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supernode-more {
+  padding: 2px 0 0 13px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+@media (max-width: 900px) {
+  .pipeline-supernode {
+    width: 250px;
+  }
 }

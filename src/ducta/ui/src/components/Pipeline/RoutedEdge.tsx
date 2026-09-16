@@ -16,6 +16,8 @@ export interface RoutedEdgeData extends Record<string, unknown> {
   onSelectDataset?: (name: string) => void;
   /** Plain text label, used by the project map for its shared-dataset summary. */
   label?: string | null;
+  /** Which way the layers run, so the spline leaves and enters along the flow. */
+  direction?: "TB" | "LR";
 }
 
 /** Midpoint of a polyline, used to sit the chip clear of the cards. */
@@ -62,7 +64,7 @@ export const RoutedEdge = memo(function RoutedEdge({
           { x: targetX, y: targetY },
         ];
 
-  const path = edgePath(points);
+  const path = edgePath(points, d?.direction);
   const dataset = d?.dataset ?? null;
   const label = d?.label ?? null;
   const at = dataset || label ? midpoint(points) : null;

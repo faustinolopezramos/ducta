@@ -70,21 +70,18 @@ master_doc = "index"
 html_theme = "furo"
 html_static_path = ["_static", "img"]
 html_css_files = ["custom.css"]
-html_js_files = ["theme.js"]
 html_title = "Ducta"
 html_favicon = "img/logo.ico"
 
 # ---------------------------------------------------------------------------
-# Brand palette — "Lima" theme: lime green pulled from the logo's accent dot
-# (#84CC16), paired with the logo's own slate blue-gray.
+# Brand palette — "Blueprint / Deep Petrol" theme:
+# Direct parity with Web UI (src/ducta/ui/src/theme/ducta-theme.css).
 #
-# Light-only: the same palette is applied to both of Furo's color modes so an
-# OS-level dark preference cannot repaint the site. The theme toggle is hidden
-# in _static/custom.css to match.
+# Light mode: "Blueprint" cool paper ground (#F4F6F7), white surfaces (#FFFFFF),
+# ink text (#0F1B20), and deep Petrol accent (#0B5F73, 7.1:1 AAA on white).
 #
-# The raw lime (#84CC16) is reserved for decorative use (borders, focus
-# rings, rules). Text-bearing roles use a darkened shade (#6FAF0F) to clear
-# WCAG AA on the light background. Slate tones carry the structural chrome.
+# Dark mode: "Deep Petrol" cool charcoal ground (#0C1417), elevated surfaces
+# (#141F24), bright text (#E3EDF1), and signal Cyan accent (#38BDF8, 8.4:1).
 # ---------------------------------------------------------------------------
 
 # Typography matches the UI stacks (Inter + JetBrains Mono).
@@ -93,70 +90,119 @@ _FONT_SANS = (
 )
 _FONT_MONO = "'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Menlo, Consolas, monospace"
 
-# Lima: --bg (off-white cálido), --surface (blanco), --text (pizarra oscura del logo).
-_BG, _SURFACE, _BORDER, _TEXT = "#F5F3F0", "#FFFFFF", "#E2DDD6", "#1E2936"
-
-_PALETTE = {
+# Light palette (Blueprint)
+_LIGHT_PALETTE = {
     "font-stack": _FONT_SANS,
     "font-stack--monospace": _FONT_MONO,
-    "color-code-background": "#F0EDE8",
-    "color-code-foreground": _TEXT,
-    # Lime darkened to 4.95:1 (brand #84CC16 is ~2.5:1 on white — fails AA).
-    "color-brand-primary": "#6FAF0F",
-    "color-brand-content": "#6FAF0F",
-    "color-brand-visited": "#568A0A",
-    # Content on white, chrome on warm off-white.
-    "color-background-primary": _SURFACE,
-    "color-background-secondary": _BG,
-    "color-background-hover": "#EBE7E0",
-    "color-background-border": _BORDER,
-    "color-foreground-primary": _TEXT,
-    "color-foreground-secondary": "#4A5B6E",
-    "color-foreground-muted": "#7C8A9C",
-    "color-foreground-border": "#D4CEC4",
-    # Sidebar & TOC — slate tones from the logo gradient.
-    "color-sidebar-background": _BG,
-    "color-sidebar-background-border": _BORDER,
-    "color-sidebar-brand-text": _TEXT,
-    "color-sidebar-caption-text": "#4A5B6E",
-    "color-sidebar-link-text": "#4A5B6E",
-    "color-sidebar-link-text--top-level": "#6FAF0F",
-    "color-sidebar-item-background": _BG,
-    "color-sidebar-item-background--hover": "#EBE7E0",
-    "color-sidebar-item-background--current": "#EBE7E0",
+    "color-code-background": "#EAEEF0",
+    "color-code-foreground": "#0F1B20",
+    "color-brand-primary": "#0B5F73",
+    "color-brand-content": "#0B5F73",
+    "color-brand-visited": "#084453",
+    "color-background-primary": "#FFFFFF",
+    "color-background-secondary": "#F4F6F7",
+    "color-background-hover": "#E4E9EC",
+    "color-background-border": "#DDE4E7",
+    "color-foreground-primary": "#0F1B20",
+    "color-foreground-secondary": "#4E626A",
+    "color-foreground-muted": "#5C717A",
+    "color-foreground-border": "#C3CFD4",
+    # Sidebar & Navigation
+    "color-sidebar-background": "#F4F6F7",
+    "color-sidebar-background-border": "#DDE4E7",
+    "color-sidebar-brand-text": "#0F1B20",
+    "color-sidebar-caption-text": "#4E626A",
+    "color-sidebar-link-text": "#4E626A",
+    "color-sidebar-link-text--top-level": "#0B5F73",
+    "color-sidebar-item-background": "#F4F6F7",
+    "color-sidebar-item-background--hover": "#E4E9EC",
+    "color-sidebar-item-background--current": "#E4E9EC",
     "color-sidebar-item-expander-background": "transparent",
-    "color-sidebar-search-text": _TEXT,
-    "color-sidebar-search-background": _SURFACE,
-    "color-sidebar-search-background--focus": _SURFACE,
-    "color-sidebar-search-border": _BORDER,
-    "color-sidebar-search-icon": "#4A5B6E",
-    "color-toc-background": _SURFACE,
-    "color-toc-title-text": "#7C8A9C",
-    "color-toc-item-text": "#4A5B6E",
-    "color-toc-item-text--hover": _TEXT,
-    "color-toc-item-text--active": "#6FAF0F",
-    # Semantic accents — teal bridges lime and slate; amber for warning.
-    "color-admonition-title--note": "#6FAF0F",
-    "color-admonition-title--tip": "#0D9488",
-    "color-admonition-title--important": "#0D9488",
-    "color-admonition-title--warning": "#D97706",
-    "color-admonition-title--caution": "#D97706",
-    "color-admonition-title--attention": "#D97706",
-    "color-admonition-title--danger": "#DC2626",
-    "color-admonition-title--error": "#DC2626",
-    # Decorative-only brand accent (see custom.css).
-    "ducta-accent": "#84CC16",
+    "color-sidebar-search-text": "#0F1B20",
+    "color-sidebar-search-background": "#FFFFFF",
+    "color-sidebar-search-background--focus": "#FFFFFF",
+    "color-sidebar-search-border": "#DDE4E7",
+    "color-sidebar-search-icon": "#4E626A",
+    "color-toc-background": "#FFFFFF",
+    "color-toc-title-text": "#5C717A",
+    "color-toc-item-text": "#4E626A",
+    "color-toc-item-text--hover": "#0F1B20",
+    "color-toc-item-text--active": "#0B5F73",
+    # Semantic accents
+    "color-admonition-title--note": "#0B5F73",
+    "color-admonition-title--tip": "#0E7C66",
+    "color-admonition-title--important": "#0E7C66",
+    "color-admonition-title--warning": "#B4690E",
+    "color-admonition-title--caution": "#B4690E",
+    "color-admonition-title--attention": "#B4690E",
+    "color-admonition-title--danger": "#BE3A34",
+    "color-admonition-title--error": "#BE3A34",
+    # Decorative custom tokens
+    "ducta-accent": "#0B5F73",
+    "ducta-accent-light": "rgba(11, 95, 115, 0.08)",
+}
+
+# Dark palette (Deep Petrol)
+_DARK_PALETTE = {
+    "font-stack": _FONT_SANS,
+    "font-stack--monospace": _FONT_MONO,
+    "color-code-background": "#10191D",
+    "color-code-foreground": "#E3EDF1",
+    "color-brand-primary": "#38BDF8",
+    "color-brand-content": "#38BDF8",
+    "color-brand-visited": "#7DD3FC",
+    "color-background-primary": "#141F24",
+    "color-background-secondary": "#0C1417",
+    "color-background-hover": "#1B282E",
+    "color-background-border": "#26353B",
+    "color-foreground-primary": "#E3EDF1",
+    "color-foreground-secondary": "#95A9B1",
+    "color-foreground-muted": "#768B94",
+    "color-foreground-border": "#374950",
+    # Sidebar & Navigation
+    "color-sidebar-background": "#0C1417",
+    "color-sidebar-background-border": "#26353B",
+    "color-sidebar-brand-text": "#E3EDF1",
+    "color-sidebar-caption-text": "#95A9B1",
+    "color-sidebar-link-text": "#95A9B1",
+    "color-sidebar-link-text--top-level": "#38BDF8",
+    "color-sidebar-item-background": "#0C1417",
+    "color-sidebar-item-background--hover": "#1B282E",
+    "color-sidebar-item-background--current": "#1B282E",
+    "color-sidebar-item-expander-background": "transparent",
+    "color-sidebar-search-text": "#E3EDF1",
+    "color-sidebar-search-background": "#141F24",
+    "color-sidebar-search-background--focus": "#141F24",
+    "color-sidebar-search-border": "#26353B",
+    "color-sidebar-search-icon": "#95A9B1",
+    "color-toc-background": "#141F24",
+    "color-toc-title-text": "#768B94",
+    "color-toc-item-text": "#95A9B1",
+    "color-toc-item-text--hover": "#E3EDF1",
+    "color-toc-item-text--active": "#38BDF8",
+    # Semantic accents
+    "color-admonition-title--note": "#38BDF8",
+    "color-admonition-title--tip": "#34D399",
+    "color-admonition-title--important": "#34D399",
+    "color-admonition-title--warning": "#FBBF24",
+    "color-admonition-title--caution": "#FBBF24",
+    "color-admonition-title--attention": "#FBBF24",
+    "color-admonition-title--danger": "#F87171",
+    "color-admonition-title--error": "#F87171",
+    # Decorative custom tokens
+    "ducta-accent": "#38BDF8",
+    "ducta-accent-light": "rgba(56, 189, 248, 0.1)",
 }
 
 pygments_style = "friendly"
-pygments_dark_style = "friendly"
+pygments_dark_style = "monokai"
 
 html_theme_options = {
     "light_logo": "ducta-logo.svg",
-    "dark_logo": "ducta-logo.svg",
+    "dark_logo": "ducta-logo-dark.svg",
     "sidebar_hide_name": True,
-    "light_css_variables": _PALETTE,
-    "dark_css_variables": _PALETTE,
+    "light_css_variables": _LIGHT_PALETTE,
+    "dark_css_variables": _DARK_PALETTE,
     # Edit-source links + GitHub in the footer.
     "source_repository": "https://github.com/faustinolopezramos/ducta/",
     "source_branch": "main",

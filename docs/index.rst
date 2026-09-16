@@ -1,7 +1,8 @@
 .. raw:: html
 
    <div style="display: flex; align-items: center; justify-content: center; gap: 18px; margin-bottom: 0.5em;">
-     <img src="_static/ducta-logo.svg" alt="Ducta" style="width: 55px; height: 55px;">
+     <img src="_static/ducta-logo.svg" alt="Ducta" class="only-light" style="width: 55px; height: 55px;">
+     <img src="_static/ducta-logo-dark.svg" alt="Ducta" class="only-dark" style="width: 55px; height: 55px;">
      <span style="font-size: 2.6em; font-weight: 600; color: var(--color-foreground-primary); letter-spacing: -0.02em;">Ducta</span>
    </div>
    <p style="text-align: center; margin-top: 0; margin-bottom: 1.5em;"><em>Build, run, and trust data pipelines &mdash; batch, streaming, and ML &mdash; from simple configuration.</em></p>

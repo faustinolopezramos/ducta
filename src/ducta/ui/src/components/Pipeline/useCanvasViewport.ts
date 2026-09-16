@@ -8,8 +8,11 @@ const FIT_MAX_ZOOM = 1;
 const FIT_PADDING = 0.2;
 
 export interface CanvasViewport {
-  /** Bring a node to the middle of the canvas, optionally offset horizontally. */
-  centerOnNode: (id: string, offsetX?: number) => void;
+  /**
+   * Bring a node to the middle of the canvas, optionally offset (screen pixels):
+   * a positive `offsetX` moves it left, a positive `offsetY` moves it up.
+   */
+  centerOnNode: (id: string, offsetX?: number, offsetY?: number) => void;
   /** Frame the whole graph. */
   fitCanvas: () => void;
   zoomIn: () => void;

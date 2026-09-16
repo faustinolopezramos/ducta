@@ -156,6 +156,15 @@ describe("edgePath", () => {
 });
 
 describe("DagCanvas", () => {
+  it("keeps the minimap off until asked for", () => {
+    const hidden = render(<DagCanvas items={items} datasets={datasets} />);
+    expect(hidden.container.querySelector(".react-flow__minimap")).toBeNull();
+    hidden.unmount();
+
+    const shown = render(<DagCanvas items={items} datasets={datasets} showMinimap />);
+    expect(shown.container.querySelector(".react-flow__minimap")).not.toBeNull();
+  });
+
   it("renders every node of the chain", () => {
     const { container } = render(<DagCanvas items={items} datasets={datasets} />);
 

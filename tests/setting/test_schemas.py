@@ -85,8 +85,11 @@ class TestGlobalConfigSchema:
             GlobalConfigSchema(input_path="/in", output_path="/out", run_certificate_dir="")
 
     def test_run_certificate_dir_default_and_override(self):
+        # The schema only validates the raw string; ${output_path}/${environment}
+        # interpolation and per-environment scoping happen later, in
+        # CoreSettings._resolve_scoped_dir (see tests/core/test_certificate.py).
         s = GlobalConfigSchema(input_path="/in", output_path="/out")
-        assert s.run_certificate_dir == ".ducta/runs"
+        assert s.run_certificate_dir == "${output_path}/${environment}/.ducta/runs"
         s2 = GlobalConfigSchema(
             input_path="/in", output_path="/out", run_certificate_dir="custom/runs"
         )

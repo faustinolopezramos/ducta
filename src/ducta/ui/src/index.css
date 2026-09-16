@@ -9,6 +9,8 @@
    the chrome around them (page frame, HUD, overlays, error and responsive). */
 @import "./theme/pipeline-canvas.css";
 @import "./theme/pipeline-inspector.css";
+@import "./theme/pipeline-focus.css";
+@import "./theme/dashboard.css";
 @import "./theme/pipeline-chrome.css";
 
 #root {

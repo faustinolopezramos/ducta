@@ -246,6 +246,10 @@ export interface NodeSchema {
     check_count: number;
     gate_behavior?: string | null;
     is_sanity: boolean;
+    /** Every enabled check, sanity and quality — the three fields above describe one block. */
+    checks?: NodeQualityCheck[];
+    /** Gates declared on either block (a gate without `enabled` still counts). */
+    gates?: NodeQualityGate[];
   } | null;
   last_execution_status?: string | null;
   last_execution_time?: string | null;
@@ -276,6 +280,52 @@ export const useNodeSchema = (projectId: string, pipeline: string, node: string)
         .then((r) => r.data),
     staleTime: 15 * 1000,
     enabled: !!projectId && !!pipeline && !!node,
+  });
+
+export interface NodeQualityCheck {
+  name: string;
+  /** `sanity` runs before the node reads its inputs; `quality` after it writes. */
+  phase: "sanity" | "quality";
+  params: Record<string, unknown>;
+}
+
+export interface NodeQualityGate {
+  phase: "sanity" | "quality";
+  behavior?: string | null;
+  params: Record<string, unknown>;
+}
+
+export interface PipelineRunSummary {
+  execution_id: string;
+  status: string;
+  time?: string | null;
+  duration?: number | null;
+  error_message?: string | null;
+}
+
+export interface PipelineNodeSchemas {
+  project_id: string;
+  pipeline_name: string;
+  nodes: NodeSchema[];
+  last_execution?: PipelineRunSummary | null;
+}
+
+/**
+ * GET /projects/{projectId}/pipelines/{pipeline}/nodes/schema
+ *
+ * Every node of the pipeline with the same detail as `useNodeSchema`, plus the
+ * pipeline's latest run — one request for the canvas, the contract list and the
+ * focus panel instead of one per node.
+ */
+export const usePipelineNodeSchemas = (projectId: string, pipeline: string) =>
+  useQuery<PipelineNodeSchemas>({
+    queryKey: ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema"],
+    queryFn: () =>
+      client
+        .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/schema`)
+        .then((r) => r.data),
+    staleTime: 15 * 1000,
+    enabled: !!projectId && !!pipeline,
   });
 
 
@@ -313,23 +363,32 @@ export const useNode = (name: string) =>
  * Note: This endpoint may not be available in all server versions.
  * If unavailable, we gracefully handle the error and use code from pipeline store.
  */
+/**
+ * The query behind `useNodeCode`, shared so a caller that needs the code once —
+ * opening the editor from a list row — can `fetchQuery` it and hit the same cache.
+ */
+export const nodeCodeQuery = (name: string) => ({
+  queryKey: ["nodes", sourceKey(), name, "code"],
+  // Untyped like the endpoint's other consumers read it (NodeCodePage also uses `module_path`).
+  queryFn: async (): Promise<any> => {
+    try {
+      const result = await client.get(`/nodes/${name}/code`);
+      return result.data;
+    } catch (error: any) {
+      // If endpoint returns 404 or any error, return null instead of failing the query
+      // The frontend will fall back to using code from the pipeline store
+      if (error?.response?.status === 404 || error?.response?.status === 405) {
+        return null;
+      }
+      throw error;
+    }
+  },
+  staleTime: 30 * 1000,
+});
+
 export const useNodeCode = (name: string) =>
   useQuery({
-    queryKey: ["nodes", sourceKey(), name, "code"],
-    queryFn: async () => {
-      try {
-        const result = await client.get(`/nodes/${name}/code`);
-        return result.data;
-      } catch (error: any) {
-        // If endpoint returns 404 or any error, return null instead of failing the query
-        // The frontend will fall back to using code from the pipeline store
-        if (error?.response?.status === 404 || error?.response?.status === 405) {
-          return null;
-        }
-        throw error;
-      }
-    },
-    staleTime: 30 * 1000,
+    ...nodeCodeQuery(name),
     enabled: !!name,
   });
 

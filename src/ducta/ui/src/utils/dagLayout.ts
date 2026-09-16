@@ -71,13 +71,40 @@ export interface RoutedEdge {
   points: LayoutPoint[];
 }
 
+/**
+ * Which way the layers run: `TB` stacks them top to bottom (edges leave a card's
+ * bottom and enter the next card's top), `LR` lines them up left to right (edges
+ * leave the right side and enter the left).
+ */
+export type LayoutDirection = "TB" | "LR";
+
 export interface LayoutOptions {
-  /** Vertical space between one layer's bottom and the next layer's top. */
+  /** Space between one layer and the next, along the flow. */
   layerGap?: number;
-  /** Minimum horizontal space between two cells in the same layer. */
+  /** Minimum space between two cells in the same layer, across the flow. */
   nodeGap?: number;
   /** Space between the graph's bounding box and the canvas edge. */
   padding?: number;
+  /** Defaults to `TB`. */
+  direction?: LayoutDirection;
+  /**
+   * Groups nodes into ordered bands (e.g. the pipelines of a chain). Every node
+   * of band `k` sits in a layer before every node of band `k + 1`, so a band
+   * reads as one contiguous stretch of the canvas. Nodes without a band are
+   * placed by their dependencies alone.
+   */
+  bandOf?: (id: string) => number | undefined;
+}
+
+/** Where a band landed, measured along the flow (y for `TB`, x for `LR`). */
+export interface LayoutBand {
+  band: number;
+  firstLayer: number;
+  lastLayer: number;
+  /** Leading edge of the band's first layer. */
+  start: number;
+  /** Trailing edge of the band's last layer. */
+  end: number;
 }
 
 export interface DagLayout {
@@ -87,6 +114,8 @@ export interface DagLayout {
   height: number;
   /** Edge crossings left after ordering — surfaced for tests and telemetry. */
   crossings: number;
+  /** One entry per band that has nodes, in band order. Empty without `bandOf`. */
+  bands: LayoutBand[];
 }
 
 const DEFAULT_LAYER_GAP = 72;
@@ -147,6 +176,38 @@ export function layoutDag(
   edges: LayoutInputEdge[],
   options: LayoutOptions = {}
 ): DagLayout | null {
+  if ((options.direction ?? "TB") === "TB") return layoutTopDown(nodes, edges, options);
+
+  // Left to right is top to bottom transposed. Laying out in the rotated frame
+  // (each card's height becomes the across-flow width) keeps one algorithm, and
+  // every guarantee it gives — reserved channels, port anchors, crossings — holds
+  // unchanged once x and y are swapped back.
+  const rotated = layoutTopDown(
+    nodes.map((n) => ({ ...n, width: n.height, height: n.width })),
+    edges,
+    options
+  );
+  if (!rotated) return null;
+
+  const positioned = new Map<string, PositionedNode>();
+  for (const [id, n] of rotated.nodes) {
+    positioned.set(id, { ...n, x: n.y, y: n.x, width: n.height, height: n.width });
+  }
+  return {
+    nodes: positioned,
+    edges: rotated.edges.map((e) => ({ ...e, points: e.points.map((p) => ({ x: p.y, y: p.x })) })),
+    width: rotated.height,
+    height: rotated.width,
+    crossings: rotated.crossings,
+    bands: rotated.bands,
+  };
+}
+
+function layoutTopDown(
+  nodes: LayoutInputNode[],
+  edges: LayoutInputEdge[],
+  options: LayoutOptions
+): DagLayout | null {
   const layerGap = options.layerGap ?? DEFAULT_LAYER_GAP;
   const nodeGap = options.nodeGap ?? DEFAULT_NODE_GAP;
   const padding = options.padding ?? DEFAULT_PADDING;
@@ -167,7 +228,14 @@ export function layoutDag(
   }
 
   if (nodes.length === 0) {
-    return { nodes: new Map(), edges: [], width: padding * 2, height: padding * 2, crossings: 0 };
+    return {
+      nodes: new Map(),
+      edges: [],
+      width: padding * 2,
+      height: padding * 2,
+      crossings: 0,
+      bands: [],
+    };
   }
 
   // ── 1. Layering ──────────────────────────────────────────────────────────
@@ -184,16 +252,75 @@ export function layoutDag(
 
   const layerOf = new Map<string, number>(levels);
 
+  // Bands: every node of band k lands in a layer before every node of band k+1.
+  // A dependency running from a later band back into an earlier one makes that
+  // impossible, so the bands are ignored rather than bent into a wrong drawing.
+  const bandOf = options.bandOf;
+  const bandIds = bandOf
+    ? [...new Set(nodes.map((n) => bandOf(n.id)).filter((b): b is number => b !== undefined))].sort(
+        (a, b) => a - b
+      )
+    : [];
+  const bandsActive =
+    bandOf !== undefined &&
+    bandIds.length > 0 &&
+    realEdges.every((e) => {
+      const from = bandOf(e.from);
+      const to = bandOf(e.to);
+      return from === undefined || to === undefined || from <= to;
+    });
+
+  /** Deepest layer used by band `b` or any band before it — the band's tightening cap. */
+  const bandCap = new Map<number, number>();
+  if (bandsActive) {
+    // Levels are a topological order, so one pass in that order settles every
+    // parent before its child; floors only ever push nodes further along, so
+    // repeating until nothing moves converges (at most once per band).
+    const topo = [...nodes].sort((a, b) => layerOf.get(a.id)! - layerOf.get(b.id)!);
+    for (let pass = 0; pass <= bandIds.length; pass++) {
+      const floor = new Map<number, number>();
+      let deepest = -1;
+      for (const b of bandIds) {
+        floor.set(b, deepest + 1);
+        for (const n of nodes) {
+          if (bandOf(n.id) === b) deepest = Math.max(deepest, layerOf.get(n.id)!);
+        }
+      }
+      let moved = false;
+      for (const n of topo) {
+        let want = 0;
+        for (const p of parents.get(n.id)!) want = Math.max(want, layerOf.get(p)! + 1);
+        const b = bandOf(n.id);
+        if (b !== undefined) want = Math.max(want, floor.get(b)!);
+        if (want > layerOf.get(n.id)!) {
+          layerOf.set(n.id, want);
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    let deepest = -1;
+    for (const b of bandIds) {
+      for (const n of nodes) {
+        if (bandOf(n.id) === b) deepest = Math.max(deepest, layerOf.get(n.id)!);
+      }
+      bandCap.set(b, deepest);
+    }
+  }
+
   // Tightening: a node whose consumers all sit far below is pulled down to just
   // above its earliest consumer. Fewer long edges means fewer dummies and a
   // more compact graph. Walking layers top-down (children first) keeps the
   // invariant layer(child) > layer(parent) — nodes only ever move *down*.
+  // A banded node is never pulled past the end of its own band.
   const byDescendingLayer = [...nodes].sort((a, b) => layerOf.get(b.id)! - layerOf.get(a.id)!);
   for (const n of byDescendingLayer) {
     const kids = children.get(n.id)!;
     if (kids.length === 0) continue;
-    const earliest = Math.min(...kids.map((c) => layerOf.get(c)!));
-    if (earliest - 1 > layerOf.get(n.id)!) layerOf.set(n.id, earliest - 1);
+    let target = Math.min(...kids.map((c) => layerOf.get(c)!)) - 1;
+    const band = bandsActive ? bandOf!(n.id) : undefined;
+    if (band !== undefined) target = Math.min(target, bandCap.get(band)!);
+    if (target > layerOf.get(n.id)!) layerOf.set(n.id, target);
   }
 
   // Tightening can empty a layer; compact so layer indices stay consecutive.
@@ -477,6 +604,34 @@ export function layoutDag(
     top += bandHeight + layerGap;
   }
 
+  // Where each band landed along the flow, from the layers its nodes occupy.
+  const bands: LayoutBand[] = [];
+  if (bandsActive) {
+    const span = new Map<number, { first: number; last: number }>();
+    for (const n of nodes) {
+      const b = bandOf!(n.id);
+      if (b === undefined) continue;
+      const l = cells.get(n.id)!.layer;
+      const s = span.get(b);
+      if (s) {
+        s.first = Math.min(s.first, l);
+        s.last = Math.max(s.last, l);
+      } else {
+        span.set(b, { first: l, last: l });
+      }
+    }
+    for (const b of [...span.keys()].sort((p, q) => p - q)) {
+      const { first, last } = span.get(b)!;
+      bands.push({
+        band: b,
+        firstLayer: first,
+        lastLayer: last,
+        start: bandTop[first],
+        end: bandBottom[last],
+      });
+    }
+  }
+
   // Normalise so the graph starts at `padding` on both axes.
   let minX = Infinity;
   for (const c of cells.values()) minX = Math.min(minX, c.x);
@@ -564,5 +719,6 @@ export function layoutDag(
     width: maxX + padding,
     height: Math.max(top - layerGap + padding, padding * 2),
     crossings: bestCrossings,
+    bands,
   };
 }

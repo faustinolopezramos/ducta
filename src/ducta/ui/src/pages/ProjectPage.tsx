@@ -1,23 +1,32 @@
-import { useParams, useNavigate, Link } from "react-router-dom";
-import { useMemo, useState, useRef, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { useMemo, useState, type FormEvent } from "react";
 import { useProjectStore } from "../store/projectStore";
-import { selectPresent } from "../store/reducer";
+import { selectPresent, type ProjectItem } from "../store/reducer";
 import { useServerPipelineHydration } from "../hooks/useServerPipelineHydration";
-import { useCreatePipeline, useDeletePipeline } from "../api/mutations";
+import { apiErrorMessage, useCreatePipeline, useDeletePipeline } from "../api/mutations";
 import {
+  useExecutionList,
   useProjectDatasets,
   useProjectDependencies,
   useServerProjectPipelines,
 } from "../api/queries";
 import { computeLineage, lensEdgeClass } from "../utils/lineage";
 import { Button } from "../components/ui/Button";
+import { ConfirmDialog } from "../components/ui/ConfirmDialog";
+import { DataTable, type DataTableColumn } from "../components/ui/DataTable";
 import { EmptyState } from "../components/ui/EmptyState";
+import { Modal } from "../components/ui/Modal";
 import { Skeleton } from "../components/ui/Skeleton";
+import { StatusBadge } from "../components/ui/StatusBadge";
 import { DagCanvas } from "../components/Pipeline/DagCanvas";
 import { RunPipelineModal } from "../components/Pipeline/RunPipelineModal";
-import { formatGlyph } from "../utils/nodePresentation";
+import { compactDuration, formatGlyph } from "../utils/nodePresentation";
+import { dependsOnFromEdges } from "../utils/pipelineChain";
+import { FAILURE_STATUSES, activityWindowStart, runTimestamp, type RunLike } from "../utils/dashboardStats";
+import { formatRelative } from "../utils/timeLabels";
+import { useUIStore } from "../store/uiStore";
 import {
-  IconChevronRight,
+  IconFolderOff,
   IconPlus,
   IconTrash,
   IconPlayerPlay,
@@ -45,10 +54,11 @@ function BoundaryList({ label, refs }: { label: string; refs: DatasetRef[] }) {
       <span className="supernode-boundary-label">{label}</span>
       {shown.map((ref) => (
         <span key={ref.name} className="supernode-dataset" data-layer={ref.layer ?? undefined}>
+          <span className="supernode-swatch" aria-hidden="true" />
           <span className="supernode-dataset-glyph" aria-hidden="true">
             {formatGlyph(ref.format)}
           </span>
-          {ref.name}
+          <span className="supernode-dataset-name">{ref.name}</span>
         </span>
       ))}
       {rest > 0 && <span className="supernode-more">+{rest} more</span>}
@@ -73,14 +83,15 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
   const { data: datasetsData } = useProjectDatasets(projectId);
   /** Pipeline under the cursor or keyboard focus — drives the lens, not selection. */
   const [focused, setFocused] = useState<string | null>(null);
+  /** The same layer direction the viewer chose on the pipeline canvas. */
+  const orientation = useUIStore((s) => s.pipelineOrientation);
 
   const { items, labels, parents } = useMemo(() => {
     const pipelines = Object.keys(data?.pipelines ?? {});
-    const dependsOn = new Map<string, Set<string>>(pipelines.map((p) => [p, new Set<string>()]));
+    const dependsOn = dependsOnFromEdges(pipelines, data?.edges ?? []);
     const edgeDatasets = new Map<string, Set<string>>();
     for (const edge of data?.edges ?? []) {
       if (edge.from_pipeline === edge.to_pipeline) continue;
-      dependsOn.get(edge.to_pipeline)?.add(edge.from_pipeline);
       const key = `${edge.from_pipeline}->${edge.to_pipeline}`;
       if (!edgeDatasets.has(key)) edgeDatasets.set(key, new Set());
       if (edge.dataset) edgeDatasets.get(key)!.add(edge.dataset);
@@ -179,6 +190,7 @@ function ProjectDependenciesView({ projectId }: { projectId: string }) {
     <div className="project-map">
       <DagCanvas
         items={items}
+        orientation={orientation}
         edgeLabel={(from, to) => labels.get(`${from}->${to}`) ?? null}
         edgeClassName={(from, to) => lensEdgeClass(lineage, from, to)}
         renderItem={(item) => {
@@ -258,11 +270,8 @@ export function ProjectPage() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [view, setView] = useState<"pipelines" | "dependencies">("dependencies");
-  const [createName, setCreateName] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runPipelineId, setRunPipelineId] = useState<string | null>(null);
-  const createInputRef = useRef<HTMLInputElement>(null);
-  const { mutate: createPipeline, isPending: isCreating } = useCreatePipeline();
   const { mutate: deletePipeline, isPending: isDeleting } = useDeletePipeline();
 
   // Load pipelines from server when projectId changes
@@ -277,47 +286,9 @@ export function ProjectPage() {
     projects.find((p) => p.id === projectId)?.pipelines.length ?? 0
   );
 
-  // Auto-focus the name input when the create form opens
-  useEffect(() => {
-    if (showCreate) createInputRef.current?.focus();
-  }, [showCreate]);
-
-  const handleOpenCreate = () => {
-    setCreateName("");
-    // The form lives in the list view, so asking for a pipeline goes there.
-    setView("pipelines");
-    setShowCreate(true);
-  };
-
-  const handleCreate = () => {
-    const name = createName.trim();
-    if (!name || !projectId) return;
-    createPipeline(
-      { projectId, name, spec: { nodes: [], type: "batch", active: true } },
-      {
-        onSuccess: () => {
-          // Select the project so ADD_PIPELINE targets the right one
-          dispatch({ type: "SELECT_PROJECT", payload: projectId });
-          dispatch({
-            type: "ADD_PIPELINE",
-            payload: {
-              id: name,
-              name,
-              nodes: [],
-              active: true,
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            },
-          });
-          setShowCreate(false);
-          navigate(`/project/${projectId}/pipeline/${name}`);
-        },
-      }
-    );
-  };
-
-  const handleDeletePipeline = (pipelineId: string) => {
-    if (!projectId) return;
+  const handleDeletePipeline = () => {
+    if (!projectId || !confirmDeleteId) return;
+    const pipelineId = confirmDeleteId;
     deletePipeline(
       { projectId, name: pipelineId, expectedSha: serverPipelines?.commit_sha },
       {
@@ -337,12 +308,16 @@ export function ProjectPage() {
   if (!currentProject) {
     return (
       <div className="page-error">
-        <div className="error-content">
-          <div className="error-icon">🔍</div>
-          <h1 className="t-h2">Project not found</h1>
-          <p className="t-p">The project "{projectId}" does not exist.</p>
-          <Button variant="primary" onClick={() => navigate("/projects")}>Back to Projects</Button>
-        </div>
+        <EmptyState
+          icon={IconFolderOff}
+          title="Project not found"
+          description={`There is no project “${projectId}” in this workspace.`}
+          action={
+            <Button variant="primary" onClick={() => navigate("/projects")}>
+              Back to dashboard
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -351,26 +326,13 @@ export function ProjectPage() {
 
   return (
     <div className={`page-transition project-page${isMap ? " project-page--map" : ""}`}>
-      {/* The only chrome the map keeps: where you are, how you look at it, and
-          the one action that creates something. Everything else the page used
-          to stack above the canvas (title, id, pipeline count, section
-          heading) repeated what the breadcrumb and the cards already say, and
-          it was costing the map most of its height. */}
+      {/* The only chrome either view keeps: how many pipelines, how you look at
+          them, and the one action that creates something. MainLayout already
+          renders the trail (Projects > this project) right above this bar. */}
       <div className="project-header">
-        {/* MainLayout already renders the trail (Projects > this project) right
-            above this bar, so in map view the left slot drops the duplicate and
-            keeps only what the trail does not say. */}
-        {isMap ? (
-          <span className="project-header-count">
-            {pipelineCount} pipeline{pipelineCount !== 1 ? "s" : ""}
-          </span>
-        ) : (
-          <div className="breadcrumbs">
-            <Link to="/projects" className="breadcrumb-item">Projects</Link>
-            <IconChevronRight size={14} className="separator" />
-            <span className="breadcrumb-current">{currentProject.name}</span>
-          </div>
-        )}
+        <span className="project-header-count">
+          {pipelineCount} pipeline{pipelineCount !== 1 ? "s" : ""}
+        </span>
 
         <div className="header-actions">
           <div className="view-switch" role="group" aria-label="Project view">
@@ -393,9 +355,13 @@ export function ProjectPage() {
               List
             </Button>
           </div>
-          <Button variant="primary" size="sm" onClick={handleOpenCreate}>
-            <IconPlus size={16} stroke={2} />
-            <span>New Pipeline</span>
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setShowCreate(true)}
+            leftIcon={<IconPlus size={16} stroke={2} />}
+          >
+            New pipeline
           </Button>
         </div>
       </div>
@@ -403,133 +369,41 @@ export function ProjectPage() {
       {isMap && <ProjectDependenciesView projectId={projectId!} />}
 
       {!isMap && (
-      <div className="project-content t-container">
-        <section className="project-intro">
-          <h1 className="t-h1">{currentProject.name}</h1>
-          <div className="project-meta">
-            <span className="project-id">{currentProject.id}</span>
-            <span className="dot-separator">•</span>
-            <span className="project-stats-info">{pipelineCount} Pipeline{pipelineCount !== 1 ? "s" : ""}</span>
-          </div>
-        </section>
+        <PipelinesView
+          projectId={projectId!}
+          project={currentProject}
+          pipelineCount={pipelineCount}
+          specs={(serverPipelines?.pipelines ?? {}) as Record<string, PipelineSpecLike | undefined>}
+          onOpen={(id) => navigate(`/project/${projectId}/pipeline/${id}`)}
+          onRun={setRunPipelineId}
+          onDelete={setConfirmDeleteId}
+          onCreate={() => setShowCreate(true)}
+        />
+      )}
 
-        {/* Pipelines List */}
-        <section className="pipelines-section">
-          {/* Inline create form */}
-          {showCreate && (
-            <div className="create-pipeline-card t-card">
-              <div className="form-title">Create New Pipeline</div>
-              <input
-                ref={createInputRef}
-                className="t-input"
-                value={createName}
-                onChange={e => setCreateName(e.target.value)}
-                onKeyDown={e => {
-                  if (e.key === "Enter") handleCreate();
-                  if (e.key === "Escape") { setShowCreate(false); setCreateName(""); }
-                }}
-                placeholder="e.g. data_ingestion_daily"
-              />
-              <div className="form-actions">
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={handleCreate}
-                  disabled={isCreating || !createName.trim()}
-                >
-                  {isCreating ? "Creating…" : "Create"}
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => { setShowCreate(false); setCreateName(""); }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {currentProject.pipelines.length === 0 && !showCreate ? (
-            <div className="empty-state t-card">
-              <div className="empty-icon">⚙️</div>
-              <h3 className="empty-title">No pipelines yet</h3>
-              <p className="empty-desc">Create your first pipeline to get started with data orchestration.</p>
-              <Button variant="primary" onClick={handleOpenCreate}>Create Pipeline</Button>
-            </div>
-          ) : (
-            <div className="pipelines-grid">
-              {currentProject.pipelines.map((pipeline) => (
-                <div
-                  key={pipeline.id}
-                  className={`pipeline-card t-card ${confirmDeleteId === pipeline.id ? "deleting" : ""}`}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/project/${projectId}/pipeline/${pipeline.id}`)}
-                  onKeyDown={(e) => {
-                    // The card holds its own buttons (delete, confirm), so it
-                    // cannot itself be a <button>; give it button semantics
-                    // and the two keys a button would answer to.
-                    if (e.target !== e.currentTarget) return;
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      navigate(`/project/${projectId}/pipeline/${pipeline.id}`);
-                    }
-                  }}
-                >
-                  <div className="card-header">
-                    <div className="pipeline-icon">
-                      <IconLayoutGrid size={18} stroke={1.5} />
-                    </div>
-                    <div className="pipeline-title-group">
-                      <h3 className="pipeline-title">{pipeline.name || pipeline.id}</h3>
-                      <p className="pipeline-id-sub">{pipeline.id}</p>
-                    </div>
-
-                    <button
-                      className="run-btn"
-                      title="Run pipeline"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setRunPipelineId(pipeline.id);
-                      }}
-                    >
-                      <IconPlayerPlay size={16} />
-                    </button>
-
-                    <button
-                      className="delete-btn"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setConfirmDeleteId(confirmDeleteId === pipeline.id ? null : pipeline.id);
-                      }}
-                    >
-                      <IconTrash size={16} />
-                    </button>
-                  </div>
-
-                  {confirmDeleteId === pipeline.id && (
-                    <div className="delete-confirm-overlay" role="presentation" onClick={e => e.stopPropagation()}>
-                      <p>Delete this pipeline?</p>
-                      <div className="confirm-actions">
-                        <button className="confirm-yes" onClick={() => handleDeletePipeline(pipeline.id)} disabled={isDeleting}>Yes</button>
-                        <button className="confirm-no" onClick={() => setConfirmDeleteId(null)}>No</button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="card-footer">
-                    <div className="stat-badge">
-                      <span className="stat-val">{pipeline.nodes.length}</span>
-                      <span className="stat-label">Nodes</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
-      </div>
+      {showCreate && projectId && (
+        <NewPipelineModal
+          projectId={projectId}
+          existing={Object.keys(serverPipelines?.pipelines ?? {})}
+          onClose={() => setShowCreate(false)}
+          onCreated={(name) => {
+            // Select the project so ADD_PIPELINE targets the right one
+            dispatch({ type: "SELECT_PROJECT", payload: projectId });
+            dispatch({
+              type: "ADD_PIPELINE",
+              payload: {
+                id: name,
+                name,
+                nodes: [],
+                active: true,
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+              },
+            });
+            setShowCreate(false);
+            navigate(`/project/${projectId}/pipeline/${name}`);
+          }}
+        />
       )}
 
       {runPipelineId && projectId && (
@@ -539,6 +413,278 @@ export function ProjectPage() {
           onClose={() => setRunPipelineId(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={Boolean(confirmDeleteId)}
+        title={`Delete pipeline ${confirmDeleteId ?? ""}?`}
+        description="This removes the pipeline from the project."
+        tone="danger"
+        confirmLabel="Delete pipeline"
+        pending={isDeleting}
+        onConfirm={handleDeletePipeline}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
     </div>
+  );
+}
+
+interface PipelineSpecLike {
+  type?: string;
+  description?: string;
+}
+
+interface PipelineRow {
+  id: string;
+  name: string;
+  type: string;
+  description?: string;
+  nodes: number;
+  lastRun: RunLike | null;
+  runsThisWeek: number;
+}
+
+/**
+ * A project's pipelines as a table: what each one is, how big, and how its
+ * last run went. It replaces a grid of identical cards whose run and delete
+ * buttons stayed invisible until hover, and whose delete asked "Yes / No" in an
+ * overlay on top of the card it was deleting.
+ */
+function PipelinesView({
+  projectId,
+  project,
+  pipelineCount,
+  specs,
+  onOpen,
+  onRun,
+  onDelete,
+  onCreate,
+}: {
+  projectId: string;
+  project: ProjectItem;
+  pipelineCount: number;
+  specs: Record<string, PipelineSpecLike | undefined>;
+  onOpen: (pipelineId: string) => void;
+  onRun: (pipelineId: string) => void;
+  onDelete: (pipelineId: string) => void;
+  onCreate: () => void;
+}) {
+  // Fixed for the life of the view so the query key does not change every render.
+  const [since] = useState(activityWindowStart);
+  const { data: runsData, isLoading } = useExecutionList({ project_id: projectId, since, limit: 200 });
+
+  const rows = useMemo<PipelineRow[]>(() => {
+    const runs = ((runsData?.executions ?? []) as RunLike[])
+      .map((run) => ({ run, t: runTimestamp(run) ?? 0 }))
+      .sort((a, b) => b.t - a.t);
+    return project.pipelines.map((pipeline) => {
+      const spec = specs[pipeline.id];
+      const own = runs.filter((x) => x.run.pipeline_name === pipeline.id);
+      return {
+        id: pipeline.id,
+        name: pipeline.name || pipeline.id,
+        type: spec?.type ?? (pipeline as { type?: string }).type ?? "batch",
+        description: spec?.description ?? (pipeline as { description?: string }).description,
+        nodes: pipeline.nodes.length,
+        lastRun: own[0]?.run ?? null,
+        runsThisWeek: own.length,
+      };
+    });
+  }, [runsData, project.pipelines, specs]);
+
+  const columns: DataTableColumn<PipelineRow>[] = [
+    {
+      key: "name",
+      header: "Pipeline",
+      cell: (r) => (
+        <span className="dash-table-project">
+          <span className="project-list-name">{r.name}</span>
+          {r.description && <span className="project-list-desc">{r.description}</span>}
+        </span>
+      ),
+    },
+    {
+      key: "type",
+      header: "Type",
+      width: "110px",
+      cell: (r) => <span className="pipeline-type-tag">{r.type}</span>,
+    },
+    { key: "nodes", header: "Nodes", align: "right", mono: true, width: "80px", cell: (r) => r.nodes },
+    {
+      key: "last",
+      header: "Last run",
+      width: "230px",
+      cell: (r) =>
+        r.lastRun ? (
+          <span className="dash-table-last">
+            <StatusBadge
+              status={r.lastRun.status}
+              label={r.lastRun.status === "gate_blocked" ? "Gate blocked" : undefined}
+              size="sm"
+            />
+            <span>
+              {formatRelative(r.lastRun.started_at ?? r.lastRun.finished_at)}
+              {r.lastRun.duration_seconds != null ? ` · ${compactDuration(r.lastRun.duration_seconds)}` : ""}
+            </span>
+          </span>
+        ) : (
+          <span className="dash-muted">{isLoading ? "…" : "No runs this week"}</span>
+        ),
+    },
+    { key: "runs", header: "Runs · 7 d", align: "right", mono: true, width: "96px", cell: (r) => r.runsThisWeek },
+    {
+      key: "actions",
+      header: "",
+      headerLabel: "Actions",
+      align: "right",
+      width: "96px",
+      cell: (r) => (
+        <span className="project-list-actions">
+          <button
+            type="button"
+            className="dash-menu-trigger"
+            aria-label={`Run ${r.name}`}
+            title="Run pipeline"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRun(r.id);
+            }}
+          >
+            <IconPlayerPlay size={15} stroke={1.75} />
+          </button>
+          <button
+            type="button"
+            className="dash-menu-trigger project-list-delete"
+            aria-label={`Delete ${r.name}`}
+            title="Delete pipeline"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(r.id);
+            }}
+          >
+            <IconTrash size={15} stroke={1.75} />
+          </button>
+        </span>
+      ),
+    },
+  ];
+
+  return (
+    <div className="project-content project-list t-container">
+      <header className="project-list-head">
+        <h1 className="project-list-title">{project.name}</h1>
+        <p className="project-list-meta">
+          <span className="project-list-id">{project.id}</span> · {pipelineCount} pipeline
+          {pipelineCount !== 1 ? "s" : ""}
+        </p>
+      </header>
+
+      {project.pipelines.length === 0 ? (
+        <EmptyState
+          icon={IconSitemap}
+          title="No pipelines yet"
+          description="Create a pipeline, then add nodes to it on the canvas."
+          action={
+            <Button variant="primary" onClick={onCreate} leftIcon={<IconPlus size={16} stroke={2} />}>
+              New pipeline
+            </Button>
+          }
+        />
+      ) : (
+        <DataTable<PipelineRow>
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          onRowClick={(r) => onOpen(r.id)}
+          rowClassName={(r) =>
+            r.lastRun && FAILURE_STATUSES.has(r.lastRun.status) ? "dash-row--failing" : undefined
+          }
+          minWidth={760}
+          caption={`Pipelines of ${project.name}`}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Pipeline names become YAML keys and URL segments; dots are the layer convention. */
+const PIPELINE_NAME_RE = /^[a-zA-Z][a-zA-Z0-9_.-]*$/;
+
+/**
+ * Creating a pipeline, as a form: Enter submits, the name is checked before it
+ * is sent (including against the pipelines that already exist), and a refusal
+ * is shown in the dialog. It used to be an inline card that only appeared in
+ * the list view, so asking for a pipeline from the map first switched views.
+ */
+function NewPipelineModal({
+  projectId,
+  existing,
+  onClose,
+  onCreated,
+}: {
+  projectId: string;
+  existing: string[];
+  onClose: () => void;
+  onCreated: (name: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const { mutate: createPipeline, isPending } = useCreatePipeline();
+
+  const trimmed = name.trim();
+  const problem = !trimmed
+    ? null
+    : !PIPELINE_NAME_RE.test(trimmed)
+      ? "Start with a letter, then use only letters, digits, _, - or ."
+      : existing.includes(trimmed)
+        ? `A pipeline named “${trimmed}” already exists in this project.`
+        : null;
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!trimmed || problem || isPending) return;
+    setError(null);
+    createPipeline(
+      { projectId, name: trimmed, spec: { nodes: [], type: "batch", active: true } },
+      {
+        onSuccess: () => onCreated(trimmed),
+        onError: (err: unknown) => setError(apiErrorMessage(err, "Couldn’t create the pipeline. Try again.")),
+      }
+    );
+  };
+
+  return (
+    <Modal title="New pipeline" onClose={onClose}>
+      <form className="projects-modal__form" onSubmit={submit} noValidate>
+        <label className="projects-modal__label" htmlFor="new-pipeline-name">
+          Pipeline name
+        </label>
+        <input
+          id="new-pipeline-name"
+          className="projects-modal__input"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="silver.clean"
+          autoComplete="off"
+          aria-invalid={Boolean(problem)}
+          aria-describedby="new-pipeline-name-hint"
+        />
+        <p id="new-pipeline-name-hint" className={`projects-modal__hint${problem ? " dash-hint-error" : ""}`}>
+          {problem ?? "Starts as an empty batch pipeline; add nodes on the canvas."}
+        </p>
+        {error && (
+          <p className="dash-form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="projects-modal__actions">
+          <Button type="button" variant="ghost" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="submit" variant="primary" loading={isPending} disabled={!trimmed || Boolean(problem)}>
+            Create pipeline
+          </Button>
+        </div>
+      </form>
+    </Modal>
   );
 }

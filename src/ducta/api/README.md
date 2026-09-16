@@ -59,12 +59,15 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `JWT_SECRET_KEY` | `change-me-in-production` | HS256 signing key (must be overridden in prod) |
 | `JWT_EXPIRATION_HOURS` | `24` | Access-token lifetime |
 | `DATABASE_URL` | `""` (in-memory) | `sqlite+aiosqlite:///...` or `postgresql+asyncpg://...` |
+| `RUNS_DIR` | `~/.ducta/runs` | Where the file-based execution store writes `meta.json` + `logs.jsonl` per run. Empty disables file persistence (memory-only) |
 | `RATE_LIMIT_ENABLED` | `false` | Per-IP rate limiting (`RATE_LIMIT_REQUESTS`, `..._WINDOW_SECONDS`, `RATE_LIMIT_REDIS_URL`) |
 | `MAX_CONCURRENT_EXECUTIONS` | `5` | Parallel pipeline runs |
 | `CORS_ORIGINS` | `["*"]` | Allowed origins |
 | `GIT_CLONE_ALLOWED_HOSTS` | `[]` | Allow-list for Git clone hosts (empty = public hosts only, internal blocked) |
 
 **Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, and either bind to `127.0.0.1` or place the server behind an authenticating proxy.
+
+**Where execution history lives**: the Execution History page reads from two layers merged together — the in-memory `ExecutionStore` (capped by `max_executions_in_memory`, evicted after `execution_retention_seconds`, lost on restart) and the file-based store at `RUNS_DIR` (persists across restarts). Setting `DATABASE_URL` adds a third, queryable layer used for single-run/log lookups once a record has aged out of both memory and `RUNS_DIR`. To fully clear history, delete `RUNS_DIR` (and the `executions`/`execution_logs` tables if `DATABASE_URL` is set) — restarting the server alone only clears memory. This is independent of Data Quality's storage, which lives under `<output_path>/<environment>/.quality` per pipeline config, not under `RUNS_DIR`.
 
 ---
 

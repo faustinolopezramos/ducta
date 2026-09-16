@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -52,6 +52,28 @@ class IOItem(BaseModel):
     model_config = {"populate_by_name": True}
 
 
+class QualityCheck(BaseModel):
+    """One enabled check, as declared on the node."""
+
+    name: str = Field(description="Check name, e.g. row_count")
+    phase: Literal["sanity", "quality"] = Field(
+        description="sanity runs before the node reads its inputs; quality after it writes"
+    )
+    params: Dict[str, Any] = Field(
+        default_factory=dict, description="The check's declared parameters, e.g. {'min': 350}"
+    )
+
+
+class QualityGate(BaseModel):
+    """A gate declared on one of the node's check blocks."""
+
+    phase: Literal["sanity", "quality"]
+    behavior: Optional[str] = Field(default=None, description="e.g. skip_downstream")
+    params: Dict[str, Any] = Field(
+        default_factory=dict, description="Remaining gate settings, e.g. {'max_errors': 0}"
+    )
+
+
 class QualityInfo(BaseModel):
     """Quality checks and gate configured on a node."""
 
@@ -62,6 +84,14 @@ class QualityInfo(BaseModel):
     )
     is_sanity: bool = Field(
         default=False, description="True when the checks run before the node rather than after"
+    )
+    # The three fields above summarise one block (data_quality, else
+    # sanity_checks) and are kept as they were. These two cover both blocks.
+    checks: List[QualityCheck] = Field(
+        default_factory=list, description="Every enabled check, sanity and quality"
+    )
+    gates: List[QualityGate] = Field(
+        default_factory=list, description="Gates declared on either block"
     )
 
 
@@ -107,3 +137,24 @@ class PipelineNodeSchemaResponse(BaseModel):
     project_id: str
     pipeline_name: str
     node: NodeSchemaResponse
+
+
+class PipelineRunSummary(BaseModel):
+    """The most recent execution that targeted a pipeline."""
+
+    execution_id: str
+    status: str
+    time: Optional[str] = None
+    duration: Optional[float] = None
+    error_message: Optional[str] = None
+
+
+class PipelineNodesSchemaResponse(BaseModel):
+    """Every node of a pipeline, with the same detail as the per-node endpoint."""
+
+    project_id: str
+    pipeline_name: str
+    nodes: List[NodeSchemaResponse] = Field(default_factory=list)
+    last_execution: Optional[PipelineRunSummary] = Field(
+        default=None, description="Latest run of this pipeline, when there is one"
+    )

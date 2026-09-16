@@ -125,6 +125,11 @@ export function humanizeGate(behavior: string): string {
   return behavior.replace(/_/g, " ");
 }
 
+/** `transform` → `Transform`: a config value, read as a sentence-case label. */
+export function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
 // ── Semantic zoom ───────────────────────────────────────────────────────────
 
 /**

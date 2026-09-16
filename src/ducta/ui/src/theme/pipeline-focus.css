@@ -1,0 +1,468 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   PIPELINE WORKSPACE — focus sheet, contract list, chain strip.
+
+   The focus sheet replaces the two inspector drawers. It docks along the bottom
+   of the canvas so the graph, and the lineage lens lighting the selection's
+   path, stay in view above it whichever way the layers run. It is a bow-tie:
+   neighbours, then data, then the object, then data, then neighbours.
+
+   Shared rows (key/values, dataset rows, pills, warnings) keep their classes
+   from pipeline-inspector.css, so a node reads the same in the sheet and the
+   list.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@keyframes focus-rise {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.focus-sheet {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  max-height: min(48%, 440px);
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  animation: focus-rise var(--dur-base) var(--ease-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .focus-sheet { animation: none; }
+}
+
+/* The sheet covers the bottom-left corner; lift the viewport cluster under the
+   lens switch instead of letting the two overlap. */
+.pipeline-canvas-area[data-focus="open"] .canvas-controls--bottom-left {
+  top: 60px;
+  bottom: auto;
+}
+
+.focus-close {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.focus-close:hover {
+  background: var(--overlay-subtle);
+  color: var(--text);
+}
+
+.focus-close:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.focus-bowtie {
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* ── Columns ────────────────────────────────────────────────────────────── */
+.focus-col {
+  display: flex;
+  flex: 1 1 190px;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 170px;
+  min-height: 0;
+  padding: var(--space-4) var(--space-3);
+  overflow-y: auto;
+}
+
+.focus-bowtie > * + * {
+  border-left: 1px solid var(--border);
+}
+
+/* The neighbours are context, not the subject: a half-step quieter ground. */
+.focus-col--from,
+.focus-col--to {
+  flex-basis: 160px;
+  background: color-mix(in srgb, var(--bg) 55%, var(--surface));
+}
+
+.focus-col-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.focus-col-items {
+  display: flex;
+  flex-direction: column;
+  margin: 0 calc(-1 * var(--space-2));
+}
+
+.focus-empty {
+  margin: 0;
+  padding: 0 var(--space-2);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text-dim);
+}
+
+.focus-node-ref .inspector-io-name {
+  font-family: var(--font-sans);
+}
+
+/* ── The object in the middle ───────────────────────────────────────────── */
+.focus-core {
+  display: flex;
+  flex: 1.8 1 340px;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 320px;
+  min-height: 0;
+  padding: var(--space-4) 44px var(--space-4) var(--space-5);
+  overflow-y: auto;
+}
+
+.focus-core--failed {
+  box-shadow: inset 0 2px 0 var(--danger);
+}
+
+.focus-core-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.focus-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.focus-eyebrow-swatch {
+  width: 10px;
+  height: 2px;
+  background: var(--edge);
+}
+
+.focus-eyebrow[data-layer="bronze"] .focus-eyebrow-swatch { background: var(--layer-bronze); }
+.focus-eyebrow[data-layer="silver"] .focus-eyebrow-swatch { background: var(--layer-silver); }
+.focus-eyebrow[data-layer="gold"] .focus-eyebrow-swatch { background: var(--layer-gold); }
+
+.focus-pills {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.focus-title {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.focus-title.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+}
+
+.focus-fn {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.focus-desc {
+  max-width: 60ch;
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--text-muted);
+}
+
+.focus-alert {
+  padding: 8px 10px;
+  background: var(--status-failed-bg);
+  border-left: 2px solid var(--danger);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.focus-alert strong {
+  color: var(--danger);
+}
+
+.focus-core .inspector-warning {
+  margin: 0;
+}
+
+.focus-core .inspector-kv {
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+/* ── Checks, one per line with parameters spelled out ───────────────────── */
+.focus-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.focus-checks li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-bottom: 3px;
+  border-bottom: 1px dotted var(--border-hover);
+  font-size: var(--text-xs);
+}
+
+.focus-check-name {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.focus-check-params {
+  font-family: var(--font-mono);
+  text-align: right;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.focus-check--gate .focus-check-name {
+  font-weight: var(--weight-medium);
+  color: var(--warning-strong);
+}
+
+.focus-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding-top: var(--space-2);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONTRACT LIST — every node as a row of its contract.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.contract-list {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  padding: 64px var(--space-4) var(--space-6);
+  overflow: auto;
+  background: var(--bg);
+}
+
+.contract-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.contract-group-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.contract-group-name {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.contract-group.current .contract-group-name {
+  color: var(--text);
+}
+
+.contract-group-count {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  color: var(--text-dim);
+}
+
+.contract-node {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.contract-node-name {
+  font-weight: var(--weight-semibold);
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.contract-node-fn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.contract-ds-list {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.contract-ds {
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-align: left;
+  color: var(--text-muted);
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.contract-ds:hover {
+  color: var(--primary);
+  text-decoration: underline;
+}
+
+.contract-ds:focus-visible {
+  outline: none;
+  border-radius: 2px;
+  box-shadow: var(--focus-ring);
+}
+
+.contract-none {
+  color: var(--text-dim);
+}
+
+.contract-failed {
+  font-weight: var(--weight-medium);
+  color: var(--danger);
+}
+
+.contract-running {
+  color: var(--primary);
+}
+
+.tui-table__row.contract-row--failed > td:first-child {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+.contract-detail {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-6);
+  padding: var(--space-3) var(--space-2) var(--space-2);
+}
+
+.contract-detail-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CHAIN STRIP — the pipelines a run executes, in order, in the top bar.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.pipeline-chain {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: 0 auto 0 var(--space-4);
+  padding: 0;
+  overflow-x: auto;
+  list-style: none;
+}
+
+.pipeline-chain li {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.pipeline-chain-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+a.pipeline-chain-pill:hover {
+  border-color: var(--border-hover);
+  color: var(--text);
+  opacity: 1;
+}
+
+.pipeline-chain-pill[aria-current="page"] {
+  border-color: var(--primary);
+  background: var(--primary-light);
+  color: var(--text);
+}
+
+.pipeline-chain-sep {
+  font-size: 12px;
+  color: var(--edge);
+}
+
+.pipeline-chain .node-card-status {
+  width: 6px;
+  height: 6px;
+}
+
+@media (max-width: 900px) {
+  .focus-sheet { max-height: 62%; }
+  .focus-bowtie { flex-direction: column; }
+  .focus-bowtie > * + * { border-left: none; border-top: 1px solid var(--border); }
+  .focus-col, .focus-core { min-width: 0; }
+  .contract-detail { grid-template-columns: 1fr; }
+}

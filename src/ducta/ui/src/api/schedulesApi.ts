@@ -8,6 +8,7 @@ export interface PipelineSchedule {
   id: string;
   pipeline_name: string;
   project_id?: string | null;
+  user_id?: string | null;
   env: string;
   cron: string;
   enabled: boolean;
@@ -15,7 +16,8 @@ export interface PipelineSchedule {
   node_name?: string | null;
   created_at: string;
   last_run_at?: string | null;
-  next_run_hint?: string | null;
+  last_execution_id?: string | null;
+  next_run_at?: string | null;
 }
 
 export interface CreateScheduleVars {
@@ -23,6 +25,15 @@ export interface CreateScheduleVars {
   cron: string;
   env?: string;
   project_id?: string;
+  node_name?: string;
+  hyperparams?: Record<string, unknown>;
+}
+
+export interface UpdateScheduleVars {
+  id: string;
+  pipeline_name?: string;
+  cron?: string;
+  env?: string;
   node_name?: string;
   hyperparams?: Record<string, unknown>;
 }
@@ -51,6 +62,18 @@ export const useCreateSchedule = () => {
   });
 };
 
+export const useUpdateSchedule = () => {
+  const qc = useQueryClient();
+  return useMutation<PipelineSchedule, unknown, UpdateScheduleVars>({
+    mutationFn: ({ id, ...body }) => client.patch(`/schedules/${id}`, body).then((r) => r.data),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["schedules", sourceKey()] });
+      toastStore.getState().show("Schedule updated", "success");
+    },
+    onError: defaultOnError,
+  });
+};
+
 export const useDeleteSchedule = () => {
   const qc = useQueryClient();
   return useMutation<void, unknown, string>({
@@ -68,8 +91,9 @@ export const useToggleSchedule = () => {
   return useMutation<PipelineSchedule, unknown, { id: string; enabled?: boolean }>({
     mutationFn: ({ id, enabled }) =>
       client.post(`/schedules/${id}/toggle`, null, { params: enabled !== undefined ? { enabled } : {} }).then((r) => r.data),
-    onSuccess: () => {
+    onSuccess: (updated) => {
       qc.invalidateQueries({ queryKey: ["schedules", sourceKey()] });
+      toastStore.getState().show(updated.enabled ? "Schedule activated" : "Schedule paused", "success");
     },
     onError: defaultOnError,
   });

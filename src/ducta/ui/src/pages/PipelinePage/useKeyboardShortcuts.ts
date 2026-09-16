@@ -1,5 +1,5 @@
 import { useEffect, type Dispatch, type SetStateAction } from "react";
-import type { Node } from "../../types";
+import type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
 
 interface NavMaps {
   children: Map<string, string[]>;
@@ -7,16 +7,28 @@ interface NavMaps {
   rows: Map<number, string[]>;
 }
 
-/** ⌘K finder, arrow-key DAG walking, F fit, R run node, Esc — deselect. */
+/**
+ * ⌘K finder, arrow-key walking, F fit, O orientation, R run node, Esc deselect.
+ *
+ * Arrows follow the flow. Along it they step to a dependency or a consumer;
+ * across it, to the neighbour in the same layer — so ↑/↓ walk the dependencies
+ * when layers run down the page, and ←/→ do when they run across it. In the
+ * List lens ↑/↓ move between rows in the order the list shows them.
+ */
 export function usePipelineKeyboardShortcuts(params: {
   paletteOpen: boolean;
   setPaletteOpen: Dispatch<SetStateAction<boolean>>;
   isCodeEditorOpen: boolean;
   addNodeOpen: boolean;
-  viewMode: string;
+  lens: PipelineLens;
+  orientation: PipelineOrientation;
+  onToggleOrientation: () => void;
   selectedNodeId: string | null;
   setSelectedNodeId: (id: string | null) => void;
-  pipelineNodes: Node[];
+  /** Every node drawn right now (this pipeline, or its whole chain). */
+  pipelineNodes: Array<{ id: string; name?: string }>;
+  /** Node ids in the order the List lens shows them. */
+  listOrder: string[];
   navMaps: NavMaps;
   parentsMap: Map<string, string[]>;
   isExecuting: boolean;
@@ -30,10 +42,13 @@ export function usePipelineKeyboardShortcuts(params: {
     setPaletteOpen,
     isCodeEditorOpen,
     addNodeOpen,
-    viewMode,
+    lens,
+    orientation,
+    onToggleOrientation,
     selectedNodeId,
     setSelectedNodeId,
     pipelineNodes,
+    listOrder,
     navMaps,
     parentsMap,
     isExecuting,
@@ -55,15 +70,27 @@ export function usePipelineKeyboardShortcuts(params: {
       if (paletteOpen || mod || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
-      if (isCodeEditorOpen || addNodeOpen || viewMode !== "flow") return;
+      if (isCodeEditorOpen || addNodeOpen || lens === "yaml") return;
+
+      const onCanvas = lens === "flow";
+      const select = (id: string | undefined) => {
+        if (!id) return;
+        setSelectedNodeId(id);
+        if (onCanvas) centerOnNode(id);
+      };
 
       if (e.key === "Escape") {
         setSelectedNodeId(null);
         return;
       }
-      if (e.key === "f" || e.key === "F") {
+      if (onCanvas && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         fitCanvas();
+        return;
+      }
+      if (onCanvas && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        onToggleOrientation();
         return;
       }
       if (e.key === "r" || e.key === "R") {
@@ -73,29 +100,35 @@ export function usePipelineKeyboardShortcuts(params: {
       }
       if (!e.key.startsWith("Arrow")) return;
       e.preventDefault();
-      const { children, levels, rows } = navMaps;
-      if (!selectedNodeId) {
-        const first = rows.get(0)?.[0] ?? pipelineNodes[0]?.id;
-        if (first) {
-          setSelectedNodeId(first);
-          centerOnNode(first);
-        }
+
+      if (!onCanvas) {
+        if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+        const idx = selectedNodeId ? listOrder.indexOf(selectedNodeId) : -1;
+        const next = idx < 0 ? listOrder[0] : listOrder[idx + (e.key === "ArrowDown" ? 1 : -1)];
+        select(next);
         return;
       }
-      let next: string | undefined;
-      if (e.key === "ArrowUp") {
-        next = (parentsMap.get(selectedNodeId) ?? [])[0];
-      } else if (e.key === "ArrowDown") {
-        next = (children.get(selectedNodeId) ?? [])[0];
+
+      const { children, levels, rows } = navMaps;
+      if (!selectedNodeId) {
+        select(rows.get(0)?.[0] ?? pipelineNodes[0]?.id);
+        return;
+      }
+
+      const horizontal = orientation === "horizontal";
+      const back = horizontal ? "ArrowLeft" : "ArrowUp";
+      const forward = horizontal ? "ArrowRight" : "ArrowDown";
+      const before = horizontal ? "ArrowUp" : "ArrowLeft";
+
+      if (e.key === back) {
+        select((parentsMap.get(selectedNodeId) ?? [])[0]);
+      } else if (e.key === forward) {
+        select((children.get(selectedNodeId) ?? [])[0]);
       } else {
         const lvl = levels?.get(selectedNodeId) ?? 0;
         const row = rows.get(lvl) ?? [];
         const idx = row.indexOf(selectedNodeId);
-        next = e.key === "ArrowLeft" ? row[idx - 1] : row[idx + 1];
-      }
-      if (next) {
-        setSelectedNodeId(next);
-        centerOnNode(next);
+        select(e.key === before ? row[idx - 1] : row[idx + 1]);
       }
     };
     window.addEventListener("keydown", onKey);
@@ -105,10 +138,13 @@ export function usePipelineKeyboardShortcuts(params: {
     setPaletteOpen,
     isCodeEditorOpen,
     addNodeOpen,
-    viewMode,
+    lens,
+    orientation,
+    onToggleOrientation,
     selectedNodeId,
     setSelectedNodeId,
     pipelineNodes,
+    listOrder,
     navMaps,
     parentsMap,
     isExecuting,

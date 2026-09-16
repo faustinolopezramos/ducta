@@ -39,7 +39,7 @@ from ducta.api.utils.git_utils import (
 from ducta.api.utils.platform_utils import posix_relative
 from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, load_environment_yaml
-from ducta.api.workspace.utils import find_config_files
+from ducta.api.workspace.utils import find_base_global_config, find_config_files
 
 
 class WorkspaceManager:
@@ -110,6 +110,12 @@ class WorkspaceManager:
         for name, path in config_paths.items():
             original_key = self._CONTEXT_KEY_MAP.get(name, f"{name}_path")
             path_dict[original_key] = str(path)
+
+        # Deep-merge the environment's global config over the base one, exactly
+        # as the CLI does — see `find_base_global_config`.
+        base_global = find_base_global_config(config_root, env)
+        if base_global is not None:
+            path_dict["base_global_config_path"] = str(base_global)
 
         ctx = ContextLoader(allow_python_config=False).load_from_paths(path_dict, env)
 

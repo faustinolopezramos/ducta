@@ -47,7 +47,7 @@ from ducta.api.models.execution import (
     SweepRequest,
     SweepResponse,
 )
-from ducta.api.models.node_schema import PipelineNodeSchemaResponse
+from ducta.api.models.node_schema import PipelineNodeSchemaResponse, PipelineNodesSchemaResponse
 from ducta.api.models.project import (
     ImportProjectRequest,
     ProjectCreateRequest,
@@ -660,6 +660,33 @@ async def sweep_project_pipeline(
 # ═══════════════════════════════════════════════════════════
 # NODE SCHEMA (Enriched node information with connectivity)
 # ═══════════════════════════════════════════════════════════
+
+
+@router.get(
+    "/{project_id}/pipelines/{pipeline_name}/nodes/schema",
+    response_model=PipelineNodesSchemaResponse,
+    dependencies=[Depends(require_permission("node.read"))],
+    summary="Get the enriched schema of every node in a pipeline",
+)
+def get_pipeline_node_schemas(
+    project_id: str,
+    pipeline_name: str,
+    svc: ProjectServiceDep,
+    node_svc: NodeServiceDep,
+    exec_manager: ExecutionManagerDep,
+    dataset_svc: DatasetServiceDep,
+) -> PipelineNodesSchemaResponse:
+    """
+    Same detail as the per-node schema endpoint, for all of a pipeline's nodes in
+    one request, plus the pipeline's latest run.
+
+    A plain ``def`` on purpose: it reads the pipelines file, the node specs and
+    each node's source file, so FastAPI runs it in the threadpool instead of on
+    the event loop.
+    """
+    return NodeSchemaService(svc, node_svc, exec_manager, dataset_svc).build_all(
+        project_id, pipeline_name
+    )
 
 
 @router.get(

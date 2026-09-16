@@ -1,66 +1,74 @@
-import { useCallback, useEffect, lazy, Suspense } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, lazy, Suspense } from "react";
 import {
-  DagCanvas,
-  DataGraph,
-  HUDToolbar,
-  NodeInspector,
-  DatasetInspector,
   CommandPalette,
+  ContractList,
+  DagCanvas,
+  DatasetFocus,
+  HUDToolbar,
+  NodeFocus,
 } from "../../components/Pipeline";
-import { useUpdateNodeCode, useUpdatePipeline, useUpdateNode } from "../../api/mutations";
+import { useUpdateNodeCode } from "../../api/mutations";
 const CodeEditorModal = lazy(() => import("../../components/CodeEditorModal").then(m => ({ default: m.CodeEditorModal })));
 const CodeEditor = lazy(() => import("../../components/CodeEditor").then(m => ({ default: m.CodeEditor })));
-import type { EditorMarker } from "../../components/CodeEditor";
 import { ExecutionControls } from "../../components/Execution";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { IconChevronRight, IconFolderOff, IconSitemap, IconCircleDotted, IconCircleX, IconCircleCheck, IconAlertTriangle } from "@tabler/icons-react";
+import { IconFolderOff, IconSitemap, IconCircleDotted, IconCircleX, IconCircleCheck, IconAlertTriangle } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
 import { validatePipelineYaml } from "./yamlValidation";
 import { AddNodeForm } from "./AddNodeForm";
 import { LogsStatusBar } from "./LogsStatusBar";
+import { PipelineTopBar } from "./PipelineTopBar";
 import { usePipelineKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { usePipelinePageState } from "./usePipelinePageState";
+
+/** How far a focused node is lifted above centre, clear of the focus sheet. */
+const FOCUS_LIFT_PX = 150;
 
 export function PipelinePage() {
   const {
     projectId, pipelineId, navigate,
+    lens, setLens, orientation, setOrientation, toggleOrientation,
+    scope, setScope, hasChain, chainStrip, chainStatus, drawnPipelines,
     selection, selectedNodeId, selectedDatasetName,
-    selectNodeById, selectDatasetByName, setSelection, viewMode, setViewMode,
-    yamlMarkers, setYamlMarkers, activeExecutionId, setActiveExecutionId,
+    selectNodeById, selectDatasetByName, setSelection, clearSelection,
+    showOnCanvas, focusDatasetOnCanvas, openPipeline, isOnCanvas, openCodeFor,
+    yamlMarkers, setYamlMarkers, setActiveExecutionId,
     isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode,
-    runningNodeId, setRunningNodeId, execStatus, setExecStatus,
+    runningNodeId, execStatus, setExecStatus,
     addNodeOpen, setAddNodeOpen, paletteOpen, setPaletteOpen,
-    activeEnv, executionStates, showToast, logsOpen, setLogsOpen,
-    datasetList, datasetMap, datasetByName, datasetsLoading,
-    pipelinesData, rawPipelineSpec, yamlString, handleSaveYaml, handleChangeType, handleAddNode,
+    activeEnv, executionStates, nodeStates, showToast, logsOpen, setLogsOpen,
+    datasetMap, datasetByName, datasetsLoading, schemaById, schemasLoading,
+    pipelinesData, rawPipelineSpec, yamlString, handleSaveYaml, handleAddNode,
     existingNodeNames,
-    currentProject, currentPipeline, pipelineNodes, dagItems,
-    parentsMap, lineage, navMaps, lineageLists, isExecuting,
-    handleRunNode, handleExecute, handleValidate, handleCancel, clearSelection,
+    currentProject, currentPipeline, pipelineNodes, dagItems, itemById, strata,
+    parentsMap, lineage, navMaps, neighbours, listOrder, contractRows, isExecuting,
+    handleRunNode, handleExecute, handleValidate, handleCancel,
     onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
     blocker,
   } = usePipelinePageState();
 
+  const [showMinimap, setShowMinimap] = useState(false);
+
   usePipelineKeyboardShortcuts({
     paletteOpen, setPaletteOpen, isCodeEditorOpen, addNodeOpen,
-    viewMode, selectedNodeId, setSelectedNodeId: selectNodeById, pipelineNodes,
+    lens, orientation, onToggleOrientation: toggleOrientation,
+    selectedNodeId, setSelectedNodeId: selectNodeById, pipelineNodes: dagItems, listOrder,
     navMaps, parentsMap, isExecuting, runningNodeId, handleRunNode,
     centerOnNode, fitCanvas,
   });
 
-  // Shift the selected node clear of the inspector drawer. The offset is
-  // negative because the drawer is on the right, so the node moves left.
+  // Lift the focused node clear of the focus sheet docked along the bottom.
+  // Re-run when the orientation changes: the node has moved under the viewport.
   useEffect(() => {
-    if (selectedNodeId && viewMode === "flow") {
-      const timer = setTimeout(() => centerOnNode(selectedNodeId, -170), 60);
+    if (selectedNodeId && lens === "flow") {
+      const timer = setTimeout(() => centerOnNode(selectedNodeId, 0, FOCUS_LIFT_PX), 60);
       return () => clearTimeout(timer);
     }
-  }, [selectedNodeId, viewMode, centerOnNode]);
+  }, [selectedNodeId, lens, orientation, centerOnNode]);
 
   const { mutate: updateNodeCode } = useUpdateNodeCode();
 
@@ -108,22 +116,28 @@ export function PipelinePage() {
     );
   }
 
+  const onCanvas = lens === "flow";
+  // The focus sheet belongs to the canvas; the list opens a row in place instead.
+  const focusOpen = onCanvas && Boolean(selection);
+  const selectedItem = selectedNodeId ? itemById.get(selectedNodeId) : undefined;
+
   return (
     <div className="pipeline-page">
-      <header className="pipeline-topbar">
-        <div className="pipeline-breadcrumbs">
-          <Link to="/projects" className="breadcrumb-item">Projects</Link>
-          <IconChevronRight size={14} className="breadcrumb-sep" />
-          <Link to={`/project/${projectId}`} className="breadcrumb-item">{projectId}</Link>
-          <IconChevronRight size={14} className="breadcrumb-sep" />
-          <span className="breadcrumb-current">{pipelineId}</span>
-        </div>
-        <div className="pipeline-topbar-right">
-          {activeEnv && <span className="env-badge">{activeEnv}</span>}
-        </div>
-      </header>
+      <PipelineTopBar
+        projectId={projectId ?? ""}
+        projectName={currentProject.name}
+        pipelineId={pipelineId ?? ""}
+        pipelineType={rawPipelineSpec?.type ?? "batch"}
+        hasNodes={pipelineNodes.length > 0}
+        isExecuting={isExecuting}
+        onExecute={handleExecute}
+        onValidate={handleValidate}
+        onCancel={handleCancel}
+        chain={chainStrip}
+        chainStatus={chainStatus}
+      />
 
-      <div className="pipeline-canvas-area">
+      <div className="pipeline-canvas-area" data-lens={lens} data-focus={focusOpen ? "open" : undefined}>
         <div style={{ display: "none" }}>
           {projectId && pipelineId && (
             <ExecutionControls
@@ -136,33 +150,32 @@ export function PipelinePage() {
         </div>
 
         <HUDToolbar
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-          pipelineType={rawPipelineSpec?.type ?? "batch"}
-          onPipelineTypeChange={handleChangeType}
-          hasNodes={pipelineNodes.length > 0}
-          isExecuting={isExecuting}
-          onExecute={handleExecute}
-          onCancel={handleCancel}
-          onValidate={handleValidate}
+          lens={lens}
+          onLensChange={setLens}
+          orientation={orientation}
+          onOrientationChange={setOrientation}
+          scope={scope}
+          onScopeChange={hasChain ? setScope : undefined}
           onAddNode={() => setAddNodeOpen(true)}
           onFind={() => setPaletteOpen(true)}
-          onZoomIn={viewMode === "config" ? undefined : zoomIn}
-          onZoomOut={viewMode === "config" ? undefined : zoomOut}
-          onFitView={viewMode === "config" ? undefined : fitCanvas}
+          onZoomIn={onCanvas ? zoomIn : undefined}
+          onZoomOut={onCanvas ? zoomOut : undefined}
+          onFitView={onCanvas ? fitCanvas : undefined}
+          showMinimap={showMinimap}
+          onToggleMinimap={onCanvas ? () => setShowMinimap((v) => !v) : undefined}
         />
 
         {paletteOpen && (
           <CommandPalette
-            nodes={pipelineNodes}
+            nodes={dagItems}
             pipelines={Object.keys(pipelinesData?.pipelines ?? {}).filter((p) => p !== pipelineId)}
-            onSelectNode={(id) => { selectNodeById(id); centerOnNode(id); }}
-            onOpenPipeline={(name) => navigate(`/project/${projectId}/pipeline/${name}`)}
+            onSelectNode={(id) => { selectNodeById(id); if (onCanvas) centerOnNode(id, 0, FOCUS_LIFT_PX); }}
+            onOpenPipeline={(name) => openPipeline(name)}
             onClose={() => setPaletteOpen(false)}
           />
         )}
 
-        {pipelineNodes.length === 0 && viewMode === "flow" ? (
+        {pipelineNodes.length === 0 && lens !== "yaml" ? (
           <div className="pipeline-empty">
             <EmptyState icon={IconCircleDotted} title="No nodes yet"
               description="Add your first node to build this pipeline."
@@ -175,7 +188,7 @@ export function PipelinePage() {
               />
             )}
           </div>
-                ) : viewMode === "config" ? (
+        ) : lens === "yaml" ? (
           <div className="pipeline-yaml-editor">
             <div className="yaml-editor-header">
               <span className="yaml-editor-label"><span className="status-dot-small" />{currentPipeline.name || currentPipeline.id} (YAML Spec)</span>
@@ -199,23 +212,33 @@ export function PipelinePage() {
           </div>
         ) : (
           <div className="pipeline-flow">
-            {viewMode === "data" ? (
-              <DataGraph
-                datasets={datasetList}
-                pipelineId={pipelineId}
-                selection={selection}
-                onSelect={setSelection}
+            {lens === "list" ? (
+              <ContractList
+                rows={contractRows}
+                pipelineOrder={drawnPipelines}
+                currentPipeline={pipelineId ?? ""}
+                selectedId={selectedNodeId}
+                isLoading={schemasLoading}
+                runningNodeId={runningNodeId}
+                onSelect={selectNodeById}
+                onSelectDataset={focusDatasetOnCanvas}
+                onRunNode={handleRunNode}
+                onOpenCode={openCodeFor}
+                onShowOnCanvas={showOnCanvas}
               />
             ) : (
               <DagCanvas
                 items={dagItems}
                 datasets={datasetMap}
                 edgeClassName={(from: string, to: string) => lensEdgeClass(lineage, from, to)}
-                executionStates={executionStates}
+                executionStates={nodeStates}
                 selection={selection}
                 lineage={lineage}
                 onSelect={setSelection}
                 onViewportReady={onViewportReady}
+                showMinimap={showMinimap}
+                orientation={orientation}
+                strata={strata}
               />
             )}
 
@@ -227,16 +250,19 @@ export function PipelinePage() {
               />
             )}
 
-            {/* One inspector slot, two objects. Which panel opens follows the
+            {/* One focus slot, two objects: which panel opens follows the
                 selection's `kind`, so nodes and datasets are equally reachable. */}
-            {selectedNodeId && (
-              <NodeInspector
+            {focusOpen && selectedNodeId && (
+              <NodeFocus
                 nodeId={selectedNodeId}
-                projectId={projectId ?? ""}
-                pipelineId={pipelineId ?? ""}
-                fallback={pipelineNodes.find((n) => n.id === selectedNodeId)}
+                pipelineId={selectedItem?.pipeline ?? pipelineId ?? ""}
+                schema={schemaById.get(selectedNodeId) ?? null}
+                isLoading={schemasLoading && (selectedItem?.pipeline ?? pipelineId) === pipelineId}
+                fallback={selectedItem}
+                execState={executionStates[selectedNodeId]}
                 runningNodeId={runningNodeId}
-                lineage={lineageLists}
+                upstream={neighbours.upstream}
+                downstream={neighbours.downstream}
                 onSelectNode={selectNodeById}
                 onSelectDataset={selectDatasetByName}
                 onClose={clearSelection}
@@ -249,18 +275,20 @@ export function PipelinePage() {
                       `&dataset=${encodeURIComponent(dataset)}`
                   )
                 }
+                onViewLogs={() => setLogsOpen(true)}
+                onOpenYaml={() => setLens("yaml")}
               />
             )}
 
-            {selectedDatasetName && (
-              <DatasetInspector
+            {focusOpen && selectedDatasetName && (
+              <DatasetFocus
                 name={selectedDatasetName}
                 dataset={datasetByName.get(selectedDatasetName) ?? null}
                 isLoading={datasetsLoading}
-                currentPipeline={pipelineId}
-                onClose={clearSelection}
+                isOnCanvas={isOnCanvas}
                 onSelectNode={selectNodeById}
-                onOpenPipeline={(name) => navigate(`/project/${projectId}/pipeline/${name}`)}
+                onOpenPipeline={(name) => openPipeline(name, { kind: "dataset", id: selectedDatasetName })}
+                onClose={clearSelection}
               />
             )}
           </div>
@@ -278,7 +306,7 @@ export function PipelinePage() {
       </div>
 
       {isCodeEditorOpen && selectedNodeId && (() => {
-        const node = pipelineNodes.find((n) => n.id === selectedNodeId);
+        const node = itemById.get(selectedNodeId);
         return (
           <Suspense fallback={<div className="modal-fallback">Loading modal...</div>}>
             <CodeEditorModal

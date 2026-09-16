@@ -58,14 +58,27 @@ Core does not define its own config files — it consumes the `Context` produced
 *   **`max_parallel_nodes`**: Thread-pool width for parallel node execution.
 *   **`execution_timeout_seconds` / `node_timeout_seconds`**: Whole-pipeline and per-node time limits (capped at 24h).
 *   **`preflight_enabled`** (*bool*, default `true`): Run configuration preflight before execution.
-*   **`enable_run_certificate`** (*bool*, default `true`) + **`run_certificate_dir`**: Emit a signed Run Certificate per batch/ml/hybrid run.
+*   **`enable_run_certificate`** (*bool*, default `true`) + **`run_certificate_dir`**: Emit a signed Run Certificate per batch/ml/hybrid run. See "Ducta storage convention" below for where it's written by default.
 *   **`certificate_signing_key`** / `Ducta_CERTIFICATE_KEY` env: Optional HMAC key for certificate attribution.
 *   **`mlops_enabled` / `mlops_required`**: Toggle experiment tracking and whether its failure aborts the run.
 *   **`random_seed`**: Global reproducibility seed applied at pipeline start.
 *   **`chain.reuse_materialized` / `chain.staleness_check`**: Skip already-materialized upstream pipelines in a `depends_on` chain. Reuse is refused unless the dates, the config fingerprint, the node modules and (with `staleness_check`, on by default) the input mtimes all still match what produced those outputs.
 *   **`chain.on_gate_blocked`** (`stop` | `continue`, default `stop`): What a blocked quality gate in an *upstream* chain step does to the rest of the chain. `stop` aborts it; `continue` runs on, which means the downstream pipelines read whatever an earlier run left on disk.
+*   **`chain.state_dir`**: Where chain-state markers (the date range a batch pipeline last ran, for `reuse_materialized`) are written. See "Ducta storage convention" below.
 
 Per-node quality is configured through the `sanity_checks` (pre-execution) and `data_quality` (post-execution) blocks; ML behavior through the pipeline `split` and `hyperparams` blocks (all validated in `ducta.setting.schemas`).
+
+### Ducta storage convention
+
+Every directory Ducta itself writes to — as opposed to a node's own data output — is scoped by `${output_path}/${environment}`, exactly like a node's own output paths are (`${output_path}/${environment}/bronze/...`, etc.). This keeps everything for one environment under one subtree instead of scattering framework bookkeeping at the project root, where it reads as clutter with no indication of which environment it belongs to.
+
+| What                          | Setting                | Default                                          | Visible? |
+|--------------------------------|-------------------------|---------------------------------------------------|----------|
+| Quality reports/baselines/history | `quality.output.base_path` | `${output_path}/${environment}/quality`            | yes — a project may want to browse or ship these |
+| Run certificates               | `run_certificate_dir`   | `${output_path}/${environment}/.ducta/runs`        | no — hidden, framework bookkeeping |
+| Chain-state markers            | `chain.state_dir`       | `${output_path}/${environment}/.ducta/chain_state` | no — hidden, framework bookkeeping |
+
+A value that doesn't itself reference `${environment}` (a fixed custom or legacy path) is still scoped per environment automatically — the resolved environment is appended as a path segment — so two environments can never collide in the same directory even with a non-default setting. See `CoreSettings._resolve_scoped_dir` for the resolution logic, and `PipelineExecutor._load_chain_state`/`certificate_dir` for the backward-compatible fallbacks that still read markers/certificates written under Ducta's pre-convention defaults (`.ducta/runs`, `.ducta/chain_state`, relative to the project root).
 
 ---
 
@@ -77,12 +90,13 @@ max_parallel_nodes: 4
 node_timeout_seconds: 1800
 preflight_enabled: true
 enable_run_certificate: true
-run_certificate_dir: ".Ducta/runs"
+run_certificate_dir: "${output_path}/${environment}/.ducta/runs"  # default — usually left unset
 random_seed: 42
 chain:
   reuse_materialized: true      # skip up-to-date upstream pipelines
   staleness_check: true         # also require outputs newer than inputs (default)
   on_gate_blocked: stop         # a blocked gate upstream aborts the chain (default)
+  state_dir: "${output_path}/${environment}/.ducta/chain_state"  # default — usually left unset
 
 # nodes.yaml — a node with quality gates
 clean_sales:

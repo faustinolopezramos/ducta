@@ -26,7 +26,9 @@ from typing import Any, Dict, Optional, Set
 
 from loguru import logger  # type: ignore
 
-from ducta.stream.context_utils import get_context_value
+from ducta.setting.environments import sanitize_env_for_path
+from ducta.setting.interpolator import VariableInterpolator
+from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import StreamingConfigurationError, StreamingError
 
 
@@ -62,23 +64,45 @@ class CheckpointManager:
         return sanitized if sanitized else "_unnamed"
 
     def determine_checkpoint_base(self, base_checkpoint: Optional[str]) -> str:
-        """Determine the base directory for checkpoints."""
+        """Determine the base directory for checkpoints.
+
+        *base_checkpoint* (a node's own `streaming.checkpoint`/
+        `checkpoint_location`) is returned as-is — it already went through the
+        general config interpolator before reaching here, so any
+        ${output_path}/${environment} in it is already resolved. The two
+        fallbacks below are read directly from the raw config and are not
+        interpolated by anything upstream, so this method scopes them itself:
+        same convention CoreSettings._resolve_scoped_dir applies to
+        run_certificate_dir/chain_state_dir (${output_path}/${environment},
+        and still env-scoped even when the value doesn't reference
+        ${environment}) — without it, a project that leans on either fallback
+        instead of setting checkpoint_location per node would collide every
+        environment's streaming checkpoints in one directory.
+        """
         if base_checkpoint:
             return base_checkpoint
 
+        gs: Dict[str, Any] = {}
         checkpoints_base = None
         try:
-            gs = get_context_value(self.context, "global_config", {}) or {}
-            if isinstance(gs, dict):
+            raw_gs = get_context_value(self.context, "global_config", {}) or {}
+            if isinstance(raw_gs, dict):
+                gs = raw_gs
                 checkpoints_base = gs.get("checkpoints_base")
         except Exception as e:
             logger.debug(f"Could not read global_config.checkpoints_base: {e}")
             checkpoints_base = None
 
-        if checkpoints_base:
-            return str(checkpoints_base)
+        env = get_active_env(self.context)
+        # context.output_path (a Context's promoted top-level attribute) is
+        # preferred over global_config.output_path so ${output_path} in a
+        # checkpoints_base template resolves the same value the naked
+        # fallback below would use.
+        output_path = get_context_value(self.context, "output_path", None) or gs.get("output_path")
 
-        output_path = get_context_value(self.context, "output_path", None)
+        if checkpoints_base:
+            return self._scope_by_environment(str(checkpoints_base), gs, output_path, env)
+
         if output_path is None:
             raise StreamingConfigurationError(
                 "No checkpoint base directory is configured. "
@@ -88,20 +112,43 @@ class CheckpointManager:
                 "because checkpoints may be lost on OS restart.",
                 config_section="streaming.checkpoint / global_config.checkpoints_base",
             )
-        return str(Path(output_path) / "streaming_checkpoints")
+        return str(Path(output_path) / sanitize_env_for_path(env) / "streaming_checkpoints")
 
     @staticmethod
-    def build_checkpoint_path(
-        checkpoint_base: str, pipeline_name: str, node_name: str, execution_id: str
+    def _scope_by_environment(
+        template: str, gs: Dict[str, Any], output_path: Optional[str], env: Optional[str]
     ) -> str:
-        """Build the full checkpoint path from base and identifiers."""
+        """Interpolate ${output_path}/${environment} in *template*, env-scoping
+        it even when it doesn't reference ${environment} itself — see
+        determine_checkpoint_base's docstring."""
+        safe_env = sanitize_env_for_path(env)
+        has_env_placeholder = "${environment}" in template
+        resolved = template
+        if "${" in template:
+            variables = {**gs, "output_path": output_path or ".", "environment": safe_env}
+            resolved = VariableInterpolator.interpolate(template, variables)
+        if not has_env_placeholder:
+            resolved = str(Path(resolved) / safe_env)
+        return resolved
+
+    @staticmethod
+    def build_checkpoint_path(checkpoint_base: str, pipeline_name: str, node_name: str) -> str:
+        """Build the full checkpoint path from base and identifiers.
+
+        Deliberately deterministic — pipeline + node only, no per-run id. Spark
+        Structured Streaming's checkpoint is how a query resumes from where the
+        last run left off; a path that changed on every invocation (this used to
+        append a fresh `uuid4().hex` per run) meant no query ever actually
+        resumed; every run silently reprocessed the source from scratch and,
+        for an append-mode sink, duplicated every row the previous run already
+        wrote. `validate_and_reserve` (below) already rejects two *concurrent*
+        queries claiming the same path, which was the only real reason to make
+        it unique — a fresh id per run was never required for that.
+        """
         safe_pipeline = CheckpointManager.sanitize_path_component(pipeline_name)
         safe_node = CheckpointManager.sanitize_path_component(node_name)
-        # execution_id is always caller-generated (uuid4().hex) today, but sanitize
-        # it too for defense in depth — same reasoning as pipeline_name/node_name.
-        safe_execution_id = CheckpointManager.sanitize_path_component(execution_id)
         if CheckpointManager.is_cloud_path(checkpoint_base):
-            return f"{checkpoint_base.rstrip('/')}/{safe_pipeline}/{safe_node}/{safe_execution_id}"
+            return f"{checkpoint_base.rstrip('/')}/{safe_pipeline}/{safe_node}"
         # A local checkpoint_base may be given as a file:// URI (Spark accepts
         # those for checkpointLocation); strip the scheme before handing it to
         # pathlib, which would otherwise treat "file:" as a literal directory name.
@@ -110,7 +157,7 @@ class CheckpointManager:
             if checkpoint_base.startswith("file://")
             else checkpoint_base
         )
-        return str(Path(local_base) / safe_pipeline / safe_node / safe_execution_id)
+        return str(Path(local_base) / safe_pipeline / safe_node)
 
     def ensure_checkpoint_dir(self, checkpoint_path: str) -> None:
         """Ensure checkpoint directory exists for local filesystems."""
@@ -125,14 +172,12 @@ class CheckpointManager:
             ) from e
 
     def get_checkpoint_location(
-        self, base_checkpoint: Optional[str], pipeline_name: str, node_name: str, execution_id: str
+        self, base_checkpoint: Optional[str], pipeline_name: str, node_name: str
     ) -> str:
         """Get checkpoint location for the streaming query with validation."""
         try:
             checkpoint_base = self.determine_checkpoint_base(base_checkpoint)
-            checkpoint_path = self.build_checkpoint_path(
-                checkpoint_base, pipeline_name, node_name, execution_id
-            )
+            checkpoint_path = self.build_checkpoint_path(checkpoint_base, pipeline_name, node_name)
 
             if not self.is_cloud_path(checkpoint_path):
                 self.ensure_checkpoint_dir(checkpoint_path)

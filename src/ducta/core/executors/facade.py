@@ -819,18 +819,34 @@ class PipelineExecutor:
         """Resolve the active environment name for output-path resolution."""
         return self.settings.env
 
-    CHAIN_STATE_DIR = ".ducta/chain_state"
+    #: Pre-restructure default (relative to cwd, not to ${output_path}), kept
+    #: only so `_legacy_*` readers below can still find markers a project
+    #: accumulated before the Ducta storage convention moved chain state under
+    #: ${output_path}/${environment}/.ducta/chain_state — see
+    #: CoreSettings.DEFAULT_CHAIN_STATE_DIR.
+    _LEGACY_CHAIN_STATE_DIR = ".ducta/chain_state"
 
     def _chain_state_path(self, pipeline_name: str) -> Path:
-        """Per-environment chain-state path: <CHAIN_STATE_DIR>/<env>/<pipeline>.json."""
+        """Chain-state path for this pipeline.
+
+        ``self.settings.chain_state_dir`` is already fully resolved and
+        environment-scoped (``CoreSettings._resolve_scoped_dir``), so this
+        just appends the pipeline's file name.
+        """
+        safe_name = pipeline_name.replace("/", "_")
+        return Path(self.settings.chain_state_dir) / f"{safe_name}.json"
+
+    def _legacy_per_env_chain_state_path(self, pipeline_name: str) -> Path:
+        """Pre-restructure per-environment path (`.ducta/chain_state/<env>/…`,
+        relative to cwd), kept for backward-compat reads only."""
         safe_name = pipeline_name.replace("/", "_")
         env = sanitize_env_for_path(self.settings.env)
-        return Path(self.CHAIN_STATE_DIR) / env / f"{safe_name}.json"
+        return Path(self._LEGACY_CHAIN_STATE_DIR) / env / f"{safe_name}.json"
 
     def _legacy_chain_state_path(self, pipeline_name: str) -> Path:
         """Pre-per-environment flat path, kept for backward-compat reads only."""
         safe_name = pipeline_name.replace("/", "_")
-        return Path(self.CHAIN_STATE_DIR) / f"{safe_name}.json"
+        return Path(self._LEGACY_CHAIN_STATE_DIR) / f"{safe_name}.json"
 
     def _effective_dates(
         self, start_date: Optional[str], end_date: Optional[str]
@@ -963,18 +979,24 @@ class PipelineExecutor:
     def _load_chain_state(self, pipeline_name: str) -> Optional[Dict[str, Any]]:
         """Read the chain-state marker for a pipeline; None when absent/corrupt.
 
-        Falls back to the pre-per-environment flat path so runs recorded
-        before this change aren't silently discarded; a subsequent run in
-        this environment will migrate the marker to the new per-env path.
+        Tries, in order: the current path (${output_path}/${environment}
+        /.ducta/chain_state — the Ducta storage convention), the
+        pre-restructure per-environment path (.ducta/chain_state/<env>/,
+        relative to cwd), then the oldest pre-per-environment flat path — so
+        markers recorded before either change aren't silently discarded. A
+        subsequent successful run in this environment migrates the marker to
+        the current path.
         """
         try:
-            path = self._chain_state_path(pipeline_name)
-            if not path.exists():
-                path = self._legacy_chain_state_path(pipeline_name)
-                if not path.exists():
-                    return None
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data if isinstance(data, dict) else None
+            for candidate in (
+                self._chain_state_path(pipeline_name),
+                self._legacy_per_env_chain_state_path(pipeline_name),
+                self._legacy_chain_state_path(pipeline_name),
+            ):
+                if candidate.exists():
+                    data = json.loads(candidate.read_text(encoding="utf-8"))
+                    return data if isinstance(data, dict) else None
+            return None
         except Exception:  # noqa: BLE001
             return None
 

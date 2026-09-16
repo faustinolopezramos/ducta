@@ -24,6 +24,7 @@ from fastapi import FastAPI  # type: ignore
 
 from ducta.api.routes.auth import router as auth_router
 from ducta.api.routes.certificates import router as certificates_router
+from ducta.api.routes.certificates_standalone import router as certificates_standalone_router
 from ducta.api.routes.configs import router as configs_router
 from ducta.api.routes.connect import router as connect_router
 from ducta.api.routes.environments import router as environments_router
@@ -81,6 +82,11 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(execution_router, prefix=API_PREFIX)
     app.include_router(execution_ws_router, prefix=API_PREFIX)
     app.include_router(certificates_router, prefix=API_PREFIX)
+    # Standalone certificate verification: no project/workspace scope and
+    # deliberately no `Depends(require_permission(...))` — this is meant to be
+    # usable by someone with no account on this instance who was handed a
+    # certificate directly (see certificates_standalone.py's own docstring).
+    app.include_router(certificates_standalone_router, prefix=API_PREFIX)
     app.include_router(schedules_router, prefix=API_PREFIX)
 
     # Version control

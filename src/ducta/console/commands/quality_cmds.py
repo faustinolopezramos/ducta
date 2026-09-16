@@ -175,6 +175,7 @@ class QualityCommands:
         run_id = getattr(parsed_args, "run_id", None)
         all_reports = getattr(parsed_args, "all_reports", False)
         output_format = getattr(parsed_args, "output_format", "rich")
+        pipeline_name = getattr(parsed_args, "pipeline", None)
 
         try:
             storage = _resolve_storage_from_env(parsed_args)
@@ -184,6 +185,7 @@ class QualityCommands:
                 run_id=run_id,
                 all_reports=all_reports,
                 storage=storage,
+                pipeline_name=pipeline_name,
             )
         except FileNotFoundError as e:
             logger.error("{}", e)
@@ -263,11 +265,16 @@ class QualityCommands:
         workspace = getattr(parsed_args, "workspace", ".")
         last_n = getattr(parsed_args, "last_n", 20)
         output_format = getattr(parsed_args, "output_format", "rich")
+        pipeline_name = getattr(parsed_args, "pipeline", None)
 
         try:
             storage = _resolve_storage_from_env(parsed_args)
             result = QualityService.get_trend(
-                dataset=dataset, workspace=workspace, last_n=last_n, storage=storage
+                dataset=dataset,
+                workspace=workspace,
+                last_n=last_n,
+                storage=storage,
+                pipeline_name=pipeline_name,
             )
         except Exception as e:
             logger.error("Failed to get trend: {}", e)

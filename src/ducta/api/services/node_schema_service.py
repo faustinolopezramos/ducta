@@ -32,6 +32,10 @@ from ducta.api.models.node_schema import (
     IOItem,
     NodeSchemaResponse,
     PipelineNodeSchemaResponse,
+    PipelineNodesSchemaResponse,
+    PipelineRunSummary,
+    QualityCheck,
+    QualityGate,
     QualityInfo,
 )
 from ducta.api.services.dataset_service import node_io
@@ -86,7 +90,37 @@ class NodeSchemaService:
         if pipeline_name not in pipelines:
             raise PipelineNotFoundError(f"Pipeline '{pipeline_name}' not found")
 
+        node = self._build_node(pipelines[pipeline_name], pipeline_name, node_id)
+        return PipelineNodeSchemaResponse(
+            project_id=project_id, pipeline_name=pipeline_name, node=node
+        )
+
+    def build_all(self, project_id: str, pipeline_name: str) -> PipelineNodesSchemaResponse:
+        """Return the enriched schema of every node in *pipeline_name*, in declared order.
+
+        The canvas, the contract list and the focus panel all need quality and
+        last-run data for the whole pipeline at once; asking per node cost one
+        request (and one read of the pipelines file) for every card.
+        """
+        pipelines = self._project_svc.list_project_pipelines(project_id)
+        if pipeline_name not in pipelines:
+            raise PipelineNotFoundError(f"Pipeline '{pipeline_name}' not found")
+
         pipeline_spec = pipelines[pipeline_name]
+        nodes = [
+            self._build_node(pipeline_spec, pipeline_name, node_id)
+            for node_id in self._node_ids(pipeline_spec)
+        ]
+        return PipelineNodesSchemaResponse(
+            project_id=project_id,
+            pipeline_name=pipeline_name,
+            nodes=nodes,
+            last_execution=self._last_pipeline_execution(pipeline_name),
+        )
+
+    def _build_node(
+        self, pipeline_spec: Dict[str, Any], pipeline_name: str, node_id: str
+    ) -> NodeSchemaResponse:
         node_spec = self._find_node_spec(pipeline_spec, node_id)
         if node_spec is None:
             raise NodeNotFoundError(f"Node '{node_id}' not found in pipeline '{pipeline_name}'")
@@ -129,9 +163,7 @@ class NodeSchemaService:
             last_execution_duration=last_exec.get("duration"),
             last_execution_error_message=last_exec.get("error_message"),
         )
-        return PipelineNodeSchemaResponse(
-            project_id=project_id, pipeline_name=pipeline_name, node=node
-        )
+        return node
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -191,46 +223,135 @@ class NodeSchemaService:
         return items
 
     @staticmethod
+    def _node_ids(pipeline_spec: Dict[str, Any]) -> List[str]:
+        """Node ids in the order the pipeline declares them (strings or dicts)."""
+        ids: List[str] = []
+        for n in pipeline_spec.get("nodes", []) or []:
+            if isinstance(n, str) and n:
+                ids.append(n)
+            elif isinstance(n, dict) and (n.get("id") or n.get("name")):
+                ids.append(str(n.get("id") or n.get("name")))
+        return ids
+
+    @staticmethod
     def _quality(node_spec: Dict[str, Any]) -> Optional[QualityInfo]:
-        """Summarize the node's checks and gate, when either is enabled."""
-        dq = node_spec.get("data_quality") or node_spec.get("dataQuality")
+        """Summarize the node's checks and gates.
+
+        ``check_count``, ``gate_behavior`` and ``is_sanity`` keep describing one
+        block — ``data_quality`` when enabled, else ``sanity_checks`` — as they
+        always have. ``checks`` and ``gates`` list both blocks, and a gate counts
+        unless it says ``enabled: false``: the demo project declares
+        ``quality_gate: {max_errors: 0}`` with no ``enabled`` key at all.
+        """
         sanity = node_spec.get("sanity_checks") or node_spec.get("sanityChecks")
-        block = None
-        is_sanity = False
+        dq = node_spec.get("data_quality") or node_spec.get("dataQuality")
+        blocks: List[tuple[str, Dict[str, Any]]] = []
+        if isinstance(sanity, dict) and sanity.get("enabled"):
+            blocks.append(("sanity", sanity))
         if isinstance(dq, dict) and dq.get("enabled"):
-            block = dq
-        elif isinstance(sanity, dict) and sanity.get("enabled"):
-            block = sanity
-            is_sanity = True
-        if block is None:
+            blocks.append(("quality", dq))
+        if not blocks:
             return None
 
-        checks = block.get("checks") or {}
-        if isinstance(checks, dict):
-            count = sum(
-                1
-                for c in checks.values()
-                if not isinstance(c, dict) or c.get("enabled") is not False
-            )
-        elif isinstance(checks, list):
-            count = len(checks)
-        else:
-            count = 0
+        checks = [
+            check
+            for phase, block in blocks
+            for check in NodeSchemaService._enabled_checks(block.get("checks"), phase)
+        ]
+        gates = [
+            gate
+            for phase, block in blocks
+            if (gate := NodeSchemaService._declared_gate(block, phase)) is not None
+        ]
+        if not checks and not gates:
+            return None
 
-        gate_block = (
+        # data_quality wins when both are enabled — the legacy summary's rule.
+        primary_phase, primary = blocks[-1]
+        legacy_gate = NodeSchemaService._gate_block(primary)
+        gate_behavior = None
+        if isinstance(legacy_gate, dict) and legacy_gate.get("enabled"):
+            behavior = legacy_gate.get("behavior")
+            gate_behavior = str(behavior) if behavior else None
+
+        return QualityInfo(
+            check_count=sum(1 for c in checks if c.phase == primary_phase),
+            gate_behavior=gate_behavior,
+            is_sanity=primary_phase == "sanity",
+            checks=checks,
+            gates=gates,
+        )
+
+    @staticmethod
+    def _enabled_checks(checks: Any, phase: str) -> List[QualityCheck]:
+        """Checks declared as ``{name: params}`` or as a list, minus ``enabled: false``."""
+        out: List[QualityCheck] = []
+        if isinstance(checks, dict):
+            for name, cfg in checks.items():
+                if isinstance(cfg, dict) and cfg.get("enabled") is False:
+                    continue
+                params = (
+                    {k: v for k, v in cfg.items() if k != "enabled"}
+                    if isinstance(cfg, dict)
+                    else {}
+                )
+                out.append(QualityCheck(name=str(name), phase=phase, params=params))
+        elif isinstance(checks, list):
+            for cfg in checks:
+                if isinstance(cfg, str):
+                    out.append(QualityCheck(name=cfg, phase=phase))
+                    continue
+                if not isinstance(cfg, dict) or cfg.get("enabled") is False:
+                    continue
+                name = cfg.get("name") or cfg.get("type") or cfg.get("check") or "check"
+                params = {
+                    k: v for k, v in cfg.items() if k not in ("name", "type", "check", "enabled")
+                }
+                out.append(QualityCheck(name=str(name), phase=phase, params=params))
+        return out
+
+    @staticmethod
+    def _gate_block(block: Dict[str, Any]) -> Any:
+        return (
             block.get("quality_gate")
             or block.get("qualityGate")
             or block.get("sanity_gate")
             or block.get("sanityGate")
         )
-        gate = None
-        if isinstance(gate_block, dict) and gate_block.get("enabled"):
-            behavior = gate_block.get("behavior")
-            gate = str(behavior) if behavior else None
 
-        if count == 0 and gate is None:
+    @staticmethod
+    def _declared_gate(block: Dict[str, Any], phase: str) -> Optional[QualityGate]:
+        gate = NodeSchemaService._gate_block(block)
+        if not isinstance(gate, dict) or gate.get("enabled") is False:
             return None
-        return QualityInfo(check_count=count, gate_behavior=gate, is_sanity=is_sanity)
+        behavior = gate.get("behavior")
+        return QualityGate(
+            phase=phase,
+            behavior=str(behavior) if behavior else None,
+            params={k: v for k, v in gate.items() if k not in ("enabled", "behavior")},
+        )
+
+    def _last_pipeline_execution(self, pipeline_name: str) -> Optional[PipelineRunSummary]:
+        """The most recent execution targeting *pipeline_name* (best-effort)."""
+        try:
+            runs, _ = self._exec_manager.list_executions_paginated(
+                skip=0, limit=1, pipeline_name=pipeline_name
+            )
+        except Exception as exc:  # noqa: BLE001 - history lookup must never break the schema
+            logger.warning(
+                "Last-execution lookup failed for pipeline {p}: {exc}", p=pipeline_name, exc=exc
+            )
+            return None
+        if not runs:
+            return None
+        last = runs[0]
+        return PipelineRunSummary(
+            execution_id=str(last.id),
+            status=last.status.value if hasattr(last.status, "value") else str(last.status),
+            time=last.started_at.isoformat() if last.started_at else None,
+            duration=last.duration_seconds,
+            error_message=last.error_message,
+        )
 
     def _resolve_file(
         self, node_spec: Dict[str, Any], node_id: str

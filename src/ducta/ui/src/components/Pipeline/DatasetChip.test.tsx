@@ -24,7 +24,7 @@ describe("DatasetChip", () => {
   it("names the dataset and its real format", () => {
     render(<DatasetChip dataset={declared} />);
     expect(screen.getByText("silver.clean_results")).toBeInTheDocument();
-    expect(screen.getByText("delta · merge · 2 M rows")).toBeInTheDocument();
+    expect(screen.getByText("delta, merge, 2 M rows")).toBeInTheDocument();
   });
 
   it("carries the layer from the dataset's namespace", () => {

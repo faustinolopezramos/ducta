@@ -21,14 +21,13 @@ SPDX-License-Identifier: Apache-2.0
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from ducta.console.core import VALID_NAME_RE, ExitCode
 from ducta.console.ux.formatters import create_table, get_console, require_table
 from ducta.core.certificate import (
-    DEFAULT_CERTIFICATE_DIR,
     diff_certificates,
     find_certificate_dir,
     fingerprints_comparable,
@@ -38,6 +37,7 @@ from ducta.core.certificate import (
     resolve_signing_key_from_dir,
     verify_certificate,
 )
+from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
 try:
     from rich import box
@@ -47,12 +47,75 @@ except ImportError:  # pragma: no cover - rich is a hard dependency in practice
     _USE_RICH = False
 
 
-def _runs_dir(parsed_args) -> Path:
-    return Path(getattr(parsed_args, "dir", None) or DEFAULT_CERTIFICATE_DIR)
-
-
 def _env_arg(parsed_args) -> Optional[str]:
     return getattr(parsed_args, "env", None)
+
+
+def _resolve_run_certificate_dir(parsed_args, env: str) -> Optional[Path]:
+    """The configured run-certificates directory for one environment.
+
+    Resolved the same way a pipeline run does — through the project's config,
+    so ``run_certificate_dir``'s ``${output_path}/${environment}`` interpolation
+    (the Ducta storage convention; see ``CoreSettings._resolve_scoped_dir``)
+    is honored rather than assumed. Returns None if this environment can't be
+    resolved at all (e.g. the project defines no config for it).
+    """
+    from ducta.console.config import ConfigManager
+    from ducta.console.execution import ContextInitializer
+    from ducta.core.settings import CoreSettings
+
+    try:
+        config_manager = ConfigManager(
+            base_path=getattr(parsed_args, "base_path", None), require_config=False
+        )
+        config_manager.change_to_config_directory()
+        context = ContextInitializer(config_manager).initialize(env)
+        return Path(CoreSettings.from_context(context).run_certificate_dir)
+    except Exception as e:  # noqa: BLE001 — best-effort, one environment at a time
+        logger.debug("Could not resolve run-certificates dir for env '{}': {}", env, e)
+        return None
+
+
+#: Pre-convention default (relative to cwd, not ${output_path}/${environment}).
+#: Kept discoverable — read-only — so certificates a project accumulated
+#: before the Ducta storage convention moved run_certificate_dir don't
+#: silently disappear from `certify list`/`show`/`verify`/`diff`; see
+#: CoreSettings.DEFAULT_CERTIFICATE_DIR.
+_LEGACY_RUNS_DIR = Path(".ducta/runs")
+
+
+def _legacy_runs_dir() -> Optional[Path]:
+    return _LEGACY_RUNS_DIR if _LEGACY_RUNS_DIR.is_dir() else None
+
+
+def _candidate_runs_dirs(parsed_args) -> List[Tuple[Optional[str], Path]]:
+    """``[(env, runs_dir), ...]`` to search.
+
+    ``--dir`` is a hard override: search that one directory as-is (a manual or
+    pre-convention layout; ``iter_certificate_dirs`` already understands both
+    the flat and the per-environment-subfolder shape). Otherwise: every
+    canonical environment (``ducta.setting.environments.DEFAULT_ENVIRONMENTS``,
+    or just the one given via ``--env``) whose configured directory actually
+    exists — since the Ducta storage convention gives each environment its
+    own directory, there is no longer a single tree that holds every
+    environment's certificates — plus the pre-convention ``.ducta/runs``
+    directory, if present, so certificates written before that change stay
+    discoverable.
+    """
+    explicit = getattr(parsed_args, "dir", None)
+    if explicit:
+        return [(None, Path(explicit))]
+
+    env = _env_arg(parsed_args)
+    dirs: List[Tuple[Optional[str], Path]] = []
+    for candidate_env in [env] if env else DEFAULT_ENVIRONMENTS:
+        d = _resolve_run_certificate_dir(parsed_args, candidate_env)
+        if d is not None and d.is_dir():
+            dirs.append((candidate_env, d))
+    legacy = _legacy_runs_dir()
+    if legacy is not None:
+        dirs.append((None, legacy))
+    return dirs
 
 
 def handle_certify(parsed_args) -> int:
@@ -145,40 +208,43 @@ def _quality_summary_label(quality: list) -> str:
 
 
 def _handle_list(parsed_args) -> int:
-    runs_dir = _runs_dir(parsed_args)
+    candidates = _candidate_runs_dirs(parsed_args)
     env_filter = _env_arg(parsed_args)
-    if not runs_dir.is_dir():
-        logger.warning("No runs directory found at {}", runs_dir)
-        return ExitCode.SUCCESS.value
 
     rows = []
-    for found_env, _run_id, run_dir in iter_certificate_dirs(runs_dir):
-        if env_filter is not None and found_env != env_filter:
+    for dir_env, runs_dir in candidates:
+        if not runs_dir.is_dir():
             continue
-        try:
-            data = load_certificate(run_dir / "certificate.json")
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Could not read {}: {}", run_dir / "certificate.json", e)
-            continue
-        data["_env_dir"] = found_env
-        rows.append(data)
+        for found_env, _run_id, run_dir in iter_certificate_dirs(runs_dir):
+            effective_env = found_env or dir_env
+            if env_filter is not None and effective_env != env_filter:
+                continue
+            try:
+                data = load_certificate(run_dir / "certificate.json")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Could not read {}: {}", run_dir / "certificate.json", e)
+                continue
+            data["_env_dir"] = effective_env
+            rows.append(data)
 
     if not rows:
+        searched = ", ".join(str(d) for _, d in candidates) or "no configured environment"
         logger.warning(
             "No run certificates found under {}{}",
-            runs_dir,
+            searched,
             f" for environment '{env_filter}'" if env_filter else "",
         )
         return ExitCode.SUCCESS.value
 
     rows.sort(key=lambda d: d.get("started_at", ""), reverse=True)
 
-    console = get_console()
-    table = (
-        create_table(title=f"Run Certificates — {runs_dir}", box=box.SIMPLE_HEAD)
-        if _USE_RICH
-        else None
+    title = (
+        f"Run Certificates — {candidates[0][1]}"
+        if len(candidates) == 1
+        else "Run Certificates — all environments"
     )
+    console = get_console()
+    table = create_table(title=title, box=box.SIMPLE_HEAD) if _USE_RICH else None
     if console is not None and table is not None:
         table.add_column("Run ID", no_wrap=True)
         table.add_column("Pipeline")
@@ -218,14 +284,15 @@ def _handle_list(parsed_args) -> int:
 
 
 def _resolve_run_id(
-    runs_dir: Path, run_id: Optional[str], env: Optional[str] = None
+    candidates: List[Tuple[Optional[str], Path]], run_id: Optional[str], env: Optional[str] = None
 ) -> Optional[Path]:
-    """Resolve a run id (or unique prefix) to its certificate.json under runs_dir.
+    """Resolve a run id (or unique prefix) to its certificate.json across ``candidates``.
 
-    Looks in both the per-environment layout and the legacy flat layout
-    (via ``find_certificate_dir``/``iter_certificate_dirs``); when ``env`` is
-    given, an exact per-env match wins, otherwise every environment is
-    searched, matching a unique run id prefix across all of them.
+    Each candidate is searched with ``find_certificate_dir``/``iter_certificate_dirs``,
+    which understand both the current per-environment-directory layout and the
+    legacy flat/per-env-subfolder shapes a single directory may still hold (e.g.
+    under an explicit ``--dir``). An exact run id match wins when it's unique
+    across every candidate; otherwise a unique run id prefix wins.
     """
     if not run_id:
         logger.error("--run-id is required")
@@ -237,29 +304,45 @@ def _resolve_run_id(
         logger.error("Invalid run id '{}': must be alphanumeric, '_' or '-'", run_id)
         return None
 
-    exact = find_certificate_dir(runs_dir, run_id, env=env)
-    if exact is not None:
-        return exact / "certificate.json"
+    exact_matches: List[Path] = []
+    prefix_matches: List[Path] = []
+    for dir_env, runs_dir in candidates:
+        exact = find_certificate_dir(runs_dir, run_id, env=env if dir_env is None else None)
+        if exact is not None:
+            exact_matches.append(exact)
+        for found_env, found_run_id, run_dir in iter_certificate_dirs(runs_dir):
+            effective_env = found_env or dir_env
+            if found_run_id.startswith(run_id) and (env is None or effective_env == env):
+                prefix_matches.append(run_dir)
 
-    matches = [
-        run_dir
-        for found_env, found_run_id, run_dir in iter_certificate_dirs(runs_dir)
-        if found_run_id.startswith(run_id) and (env is None or found_env == env)
-    ]
-    if len(matches) == 1:
-        return matches[0] / "certificate.json"
+    if len(exact_matches) == 1:
+        return exact_matches[0] / "certificate.json"
+
+    matches = exact_matches or prefix_matches
+    seen: set = set()
+    deduped: List[Path] = []
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            deduped.append(m)
+
     scope = f" in environment '{env}'" if env else ""
-    if not matches:
-        logger.error("No certificate found for run '{}'{} under {}", run_id, scope, runs_dir)
+    if len(deduped) == 1:
+        return deduped[0] / "certificate.json"
+    searched = ", ".join(str(d) for _, d in candidates) or "no configured environment"
+    if not deduped:
+        logger.error("No certificate found for run '{}'{} under {}", run_id, scope, searched)
     else:
-        logger.error("Run id prefix '{}' is ambiguous{} ({} matches)", run_id, scope, len(matches))
+        logger.error("Run id prefix '{}' is ambiguous{} ({} matches)", run_id, scope, len(deduped))
     return None
 
 
 def _resolve_run(parsed_args) -> Optional[Path]:
     """Resolve the certificate path for --run-id (accepts a unique prefix)."""
     return _resolve_run_id(
-        _runs_dir(parsed_args), getattr(parsed_args, "run_id", None), env=_env_arg(parsed_args)
+        _candidate_runs_dirs(parsed_args),
+        getattr(parsed_args, "run_id", None),
+        env=_env_arg(parsed_args),
     )
 
 
@@ -548,10 +631,10 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
 
 
 def _handle_diff(parsed_args) -> int:
-    runs_dir = _runs_dir(parsed_args)
+    candidates = _candidate_runs_dirs(parsed_args)
     env = _env_arg(parsed_args)
-    path_a = _resolve_run_id(runs_dir, getattr(parsed_args, "run_a", None), env=env)
-    path_b = _resolve_run_id(runs_dir, getattr(parsed_args, "run_b", None), env=env)
+    path_a = _resolve_run_id(candidates, getattr(parsed_args, "run_a", None), env=env)
+    path_b = _resolve_run_id(candidates, getattr(parsed_args, "run_b", None), env=env)
     if path_a is None or path_b is None:
         return ExitCode.VALIDATION_ERROR.value
 

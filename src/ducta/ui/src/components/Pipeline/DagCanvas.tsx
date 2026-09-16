@@ -5,6 +5,7 @@ import {
   MiniMap,
   ReactFlow,
   ReactFlowProvider,
+  ViewportPortal,
   useReactFlow,
   useStore,
   type Edge,
@@ -14,9 +15,10 @@ import {
 import "@xyflow/react/dist/style.css";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import { resolveDepId } from "../../utils/dagValidation";
-import { layoutDag, type LayoutInputEdge } from "../../utils/dagLayout";
+import { layoutDag, type DagLayout, type LayoutInputEdge } from "../../utils/dagLayout";
 import type { Lineage } from "../../utils/lineage";
 import { zoomTier, type ZoomTier } from "../../utils/nodePresentation";
+import type { Strata } from "../../utils/strata";
 import { DuctaNode, type DuctaNodeData } from "./DuctaNode";
 import { RoutedEdge, type RoutedEdgeData } from "./RoutedEdge";
 import { useCanvasViewport, type CanvasViewport } from "./useCanvasViewport";
@@ -39,25 +41,34 @@ interface DagCanvasProps {
   selection?: CanvasSelection;
   lineage?: Lineage | null;
   onSelect?: (selection: CanvasSelection) => void;
-  /** Hide the dataset chips — the data graph draws datasets as nodes instead. */
+  /** Hide the dataset chips and draw plain edges. */
   hideDatasetChips?: boolean;
   /** Receives the canvas' viewport controls once React Flow is mounted. */
   onViewportReady?: (viewport: CanvasViewport) => void;
+  /** Off by default: on most pipelines the whole graph already fits the view. */
+  showMinimap?: boolean;
+  /** Layers top to bottom (the default) or left to right — the viewer's preference. */
+  orientation?: "vertical" | "horizontal";
+  /** Draw a pipeline chain as bands, one per pipeline, in execution order. */
+  strata?: Strata | null;
 }
 
+/** Space between two cards of the same layer, across the flow. */
 const NODE_GAP_X = 40;
 /**
- * Vertical gap between layers. Wider than it was: the dataset chip now rides at
- * the midpoint of each edge, and it needs clear space between the cards.
+ * Space between layers, along the flow. Left to right needs more: a dataset
+ * chip sits in that gap, and a chip is wide where it is short.
  */
-const NODE_GAP_Y = 112;
-const NODE_WIDTH = 200;
-/** Placeholder height for the first paint, before React Flow measures a card. */
-const NODE_HEIGHT_ESTIMATE = 96;
+const LAYER_GAP = { vertical: 112, horizontal: 232 } as const;
+const NODE_WIDTH = 208;
+/** The card is a single line now; React Flow's measurement replaces this. */
+const NODE_HEIGHT_ESTIMATE = 42;
 const CANVAS_PADDING = 56;
 const FIT_PADDING = 0.2;
 /** Never zoom past 1:1 — the cards are designed at a size, not scaled up to fill. */
 const FIT_MAX_ZOOM = 1;
+/** How far a band reaches past its first and last cards, into the gap between bands. */
+const BAND_INSET = 40;
 
 const nodeTypes = { ducta: DuctaNode };
 const edgeTypes = { routed: RoutedEdge };
@@ -151,6 +162,9 @@ function DagCanvasInner({
   lineage,
   onSelect,
   hideDatasetChips = false,
+  showMinimap = false,
+  orientation = "vertical",
+  strata = null,
 }: DagCanvasProps) {
   /**
    * Card sizes, fed back from React Flow's own measurement into the layout.
@@ -169,6 +183,7 @@ function DagCanvasInner({
   }, [items]);
 
   const graphEdges = useMemo(() => buildEdges(dedupedItems), [dedupedItems]);
+  const direction = orientation === "horizontal" ? "LR" : "TB";
 
   const rawLayout = useMemo(() => {
     // A node's port count is the larger of what it declares and how many edges
@@ -190,14 +205,20 @@ function DagCanvasInner({
         outPorts: Math.max(it.outputs?.length ?? 0, outCount.get(it.id) ?? 0) || undefined,
       })),
       graphEdges,
-      { layerGap: NODE_GAP_Y, nodeGap: NODE_GAP_X, padding: CANVAS_PADDING }
+      {
+        layerGap: LAYER_GAP[orientation],
+        nodeGap: NODE_GAP_X,
+        padding: CANVAS_PADDING,
+        direction,
+        bandOf: strata?.bandOf,
+      }
     );
-  }, [dedupedItems, graphEdges, sizes]);
+  }, [dedupedItems, graphEdges, sizes, orientation, direction, strata]);
 
   /** Null only when the graph has a cycle — see the fallback at the bottom. */
   const isCycle = rawLayout === null && dedupedItems.length > 0;
-  const layout = useMemo(
-    () => rawLayout ?? { nodes: new Map(), edges: [], width: 0, height: 0, crossings: 0 },
+  const layout = useMemo<DagLayout>(
+    () => rawLayout ?? { nodes: new Map(), edges: [], width: 0, height: 0, crossings: 0, bands: [] },
     [rawLayout]
   );
 
@@ -212,6 +233,16 @@ function DagCanvasInner({
     (name: string) => onSelect?.({ kind: "dataset", id: name }),
     [onSelect]
   );
+
+  /**
+   * Nodes of the chain's other pipelines. They are the page pipeline's upstream
+   * context: drawn quieter, but still selectable. Only meaningful when a band is
+   * marked as the page's own pipeline.
+   */
+  const contextIds = useMemo(() => {
+    if (!strata || !strata.bands.some((b) => b.current)) return new Set<string>();
+    return new Set(strata.bands.filter((b) => !b.current).flatMap((b) => b.nodeIds));
+  }, [strata]);
 
   const tier: ZoomTier = useStore((s) => zoomTier(s.transform[2]));
 
@@ -239,6 +270,10 @@ function DagCanvasInner({
             ? (lensDir === "up" ? lineage?.upstream : lineage?.downstream)?.get(item.id)
             : undefined,
           execState: executionStates?.[item.id],
+          orientation,
+          // A band already says which layer a pipeline is; the swatch would repeat it.
+          showLayer: !strata,
+          context: contextIds.has(item.id),
           render: renderItem,
           onSelect: selectNode,
         };
@@ -262,6 +297,9 @@ function DagCanvasInner({
       lineage,
       selectedNodeId,
       executionStates,
+      orientation,
+      strata,
+      contextIds,
       renderItem,
       selectNode,
     ]
@@ -300,6 +338,7 @@ function DagCanvasInner({
         tier,
         onSelectDataset: selectDataset,
         label: dataset ? null : (edgeLabel?.(e.from, e.to) ?? null),
+        direction,
       };
 
       return {
@@ -325,26 +364,29 @@ function DagCanvasInner({
     lineage,
     tier,
     selectDataset,
+    direction,
   ]);
 
   /**
-   * Re-fit once the cards have been measured.
+   * Re-fit once the cards have been measured, and again whenever the drawing
+   * itself changes shape (another orientation, bands on or off).
    *
    * `fitView` as a prop only runs on init, when every card is still the
    * placeholder size — so the graph was framed against an estimate and then
-   * re-laid-out underneath the viewport. Refitting is keyed to the set of
-   * items, so it happens once per graph and never yanks the viewport away from
-   * a user who has panned.
+   * re-laid-out underneath the viewport. Refitting is keyed to what is drawn,
+   * so it happens once per drawing and never yanks the viewport away from a
+   * user who has panned.
    */
   const { fitView } = useReactFlow();
   const itemsKey = useMemo(() => dedupedItems.map((it) => it.id).join("|"), [dedupedItems]);
+  const fitKey = `${itemsKey}#${orientation}#${strata?.bands.length ?? 0}`;
   const measured = dedupedItems.length > 0 && dedupedItems.every((it) => sizes.has(it.id));
   const fittedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!measured || fittedFor.current === itemsKey) return;
-    fittedFor.current = itemsKey;
+    if (!measured || fittedFor.current === fitKey) return;
+    fittedFor.current = fitKey;
     fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM });
-  }, [measured, itemsKey, fitView]);
+  }, [measured, fitKey, fitView, layout]);
 
   /**
    * Pick up React Flow's measurements and re-run the layout with real sizes.
@@ -388,7 +430,11 @@ function DagCanvasInner({
   }
 
   return (
-    <div className="dag-canvas-root" style={{ width: "100%", height: "100%" }}>
+    <div
+      className="dag-canvas-root"
+      data-orientation={orientation}
+      style={{ width: "100%", height: "100%" }}
+    >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -405,16 +451,67 @@ function DagCanvasInner({
         elementsSelectable
         proOptions={{ hideAttribution: false }}
       >
-        <Background variant={BackgroundVariant.Dots} gap={22} size={1} color="var(--canvas-dot)" />
-        <MiniMap
-          pannable
-          zoomable
-          ariaLabel="Pipeline minimap"
-          nodeColor="var(--text-dim)"
-          maskColor="var(--overlay-subtle)"
-        />
+        <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--canvas-dot)" />
+        <StrataBands layout={layout} strata={strata} orientation={orientation} />
+        {showMinimap && (
+          <MiniMap
+            pannable
+            zoomable
+            ariaLabel="Pipeline minimap"
+            nodeColor="var(--edge)"
+            maskColor="var(--overlay-subtle)"
+          />
+        )}
       </ReactFlow>
     </div>
+  );
+}
+
+/**
+ * One band per pipeline of the chain, drawn in the canvas' own coordinates so
+ * it pans and zooms with the cards. The layout says where each band starts and
+ * ends along the flow; across the flow a band spans the whole drawing.
+ */
+function StrataBands({
+  layout,
+  strata,
+  orientation,
+}: {
+  layout: DagLayout;
+  strata: Strata | null;
+  orientation: "vertical" | "horizontal";
+}) {
+  if (!strata || layout.bands.length === 0) return null;
+  const vertical = orientation === "vertical";
+
+  return (
+    <ViewportPortal>
+      {layout.bands.map((placed) => {
+        const band = strata.bands[placed.band];
+        if (!band) return null;
+        const start = placed.start - BAND_INSET;
+        const length = placed.end - placed.start + BAND_INSET * 2;
+        const style: React.CSSProperties = vertical
+          ? { transform: `translate(0px, ${start}px)`, width: layout.width, height: length }
+          : { transform: `translate(${start}px, 0px)`, width: length, height: layout.height };
+        return (
+          <div
+            key={band.pipeline}
+            className={`strata-band${band.current ? " current" : ""}`}
+            data-orientation={orientation}
+            data-layer={band.layer ?? undefined}
+            data-testid="strata-band"
+            style={style}
+          >
+            <span className="strata-band-label">
+              <span className="strata-band-swatch" aria-hidden="true" />
+              {band.layer && <span>{band.layer}</span>}
+              <span className="strata-band-pipe">{band.pipeline}</span>
+            </span>
+          </div>
+        );
+      })}
+    </ViewportPortal>
   );
 }
 

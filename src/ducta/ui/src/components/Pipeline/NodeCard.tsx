@@ -1,12 +1,3 @@
-import type React from "react";
-import {
-  IconDatabase,
-  IconSettings2,
-  IconBrain,
-  IconCloud,
-  IconTool,
-  IconShieldHalf,
-} from "@tabler/icons-react";
 import {
   compactDuration,
   humanizeGate,
@@ -27,25 +18,25 @@ interface NodeCardProps {
   execState?: string;
   /** Semantic-zoom tier: how much of the card is legible at this zoom. */
   tier?: ZoomTier;
+  /** Ports along the top and bottom (vertical) or down the left and right (horizontal). */
+  orientation?: "vertical" | "horizontal";
+  /** Show the layer swatch. Off in the strata view, where the band already says it. */
+  showLayer?: boolean;
+  /** Upstream context from another pipeline of the chain: quieter, still clickable. */
+  context?: boolean;
   onClick: () => void;
 }
 
-const typeIcons: Record<string, React.ComponentType<any>> = {
-  source: IconDatabase,
-  transform: IconSettings2,
-  ml: IconBrain,
-  sink: IconCloud,
-  custom: IconTool,
-};
+const FAILED = new Set(["failed", "error"]);
 
 /**
- * A node on the canvas: a function, and what only a function knows.
+ * A node on the canvas, reduced to what you scan a graph for: which function,
+ * and how it went.
  *
- * The datasets are deliberately *not* here — they live on the edges, where they
- * can be clicked and where their real format comes from the registry. That
- * leaves the card lighter than before rather than heavier: an eyebrow, a name,
- * how it is addressed, whether a gate guards what comes after it, and how long
- * it last took.
+ * Everything else a node knows — how it is addressed, its checks and gate, the
+ * datasets it reads and writes — lives in the focus panel that opens when the
+ * card is selected, and the datasets stay on the edges. The card keeps one fact:
+ * that the run failed, that it is running, or how long it last took.
  */
 export function NodeCard({
   node,
@@ -55,19 +46,23 @@ export function NodeCard({
   lensDepth,
   execState,
   tier = "detail",
+  orientation = "vertical",
+  showLayer = true,
+  context = false,
   onClick,
 }: NodeCardProps) {
-  const Icon = typeIcons[node.type ?? ""] ?? IconTool;
-
   const inputs = node.inputs ?? [];
   const outputs = node.outputs ?? [];
-  // The layer a node writes into says where it sits in the pipeline, which is a
-  // better eyebrow than the inferred node type. Falls back to the type when the
-  // datasets follow no medallion convention.
   const layer = medallionLayer(outputs.map((o) => o.name));
   const quality = qualitySummary(node.quality);
-  const duration = compactDuration(node.lastDuration);
   const name = node.name || node.id;
+
+  const failed = execState ? FAILED.has(execState) : false;
+  const fact = failed
+    ? "failed"
+    : execState === "running"
+      ? "running"
+      : compactDuration(node.lastDuration);
 
   const label =
     `Node ${name}${execState ? `, ${execState}` : ""}` +
@@ -92,6 +87,7 @@ export function NodeCard({
         `node-card--${tier}`,
         selected ? "selected" : "",
         dimmed ? "dag-dimmed" : "",
+        context ? "node-card--context" : "",
         lensDir ? `lens-${lensDir}` : "",
         execState ? `status-${execState}` : "",
       ]
@@ -99,11 +95,8 @@ export function NodeCard({
         .join(" ")}
       data-type={node.type}
       data-layer={layer ?? undefined}
+      data-orientation={orientation}
     >
-      {/* The layer, as a rule across the top. Carries the same information as
-          the eyebrow text, so it still reads at `shape` zoom where text does not. */}
-      <span className="node-card-layerbar" aria-hidden="true" />
-
       {lensDir && lensDepth != null && tier !== "shape" && (
         <span
           className={`lens-tag lens-tag-${lensDir}`}
@@ -117,91 +110,57 @@ export function NodeCard({
       )}
 
       <div className="node-card-body">
-        {tier !== "shape" && (
-          <div className="node-card-head">
-            <span className="node-card-eyebrow">
-              <Icon size={13} stroke={1.6} className="node-card-eyebrow-icon" />
-              {layer ? layer.toUpperCase() : (node.type ?? "node")}
-            </span>
-            <span className="node-card-run">
-              {execState && (
-                <span
-                  className={`node-card-status status-dot-${execState}`}
-                  title={execState}
-                  aria-hidden="true"
-                />
-              )}
-              {duration && <span className="node-card-duration">{duration}</span>}
-            </span>
-          </div>
-        )}
-
         <div className="node-card-title">
-          <span className="node-card-name">{name}</span>
-          {tier === "shape" && execState && (
-            <span
-              className={`node-card-status status-dot-${execState}`}
-              title={execState}
-              aria-hidden="true"
-            />
+          {showLayer && layer && tier !== "shape" && (
+            <span className="node-card-swatch" aria-hidden="true" />
           )}
-        </div>
-
-        {tier === "detail" && (node.module || node.fn) && (
-          <div className="node-card-fn">
-            {[node.module, node.fn].filter(Boolean).join(" · ")}
-          </div>
-        )}
-
-        {/* A gate decides whether anything downstream runs at all, which is
-            worth reading off the graph instead of opening a panel. */}
-        {tier !== "shape" && quality && (
-          <div className="node-card-foot">
-            {quality.gate && (
+          <span className="node-card-name">{name}</span>
+          <span className="node-card-run">
+            {execState && (
               <span
-                className="node-card-gate"
-                title={`Quality gate: ${humanizeGate(quality.gate)}`}
-              >
-                <IconShieldHalf size={11} stroke={1.8} aria-hidden="true" />
-                {tier === "detail" ? `gate · ${humanizeGate(quality.gate)}` : "gate"}
+                className={`node-card-status status-dot-${execState}`}
+                title={execState}
+                aria-hidden="true"
+              />
+            )}
+            {tier === "detail" && fact && (
+              <span className={`node-card-fact${failed ? " node-card-fact--failed" : ""}`}>
+                {fact}
               </span>
             )}
-            {tier === "detail" && quality.count > 0 && (
-              <span className="node-card-checks">
-                {quality.count} {quality.isSanity ? "sanity" : "quality"}{" "}
-                {quality.count === 1 ? "check" : "checks"}
-              </span>
-            )}
-          </div>
-        )}
+          </span>
+        </div>
       </div>
 
-      {inputs.length > 0 && <PortRail ports={inputs} side="in" />}
-      {outputs.length > 0 && <PortRail ports={outputs} side="out" />}
+      {inputs.length > 0 && <PortRail ports={inputs} side="in" orientation={orientation} />}
+      {outputs.length > 0 && <PortRail ports={outputs} side="out" orientation={orientation} />}
     </div>
   );
 }
 
 /**
- * The connectors the edges land on — inputs across the top, outputs across the
- * bottom. Offsets match `portOffset` in utils/dagLayout.ts and the handle
- * positions in DuctaNode; all three have to agree or an edge arrives next to
- * its dot instead of on it.
+ * The connectors the edges land on — inputs where the flow enters the card,
+ * outputs where it leaves. Offsets match `portOffset` in utils/dagLayout.ts and
+ * the handle positions in DuctaNode; all three have to agree or an edge arrives
+ * next to its dot instead of on it.
  */
 function PortRail({
   ports,
   side,
+  orientation,
 }: {
   ports: NonNullable<DagCanvasItem["inputs"]>;
   side: "in" | "out";
+  orientation: "vertical" | "horizontal";
 }) {
+  const across = orientation === "horizontal" ? "top" : "left";
   return (
     <>
       {ports.map((port, i) => (
         <span
           key={port.id ?? `${side}-${i}`}
           className={`node-port node-port-${side}`}
-          style={{ left: `${((i + 1) / (ports.length + 1)) * 100}%` }}
+          style={{ [across]: `${((i + 1) / (ports.length + 1)) * 100}%` }}
           aria-hidden="true"
         >
           <span className="port-dot" />

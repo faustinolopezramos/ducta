@@ -7,6 +7,7 @@ import {
   IconBox,
   IconFlask,
   IconShieldCheck,
+  IconFileCertificate,
   IconDatabaseImport,
   IconCalendarEvent,
 } from "@tabler/icons-react";
@@ -26,6 +27,7 @@ export function Sidebar() {
   const menuItems = [
     { label: "Dashboard", icon: IconLayoutDashboard, path: "/projects" },
     { label: "History", icon: IconHistory, path: "/workspace/executions", divideBefore: true },
+    { label: "Certificates", icon: IconFileCertificate, path: "/workspace/certificates" },
     { label: "Schedules", icon: IconCalendarEvent, path: "/workspace/schedules" },
     { label: "Quality", icon: IconShieldCheck, path: "/workspace/quality" },
     { label: "Ingestion", icon: IconDatabaseImport, path: "/workspace/ingestion" },

@@ -214,13 +214,45 @@ class TestSchemaDefaultsDoNotDrift:
     def test_every_chain_field_agrees_between_the_schema_and_the_engine(self):
         # Field-by-field rather than one assertion per key, so a field added to
         # ChainReuseConfig later is covered the day it appears.
+        from ducta.core.settings import DEFAULT_CHAIN_STATE_DIR
         from ducta.setting.schemas import ChainReuseConfig
 
         engine = CoreSettings.from_context({})
         for name, field in ChainReuseConfig.model_fields.items():
+            if name == "state_dir":
+                # A path *template* (${output_path}/${environment}/...), not a
+                # plain value: the schema default and CoreSettings'
+                # DEFAULT_CHAIN_STATE_DIR constant must agree on that raw
+                # template, since both feed CoreSettings._resolve_scoped_dir.
+                # `engine.chain_state_dir` is that template already
+                # interpolated and environment-scoped, so it is never equal to
+                # the literal default string — comparing it here would be
+                # asserting the wrong thing.
+                assert field.default == DEFAULT_CHAIN_STATE_DIR, (
+                    f"ChainReuseConfig.state_dir defaults to {field.default!r} but "
+                    f"CoreSettings.DEFAULT_CHAIN_STATE_DIR is {DEFAULT_CHAIN_STATE_DIR!r}. "
+                    "A project's config is validated through the schema, so these "
+                    "must agree or a project relying on the engine's default would "
+                    "silently get a different one once its config round-trips "
+                    "through GlobalConfigSchema.model_dump()."
+                )
+                continue
             engine_value = getattr(engine, f"chain_{name}")
             assert field.default == engine_value, (
                 f"ChainReuseConfig.{name} defaults to {field.default!r} but "
                 f"CoreSettings.chain_{name} resolves to {engine_value!r}. The schema "
                 f"default wins at runtime, so these must agree."
             )
+
+    def test_run_certificate_dir_template_agrees_between_the_schema_and_the_engine(self):
+        # Same reasoning as ChainReuseConfig.state_dir above: both hold the raw
+        # ${output_path}/${environment}/... template, not a resolved path.
+        from ducta.core.settings import DEFAULT_CERTIFICATE_DIR
+        from ducta.setting.schemas import GlobalConfigSchema
+
+        schema_default = GlobalConfigSchema.model_fields["run_certificate_dir"].default
+        assert schema_default == DEFAULT_CERTIFICATE_DIR, (
+            f"GlobalConfigSchema.run_certificate_dir defaults to {schema_default!r} but "
+            f"CoreSettings.DEFAULT_CERTIFICATE_DIR is {DEFAULT_CERTIFICATE_DIR!r}. A "
+            "project's config is validated through the schema, so these must agree."
+        )

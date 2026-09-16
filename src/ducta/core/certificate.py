@@ -44,7 +44,14 @@ from ducta.setting.environments import sanitize_env_for_path
 # carries. They are NOT comparable to 1.2 fingerprints — see
 # `fingerprints_comparable`.
 SCHEMA_VERSION = "1.4"
-DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
+#: Mirrors ``ducta.core.settings.DEFAULT_CERTIFICATE_DIR`` — duplicated as a
+#: literal (like ``LEGACY_FINGERPRINT_ALGORITHM`` below) rather than imported,
+#: to keep this module importable without pulling in ``ducta.core.settings``
+#: at module load time. ``tests/core/test_certificate.py`` asserts the two
+#: agree. See ``CoreSettings._resolve_scoped_dir`` for how this template
+#: resolves to a concrete, environment-scoped path (env-scoped even for a
+#: project-configured value, so two environments never collide).
+DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
 #: Fingerprints written before the algorithm was recorded. Mirrors
 #: ``ducta.mlrun.fingerprint.ALGO_LEGACY`` — duplicated as a literal rather than
 #: imported because `ducta.mlrun` is an optional extra and `certify verify` must
@@ -392,12 +399,17 @@ def build_certificate(
 
 
 def certificate_dir(context: Any, run_id: str) -> Path:
-    """Resolve ``<run_certificate_dir>/<env>/<run_id>`` for this run (relative to cwd)."""
+    """Resolve the run certificate directory for this run.
+
+    ``CoreSettings.run_certificate_dir`` is already fully resolved and
+    environment-scoped (``${output_path}/${environment}/.ducta/runs`` by
+    default; see ``CoreSettings._resolve_scoped_dir``), so this just appends
+    the run id.
+    """
     from ducta.core.settings import CoreSettings
 
     settings = CoreSettings.from_context(context)
-    env = sanitize_env_for_path(settings.env)
-    return Path(settings.run_certificate_dir) / env / run_id
+    return Path(settings.run_certificate_dir) / run_id
 
 
 def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[Optional[str], str, Path]]:
@@ -490,7 +502,23 @@ class VerifyResult:
 
 
 def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> VerifyResult:
-    """Confirm the certificate was not altered; when signed and keyed, check the signature.
+    """Confirm the certificate at *path* was not altered; when signed and keyed, check the signature.
+
+    Thin wrapper around :func:`verify_certificate_data` for the file-based CLI/API
+    paths — see that function for the actual verification logic and its docstring
+    for the reasoning behind each outcome.
+    """
+    try:
+        data = load_certificate(path)
+    except Exception as e:  # noqa: BLE001
+        return VerifyResult(ok=False, run_id=None, reason=f"could not read certificate: {e}")
+    return verify_certificate_data(data, signing_key=signing_key)
+
+
+def verify_certificate_data(
+    data: Dict[str, Any], signing_key: Optional[bytes] = None
+) -> VerifyResult:
+    """Confirm an already-parsed certificate dict was not altered; check the signature when keyed.
 
     Integrity (self-hash) is always checked. If the certificate carries a signature
     and ``signing_key`` is provided, the HMAC is verified too and a mismatch fails.
@@ -503,12 +531,11 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
     and fails. A pre-1.3 certificate carries no such claim: when a key is
     supplied and no signature is present, "never signed" and "signature removed"
     are indistinguishable, and this reports that rather than guessing.
-    """
-    try:
-        data = load_certificate(path)
-    except Exception as e:  # noqa: BLE001
-        return VerifyResult(ok=False, run_id=None, reason=f"could not read certificate: {e}")
 
+    Operates purely on *data* — no filesystem access — so a certificate a caller
+    already holds in memory (e.g. pasted/uploaded through the standalone verify
+    endpoint) can be checked without ever being written to disk.
+    """
     run_id = data.get("run_id")
     stored = data.get("certificate_hash")
     if not stored:

@@ -45,6 +45,8 @@ const STATUS_ALIASES: Record<string, BadgeStatus> = {
   done: "success",
   queued: "pending",
   skip: "skipped",
+  // A quality gate stopped the run: it finished, but did not do all its work.
+  gate_blocked: "warning",
 };
 
 export function normalizeStatus(raw: string | null | undefined): BadgeStatus {

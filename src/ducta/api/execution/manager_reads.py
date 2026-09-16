@@ -70,7 +70,24 @@ class _ReadsMixin:
         return load_error_log_summary(execution_id)
 
     def list_executions(self, user_id: Optional[str] = None) -> List[ExecutionResponse]:
+        """Every known execution: the in-memory records, then the persisted runs
+        memory no longer holds.
+
+        The in-memory store keeps at most ``max_executions_in_memory`` records for
+        ``execution_retention_seconds`` (six hours by default) and loses them all
+        on a restart, while every run's ``meta.json`` stays in ``runs_dir``.
+        Listing memory alone made history — and anything counting runs over a day
+        or a week, like the dashboard — silently forget everything older than that
+        window. A record still in memory wins over its (possibly stale) file.
+        """
         all_executions = self._store.list_all()
+        file_store = getattr(self, "_file_log_store", None)
+        if file_store is not None:
+            seen = {e.id for e in all_executions}
+            for persisted in file_store.list_runs():
+                if persisted.id not in seen:
+                    seen.add(persisted.id)
+                    all_executions.append(persisted)
         if user_id:
             return [e for e in all_executions if e.user_id == user_id]
         return all_executions
@@ -134,7 +151,10 @@ class _ReadsMixin:
                 e for e in all_executions if e.started_at and e.started_at <= until_dt
             ]
 
-        all_executions.sort(key=lambda e: e.started_at or e.finished_at or "", reverse=True)
+        # A record with neither timestamp sorts last. Comparing it to "" raised
+        # TypeError against the datetimes, which persisted runs made reachable.
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        all_executions.sort(key=lambda e: e.started_at or e.finished_at or epoch, reverse=True)
         paginated, total = paginate(all_executions, skip, limit)
         return paginated, total
 

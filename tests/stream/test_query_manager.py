@@ -40,16 +40,16 @@ class TestBuildCheckpointPath:
 
     def test_local_composition(self):
         qm = self._qm()
-        path = qm._build_checkpoint_path("/base/ck", "pipe", "node", "exec123")
-        assert path.endswith("pipe/node/exec123")
+        path = qm._build_checkpoint_path("/base/ck", "pipe", "node")
+        assert path.endswith("pipe/node")
         assert path.startswith("/base/ck")
 
     def test_sanitizes_components(self):
         qm = self._qm()
-        path = qm._build_checkpoint_path("/base", "../evil", "n/ode", "e1")
+        path = qm._build_checkpoint_path("/base", "../evil", "n/ode")
         assert "../" not in path
 
     def test_cloud_composition(self):
         qm = self._qm()
-        path = qm._build_checkpoint_path("s3://b/ck", "pipe", "node", "e1")
-        assert path == "s3://b/ck/pipe/node/e1"
+        path = qm._build_checkpoint_path("s3://b/ck", "pipe", "node")
+        assert path == "s3://b/ck/pipe/node"

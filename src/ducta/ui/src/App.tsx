@@ -40,6 +40,9 @@ const MLOpsPage            = lazy(() => import("./pages/MLOpsPage")          .th
 const QualityPage          = lazy(() => import("./pages/QualityPage"));
 const IngestionPage        = lazy(() => import("./pages/IngestionPage"));
 const SchedulesPage        = lazy(() => import("./pages/SchedulesPage"));
+const CertificatesPage       = lazy(() => import("./pages/CertificatesPage")                          .then(m => ({ default: m.CertificatesPage })));
+const CertificateDetailPage  = lazy(() => import("./pages/CertificatesPage/CertificateDetailPage")    .then(m => ({ default: m.CertificateDetailPage })));
+const VerifyCertificatePage  = lazy(() => import("./pages/VerifyCertificatePage")                     .then(m => ({ default: m.VerifyCertificatePage })));
 
 import { useUIStore } from "./store/uiStore";
 
@@ -57,8 +60,12 @@ function WorkspaceShellWrapper() {
 function ProjectsListRoute() {
   const projects = useProjectStore((s) => s.present.projects);
   const dispatch = useProjectStore((s) => s.dispatch);
+  // The dashboard names the workspace it is showing; it was never passed, so
+  // the header always fell back to a generic line.
+  const { selectedSource } = useWorkspaceSelection();
   return (
     <ProjectsList
+      workspacePath={selectedSource ?? undefined}
       projects={projects}
       onDeleteProject={(id: string) => dispatch({ type: "DELETE_PROJECT", payload: id })}
     />
@@ -178,6 +185,9 @@ export default function App() {
           element: <ProtectedRoute><Outlet /></ProtectedRoute>,
           children: [
             { path: "setup", element: <ConnectWorkspaceForm />, handle: { breadcrumb: () => "Setup" } },
+            // No workspace/project required — someone verifying a certificate
+            // handed to them directly may not have one selected yet.
+            { path: "verify-certificate", element: <VerifyCertificatePage />, handle: { breadcrumb: () => "Verify a Certificate" } },
             {
               element: <RequireWorkspace />,
               children: [
@@ -187,13 +197,15 @@ export default function App() {
                   element: <ProjectsListRoute />,
                 },
                 { path: "project/:projectId", handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectPage /> },
-                { path: "project/:projectId/pipeline/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline" }, element: <PipelinePage /> },
+                { path: "project/:projectId/pipeline/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline", hideTrail: true }, element: <PipelinePage /> },
                 {
                   path: "workspace",
                   element: <WorkspaceShellWrapper />,
                   children: [
                     { path: "nodes/:name/code", element: <NodeCodePage />, handle: { breadcrumb: (d: any) => `Node: ${d?.params?.name}` } },
                     { path: "executions", element: <ExecutionHistoryPage />, handle: { breadcrumb: () => "Executions" } },
+                    { path: "certificates", element: <CertificatesPage />, handle: { breadcrumb: () => "Certificates" } },
+                    { path: "certificates/:projectId/:runId", element: <CertificateDetailPage />, handle: { breadcrumb: (d: any) => `Certificate ${d?.params?.runId?.slice(0, 8)}` } },
                     { path: "quality", element: <QualityPage />, handle: { breadcrumb: () => "Quality" } },
                     { path: "ingestion", element: <IngestionPage />, handle: { breadcrumb: () => "Ingestion" } },
                     { path: "git", element: <GitPage />, handle: { breadcrumb: () => "Git" } },

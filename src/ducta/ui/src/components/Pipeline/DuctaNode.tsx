@@ -11,6 +11,12 @@ export interface DuctaNodeData extends Record<string, unknown> {
   lensDir?: "up" | "down" | null;
   lensDepth?: number;
   execState?: string;
+  /** Ports sit top/bottom when layers run down the page, left/right when they run across. */
+  orientation?: "vertical" | "horizontal";
+  /** False when a band already names the layer (the strata view). */
+  showLayer?: boolean;
+  /** A node from another pipeline of the chain: quieter, still selectable. */
+  context?: boolean;
   /** Escape hatch used by ProjectPage to draw pipeline cards instead of nodes. */
   render?: (item: DagCanvasItem) => React.ReactNode;
   onSelect: (id: string) => void;
@@ -29,11 +35,16 @@ function PortHandles({
   count,
   type,
   position,
+  orientation,
 }: {
   count: number;
   type: "source" | "target";
   position: Position;
+  orientation?: "vertical" | "horizontal";
 }) {
+  // Handles spread across the edge the flow crosses: along the width when the
+  // layers run down the page, along the height when they run across it.
+  const across = orientation === "horizontal" ? "top" : "left";
   return (
     <>
       {Array.from({ length: Math.max(count, 1) }, (_, i) => (
@@ -44,7 +55,7 @@ function PortHandles({
           position={position}
           isConnectable={false}
           style={{
-            left: `${((i + 1) / (Math.max(count, 1) + 1)) * 100}%`,
+            [across]: `${((i + 1) / (Math.max(count, 1) + 1)) * 100}%`,
             width: 1,
             height: 1,
             minWidth: 0,
@@ -77,9 +88,16 @@ export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
   // crosses a threshold, not on every wheel tick.
   const tier: ZoomTier = useStore((s) => zoomTier(s.transform[2]));
 
+  const horizontal = d.orientation === "horizontal";
+
   return (
     <>
-      <PortHandles count={inCount} type="target" position={Position.Top} />
+      <PortHandles
+        count={inCount}
+        type="target"
+        position={horizontal ? Position.Left : Position.Top}
+        orientation={d.orientation}
+      />
       {render ? (
         // A custom renderer brings its own interactive element (the project
         // map's supernode is a button that opens the pipeline), so this stays a
@@ -95,10 +113,18 @@ export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
           lensDepth={d.lensDepth}
           execState={d.execState}
           tier={tier}
+          orientation={d.orientation}
+          showLayer={d.showLayer}
+          context={d.context}
           onClick={() => onSelect(item.id)}
         />
       )}
-      <PortHandles count={outCount} type="source" position={Position.Bottom} />
+      <PortHandles
+        count={outCount}
+        type="source"
+        position={horizontal ? Position.Right : Position.Bottom}
+        orientation={d.orientation}
+      />
     </>
   );
 });

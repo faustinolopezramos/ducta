@@ -59,7 +59,7 @@ Streaming nodes declare their I/O **inline** (rather than referencing the input/
 *   **`depends_on`**: intra-pipeline ordering; independent nodes in the same wave start concurrently.
 *   **`global_config`**: `max_streaming_pipelines`, `checkpoints_base`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`.
 
-Checkpoint base resolution order: node `streaming.checkpoint` → `global_config.checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed).
+Checkpoint base resolution order: node `streaming.checkpoint` → `global_config.checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed). The latter two are resolved by `CheckpointManager.determine_checkpoint_base`, which applies the Ducta storage convention (see `ducta.core.README`): scoped by `${output_path}/${environment}`, and still env-scoped even when `checkpoints_base` doesn't reference `${environment}` itself — otherwise every environment's checkpoints would collide in one directory. A node's own `streaming.checkpoint_location` is unaffected by this — set it explicitly (as below) and it's used verbatim, already resolved by the general config interpolator.
 
 ---
 
@@ -90,7 +90,7 @@ events_stream:
 
 # global_config.yaml
 max_streaming_pipelines: 5
-checkpoints_base: "data/_checkpoints"
+checkpoints_base: "${output_path}/${environment}/_checkpoints"  # default already does this if unset
 streaming_node_start_parallelism: 8
 ```
 

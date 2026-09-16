@@ -7,6 +7,8 @@ import "./Breadcrumbs.css";
 
 interface BreadcrumbHandle {
   breadcrumb?: (match: UIMatch) => string;
+  /** The page draws this trail in its own toolbar (the pipeline canvas). */
+  hideTrail?: boolean;
 }
 
 interface Crumb {
@@ -41,6 +43,8 @@ export function Breadcrumbs() {
   // No handle at all, or already on /projects — the trail would be redundant
   // with the page's own title.
   if (!current || current.pathname === "/projects") return null;
+  // Drawn by the page itself; a second copy here would cost the canvas a row.
+  if (current.handle.hideTrail) return null;
 
   const params = current.params as Record<string, string | undefined>;
   const resolveProject = (id: string) => projects.find((p) => p.id === id)?.name ?? id;

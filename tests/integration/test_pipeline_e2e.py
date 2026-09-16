@@ -106,12 +106,12 @@ class TestPipelineRun:
 
     def test_run_emits_a_verifiable_certificate(self, executed, scaffolded, ducta_cli):
         # Discover the run through `iter_certificate_dirs` rather than by walking
-        # `.ducta/runs` by hand. Certificates moved from a flat `runs/<run_id>/`
-        # to a per-environment `runs/<env>/<run_id>/`, and the hand-rolled
-        # `sorted(...)[-1]` here kept picking `runs/dev` — a directory that holds
-        # runs rather than being one — so this test failed on a layout it should
-        # not have known about in the first place.
-        runs = list(iter_certificate_dirs(scaffolded / ".ducta" / "runs"))
+        # the runs dir by hand. Certificates now live at
+        # `${output_path}/${environment}/.ducta/runs/<run_id>/` (the Ducta
+        # storage convention — env baked into the directory itself, so a
+        # hand-rolled `sorted(...)[-1]` here would silently assume a layout
+        # this test should not need to know about).
+        runs = list(iter_certificate_dirs(scaffolded / "data" / "dev" / ".ducta" / "runs"))
         assert runs, "no run certificate directory was created"
 
         _env, run_id, run_dir = runs[-1]

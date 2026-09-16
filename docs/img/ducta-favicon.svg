@@ -7,5 +7,5 @@
   </defs>
   <rect x="42" y="18" width="36" height="84" rx="18" fill="none" stroke="#6B7A8C" stroke-width="14"/>
   <rect x="18" y="42" width="84" height="36" rx="18" fill="none" stroke="#6B7A8C" stroke-width="14" mask="url(#weave)"/>
-  <circle cx="60" cy="18" r="8" fill="#84CC16"/>
+  <circle cx="60" cy="18" r="8" fill="#0B5F73"/>
 </svg>

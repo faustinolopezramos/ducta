@@ -21,9 +21,10 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from loguru import logger
 from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import (
@@ -33,9 +34,10 @@ from ducta.api.dependencies import (
     WorkspaceManagerDep,
     require_permission,
 )
+from ducta.api.execution.runner import normalize_execution_context_paths, select_execution_cwd
 from ducta.api.models.execution import ExecutionResponse
+from ducta.api.workspace.manager import WorkspaceManager
 from ducta.core.certificate import (
-    DEFAULT_CERTIFICATE_DIR,
     diff_certificates,
     find_certificate_dir,
     iter_certificate_dirs,
@@ -43,6 +45,8 @@ from ducta.core.certificate import (
     resolve_signing_key_from_dir,
     verify_certificate,
 )
+from ducta.core.settings import CoreSettings
+from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
 router = APIRouter(prefix="/projects", tags=["certificates"])
 
@@ -72,7 +76,8 @@ class CertificateVerifyResponse(BaseModel):
     run_id: Optional[str] = None
     reason: str
     signature: str = Field(
-        default="unsigned", description="unsigned | valid | invalid | present (no key)"
+        default="unsigned",
+        description="unsigned | valid | invalid | present (no key) | stripped | unverifiable",
     )
 
 
@@ -80,7 +85,11 @@ class CertificateDiffOutputRow(BaseModel):
     key: str
     in_a: bool
     in_b: bool
-    match: bool
+    #: True (same), False (differs), None = measured with different fingerprint
+    #: algorithms (e.g. across a Ducta upgrade) — "not comparable", not a claim
+    #: either way. See `not_comparable_reason` for why.
+    match: Optional[bool]
+    not_comparable_reason: Optional[str] = None
 
 
 class CertificateDiffQualityRow(BaseModel):
@@ -108,6 +117,10 @@ class CertificateDiffResponse(BaseModel):
     config_fingerprint_match: bool
     outputs: List[CertificateDiffOutputRow]
     outputs_match: bool
+    #: Whether every output could be measured with a comparable fingerprint —
+    #: false means at least one output's `match` is `None` ("not comparable"),
+    #: so `outputs_match`/`identical` cover only what could actually be checked.
+    outputs_comparable: bool = True
     quality: List[CertificateDiffQualityRow]
     identical: bool
 
@@ -119,22 +132,68 @@ class ReproduceRequest(BaseModel):
     end_date: Optional[str] = None
 
 
-def _project_runs_dir(root: Path, project_id: str) -> Path:
-    """The runs directory for a project (same resolution the executor uses)."""
+#: Pre-convention default, relative to the project directory. Kept discoverable
+#: (read-only) so certificates written before the storage convention moved
+#: run_certificate_dir under ${output_path}/${environment} don't disappear.
+_LEGACY_RUNS_DIR = Path(".ducta") / "runs"
+
+
+def _project_dir(root: Path, project_id: str) -> Path:
+    """The directory a project's runs execute from (same rule as execute/reproduce)."""
     project_dir = root / "projects" / project_id
-    base = project_dir if project_dir.is_dir() else root
-    return base / DEFAULT_CERTIFICATE_DIR
+    return project_dir if project_dir.is_dir() else root
+
+
+def _env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
+    """The run-certificates directory a run in *env* writes to, or None.
+
+    Resolved the way the runner resolves it before executing
+    (execution/runner.py): same context loader, same execution cwd, same path
+    normalisation — so the ``${output_path}/${environment}/.ducta/runs``
+    template lands on the directory the executor actually wrote. Nothing here
+    calls ``os.chdir``: it runs inside the server process.
+    """
+    try:
+        ctx = WorkspaceManager(project_dir).load_context(env)
+    except Exception as exc:  # noqa: BLE001 — an environment the project can't load is skipped
+        logger.debug("Could not resolve run-certificates dir for env '{}': {}", env, exc)
+        return None
+    env_dir = project_dir / env if (project_dir / env).is_dir() else project_dir
+    execution_cwd = select_execution_cwd(project_dir, env_dir, ctx)
+    normalize_execution_context_paths(ctx, execution_cwd)
+    runs_dir = Path(CoreSettings.from_context(ctx).run_certificate_dir)
+    return runs_dir if runs_dir.is_absolute() else execution_cwd / runs_dir
+
+
+def _candidate_runs_dirs(project_dir: Path, env: Optional[str]) -> List[Tuple[Optional[str], Path]]:
+    """``[(env, runs_dir), ...]`` to search: each environment's own directory
+    that exists (only *env* when given), then the legacy directory — labelled
+    ``None`` because its layout may itself nest several environments."""
+    dirs: List[Tuple[Optional[str], Path]] = []
+    seen: set = set()
+    for candidate_env in [env] if env else DEFAULT_ENVIRONMENTS:
+        runs_dir = _env_runs_dir(project_dir, candidate_env)
+        if runs_dir is not None and runs_dir.is_dir() and runs_dir not in seen:
+            seen.add(runs_dir)
+            dirs.append((candidate_env, runs_dir))
+    legacy = project_dir / _LEGACY_RUNS_DIR
+    if legacy.is_dir():
+        dirs.append((None, legacy))
+    return dirs
 
 
 def _certificate_path(root: Path, project_id: str, run_id: str, env: Optional[str] = None) -> Path:
-    run_dir = find_certificate_dir(_project_runs_dir(root, project_id), run_id, env=env)
-    if run_dir is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No certificate found for run '{run_id}' in project '{project_id}'"
-            + (f" (environment '{env}')" if env else ""),
-        )
-    return run_dir / "certificate.json"
+    for dir_env, runs_dir in _candidate_runs_dirs(_project_dir(root, project_id), env):
+        # An environment's own directory already is that environment; only the
+        # legacy tree can hold several, so only it is filtered by *env*.
+        run_dir = find_certificate_dir(runs_dir, run_id, env=env if dir_env is None else None)
+        if run_dir is not None:
+            return run_dir / "certificate.json"
+    raise HTTPException(
+        status_code=404,
+        detail=f"No certificate found for run '{run_id}' in project '{project_id}'"
+        + (f" (environment '{env}')" if env else ""),
+    )
 
 
 @router.get(
@@ -151,29 +210,30 @@ async def list_certificates(
         None, description="Restrict to one environment (default: all environments)"
     ),
 ) -> List[CertificateSummary]:
-    runs_dir = _project_runs_dir(manager.root, project_id)
     summaries: List[CertificateSummary] = []
-    for found_env, run_id, run_dir in iter_certificate_dirs(runs_dir):
-        if env is not None and found_env != env:
-            continue
-        try:
-            data = load_certificate(run_dir / "certificate.json")
-        except Exception:  # noqa: BLE001 — a corrupt file must not break the listing
-            continue
-        quality = data.get("quality", []) or []
-        summaries.append(
-            CertificateSummary(
-                run_id=str(data.get("run_id", run_id)),
-                pipeline=str(data.get("pipeline", "?")),
-                status=str(data.get("status", "?")),
-                started_at=data.get("started_at"),
-                duration_seconds=data.get("duration_seconds"),
-                environment_name=found_env or data.get("environment_name"),
-                signed=bool(data.get("signature")),
-                quality_passed=sum(1 for q in quality if q.get("passed")) if quality else None,
-                quality_total=len(quality) if quality else None,
+    for dir_env, runs_dir in _candidate_runs_dirs(_project_dir(manager.root, project_id), env):
+        for found_env, run_id, run_dir in iter_certificate_dirs(runs_dir):
+            run_env = dir_env or found_env
+            if env is not None and run_env != env:
+                continue
+            try:
+                data = load_certificate(run_dir / "certificate.json")
+            except Exception:  # noqa: BLE001 — a corrupt file must not break the listing
+                continue
+            quality = data.get("quality", []) or []
+            summaries.append(
+                CertificateSummary(
+                    run_id=str(data.get("run_id", run_id)),
+                    pipeline=str(data.get("pipeline", "?")),
+                    status=str(data.get("status", "?")),
+                    started_at=data.get("started_at"),
+                    duration_seconds=data.get("duration_seconds"),
+                    environment_name=run_env or data.get("environment_name"),
+                    signed=bool(data.get("signature")),
+                    quality_passed=sum(1 for q in quality if q.get("passed")) if quality else None,
+                    quality_total=len(quality) if quality else None,
+                )
             )
-        )
     summaries.sort(key=lambda s: s.started_at or "", reverse=True)
     return summaries
 
@@ -211,8 +271,7 @@ async def verify_certificate_endpoint(
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> CertificateVerifyResponse:
     path = _certificate_path(manager.root, project_id, run_id, env=env)
-    project_dir = manager.root / "projects" / project_id
-    signing_root = project_dir if project_dir.is_dir() else manager.root
+    signing_root = _project_dir(manager.root, project_id)
     result = verify_certificate(path, signing_key=resolve_signing_key_from_dir(signing_root))
     return CertificateVerifyResponse(
         ok=result.ok,
@@ -285,8 +344,7 @@ async def reproduce_certificate(
             detail=f"Certificate '{run_id}' has no pipeline name — cannot reproduce",
         )
 
-    project_dir = manager.root / "projects" / project_id
-    exec_source = project_dir if project_dir.is_dir() else manager.root
+    exec_source = _project_dir(manager.root, project_id)
 
     return exec_manager.execute(
         source_path=exec_source,

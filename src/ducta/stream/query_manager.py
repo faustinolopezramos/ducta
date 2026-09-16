@@ -748,7 +748,6 @@ class StreamingQueryManager:
                 streaming_config.get("checkpoint_location"),
                 pipeline_name,
                 node_name,
-                execution_id,
             )
 
             # Validate and reserve checkpoint atomically before Spark operations
@@ -831,12 +830,9 @@ class StreamingQueryManager:
         checkpoint_base: str,
         pipeline_name: str,
         node_name: str,
-        execution_id: str,
     ) -> str:
         """Build the full checkpoint path from base and identifiers."""
-        return CheckpointManager.build_checkpoint_path(
-            checkpoint_base, pipeline_name, node_name, execution_id
-        )
+        return CheckpointManager.build_checkpoint_path(checkpoint_base, pipeline_name, node_name)
 
     def _determine_checkpoint_base(self, base_checkpoint: Optional[str]) -> str:
         """Determine the base directory for checkpoints."""
@@ -851,11 +847,10 @@ class StreamingQueryManager:
         base_checkpoint: Optional[str],
         pipeline_name: str,
         node_name: str,
-        execution_id: str,
     ) -> str:
         """Get checkpoint location for the streaming query with validation."""
         return self.checkpoint_manager.get_checkpoint_location(
-            base_checkpoint, pipeline_name, node_name, execution_id
+            base_checkpoint, pipeline_name, node_name
         )
 
     def _validate_and_reserve_checkpoint(self, checkpoint_path: str, node_name: str) -> None:

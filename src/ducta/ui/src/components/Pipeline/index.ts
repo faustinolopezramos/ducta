@@ -1,13 +1,15 @@
 export { DagCanvas, edgePath } from "./DagCanvas";
-export { DataGraph } from "./DataGraph";
 export { DatasetChip } from "./DatasetChip";
 export { HUDToolbar } from "./HUDToolbar";
 export { NodeCard } from "./NodeCard";
 export { CommandPalette } from "./CommandPalette";
-export { NodeInspector } from "./Inspector/NodeInspector";
-export { DatasetInspector } from "./Inspector/DatasetInspector";
+export { ContractList } from "./ContractList";
+export { NodeFocus } from "./Focus/NodeFocus";
+export { DatasetFocus } from "./Focus/DatasetFocus";
 export { useCanvasViewport } from "./useCanvasViewport";
-export type { PipelineViewMode } from "./HUDToolbar";
+export type { PipelineLens, PipelineOrientation, PipelineScope } from "./HUDToolbar";
+export type { ContractRow } from "./ContractList";
+export type { NeighbourNode } from "./Focus/NodeFocus";
 export type { CanvasViewport } from "./useCanvasViewport";
 export type {
   CanvasDataset,

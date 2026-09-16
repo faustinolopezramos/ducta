@@ -166,6 +166,15 @@ class ChainReuseConfig(BaseModel):
             "silently overrides the one the engine resolves."
         ),
     )
+    state_dir: str = Field(
+        default="${output_path}/${environment}/.ducta/chain_state",
+        description=(
+            "Directory where chain-state markers (the date range a batch "
+            "pipeline last ran, for reuse_materialized) are written. Same "
+            "interpolation and env-scoping rules as global_config."
+            "run_certificate_dir — see the Ducta storage convention there."
+        ),
+    )
 
     model_config = ConfigDict(extra="allow")
 
@@ -328,8 +337,16 @@ class GlobalConfigSchema(BaseModel):
         ),
     )
     run_certificate_dir: str = Field(
-        default=".ducta/runs",
-        description="Directory (relative to the project root) where Run Certificates are written",
+        default="${output_path}/${environment}/.ducta/runs",
+        description=(
+            "Directory where Run Certificates are written. Supports "
+            "${output_path}/${environment} interpolation (the Ducta storage "
+            "convention: framework-managed state lives under the environment's "
+            "data tree, hidden in a `.ducta/` namespace, next to "
+            "`${output_path}/${environment}/quality`). A value without "
+            "${environment} is still scoped per environment automatically, by "
+            "appending it as a path segment."
+        ),
     )
 
     # Reproducibility

@@ -267,7 +267,12 @@ class FileStorageBackend(StorageBackend):
     def __init__(self, workspace_path: str) -> None:
         self.workspace_path = Path(workspace_path)
         self.base_dir = self.workspace_path / ".quality"
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        # No eager mkdir here: this backend is constructed on every read-only
+        # call (list_datasets, get_summary, ...) via `_resolve_storage`, and
+        # creating the directory just to look inside it left an empty
+        # `.quality/` behind on every workspace ever queried, even ones that
+        # never ran a check. `_dataset_path`/`_reports_dir` still create it
+        # (with `parents=True`) the first time something is actually written.
 
     def _dataset_path(self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME) -> Path:
         safe_pipeline = _sanitize_dataset_name(pipeline_name)

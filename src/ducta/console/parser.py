@@ -559,6 +559,15 @@ class UnifiedArgumentParser:
             "standalone --workspace/.quality convention used by "
             "'ducta quality run'. Reads reports a real pipeline run persisted.",
         )
+        report_qp.add_argument(
+            "--pipeline",
+            "-p",
+            help="Pipeline name the report was recorded under (as named in "
+            "config/pipelines, e.g. 'golden.transformation'). A report saved "
+            "by a real pipeline run is scoped under its pipeline name, not "
+            "the standalone default — omitting this when --env is a real "
+            "project looks in the wrong place and reports no reports found.",
+        )
         report_qp.add_argument("--base-path", help=HELP_BASE_PATH)
 
         trend_qp = quality_subparsers.add_parser(
@@ -584,6 +593,13 @@ class UnifiedArgumentParser:
             "-e",
             help="Environment to resolve the project's real quality.output "
             "storage from, instead of the standalone --workspace convention.",
+        )
+        trend_qp.add_argument(
+            "--pipeline",
+            "-p",
+            help="Pipeline name the score history was recorded under (see "
+            "'ducta quality report --help'). Omitting this when --env is a "
+            "real project looks in the wrong place and reports no history.",
         )
         trend_qp.add_argument("--base-path", help=HELP_BASE_PATH)
 
@@ -740,7 +756,8 @@ class UnifiedArgumentParser:
             help="Inspect and verify Run Certificates",
             description=(
                 "Every terminating run writes a tamper-evident Run Certificate "
-                "(.ducta/runs/<run_id>/certificate.json). List, show, or verify them."
+                "(${output_path}/${environment}/.ducta/runs/<run_id>/certificate.json "
+                "by default). List, show, or verify them."
             ),
         )
         certify_subparsers = certify_parser.add_subparsers(
@@ -748,7 +765,9 @@ class UnifiedArgumentParser:
         )
 
         list_parser = certify_subparsers.add_parser("list", help="List run certificates")
-        list_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        list_parser.add_argument(
+            "--dir", help="Runs directory (default: resolved per environment from config)"
+        )
         list_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
         )
@@ -757,7 +776,9 @@ class UnifiedArgumentParser:
             "show", help="Show a certificate (human-readable by default)"
         )
         show_parser.add_argument("--run-id", required=True, help="Run id (or a unique prefix)")
-        show_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        show_parser.add_argument(
+            "--dir", help="Runs directory (default: resolved per environment from config)"
+        )
         show_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
         )
@@ -770,7 +791,9 @@ class UnifiedArgumentParser:
             help="Verify a certificate (tamper check, optionally re-run to prove reproducibility)",
         )
         verify_parser.add_argument("--run-id", required=True, help="Run id (or a unique prefix)")
-        verify_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        verify_parser.add_argument(
+            "--dir", help="Runs directory (default: resolved per environment from config)"
+        )
         verify_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
         )
@@ -787,7 +810,9 @@ class UnifiedArgumentParser:
         )
         diff_parser.add_argument("run_a", help="First run id (or a unique prefix)")
         diff_parser.add_argument("run_b", help="Second run id (or a unique prefix)")
-        diff_parser.add_argument("--dir", help="Runs directory (default: .ducta/runs)")
+        diff_parser.add_argument(
+            "--dir", help="Runs directory (default: resolved per environment from config)"
+        )
         diff_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
         )

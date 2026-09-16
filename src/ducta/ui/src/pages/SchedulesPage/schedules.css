@@ -1,0 +1,305 @@
+/* SchedulesPage cell/action presentation — same class-over-inline-style
+   approach as ExecutionHistoryPage/executionTable.css. */
+
+.schedule-node {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+}
+
+.schedule-cron {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.schedule-cron__raw {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--primary);
+}
+
+.schedule-cron__raw code {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+.schedule-cron__desc {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+.schedule-time {
+  color: var(--text);
+}
+
+.schedule-time-relative {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.schedule-lastrun-link {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.schedule-lastrun-link:disabled {
+  cursor: default;
+}
+
+.schedule-lastrun-link:not(:disabled):hover .schedule-time {
+  text-decoration: underline;
+}
+
+.schedule-actions {
+  display: flex;
+  gap: var(--space-1);
+  justify-content: flex-end;
+}
+
+.schedule-action {
+  display: flex;
+  align-items: center;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px var(--space-1);
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.schedule-action:hover:not(:disabled) { border-color: var(--border-hover); }
+
+.schedule-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.schedule-action:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.schedule-action--danger { color: var(--danger); }
+
+.schedule-action__spinner {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--primary);
+  animation: schedule-spin 0.6s linear infinite;
+}
+
+@keyframes schedule-spin {
+  to { transform: rotate(360deg); }
+}
+
+.schedules-filterbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  padding: var(--space-2) 0 var(--space-3);
+}
+
+.schedules-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 220px;
+  padding: 4px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-muted);
+}
+
+.schedules-search input {
+  border: none;
+  background: none;
+  outline: none;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  width: 100%;
+}
+
+.schedules-status-pills {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.schedules-status-pill {
+  font-size: 11px;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.schedules-status-pill[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--overlay-subtle);
+  color: var(--primary);
+}
+
+.schedule-form__readonly {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: 6px 0;
+}
+
+.schedule-form__advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-3);
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.schedule-form__advanced-toggle:hover { color: var(--text); }
+
+.schedule-form__textarea {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  resize: vertical;
+}
+
+.schedule-form__error {
+  color: var(--danger);
+}
+
+/* ── Calendar + clock schedule builder ──────────────────────────────────── */
+
+.schedule-picker__modes {
+  display: flex;
+  gap: var(--space-1);
+  margin-bottom: var(--space-2);
+}
+
+.schedule-mode-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 4px var(--space-2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.schedule-mode-tab[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--overlay-subtle);
+  color: var(--primary);
+}
+
+.schedule-freq-pills {
+  display: flex;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.schedule-freq-pill {
+  font-size: var(--text-sm);
+  padding: 5px var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.schedule-freq-pill[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--overlay-subtle);
+  color: var(--primary);
+  font-weight: var(--weight-semibold);
+}
+
+.schedule-weekday-picker {
+  display: flex;
+  gap: 4px;
+  margin-top: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.schedule-weekday-pill {
+  width: 40px;
+  font-size: 11px;
+  padding: 6px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.schedule-weekday-pill[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--surface);
+  font-weight: var(--weight-semibold);
+}
+
+/* A real 7-column calendar grid for day-of-month, not just a bare list of
+   numbers — it reads at a glance the way a calendar does. */
+.schedule-daygrid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-top: var(--space-2);
+  max-width: 320px;
+}
+
+.schedule-day-cell {
+  aspect-ratio: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.schedule-day-cell[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--surface);
+  font-weight: var(--weight-semibold);
+}
+
+.schedule-clock-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.schedule-clock-input {
+  max-width: 140px;
+  font-family: var(--font-mono);
+}

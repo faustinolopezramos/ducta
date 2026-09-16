@@ -4,14 +4,9 @@ import { NodeCard } from "./NodeCard";
 import type { DagCanvasItem } from "./types";
 
 /**
- * The card shows what a *function* knows. The datasets moved to the edges, so
- * what has to be readable here is the layer it writes into, how it is
- * addressed, whether a gate guards what comes after it, and how long it took.
- *
- * The previous card read its description and quality block out of a `_raw`
- * spec blob that the hydration never populated, so neither ever rendered in
- * the running app while these tests passed by injecting `_raw` by hand. The
- * node shape below is exactly what the canvas receives.
+ * The card is what you scan a graph for: the function's name and how its run
+ * went. How it is addressed, its checks and gate, and its datasets live in the
+ * focus panel (and the datasets on the edges), so the card must not repeat them.
  */
 const node: DagCanvasItem = {
   id: "clean_results",
@@ -34,81 +29,70 @@ describe("NodeCard", () => {
     expect(screen.getByText("clean_results")).toBeInTheDocument();
   });
 
-  it("uses the medallion layer of its output as the eyebrow", () => {
+  it("marks the medallion layer of its output with a swatch", () => {
     const { container } = render(<NodeCard node={node} {...base} />);
-    expect(container.querySelector(".node-card-eyebrow")!.textContent).toContain("SILVER");
+    expect(container.querySelector(".node-card-swatch")).not.toBeNull();
     expect(container.querySelector(".node-card")!.getAttribute("data-layer")).toBe("silver");
   });
 
-  it("falls back to the node type when no dataset declares a layer", () => {
-    const plain: DagCanvasItem = {
-      ...node,
-      outputs: [{ id: "o", name: "results" }],
-    };
-    const { container } = render(<NodeCard node={plain} {...base} />);
-    expect(container.querySelector(".node-card-eyebrow")!.textContent).toContain("transform");
-    expect(container.querySelector(".node-card")!.getAttribute("data-layer")).toBeNull();
+  it("drops the swatch when a band already names the layer", () => {
+    const { container } = render(<NodeCard node={node} {...base} showLayer={false} />);
+    expect(container.querySelector(".node-card-swatch")).toBeNull();
+    // Still on the element for styling.
+    expect(container.querySelector(".node-card")!.getAttribute("data-layer")).toBe("silver");
   });
 
-  it("shows how the node is addressed", () => {
-    render(<NodeCard node={node} {...base} />);
-    expect(screen.getByText("src.clean · run")).toBeInTheDocument();
-  });
-
-  it("reads the gate off the graph, with its behaviour spelled out", () => {
-    render(<NodeCard node={node} {...base} />);
-    expect(screen.getByText(/gate · skip downstream/)).toBeInTheDocument();
-  });
-
-  it("counts the enabled checks", () => {
-    render(<NodeCard node={node} {...base} />);
-    expect(screen.getByText("3 quality checks")).toBeInTheDocument();
-  });
-
-  it("says 'sanity' for pre-execution checks", () => {
-    const sanity: DagCanvasItem = {
-      ...node,
-      quality: { checkCount: 1, gateBehavior: null, isSanity: true },
-    };
-    render(<NodeCard node={sanity} {...base} />);
-    expect(screen.getByText("1 sanity check")).toBeInTheDocument();
-  });
-
-  it("omits the quality footer when nothing is configured", () => {
-    const { container } = render(<NodeCard node={{ ...node, quality: null }} {...base} />);
-    expect(container.querySelector(".node-card-foot")).toBeNull();
-  });
-
-  it("shows the last run's duration, sub-second in ms", () => {
+  it("leaves the entry point, gate and checks to the focus panel", () => {
     const { container } = render(<NodeCard node={node} {...base} />);
-    expect(container.querySelector(".node-card-duration")!.textContent).toBe("812 ms");
+    expect(container.textContent).not.toContain("src.clean:run");
+    expect(container.textContent).not.toMatch(/gate/i);
+    expect(container.textContent).not.toMatch(/check/i);
   });
 
-  it("omits the duration when the node has never run", () => {
-    const { container } = render(
-      <NodeCard node={{ ...node, lastDuration: null }} {...base} />
-    );
-    expect(container.querySelector(".node-card-duration")).toBeNull();
+  it("shows the last run's duration as its one fact", () => {
+    const { container } = render(<NodeCard node={node} {...base} />);
+    expect(container.querySelector(".node-card-fact")!.textContent).toBe("812 ms");
   });
 
-  it("does not draw the datasets — they belong to the edges now", () => {
+  it("says the run failed instead of how long it took", () => {
+    const { container } = render(<NodeCard node={node} {...base} execState="failed" />);
+    const fact = container.querySelector(".node-card-fact")!;
+    expect(fact.textContent).toBe("failed");
+    expect(fact.classList.contains("node-card-fact--failed")).toBe(true);
+  });
+
+  it("omits the fact when the node has never run", () => {
+    const { container } = render(<NodeCard node={{ ...node, lastDuration: null }} {...base} />);
+    expect(container.querySelector(".node-card-fact")).toBeNull();
+  });
+
+  it("does not draw the datasets — they belong to the edges", () => {
     const { container } = render(<NodeCard node={node} {...base} />);
     expect(container.textContent).not.toContain("bronze.raw_results");
     expect(container.querySelector(".ds-chip")).toBeNull();
   });
 
-  it("keeps a port anchor per dataset for the edges to land on", () => {
+  it("keeps a port anchor per dataset, along the top and bottom by default", () => {
     const { container } = render(<NodeCard node={node} {...base} />);
-    const ports = container.querySelectorAll(".node-port");
+    const ports = container.querySelectorAll<HTMLElement>(".node-port");
     expect(ports).toHaveLength(2);
+    expect(ports[0].style.left).toBe("50%");
+    expect(ports[0].style.top).toBe("");
+  });
+
+  it("moves the ports to the sides when the layers run left to right", () => {
+    const { container } = render(<NodeCard node={node} {...base} orientation="horizontal" />);
+    const card = container.querySelector(".node-card")!;
+    expect(card.getAttribute("data-orientation")).toBe("horizontal");
+    const port = container.querySelector<HTMLElement>(".node-port-in")!;
+    expect(port.style.top).toBe("50%");
+    expect(port.style.left).toBe("");
   });
 
   it("names its I/O counts and gate in the accessible label", () => {
     render(<NodeCard node={node} {...base} execState="success" />);
     expect(
-      screen.getByLabelText(
-        "Node clean_results, success, reads 1, writes 1, gate skip downstream"
-      )
+      screen.getByLabelText("Node clean_results, success, reads 1, writes 1, gate skip downstream")
     ).toBeInTheDocument();
   });
 
@@ -117,31 +101,29 @@ describe("NodeCard", () => {
     expect(screen.getByRole("button")).toHaveAttribute("aria-pressed", "true");
   });
 
+  it("stays clickable as upstream context, unlike a dimmed card", () => {
+    const onClick = vi.fn();
+    const { container } = render(<NodeCard node={node} {...base} context onClick={onClick} />);
+    expect(container.querySelector(".node-card")!.classList.contains("node-card--context")).toBe(true);
+    screen.getByRole("button").click();
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
   describe("semantic zoom", () => {
-    it("at `shape` drops everything but the name and status", () => {
-      const { container } = render(<NodeCard node={node} {...base} tier="shape" execState="success" />);
+    it("at `shape` keeps only the name and status", () => {
+      const { container } = render(
+        <NodeCard node={node} {...base} tier="shape" execState="success" />
+      );
       expect(screen.getByText("clean_results")).toBeInTheDocument();
-      expect(container.querySelector(".node-card-eyebrow")).toBeNull();
-      expect(container.querySelector(".node-card-fn")).toBeNull();
-      expect(container.querySelector(".node-card-foot")).toBeNull();
-      // The layer is still encoded, as the rule across the top.
-      expect(container.querySelector(".node-card")!.getAttribute("data-layer")).toBe("silver");
+      expect(container.querySelector(".node-card-swatch")).toBeNull();
+      expect(container.querySelector(".node-card-fact")).toBeNull();
       expect(container.querySelector(".node-card-status")).not.toBeNull();
     });
 
-    it("at `flow` keeps the layer and a short gate marker but no module path", () => {
+    it("at `flow` keeps the swatch but not the fact", () => {
       const { container } = render(<NodeCard node={node} {...base} tier="flow" />);
-      expect(container.querySelector(".node-card-eyebrow")!.textContent).toContain("SILVER");
-      expect(container.querySelector(".node-card-fn")).toBeNull();
-      expect(container.querySelector(".node-card-gate")!.textContent).toBe("gate");
-      expect(container.querySelector(".node-card-checks")).toBeNull();
-    });
-
-    it("at `detail` shows all of it", () => {
-      const { container } = render(<NodeCard node={node} {...base} tier="detail" />);
-      expect(container.querySelector(".node-card-fn")).not.toBeNull();
-      expect(container.querySelector(".node-card-gate")!.textContent).toContain("skip downstream");
-      expect(container.querySelector(".node-card-checks")).not.toBeNull();
+      expect(container.querySelector(".node-card-swatch")).not.toBeNull();
+      expect(container.querySelector(".node-card-fact")).toBeNull();
     });
   });
 
@@ -149,7 +131,9 @@ describe("NodeCard", () => {
     const onClick = vi.fn();
     render(<NodeCard node={node} {...base} onClick={onClick} />);
     const card = screen.getByRole("button");
+    card.focus();
+    card.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     card.click();
-    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onClick).toHaveBeenCalledTimes(2);
   });
 });

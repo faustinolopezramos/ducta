@@ -28,6 +28,11 @@ function renderAt(path: string) {
             handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline" },
             element: <Breadcrumbs />,
           },
+          {
+            path: "canvas/:pipelineId",
+            handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Canvas", hideTrail: true },
+            element: <Breadcrumbs />,
+          },
           { path: "workspace/quality", handle: { breadcrumb: () => "Quality" }, element: <Breadcrumbs /> },
         ],
       },
@@ -62,6 +67,11 @@ describe("Breadcrumbs", () => {
     const projectLink = screen.getByRole("link", { name: "Analytics" });
     expect(projectLink).toHaveAttribute("href", "/project/proj-1");
     expect(screen.getByText("sales_etl")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("renders nothing on a page that draws its own trail", () => {
+    const { container } = renderAt("/canvas/sales_etl");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("shows Projects > page name on a workspace-scoped page", () => {

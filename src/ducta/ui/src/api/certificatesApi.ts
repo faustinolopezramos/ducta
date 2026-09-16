@@ -11,11 +11,20 @@ import { sourceKey } from "./utils";
 
 // ── Types (mirror ducta.api.routes.certificates / projects.PreflightResponse) ──
 
+/** The six outcomes `verify_certificate`/`verify_certificate_data` can report. */
+export type CertificateSignatureState =
+  | "unsigned"
+  | "valid"
+  | "invalid"
+  | "present (no key)"
+  | "stripped"
+  | "unverifiable";
+
 export interface CertificateVerifyResult {
   ok: boolean;
   run_id?: string | null;
   reason: string;
-  signature: string; // unsigned | valid | invalid | present (no key)
+  signature: CertificateSignatureState;
 }
 
 export interface PreflightResult {
@@ -29,7 +38,11 @@ export interface CertificateDiffOutputRow {
   key: string;
   in_a: boolean;
   in_b: boolean;
-  match: boolean;
+  /** true = same, false = differs, null = measured with different fingerprint
+   *  algorithms (e.g. across a Ducta upgrade) — "not comparable", not a claim
+   *  either way. Never render this as "unknown"/a warning. */
+  match: boolean | null;
+  not_comparable_reason?: string | null;
 }
 
 export interface CertificateDiffQualityRow {
@@ -56,6 +69,9 @@ export interface CertificateDiffResult {
   config_fingerprint_match: boolean;
   outputs: CertificateDiffOutputRow[];
   outputs_match: boolean;
+  /** false if any output's `match` is null — outputs_match/identical then only
+   *  cover the subset that could actually be measured. */
+  outputs_comparable: boolean;
   quality: CertificateDiffQualityRow[];
   identical: boolean;
 }
@@ -66,8 +82,12 @@ export interface CertificateNode {
   status: string;
   duration_seconds: number;
   outputs: string[];
-  error: string | null;
+  error?: string | null;
 }
+
+/** How strongly a dataset's fingerprint actually proves its content — the
+ *  field that must never be buried in a UI. */
+export type FingerprintMode = "exact" | "exact_crypto" | "sample" | "schema";
 
 export interface CertificateDatasetFingerprint {
   input_key?: string;
@@ -75,14 +95,22 @@ export interface CertificateDatasetFingerprint {
   file_size_bytes?: number | null;
   file_mtime?: string | null;
   schema_hash?: string | null;
+  columns?: Record<string, string> | null;
   row_count?: number | null;
   sample_hash?: string | null;
+  raw_file_hash?: string | null;
+  content_hash?: string | null;
   fingerprint?: string;
+  engine?: "spark" | "pandas" | "unknown";
+  algorithm?: string;
+  mode?: FingerprintMode;
+  degraded_reason?: string | null;
+  details?: Record<string, unknown> | null;
 }
 
 export interface CertificateQualityEntry {
   node: string;
-  phase: string;
+  phase: "sanity" | "data_quality" | string;
   passed: boolean;
   score: number;
   errors: number;
@@ -90,6 +118,34 @@ export interface CertificateQualityEntry {
   checks?: number;
   aborted?: boolean;
   reason?: string;
+  gate?: string;
+  triggered_rules?: string[];
+}
+
+export interface CertificateCodeNodeHash {
+  source_hash?: string | null;
+  module_hash?: string | null;
+  module_file?: string | null;
+  scope: "function" | "module" | "none";
+  algorithm?: string;
+  degraded_reason?: string | null;
+}
+
+export interface CertificateCodeBlock {
+  nodes: Record<string, CertificateCodeNodeHash>;
+  quality_extensions?: Record<string, string>;
+}
+
+export interface CertificateEnvironment {
+  python_version?: string;
+  os_info?: string;
+  hostname?: string;
+  ducta_version?: string;
+  git_commit?: string | null;
+  git_branch?: string | null;
+  git_dirty?: boolean | null;
+  pip_packages?: Record<string, string>;
+  env_hash?: string;
 }
 
 /** Mirrors ducta.core.certificate.RunCertificate. */
@@ -104,11 +160,16 @@ export interface RunCertificate {
   duration_seconds: number | null;
   ducta_version: string;
   config_fingerprint: string;
+  environment?: CertificateEnvironment;
   nodes: CertificateNode[];
   inputs: Record<string, CertificateDatasetFingerprint>;
   outputs: Record<string, CertificateDatasetFingerprint>;
   quality: CertificateQualityEntry[];
+  code?: CertificateCodeBlock;
   error: string | null;
+  evidence_complete?: boolean;
+  evidence_gaps?: string[];
+  signed?: boolean;
   certificate_hash: string;
   signature?: string | null;
   key_id?: string | null;
@@ -187,6 +248,31 @@ export const useReproduceCertificate = () =>
         { start_date: startDate || null, end_date: endDate || null }
       );
       return data as { id: string; status: string };
+    },
+  });
+
+/**
+ * POST /certificates/verify — standalone verification, no project/execution
+ * context required. Takes the certificate's raw JSON text directly (a paste
+ * or a file's contents) plus an optional shared signing key, so a certificate
+ * handed to you by someone else's Ducta instance can be checked on its own
+ * terms. Deliberately unauthenticated on the server; nothing here assumes a
+ * logged-in session.
+ */
+export const useVerifyCertificateStandalone = () =>
+  useMutation({
+    mutationFn: async ({
+      certificateJson,
+      signingKey,
+    }: {
+      certificateJson: string;
+      signingKey?: string;
+    }) => {
+      const { data } = await executionClient.post<CertificateVerifyResult>(
+        `/certificates/verify`,
+        { certificate_json: certificateJson, signing_key: signingKey || null }
+      );
+      return data;
     },
   });
 

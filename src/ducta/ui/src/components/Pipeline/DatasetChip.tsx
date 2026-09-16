@@ -19,8 +19,8 @@ interface DatasetChipProps {
  * A dataset, as it appears on the edge that carries it.
  *
  * Shape distinguishes it from a node without relying on colour: a node is an
- * outlined rectangle with a layer bar across the top, a dataset is a tinted
- * pill with a format glyph and a layer rule down its left edge.
+ * outlined box, a dataset is a tag written on the pipe — layer swatch, format
+ * glyph, name — on the canvas' own ground.
  */
 export function DatasetChip({
   dataset,
@@ -81,6 +81,7 @@ export function DatasetChip({
         onSelect?.(name);
       }}
     >
+      <span className="ds-chip-swatch" aria-hidden="true" />
       <span className="ds-chip-glyph" aria-hidden="true">
         {formatGlyph(declared ? format : null)}
       </span>
@@ -88,7 +89,7 @@ export function DatasetChip({
         <span className="ds-chip-name">{name}</span>
         {tier === "detail" &&
           (meta.length > 0 ? (
-            <span className="ds-chip-meta">{meta.join(" · ")}</span>
+            <span className="ds-chip-meta">{meta.join(", ")}</span>
           ) : (
             /* Saying so sends the user to fix input_config; a fake "parquet"
                leaves them unaware anything is missing. */

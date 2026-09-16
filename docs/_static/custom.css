@@ -1,29 +1,23 @@
 /* ============================================================================
    Ducta — capa de marca sobre Furo
 
-   Furo aporta el layout; la paleta vive en conf.py y aplica el tema "Lima"
-   (verde lima + pizarra, extraído del logotipo). Modo claro forzado.
+   Furo aporta el layout; la paleta vive en conf.py y aplica el tema
+   "Blueprint / Deep Petrol" (idéntico al Design System de Ducta Web UI).
+   Soporte completo para modo claro y modo oscuro.
 
    Tokens propios:
-     --ducta-accent  lima de marca exacta (#84CC16), solo decorativo.
+     --ducta-accent  acento de marca dinámico (#0B5F73 en claro / #38BDF8 en oscuro).
    ========================================================================== */
 
 /* Inter (texto) + JetBrains Mono (código): las mismas familias que la UI.
    Degrada con elegancia si el build no tiene red. */
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
 
-/* ---------------------------------------------------------------------------
-   Modo claro forzado
-   ------------------------------------------------------------------------- */
-.theme-toggle-container {
-  display: none;
-}
-
 :root {
-  color-scheme: light;
+  --ducta-accent: var(--color-brand-primary, #0B5F73);
 }
 
-/* Ocultar título del header */
+/* Ocultar título redundante del header */
 header .header-center .brand,
 .mobile-header .header-center .brand {
   display: none !important;
@@ -54,7 +48,7 @@ article[role="main"] { line-height: 1.66; }
    ------------------------------------------------------------------------- */
 .highlight {
   border: 1px solid var(--color-background-border);
-  border-radius: 10px;
+  border-radius: 8px;
   overflow: hidden;
 }
 div.highlight pre { padding: 14px 16px; }
@@ -72,7 +66,7 @@ button.copybtn:hover {
 }
 
 /* ---------------------------------------------------------------------------
-   Admoniciones — acento lima para note / tip / hint / seealso
+   Admoniciones — acento armónico para note / tip / hint / seealso
    ------------------------------------------------------------------------- */
 .admonition.note,
 .admonition.tip,
@@ -92,13 +86,17 @@ button.copybtn:hover {
    ------------------------------------------------------------------------- */
 .sd-card {
   border: 1px solid var(--color-background-border) !important;
-  border-radius: 14px !important;
+  border-radius: 12px !important;
+  background-color: var(--color-background-primary) !important;
   transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
 }
 .sd-card:hover {
   transform: translateY(-3px);
   border-color: var(--ducta-accent) !important;
-  box-shadow: 0 12px 28px rgba(30, 40, 50, 0.12);
+  box-shadow: 0 8px 24px rgba(15, 40, 50, 0.1);
+}
+body[data-theme="dark"] .sd-card:hover {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 .sd-card .sd-card-title { font-weight: 600; }
 .sd-btn, .btn { border-radius: 8px; }
@@ -108,7 +106,7 @@ button.copybtn:hover {
    ------------------------------------------------------------------------- */
 article[role="main"] table.docutils {
   border: 1px solid var(--color-background-border);
-  border-radius: 10px;
+  border-radius: 8px;
   overflow: hidden;
   border-collapse: separate;
   border-spacing: 0;

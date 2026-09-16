@@ -21,11 +21,14 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
 from ducta.core.context_utils import get_context_value as _get
+from ducta.setting.environments import sanitize_env_for_path
+from ducta.setting.interpolator import VariableInterpolator
 
 # Accepted spellings for boolean-ish configuration values.
 _TRUE_VALUES = frozenset({"true", "yes", "on", "1"})
@@ -36,7 +39,17 @@ DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3_600
 DEFAULT_NODE_TIMEOUT_SECONDS = 1_800
 DEFAULT_MAX_PARALLEL_NODES = 4
 DEFAULT_MAX_STREAMING_PIPELINES = 5
-DEFAULT_CERTIFICATE_DIR = ".ducta/runs"
+
+# Ducta storage convention: every state directory the framework itself writes
+# (as opposed to a node's own data output) lives under the environment's data
+# tree, scoped by ${output_path}/${environment} exactly like
+# global_config.quality.output.base_path already does — see docs/README for
+# "Ducta storage convention". Run certificates and chain state hide under a
+# `.ducta/` namespace there so they read as framework bookkeeping, not data;
+# quality reports stay visible at `${output_path}/${environment}/quality`
+# (unchanged) because a project may want to browse/ship those.
+DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
+DEFAULT_CHAIN_STATE_DIR = "${output_path}/${environment}/.ducta/chain_state"
 
 CHAIN_ON_GATE_BLOCKED_STOP = "stop"
 CHAIN_ON_GATE_BLOCKED_CONTINUE = "continue"
@@ -190,6 +203,7 @@ class CoreSettings:
     chain_reuse_materialized: bool = False
     chain_staleness_check: bool = True
     chain_on_gate_blocked: str = CHAIN_ON_GATE_BLOCKED_STOP
+    chain_state_dir: str = DEFAULT_CHAIN_STATE_DIR
 
     quality: Dict[str, Any] = field(default_factory=dict)
     ingestion: Dict[str, Any] = field(default_factory=dict)
@@ -220,6 +234,7 @@ class CoreSettings:
         mlops_section = _as_mapping(gs.get("mlops"))
         mlflow_section = _as_mapping(gs.get("mlflow"))
         chain_section = _as_mapping(gs.get("chain"))
+        resolved_env = cls._resolve_env(context, gs)
 
         return cls(
             max_parallel_nodes=coerce_int(
@@ -236,7 +251,7 @@ class CoreSettings:
             ),
             start_date=_optional_str(gs.get("start_date")),
             end_date=_optional_str(gs.get("end_date")),
-            env=cls._resolve_env(context, gs),
+            env=resolved_env,
             project_id=_optional_str(gs.get("project_id")),
             random_seed=_optional_int("random_seed", gs.get("random_seed")),
             preflight_enabled=coerce_bool(
@@ -260,10 +275,15 @@ class CoreSettings:
             require_run_certificate=coerce_bool(
                 "require_run_certificate", gs.get("require_run_certificate"), default=False
             ),
-            run_certificate_dir=str(gs.get("run_certificate_dir") or DEFAULT_CERTIFICATE_DIR),
+            run_certificate_dir=cls._resolve_scoped_dir(
+                str(gs.get("run_certificate_dir") or DEFAULT_CERTIFICATE_DIR), gs, resolved_env
+            ),
             certificate_signing_key=_optional_str(gs.get("certificate_signing_key")),
             chain_reuse_materialized=coerce_bool(
                 "chain.reuse_materialized", chain_section.get("reuse_materialized"), default=False
+            ),
+            chain_state_dir=cls._resolve_scoped_dir(
+                str(chain_section.get("state_dir") or DEFAULT_CHAIN_STATE_DIR), gs, resolved_env
             ),
             chain_staleness_check=coerce_bool(
                 "chain.staleness_check", chain_section.get("staleness_check"), default=True
@@ -277,6 +297,34 @@ class CoreSettings:
             quality=_as_mapping(gs.get("quality")),
             ingestion=_as_mapping(gs.get("ingestion")),
         )
+
+    @staticmethod
+    def _resolve_scoped_dir(template: str, gs: Mapping[str, Any], env: Optional[str]) -> str:
+        """Resolve a Ducta-managed state-directory template (run certificates,
+        chain state) to a concrete, environment-scoped path.
+
+        Interpolates ``${output_path}``/``${environment}`` (and any other
+        global_config key) the same way ``quality.output.base_path`` already
+        does, so a project that leaves the setting at its default gets
+        ``${output_path}/${environment}/.ducta/<kind>`` — next to the
+        environment's own data, not the project root (see
+        ``DEFAULT_CERTIFICATE_DIR``/``DEFAULT_CHAIN_STATE_DIR``).
+
+        A template that does not itself reference ``${environment}`` (a
+        project pointing this at a fixed custom/legacy path) is still
+        env-scoped, by appending the sanitized environment as a path segment
+        — otherwise two environments would collide in the same directory,
+        which is the exact bug this convention exists to avoid.
+        """
+        safe_env = sanitize_env_for_path(env)
+        has_env_placeholder = "${environment}" in template
+        resolved = template
+        if "${" in template:
+            variables = {**gs, "output_path": gs.get("output_path", "."), "environment": safe_env}
+            resolved = VariableInterpolator.interpolate(template, variables)
+        if not has_env_placeholder:
+            resolved = str(Path(resolved) / safe_env)
+        return resolved
 
     @staticmethod
     def _resolve_env(context: Any, gs: Mapping[str, Any]) -> Optional[str]:

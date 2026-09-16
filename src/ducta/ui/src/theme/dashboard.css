@@ -1,0 +1,462 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   DASHBOARD — the workspace at a glance.
+
+   Minimal in the sense a modern product dashboard is minimal: no shadowed
+   cards, no coloured tiles, no chrome that doesn't carry information — but
+   still a designed page, with real typographic hierarchy (a stat row, a
+   labelled section, aligned columns) rather than a wall of plain text. Colour
+   is spent only where it is worth interrupting someone over: something
+   running, something that failed today.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.dash-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+}
+
+/* ── Stat row ───────────────────────────────────────────────────────────── */
+.dash-stats {
+  display: flex;
+  gap: var(--space-10);
+  margin: 0 0 var(--space-8);
+  padding-bottom: var(--space-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.dash-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dash-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.dash-stat-pulse {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-stat-pulse {
+    animation: none;
+  }
+}
+
+.dash-stat-value {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  line-height: 1.1;
+  letter-spacing: var(--tracking-tight);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.dash-stat-value[data-tone="active"] {
+  color: var(--primary);
+}
+
+.dash-stat-value[data-tone="danger"] {
+  color: var(--danger);
+}
+
+.dash-stat-value--time {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: var(--text-xl);
+}
+
+.dash-stat-sub {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-regular);
+  font-variant-numeric: normal;
+  letter-spacing: 0;
+  color: var(--text-muted);
+}
+
+.dash-stat-empty {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text-dim);
+}
+
+/* ── Section label, shared by "Needs attention" and "Projects" ───────────── */
+.dash-section-title {
+  margin: 0 0 var(--space-3);
+  font-size: 11px;
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ── Needs attention ────────────────────────────────────────────────────── */
+.dash-all-clear {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.dash-all-clear svg {
+  flex: none;
+  color: var(--success);
+}
+
+.dash-attention {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+.dash-attention-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0 calc(-1 * var(--space-3));
+  padding: 10px var(--space-3);
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: inherit;
+}
+
+.dash-attention-row:hover {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.dash-attention-row:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.dash-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--text-dim);
+}
+
+.dash-attention-row[data-status="failed"] .dash-dot,
+.dash-attention-row[data-status="error"] .dash-dot,
+.dash-attention-row[data-status="gate_blocked"] .dash-dot {
+  background: var(--danger);
+}
+
+.dash-attention-row[data-status="running"] .dash-dot,
+.dash-attention-row[data-status="pending"] .dash-dot {
+  background: var(--primary);
+}
+
+.dash-attention-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dash-attention-project {
+  font-weight: var(--weight-regular);
+  color: var(--text-dim);
+}
+
+.dash-attention-meta {
+  flex: none;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.dash-attention-more {
+  padding: 8px var(--space-3) 0;
+  font-size: var(--text-xs);
+}
+
+/* ── Projects ───────────────────────────────────────────────────────────── */
+.dash-project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dash-project-card {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.dash-project-card:hover {
+  border-color: var(--border-hover);
+  box-shadow: var(--shadow-sm);
+}
+
+/* A quiet accent on the card a viewer should check first, scanning a whole
+   grid of them — the same colour a failed status already carries, spent once
+   more instead of tinting the card's fill. */
+.dash-project-card[data-health="failing"] {
+  box-shadow: inset 0 2px 0 var(--danger);
+}
+
+.dash-project-card[data-health="failing"]:hover {
+  box-shadow: inset 0 2px 0 var(--danger), var(--shadow-sm);
+}
+
+.dash-project-card-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  color: inherit;
+}
+
+.dash-project-card-link:focus-visible {
+  outline: none;
+}
+
+.dash-project-card:has(.dash-project-card-link:focus-visible) {
+  box-shadow: var(--focus-ring);
+}
+
+.dash-project-card-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dash-project-card-name {
+  overflow: hidden;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dash-project-card-count {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.dash-project-card-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* Quiet until the card is hovered, focused or the button itself has focus —
+   it does not need to compete with the card's own information at rest. */
+.dash-project-card-delete {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-3);
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: var(--surface);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.dash-project-card:hover .dash-project-card-delete,
+.dash-project-card:focus-within .dash-project-card-delete {
+  opacity: 1;
+}
+
+.dash-project-card-delete:hover {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+  color: var(--danger);
+}
+
+.dash-project-card-delete:focus-visible {
+  opacity: 1;
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+
+/* ── Cells shared with the project's own pipeline list (ProjectPage.tsx) ─── */
+.dash-table-project {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dash-table-last {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.dash-muted {
+  color: var(--text-dim);
+}
+
+.tui-table__row.dash-row--failing > td:first-child {
+  box-shadow: inset 2px 0 0 var(--danger);
+}
+
+/* ── The project's own pipeline list (ProjectPage.tsx), same language ────── */
+.project-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.project-list-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-list-title {
+  margin: 0;
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--text);
+}
+
+.project-list-meta {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.project-list-id {
+  font-family: var(--font-mono);
+}
+
+.project-list-name {
+  font-family: var(--font-mono);
+  font-weight: var(--weight-medium);
+  color: var(--text);
+}
+
+.project-list-desc {
+  overflow: hidden;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.project-list-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+/* A small icon-only button — the run/delete actions at the end of a pipeline row. */
+.dash-menu-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.dash-menu-trigger:hover {
+  background: var(--overlay-subtle);
+  color: var(--text);
+}
+
+.dash-menu-trigger:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.project-list-delete:hover {
+  color: var(--danger);
+}
+
+/* ── New project / pipeline forms ──────────────────────────────────────── */
+.dash-source {
+  display: flex;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  border: 0;
+}
+
+.dash-source legend {
+  width: 100%;
+  margin-bottom: 6px;
+}
+
+.dash-source-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.dash-hint-error {
+  color: var(--danger);
+}
+
+.dash-form-error {
+  margin: 0;
+  padding: 8px 10px;
+  background: var(--status-failed-bg);
+  border-left: 2px solid var(--danger);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .dash-stats {
+    flex-wrap: wrap;
+    row-gap: var(--space-5);
+  }
+
+  .dash-project-grid {
+    grid-template-columns: 1fr;
+  }
+}

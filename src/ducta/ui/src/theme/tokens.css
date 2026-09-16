@@ -171,9 +171,16 @@
   --layer-silver: #6B7B85;
   --layer-gold:   #A8801F;
 
-  --edge:          var(--border-hover);
+  /* Pipes are graphite so that only state and selection carry colour on the
+     canvas; #7D8E95 clears 3:1 on --bg, the floor for a meaningful graphic
+     (WCAG 1.4.11). */
+  --edge:          #7D8E95;
+  --edge-strong:   #4E626A;
   --edge-hot:      var(--primary);
   --edge-dim-op:   0.15;
+
+  --node-radius: 6px;
+  --tag-radius:  3px;
 
   /* ── Aliases for names the app already used ──────────────────────────────
    *  `--bg-surface` and `--bg-subtle` were referenced by SchedulesPage but
@@ -185,7 +192,7 @@
   --bg-subtle: var(--overlay-subtle);
 
   /* ── Canvas dot grid ─────────────────────────────────────────────────────── */
-  --canvas-dot: color-mix(in srgb, var(--text) 10%, transparent);
+  --canvas-dot: color-mix(in srgb, var(--text) 7%, transparent);
 
   /* ── Glows / focus emphasis ──────────────────────────────────────────────── */
   --glow-xs: 0 0 0 3px color-mix(in oklab, var(--primary) 12%, transparent);
@@ -261,7 +268,9 @@
 /* ── Dark-mode parity: only neutrals/overlays/contrast change; the vivid
  *    palette + status hues read well on dark as-is. ──────────────────────────── */
 [data-theme="dark"] {
-  --canvas-dot: color-mix(in srgb, var(--text) 10%, transparent);
+  --canvas-dot: color-mix(in srgb, var(--text) 8%, transparent);
+  --edge: #587079;
+  --edge-strong: #95A9B1;
   --shadow-xs: 0 1px 1px rgba(0, 0, 0, 0.4);
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.5);

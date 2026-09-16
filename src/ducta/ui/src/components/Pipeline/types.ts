@@ -50,6 +50,8 @@ export interface DagCanvasItem {
   quality?: CanvasQuality | null;
   /** Duration of the last run, in seconds. */
   lastDuration?: number | null;
+  /** Pipeline that declares the node — set when a chain of pipelines is drawn together. */
+  pipeline?: string;
   [key: string]: any;
 }
 

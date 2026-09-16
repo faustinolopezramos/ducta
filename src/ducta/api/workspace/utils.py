@@ -95,21 +95,57 @@ def find_config_files(workspace_root: Path, env: str) -> Dict[str, Path]:
         # "Missing config paths: ['global_config_path']", taking every
         # API-driven execution, MLOps and quality route down with it.
         name = _CONFIG_KEY_TO_NAME.get(key, key.removesuffix("_path"))
-        resolved = safe_path(base_path, rel_path)
-
-        # If the specified path doesn't exist, probe alternative extensions so
-        # projects using .toml / .json configs work without an explicit environment
-        # file that spells out the exact extension.
-        if not resolved.exists():
-            for ext in CONFIG_EXTENSIONS:
-                alt = resolved.with_suffix(ext)
-                if alt.exists():
-                    resolved = alt
-                    break
-
-        result[name] = resolved
+        result[name] = _resolve_declared_path(base_path, rel_path)
 
     return result
+
+
+def _resolve_declared_path(base_path: Path, rel_path: str) -> Path:
+    """Confine *rel_path* to *base_path* and resolve it to an existing config file."""
+    from ducta.api.utils.git_utils import safe_path  # avoid circular
+
+    resolved = safe_path(base_path, rel_path)
+
+    # If the specified path doesn't exist, probe alternative extensions so
+    # projects using .toml / .json configs work without an explicit environment
+    # file that spells out the exact extension.
+    if not resolved.exists():
+        for ext in CONFIG_EXTENSIONS:
+            alt = resolved.with_suffix(ext)
+            if alt.exists():
+                return alt
+    return resolved
+
+
+def find_base_global_config(workspace_root: Path, env: str) -> Path | None:
+    """Return the base global config that *env*'s own must be deep-merged over, or None.
+
+    ``find_config_files`` lets an environment's ``global_config_path`` *replace*
+    the base one, but the CLI never did that: ``AppConfigManager._merge_base_and_env``
+    also hands ``ContextLoader.load_from_paths`` a ``base_global_config_path``,
+    which deep-merges the environment's file over the base. Without it, every
+    base-only setting — ``spark_config`` above all — silently vanished from
+    API-driven runs, so a pipeline that ran under ``ducta start -e dev`` failed
+    from the UI. Returns None for ``base`` itself and whenever the environment
+    ends up on the same global config as base (nothing to merge).
+    """
+    from ducta.api.utils.git_utils import safe_path  # avoid circular
+    from ducta.api.workspace.loaders import load_environment_yaml  # avoid circular
+
+    if env == "base":
+        return None
+
+    env_settings = load_environment_yaml(workspace_root)
+    base_gs = env_settings.get("env_config", {}).get("base", {}).get("global_config_path")
+    if not base_gs:
+        return None
+
+    base_path = safe_path(workspace_root, str(env_settings.get("base_path", ".")))
+    base_global = _resolve_declared_path(base_path, base_gs)
+    selected = find_config_files(workspace_root, env).get("global_config")
+    if selected is None or selected == base_global:
+        return None
+    return base_global
 
 
 def find_ducta_config(project_dir: Path) -> Path | None:
