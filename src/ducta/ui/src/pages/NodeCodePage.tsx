@@ -14,7 +14,7 @@ import { InlineLogs } from "../components/Execution/InlineLogs";
 import { useBuilderStore } from "../store/builderStore";
 import { useQueries } from "@tanstack/react-query";
 import client from "../api/client";
-import { sourceKey } from "../api/utils";
+import { qk } from "../api/queryKeys";
 
 // ── ExecutionBar ─────────────────────────────────────────────────────────────
 
@@ -39,7 +39,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
   const projectsList = projectsData?.projects ?? [];
   const pipelinesQueries = useQueries({
     queries: projectsList.map((p: any) => ({
-      queryKey: ["server-projects", sourceKey(), p.id, "pipelines"],
+      queryKey: qk.projects.pipelines(p.id),
       queryFn: () =>
         client.get(`/projects/${p.id}/pipelines`).then((r) => r.data),
       staleTime: 30 * 1000,

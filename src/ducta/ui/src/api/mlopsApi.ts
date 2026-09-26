@@ -1,8 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
-import { sourceKey } from "./utils";
 import { toastStore } from "../hooks/useModalStack";
 import { defaultOnError } from "./mutations/errors";
+import { qk } from "./queryKeys";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ const scopeParams = ({ env, pipelineName, project }: MlopsScope) => ({
 
 export const useMlopsExperiments = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<ExperimentSummary[]>({
-    queryKey: ["mlops", sourceKey(), "experiments", env ?? null, pipelineName ?? null, project ?? null],
+    queryKey: qk.mlops.experiments({ env, pipelineName, project }),
     queryFn: () =>
       client
         .get("/mlops/experiments", { params: scopeParams({ env, pipelineName, project }) })
@@ -125,15 +125,7 @@ export const useMlopsExperiment = (
   project?: string
 ) =>
   useQuery<ExperimentDetail>({
-    queryKey: [
-      "mlops",
-      sourceKey(),
-      "experiments",
-      experimentId,
-      env ?? null,
-      pipelineName ?? null,
-      project ?? null,
-    ],
+    queryKey: qk.mlops.experiment(experimentId, { env, pipelineName, project }),
     queryFn: () =>
       client
         .get(`/mlops/experiments/${experimentId}`, {
@@ -146,7 +138,7 @@ export const useMlopsExperiment = (
 
 export const useMlopsModels = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<ModelInfo[]>({
-    queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+    queryKey: qk.mlops.models({ env, pipelineName, project }),
     queryFn: () =>
       client
         .get("/mlops/models", { params: scopeParams({ env, pipelineName, project }) })
@@ -162,15 +154,7 @@ export const useMlopsModelVersions = (
   project?: string
 ) =>
   useQuery<ModelVersion[]>({
-    queryKey: [
-      "mlops",
-      sourceKey(),
-      "models",
-      name,
-      env ?? null,
-      pipelineName ?? null,
-      project ?? null,
-    ],
+    queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
     queryFn: () =>
       client
         .get(`/mlops/models/${name}`, { params: scopeParams({ env, pipelineName, project }) })
@@ -194,18 +178,10 @@ export const usePromoteModel = () => {
         .then((r) => r.data),
     onSuccess: (_data, { name, env, pipelineName, project }) => {
       queryClient.invalidateQueries({
-        queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+        queryKey: qk.mlops.models({ env, pipelineName, project }),
       });
       queryClient.invalidateQueries({
-        queryKey: [
-          "mlops",
-          sourceKey(),
-          "models",
-          name,
-          env ?? null,
-          pipelineName ?? null,
-          project ?? null,
-        ],
+        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
       });
       toastStore.getState().show(`Model '${name}' promoted successfully`, "success");
     },
@@ -230,15 +206,7 @@ export const useCloseMlopsRun = () => {
         .then((r) => r.data),
     onSuccess: (_data, { experimentId, env, pipelineName, project }) => {
       queryClient.invalidateQueries({
-        queryKey: [
-          "mlops",
-          sourceKey(),
-          "experiments",
-          experimentId,
-          env ?? null,
-          pipelineName ?? null,
-          project ?? null,
-        ],
+        queryKey: qk.mlops.experiment(experimentId, { env, pipelineName, project }),
       });
     },
     onError: defaultOnError,
@@ -256,15 +224,7 @@ export const useDeleteMlopsRun = () => {
         .then(() => undefined),
     onSuccess: (_data, { experimentId, env, pipelineName, project }) => {
       queryClient.invalidateQueries({
-        queryKey: [
-          "mlops",
-          sourceKey(),
-          "experiments",
-          experimentId,
-          env ?? null,
-          pipelineName ?? null,
-          project ?? null,
-        ],
+        queryKey: qk.mlops.experiment(experimentId, { env, pipelineName, project }),
       });
     },
     onError: defaultOnError,
@@ -282,18 +242,10 @@ export const useDeleteModelVersion = () => {
         .then(() => undefined),
     onSuccess: (_data, { name, env, pipelineName, project }) => {
       queryClient.invalidateQueries({
-        queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+        queryKey: qk.mlops.models({ env, pipelineName, project }),
       });
       queryClient.invalidateQueries({
-        queryKey: [
-          "mlops",
-          sourceKey(),
-          "models",
-          name,
-          env ?? null,
-          pipelineName ?? null,
-          project ?? null,
-        ],
+        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
       });
     },
     onError: defaultOnError,
@@ -310,7 +262,7 @@ export const useRunMlopsGc = () => {
     onSuccess: (data, { dry_run, env, pipelineName, project }) => {
       if (!dry_run) {
         queryClient.invalidateQueries({
-          queryKey: ["mlops", sourceKey(), "models", env ?? null, pipelineName ?? null, project ?? null],
+          queryKey: qk.mlops.models({ env, pipelineName, project }),
         });
       }
       const removed = data.versions_removed ?? 0;

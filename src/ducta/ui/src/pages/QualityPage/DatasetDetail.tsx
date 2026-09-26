@@ -18,6 +18,7 @@ import { IconDatabase, IconRefresh, IconTrash, IconX } from "@tabler/icons-react
 import { label } from "./shared";
 import { Panel } from "../../components/ui/Panel";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { qk } from "../../api/queryKeys";
 
 // ─────────────────────────────────────────────
 // DATASET DETAIL (run history + report)
@@ -65,7 +66,7 @@ function RunHistoryRow({
     if (source.checks) vars.checks = source.checks;
     else if (source.config_path) vars.config_path = source.config_path;
     await client.post("/quality/run", vars);
-    queryClient.invalidateQueries({ queryKey: ["quality"] });
+    queryClient.invalidateQueries({ queryKey: qk.quality.all() });
   };
 
   return (

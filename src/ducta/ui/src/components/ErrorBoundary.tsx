@@ -286,16 +286,3 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return this.props.children;
   }
 }
-
-/**
- * HOC to wrap components with error boundary
- */
-export function withErrorBoundary<P extends object>(Component: React.ComponentType<P>) {
-  return function ErrorBoundaryWrapper(props: P) {
-    return (
-      <ErrorBoundary>
-        <Component {...props} />
-      </ErrorBoundary>
-    );
-  };
-}

@@ -21,36 +21,34 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
-import subprocess
 from pathlib import Path
 from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ducta.api.dependencies import require_permission
-from ducta.api.source.models import SourceInfo
+from ducta.api.dependencies import require_permission, resolve_source
+from ducta.api.exceptions import http_error_on
+from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.source.resolver import SourceResolver
-from ducta.api.utils.git_utils import sanitize_git_remote_url
 
 router = APIRouter(prefix="/workspace", tags=["Source"])
 
 
+def _source_summary(resolved: ResolvedSource) -> dict:
+    return {
+        "path": str(resolved.path),
+        "name": resolved.path.name,
+        "source_type": resolved.source_type,
+        "has_git": resolved.has_git,
+        "has_environment_yaml": resolved.has_environment_yaml,
+    }
+
+
 class SourceValidateRequest(BaseModel):
-    """Request body for POST /api/workspace/validate."""
+    """Request body for POST /api/workspace/select."""
 
     path_or_url: str
-
-
-class SourceValidateResponse(BaseModel):
-    path: str
-    exists: bool = True
-    is_directory: bool = True
-    has_git: bool = False
-    has_environment_yaml: bool = False
-    git_remote: Optional[str] = None
-    environments: list[str] = []
-    warning: Optional[str] = None
 
 
 @router.get(
@@ -81,19 +79,7 @@ async def auto_detect_workspace() -> dict:
             ),
         )
 
-    try:
-        resolved = SourceResolver.resolve(source)
-    except (ValueError, RuntimeError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-
-    return {
-        "path": str(resolved.path),
-        "name": resolved.path.name,
-        "source_type": resolved.source_type,
-        "has_git": resolved.has_git,
-        "has_environment_yaml": resolved.has_environment_yaml,
-        "auto_detected": auto_detected,
-    }
+    return {**_source_summary(resolve_source(source)), "auto_detected": auto_detected}
 
 
 @router.get(
@@ -106,12 +92,8 @@ async def get_source_info(
     source: Annotated[str, Query(description="Source path (local directory or Git URL)")],
 ) -> SourceInfo:
     """Resolve a source path/URL and return its metadata."""
-    try:
+    with http_error_on(400, ValueError), http_error_on(500, RuntimeError):
         return SourceResolver.get_info(source)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
 
 class BrowseEntry(BaseModel):
@@ -204,102 +186,6 @@ async def browse_directories(
     )
 
 
-@router.get(
-    "/select-path",
-    summary="Validate and resolve a source path",
-    dependencies=[Depends(require_permission("workspace.read"))],
-)
-async def select_source_path(
-    path: Annotated[str, Query(description="Local path or Git URL")],
-) -> dict:
-    """Accept a path or URL and return resolution info without workspace requirements."""
-    raw_path = path.strip()
-    if not raw_path:
-        raise HTTPException(status_code=400, detail="Path cannot be empty")
-
-    try:
-        resolved = SourceResolver.resolve(raw_path)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    return {
-        "path": str(resolved.path),
-        "exists": True,
-        "is_directory": True,
-        "source_type": resolved.source_type,
-        "has_git": resolved.has_git,
-        "has_environment_yaml": resolved.has_environment_yaml,
-        "message": "Source path resolved successfully",
-    }
-
-
-@router.post(
-    "/validate",
-    response_model=SourceValidateResponse,
-    summary="Validate a source path or Git URL",
-    dependencies=[Depends(require_permission("workspace.read"))],
-)
-async def validate_source(request: SourceValidateRequest) -> SourceValidateResponse:
-    """Validate whether a path/URL can be used as a Ducta source."""
-    path_or_url = request.path_or_url.strip()
-
-    is_git_url = path_or_url.startswith(("http://", "https://", "git@", "git://"))
-
-    if is_git_url:
-        if not SourceResolver.is_git_url(path_or_url):
-            return SourceValidateResponse(
-                path=path_or_url,
-                exists=False,
-                is_directory=False,
-                warning="Invalid Git URL format",
-            )
-        # Don't clone for validation — just confirm URL format is valid
-        return SourceValidateResponse(
-            path=path_or_url,
-            exists=False,
-            is_directory=False,
-            has_git=True,
-            warning="Git URL accepted. Will be cloned on first use.",
-        )
-
-    try:
-        resolved = SourceResolver.resolve_local(path_or_url)
-    except ValueError as exc:
-        return SourceValidateResponse(
-            path=path_or_url,
-            exists=False,
-            is_directory=False,
-            warning=str(exc),
-        )
-
-    has_git = (resolved / ".git").exists()
-    has_env = (resolved / "environment.yaml").exists() or (resolved / "environment.yml").exists()
-
-    git_remote: Optional[str] = None
-    if has_git:
-        try:
-            result = subprocess.run(
-                ["git", "config", "--get", "remote.origin.url"],
-                cwd=str(resolved),
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                git_remote = sanitize_git_remote_url(result.stdout.strip())
-        except Exception:
-            pass
-
-    return SourceValidateResponse(
-        path=str(resolved),
-        has_git=has_git,
-        has_environment_yaml=has_env,
-        git_remote=git_remote,
-    )
-
-
 @router.post(
     "/select",
     response_model=dict,
@@ -308,23 +194,9 @@ async def validate_source(request: SourceValidateRequest) -> SourceValidateRespo
 )
 async def select_source(request: SourceValidateRequest) -> dict:
     """Resolve a local path or clone a Git repo and return its info."""
-    path_or_url = request.path_or_url.strip()
-
-    try:
-        resolved = SourceResolver.resolve(path_or_url)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
+    resolved = resolve_source(request.path_or_url.strip())
     return {
         "status": "success",
-        "source": {
-            "path": str(resolved.path),
-            "name": resolved.path.name,
-            "source_type": resolved.source_type,
-            "has_git": resolved.has_git,
-            "has_environment_yaml": resolved.has_environment_yaml,
-        },
+        "source": _source_summary(resolved),
         "message": f"Source resolved: {resolved.path}",
     }

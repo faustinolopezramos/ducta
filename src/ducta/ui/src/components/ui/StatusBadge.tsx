@@ -1,5 +1,5 @@
 import { cx } from "../../utils/classNames";
-import { STATUS_META, type Status } from "./statusMeta";
+import { STATUS_META, statusMetaFor, type Status, type StatusTone } from "./statusMeta";
 import "./StatusBadge.css";
 
 // Re-export so existing `import { type Status } from "./StatusBadge"` consumers
@@ -45,6 +45,7 @@ const STATUS_ALIASES: Record<string, BadgeStatus> = {
   done: "success",
   queued: "pending",
   skip: "skipped",
+  completed: "success",
   // A quality gate stopped the run: it finished, but did not do all its work.
   gate_blocked: "warning",
 };
@@ -54,6 +55,11 @@ export function normalizeStatus(raw: string | null | undefined): BadgeStatus {
   const key = raw.toLowerCase();
   if (isBadgeStatus(key)) return key;
   return STATUS_ALIASES[key] ?? "idle";
+}
+
+/** Coarse severity of any raw status, for pills and row accents. */
+export function statusTone(raw: string | null | undefined): StatusTone {
+  return statusMetaFor(raw)?.tone ?? STATUS_META[normalizeStatus(raw)].tone;
 }
 
 export interface StatusBadgeProps {
@@ -82,7 +88,9 @@ export function StatusBadge({
 }: StatusBadgeProps) {
   const canonical = normalizeStatus(status);
   const meta = STATUS_META[canonical];
-  const text = label ?? meta.label;
+  // The raw status's own label when it has one ("Gate blocked"), not the
+  // label of the pill style it folds into ("Warning").
+  const text = label ?? statusMetaFor(status)?.label ?? meta.label;
   const { Icon } = meta;
 
   const classes = cx(

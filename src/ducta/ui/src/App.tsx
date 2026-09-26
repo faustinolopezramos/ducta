@@ -1,16 +1,13 @@
-import React, { useEffect, useCallback, useState, useMemo, lazy, Suspense } from "react";
+import { useEffect, useState, useMemo, lazy, Suspense } from "react";
 import {
   createBrowserRouter,
   RouterProvider,
   Outlet,
-  useNavigate,
   Navigate,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const ReactQueryDevtools = lazy(() => import("@tanstack/react-query-devtools").then(m => ({ default: m.ReactQueryDevtools })));
 import { colors } from "./theme/tokens";
-import { useProjectStore } from "./store/projectStore";
-import { useBuilderStore } from "./store/builderStore";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastContainer } from "./components/Toast";
 import { PerfMonitor } from "./components/ui/PerfMonitor";
@@ -24,11 +21,11 @@ import { ProjectsList } from "./components/ProjectsList";
 import { ProjectPage } from "./pages/ProjectPage";
 import { PipelinePage } from "./pages/PipelinePage";
 import { useExecutionNotifications } from "./hooks/useExecutionNotifications";
+import { useProjectList } from "./hooks/useProjects";
 
 // ── Extracted sub-components ──────────────────────────────────────────────────
 import { UnauthorizedRedirect } from "./components/App/UnauthorizedRedirect";
 import { GitSetupGate } from "./components/App/GitSetupGate";
-import { ServerProjectsHydrator } from "./components/App/ServerProjectsHydrator";
 import { PageLoader, RootRedirect } from "./components/App/PageRedirects";
 import { ConnectWorkspaceForm } from "./components/Workspace/ConnectWorkspaceForm";
 
@@ -54,78 +51,33 @@ function WorkspaceShellWrapper() {
   return <Outlet />;
 }
 
-// Reads the project store itself so the router stays static: subscribing in App
-// and closing `projects` into the route element would recreate the router (and
-// re-render the whole tree) on every project mutation.
+// Reads the projects itself so the router stays static: subscribing in App and
+// closing `projects` into the route element would recreate the router (and
+// re-render the whole tree) on every project change.
 function ProjectsListRoute() {
-  const projects = useProjectStore((s) => s.present.projects);
-  const dispatch = useProjectStore((s) => s.dispatch);
+  const { projects } = useProjectList();
   // The dashboard names the workspace it is showing; it was never passed, so
   // the header always fell back to a generic line.
   const { selectedSource } = useWorkspaceSelection();
-  return (
-    <ProjectsList
-      workspacePath={selectedSource ?? undefined}
-      projects={projects}
-      onDeleteProject={(id: string) => dispatch({ type: "DELETE_PROJECT", payload: id })}
-    />
-  );
+  return <ProjectsList workspacePath={selectedSource ?? undefined} projects={projects} />;
 }
 
 // ── Main content shell ────────────────────────────────────────────────────────
 
 export function AppContent() {
-  const { selectedSource, isLoading: workspaceLoading } = useWorkspaceSelection();
+  const { isLoading: workspaceLoading } = useWorkspaceSelection();
   const theme = useUIStore(s => s.theme);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
 
-  const projects = useProjectStore(s => s.present.projects);
-  const dispatch = useProjectStore(s => s.dispatch);
-  const canUndo = useProjectStore(s => s.past.length > 0);
-  const canRedo = useProjectStore(s => s.future.length > 0);
   const { toasts, dismiss } = useToastStack();
 
   useExecutionNotifications();
 
   useEffect(() => { initializeErrorHandling(); }, []);
 
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const target = e.target as HTMLElement | null;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-      return;
-    }
-
-    const isMac = /mac/i.test(navigator.userAgent);
-    const ctrl  = isMac ? e.metaKey : e.ctrlKey;
-    if (!ctrl) return;
-
-    const isPipelineView = globalThis.location?.pathname?.includes("/pipeline/");
-
-    if (e.key === "z" && !e.shiftKey) {
-      e.preventDefault();
-      if (isPipelineView) {
-        useBuilderStore.getState().undo();
-      } else {
-        dispatch({ type: "UNDO" });
-      }
-    }
-    if (e.key === "y" || (e.key === "z" && e.shiftKey)) {
-      e.preventDefault();
-      if (isPipelineView) {
-        useBuilderStore.getState().redo();
-      } else {
-        dispatch({ type: "REDO" });
-      }
-    }
-  }, [dispatch]);
-
-  useEffect(() => {
-    globalThis.addEventListener("keydown", handleKeyDown);
-    return () => globalThis.removeEventListener("keydown", handleKeyDown);
-  }, [handleKeyDown]);
 
   if (workspaceLoading) {
     return (
@@ -139,12 +91,11 @@ export function AppContent() {
 
   return (
     <>
-      {selectedSource && <ServerProjectsHydrator />}
       <div className="ducta-app-root">
         <UnauthorizedRedirect />
         <GitSetupGate>
           <Suspense fallback={<PageLoader />}>
-            <Outlet context={{ projects, dispatch, canUndo, canRedo, selectedSource }} />
+            <Outlet />
           </Suspense>
         </GitSetupGate>
       </div>

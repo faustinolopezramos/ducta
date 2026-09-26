@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "../client";
-import { sourceKey } from "../utils";
 import { toastStore } from "../../hooks/useModalStack";
 import { defaultOnError } from "./errors";
+import { qk } from "../queryKeys";
 
 /** Node identity is workspace-global, not project-scoped (PUT /nodes/{name}
  *  has no project_id) — but a node's spec feeds a project's own node-schema
@@ -14,8 +14,8 @@ import { defaultOnError } from "./errors";
  *  that could plausibly be stale" pattern `useCreatePipeline`/
  *  `useDeletePipeline` already use (mutations/pipelines.ts). */
 function invalidateNodeConsumers(queryClient: ReturnType<typeof useQueryClient>) {
-  queryClient.invalidateQueries({ queryKey: ["nodes"] });
-  queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+  queryClient.invalidateQueries({ queryKey: qk.nodes.all() });
+  queryClient.invalidateQueries({ queryKey: qk.projects.all() });
 }
 
 interface UpdateNodePayload {
@@ -56,7 +56,7 @@ export const useUpdateNodeCode = () => {
       client.put(`/nodes/${name}/code`, { code }).then((r) => r.data),
     onSuccess: (data: { commit_sha?: string }) => {
       invalidateNodeConsumers(queryClient);
-      queryClient.invalidateQueries({ queryKey: ["git"] });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
       const sha = data?.commit_sha ? ` · ${data.commit_sha.slice(0, 7)}` : "";
       toastStore.getState().show(`Code saved${sha}`, "success");
     },

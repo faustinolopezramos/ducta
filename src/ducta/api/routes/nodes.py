@@ -33,7 +33,7 @@ from ducta.api.exceptions import (
     ConfigFileNotFoundError,
     ConfigValidationError,
     NodeNotFoundError,
-    SyntaxValidationError,
+    http_error_on,
 )
 from ducta.api.models.execution import ExecutionListResponse
 
@@ -182,17 +182,13 @@ async def get_node_code(
 ) -> NodeCodeResponse:
     """Return the Python source file for a node."""
     _validate_node_name(name)
-    try:
+    with http_error_on(400):
         # If module is provided, use it directly (for nodes only in pipelines)
         if module:
             info = node_svc.get_node_python_file_by_module(module)
         else:
             # Otherwise, look up node in global nodes config
             info = node_svc.get_node_python_file(name)
-    except NodeNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
     code = info.code
     if preview and preview > 0 and code:
@@ -351,14 +347,10 @@ async def update_node_code(
 ) -> NodeCodeResponse:
     """Validate syntax, write the source file, and commit to git."""
     _validate_node_name(name)
-    try:
+    # NodeNotFoundError (404) and SyntaxValidationError (400, with line/offset
+    # detail) reach the global DuctaAPIError handler with their error codes.
+    with http_error_on(400):
         info = node_svc.save_node_code(name, body.code)
-    except NodeNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=exc.message)
-    except SyntaxValidationError as exc:
-        raise HTTPException(status_code=400, detail=exc.to_dict())
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
     return NodeCodeResponse(
         name=name,

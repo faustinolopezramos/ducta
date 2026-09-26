@@ -242,3 +242,67 @@ class PreflightValidator:
                     return cycle
 
         return None
+
+
+# ── Deep preflight (subprocess) ───────────────────────────────────────────────
+
+_DEEP_PREFLIGHT_MARKER = "DUCTA_PREFLIGHT_JSON:"
+_DEEP_PREFLIGHT_TIMEOUT_S = 180
+
+
+def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[str, Any]:
+    """Run the same checks as ``ducta config validate`` in a fresh subprocess.
+
+    Imports every node function and checks its signature, validates I/O
+    catalog keys, intermediate registration and DAG cycles — without executing
+    anything. A subprocess keeps the API process free of the project's imports.
+
+    Returns ``{"ok", "errors", "warnings"}``. *env* must already be validated
+    (it is interpolated into the snippet, although through ``repr``).
+    """
+    import json
+    import subprocess
+    import sys
+    import textwrap
+
+    snippet = textwrap.dedent(
+        f"""
+        import json, sys
+        sys.path.insert(0, {str(exec_source)!r})
+        from ducta.console.config import ConfigManager
+        from ducta.console.execution import ContextInitializer
+        from ducta.core.preflight import validate_pipeline
+        cm = ConfigManager()
+        cm.change_to_config_directory()
+        ctx = ContextInitializer(cm).initialize({env!r})
+        r = validate_pipeline(ctx, {pipeline_name!r})
+        print({_DEEP_PREFLIGHT_MARKER!r} + json.dumps(
+            {{"ok": r.ok, "errors": r.errors, "warnings": r.warnings}}
+        ))
+        """
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", snippet],
+            cwd=str(exec_source),
+            capture_output=True,
+            text=True,
+            timeout=_DEEP_PREFLIGHT_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "errors": [f"Preflight timed out after {_DEEP_PREFLIGHT_TIMEOUT_S}s"],
+            "warnings": [],
+        }
+
+    for line in reversed((proc.stdout or "").splitlines()):
+        if line.startswith(_DEEP_PREFLIGHT_MARKER):
+            return json.loads(line[len(_DEEP_PREFLIGHT_MARKER) :])
+
+    tail = ((proc.stderr or "") + (proc.stdout or ""))[-2000:]
+    return {
+        "ok": False,
+        "errors": [f"Preflight subprocess failed (exit {proc.returncode}): {tail.strip()}"],
+        "warnings": [],
+    }

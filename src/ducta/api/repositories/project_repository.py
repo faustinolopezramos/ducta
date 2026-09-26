@@ -26,11 +26,16 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
-from ducta.api.exceptions import ProjectAlreadyExistsError, ProjectNotFoundError, ValidationError
+from ducta.api.exceptions import (
+    PipelineNotFoundError,
+    ProjectAlreadyExistsError,
+    ProjectNotFoundError,
+    ValidationError,
+)
 from ducta.api.utils.git_utils import commit_files, validate_occ
 from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, write_config_file
-from ducta.api.workspace.utils import find_ducta_config
+from ducta.api.workspace.utils import CONFIG_EXTENSIONS, find_ducta_config, has_config_file
 
 _PROJECT_SETTINGS_FILE = "project_settings.yaml"
 _PROJECTS_DIR = "projects"
@@ -135,11 +140,10 @@ class ProjectRepository:
             )
 
         if not ids:
-            _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
             has_root_project = (
-                any((self._root / f"environment{ext}").exists() for ext in _ENV_EXTS)
-                or any((self._root / "config" / f"pipelines{ext}").exists() for ext in _ENV_EXTS)
-                or any((self._root / f"pipelines{ext}").exists() for ext in _ENV_EXTS)
+                has_config_file(self._root, "environment")
+                or has_config_file(self._root / "config", "pipelines")
+                or has_config_file(self._root, "pipelines")
             )
             if has_root_project:
                 ids.append(self._root.name)
@@ -148,18 +152,14 @@ class ProjectRepository:
 
     def exists(self, project_id: str) -> bool:
         p_dir = self.project_dir(project_id)
-        _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
-        if any((p_dir / f"environment{ext}").exists() for ext in _ENV_EXTS):
-            return True
-        # Also consider it a project if it has ducta.yaml (multi-layer projects)
-        if any((p_dir / f"ducta{ext}").exists() for ext in _ENV_EXTS):
-            return True
-        # Also consider it a project if it has pipelines
-        if any((p_dir / "config" / f"pipelines{ext}").exists() for ext in _ENV_EXTS):
-            return True
-        if any((p_dir / f"pipelines{ext}").exists() for ext in _ENV_EXTS):
-            return True
-        return False
+        # An environment file, a ducta.yaml (multi-layer projects) or a
+        # pipelines file (in config/ or at the top) makes a project.
+        return (
+            has_config_file(p_dir, "environment")
+            or has_config_file(p_dir, "ducta")
+            or has_config_file(p_dir / "config", "pipelines")
+            or has_config_file(p_dir, "pipelines")
+        )
 
     def get_pipelines(self, project_id: str) -> Dict[str, Any]:
         """Return pipeline dict for a project."""
@@ -206,7 +206,7 @@ class ProjectRepository:
         config_dir = p_dir / "config"
         if config_dir.exists():
             for pipelines_file in config_dir.rglob("pipelines.*"):
-                if pipelines_file.suffix.lower() in (".yaml", ".yml", ".toml", ".json"):
+                if pipelines_file.suffix.lower() in CONFIG_EXTENSIONS:
                     try:
                         data = load_config_file(pipelines_file)
                         if isinstance(data, dict) and data:
@@ -313,12 +313,12 @@ class ProjectRepository:
     def delete_pipeline(
         self, project_id: str, name: str, expected_sha: Optional[str] = None
     ) -> str:
-        """Remove a pipeline entry. Raises ValidationError when absent."""
+        """Remove a pipeline entry. Raises PipelineNotFoundError when absent."""
         path = self.pipelines_path(project_id)
         validate_occ(self._root, path, expected_sha)
         current = self.get_pipelines(project_id)
         if name not in current:
-            raise ValidationError(
+            raise PipelineNotFoundError(
                 f"Pipeline '{name}' not found in project '{project_id}'",
                 detail={"project_id": project_id, "pipeline": name},
             )

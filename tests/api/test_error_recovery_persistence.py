@@ -60,7 +60,7 @@ class TestSaveLoadRoundTrip:
         assert payload["has_critical_errors"] is True  # ValueError → permanent
         assert not (tmp_path / "exec-1" / "errors.json.tmp").exists()
 
-    def test_errors_carry_category_traceback_and_recovery_plan(self, tmp_path):
+    def test_errors_carry_category_traceback_and_hint(self, tmp_path):
         log = _make_log(tmp_path)
         log.save()
         payload = json.loads((tmp_path / "exec-1" / "errors.json").read_text(encoding="utf-8"))
@@ -71,8 +71,9 @@ class TestSaveLoadRoundTrip:
         assert entry["error"]["category"] == "permanent"
         assert "Traceback" in entry["error"]["traceback"]
         assert len(entry["error"]["traceback_lines"]) >= 1
-        assert entry["recovery_plan"]["primary"] == "abort"
-        assert entry["recovery_plan"]["retry_delay"] is None  # abort plans have no delay
+        # Advice only — nothing retries a run, so no plan/strategy is recorded.
+        assert "re-running unchanged will fail again" in entry["hint"]
+        assert "recovery_plan" not in entry
 
     def test_empty_log_save_is_noop(self, tmp_path):
         log = get_error_log("exec-empty")

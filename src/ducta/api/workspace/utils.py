@@ -148,13 +148,24 @@ def find_base_global_config(workspace_root: Path, env: str) -> Path | None:
     return base_global
 
 
-def find_ducta_config(project_dir: Path) -> Path | None:
-    """Return the ``ducta.{yaml,yml,toml,json}`` config file in *project_dir*, if any."""
-    for ext in (".yaml", ".yml", ".toml", ".json"):
-        candidate = project_dir / f"ducta{ext}"
+def find_config_file(directory: Path, stem: str) -> Path | None:
+    """Return ``<directory>/<stem>.<ext>`` for the first ext in
+    ``CONFIG_EXTENSIONS`` that exists, or None."""
+    for ext in CONFIG_EXTENSIONS:
+        candidate = directory / f"{stem}{ext}"
         if candidate.exists():
             return candidate
     return None
+
+
+def has_config_file(directory: Path, stem: str) -> bool:
+    """Whether *directory* holds ``<stem>`` in any supported config format."""
+    return find_config_file(directory, stem) is not None
+
+
+def find_ducta_config(project_dir: Path) -> Path | None:
+    """Return the ``ducta.{yaml,yml,toml,json}`` config file in *project_dir*, if any."""
+    return find_config_file(project_dir, "ducta")
 
 
 def resolve_module_path(workspace_root: Path, module_dotted: str) -> Path:
@@ -169,10 +180,9 @@ def resolve_module_path(workspace_root: Path, module_dotted: str) -> Path:
 def normalize_workspace_path(path: Path) -> Path:
     """Detect if path is a project directory and return the workspace root instead."""
     path = path.resolve()
-    _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
 
     # Rule 1: self-contained workspace (own environment file).
-    if any((path / f"environment{ext}").exists() for ext in _ENV_EXTS):
+    if has_config_file(path, "environment"):
         return path
 
     # Rule 2: self-contained workspace (own config/ directory).

@@ -49,14 +49,6 @@ class ErrorCategory(str, enum.Enum):
     UNKNOWN = "unknown"
 
 
-class RecoveryStrategy(str, enum.Enum):
-    RETRY = "retry"
-    SKIP_NODE = "skip_node"
-    FALLBACK = "fallback"
-    ABORT = "abort"
-    MANUAL = "manual"
-
-
 @dataclass
 class ErrorContext:
     execution_id: str
@@ -69,14 +61,15 @@ class ErrorContext:
     user_id: Optional[str] = None
 
 
-@dataclass
-class RecoveryPlan:
-    primary_strategy: RecoveryStrategy
-    alternative_strategies: List[RecoveryStrategy] = field(default_factory=list)
-    retry_delay_seconds: Optional[float] = None
-    fallback_value: Optional[Any] = None
-    abort_reason: Optional[str] = None
-    notes: Optional[str] = None
+#: What to look at first, per category. Advice only: nothing retries a run
+#: automatically, so the hint never promises one.
+_CATEGORY_HINTS: Dict["ErrorCategory", str] = {
+    ErrorCategory.TIMEOUT: "Increase the execution timeout or optimise the pipeline.",
+    ErrorCategory.RESOURCE: "Reduce parallelism or chunk size, then re-run.",
+    ErrorCategory.CONFIGURATION: "Review the pipeline configuration and fix it before re-running.",
+    ErrorCategory.PERMANENT: "Fix the code or input data; re-running unchanged will fail again.",
+    ErrorCategory.TEMPORARY: "Likely transient: re-running may succeed.",
+}
 
 
 class ErrorAnalyzer:
@@ -110,54 +103,8 @@ class ErrorAnalyzer:
         return ErrorCategory.UNKNOWN
 
     @staticmethod
-    def recommend_recovery(
-        exception: Exception,
-        context: ErrorContext,
-        attempt: int = 1,
-        max_attempts: int = 3,
-    ) -> RecoveryPlan:
-        category = ErrorAnalyzer.categorize_error(exception)
-
-        if category == ErrorCategory.TIMEOUT:
-            return RecoveryPlan(
-                primary_strategy=RecoveryStrategy.ABORT,
-                abort_reason="Pipeline execution exceeded timeout",
-                notes="Consider increasing execution timeout or optimizing pipeline",
-            )
-
-        if category == ErrorCategory.RESOURCE:
-            return RecoveryPlan(
-                primary_strategy=(
-                    RecoveryStrategy.RETRY if attempt < max_attempts else RecoveryStrategy.ABORT
-                ),
-                alternative_strategies=[RecoveryStrategy.SKIP_NODE],
-                retry_delay_seconds=5 * (2 ** (attempt - 1)),
-                abort_reason="Resource exhaustion" if attempt >= max_attempts else None,
-                notes="Consider reducing parallelism or chunk size",
-            )
-
-        if category == ErrorCategory.CONFIGURATION:
-            return RecoveryPlan(
-                primary_strategy=RecoveryStrategy.ABORT,
-                abort_reason="Configuration error - manual intervention required",
-                notes="Review pipeline configuration and fix issues",
-            )
-
-        if category == ErrorCategory.PERMANENT:
-            return RecoveryPlan(
-                primary_strategy=RecoveryStrategy.ABORT,
-                abort_reason="Permanent error - will not succeed on retry",
-                notes=f"Error: {str(exception)[:100]}",
-            )
-
-        return RecoveryPlan(
-            primary_strategy=(
-                RecoveryStrategy.RETRY if attempt < max_attempts else RecoveryStrategy.ABORT
-            ),
-            alternative_strategies=[RecoveryStrategy.SKIP_NODE],
-            retry_delay_seconds=1 * (2 ** (attempt - 1)),
-            abort_reason="Max retry attempts exceeded" if attempt >= max_attempts else None,
-        )
+    def hint_for(category: ErrorCategory) -> Optional[str]:
+        return _CATEGORY_HINTS.get(category)
 
     @staticmethod
     def get_error_details(exception: Exception) -> Dict[str, Any]:
@@ -181,22 +128,8 @@ class ExecutionErrorLog:
         # so failures survive the in-memory registry cleanup (and server restarts).
         self._base_dir = base_dir
 
-    def log_error(
-        self,
-        exception: Exception,
-        context: ErrorContext,
-        recovery_plan: Optional[RecoveryPlan] = None,
-    ) -> None:
+    def log_error(self, exception: Exception, context: ErrorContext) -> None:
         error_details = ErrorAnalyzer.get_error_details(exception)
-        if recovery_plan is None:
-            recovery_plan = ErrorAnalyzer.recommend_recovery(exception, context)
-        plan_dict = {
-            "primary": recovery_plan.primary_strategy.value,
-            "alternatives": [s.value for s in recovery_plan.alternative_strategies],
-            "retry_delay": recovery_plan.retry_delay_seconds,
-            "notes": recovery_plan.notes,
-        }
-
         self.errors.append(
             {
                 "timestamp": datetime.now(tz=timezone.utc).isoformat(),
@@ -205,7 +138,7 @@ class ExecutionErrorLog:
                 "node_type": context.node_type,
                 "attempt": context.attempt,
                 "error": error_details,
-                "recovery_plan": plan_dict,
+                "hint": ErrorAnalyzer.hint_for(ErrorCategory(error_details["category"])),
             }
         )
 
@@ -241,12 +174,6 @@ class ExecutionErrorLog:
                 err["error"]["category"] == "permanent" for err in self.errors
             ),
         }
-
-    def is_recoverable(self) -> bool:
-        for error in self.errors:
-            if error["error"]["category"] in ("permanent", "timeout"):
-                return False
-        return len(self.errors) < 10
 
     # ── Disk persistence (best-effort, mirrors FileLogStore semantics) ────────
 
@@ -342,11 +269,6 @@ def flush_error_log(execution_id: str) -> bool:
         _prune_error_logs()
         return True
     return False
-
-
-def delete_error_log(execution_id: str) -> bool:
-    """Alias kept for compatibility: flush-then-drop (persists to disk first)."""
-    return flush_error_log(execution_id)
 
 
 def load_error_log_summary(execution_id: str) -> Optional[Dict[str, Any]]:

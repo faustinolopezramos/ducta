@@ -20,14 +20,13 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
-from ducta.api.exceptions import ProjectNotFoundError, ValidationError
+from ducta.api.exceptions import PipelineNotFoundError, ProjectNotFoundError, ValidationError
 from ducta.api.models.project import (
     ImportProjectRequest,
     ProjectCreateRequest,
@@ -38,9 +37,8 @@ from ducta.api.models.project import (
 from ducta.api.repositories.project_repository import ProjectRepository
 from ducta.api.utils.git_utils import commit_files
 from ducta.api.utils.pagination import paginate
+from ducta.api.utils.validators import validate_project_name
 from ducta.api.workspace.loaders import load_config_file, write_config_file
-
-_SAFE_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_\-]*$")
 
 
 def _now_iso() -> str:
@@ -297,12 +295,10 @@ class ProjectService:
             )
 
         raw_name = body.name or source.name
-        if not _SAFE_NAME_RE.match(raw_name):
-            raise ValidationError(
-                f"'{raw_name}' is not a valid project identifier. "
-                "Must start with a letter and contain only letters, digits, hyphens or underscores.",
-                detail={"name": raw_name},
-            )
+        try:
+            validate_project_name(raw_name)
+        except ValueError as exc:
+            raise ValidationError(str(exc), detail={"name": raw_name}) from exc
         project_id = raw_name.lower()
 
         projects_root = self._repo.projects_root().resolve()
@@ -371,6 +367,16 @@ class ProjectService:
         self._repo.get_settings(project_id)
         return self._repo.get_pipelines(project_id)
 
+    def get_pipeline(self, project_id: str, pipeline_name: str) -> Dict[str, Any]:
+        """Return one pipeline's spec, or raise ``PipelineNotFoundError``."""
+        pipelines = self.list_project_pipelines(project_id)
+        if pipeline_name not in pipelines:
+            raise PipelineNotFoundError(
+                f"Pipeline '{pipeline_name}' not found in project '{project_id}'",
+                detail={"project_id": project_id, "pipeline": pipeline_name},
+            )
+        return pipelines[pipeline_name]
+
     def get_pipelines_commit_sha(self, project_id: str) -> Optional[str]:
         """Current commit SHA of this project's pipelines.yaml, for OCC."""
         return self._repo.get_pipelines_commit_sha(project_id) or None
@@ -389,8 +395,8 @@ class ProjectService:
     def delete_project_pipeline(
         self, project_id: str, pipeline_name: str, *, expected_sha: Optional[str] = None
     ) -> str:
-        """Delete a pipeline and return the new commit SHA (see ``save_project_pipeline``)."""
-        pipelines = self._repo.get_pipelines(project_id)
-        if pipeline_name not in pipelines:
-            return ""
+        """Delete a pipeline and return the new commit SHA (see ``save_project_pipeline``).
+
+        Raises ``PipelineNotFoundError`` (404) when the pipeline does not exist.
+        """
         return self._repo.delete_pipeline(project_id, pipeline_name, expected_sha=expected_sha)

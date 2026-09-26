@@ -4,7 +4,7 @@ import type { DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useToggleSchedule, type PipelineSchedule } from "../../api/schedulesApi";
 import { describeCron } from "../../utils/cron";
-import { formatRelative, formatUtc } from "./helpers";
+import { formatRelative, formatUtc } from "../../utils/timeLabels";
 
 /**
  * Per-row actions. Its own component because it needs the toggle mutation

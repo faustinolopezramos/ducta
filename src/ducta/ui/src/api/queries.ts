@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
 import axios from "axios";
-import { sourceKey } from "./utils";
 import type {
   Execution,
   WorkspaceProject,
@@ -10,6 +9,7 @@ import type {
   WorkspaceProjectUpdateRequest,
 } from "../types";
 import type { WorkspaceInfo } from "../types/api";
+import { qk } from "./queryKeys";
 
 // ── API Response types ────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ type ExecutionDetailResponse = Execution;
  */
 export const useSourceInfo = () =>
   useQuery<WorkspaceInfo>({
-    queryKey: ["source", sourceKey()],
+    queryKey: qk.source(),
     queryFn: () => client.get<WorkspaceInfo>("/workspace").then((r) => r.data),
     staleTime: 2 * 60 * 1000, // 2 min
     retry: 1,
@@ -48,7 +48,7 @@ export const useSourceInfo = () =>
  */
 export const useEnvironments = (project?: string) =>
   useQuery({
-    queryKey: ["environments", sourceKey(), project ?? null],
+    queryKey: qk.environments(project),
     queryFn: () => client.get("/environments", { params: { project } }).then((r) => r.data),
     staleTime: 5 * 60 * 1000, // 5 min — envs rarely change
   });
@@ -61,7 +61,7 @@ export const useEnvironments = (project?: string) =>
 export const usePlatformInfo = () => {
   const baseURL = client.defaults.baseURL?.replace(/\/api$/, "") ?? "";
   return useQuery({
-    queryKey: ["platform"],
+    queryKey: qk.platform(),
     queryFn: () => axios.get(`${baseURL}/health/platform`).then((r) => r.data),
     staleTime: Infinity,   // platform info never changes during a session
     retry: 2,
@@ -74,7 +74,7 @@ export const usePlatformInfo = () => {
  */
 export const useGitConfig = () =>
   useQuery({
-    queryKey: ["git", sourceKey(), "config"],
+    queryKey: qk.git.config(),
     queryFn: () => client.get("/git/config").then((r) => r.data),
     staleTime: 5 * 60 * 1000,
     retry: 1,
@@ -88,7 +88,7 @@ export const useGitConfig = () =>
  */
 export const useWorkspaceConfigs = (env: string) =>
   useQuery({
-    queryKey: ["configs", sourceKey(), env],
+    queryKey: qk.configs.list(env),
     queryFn: () => client.get(`/configs/${env}`).then((r) => r.data),
     staleTime: 60 * 1000, // 1 min
     enabled: !!env,
@@ -100,7 +100,7 @@ export const useWorkspaceConfigs = (env: string) =>
  */
 export const useWorkspaceConfig = (env: string, name: string) =>
   useQuery({
-    queryKey: ["configs", sourceKey(), env, name],
+    queryKey: qk.configs.file(env, name),
     queryFn: () => client.get(`/configs/${env}/${name}`).then((r) => r.data),
     staleTime: 60 * 1000,
     enabled: !!env && !!name,
@@ -118,7 +118,7 @@ export const useWorkspaceConfig = (env: string, name: string) =>
  */
 export const useServerProjectPipelines = (projectId: string) =>
   useQuery({
-    queryKey: ["server-projects", sourceKey(), projectId, "pipelines"],
+    queryKey: qk.projects.pipelines(projectId),
     queryFn: () =>
       client.get(`/projects/${projectId}/pipelines`).then((r) => r.data),
     staleTime: 30 * 1000,
@@ -146,7 +146,7 @@ export interface ProjectDependencies {
  */
 export const useProjectDependencies = (projectId: string) =>
   useQuery<ProjectDependencies>({
-    queryKey: ["server-projects", sourceKey(), projectId, "dependencies"],
+    queryKey: qk.projects.dependencies(projectId),
     queryFn: () =>
       client.get(`/projects/${projectId}/dependencies`).then((r) => r.data),
     staleTime: 30 * 1000,
@@ -159,7 +159,7 @@ export const useProjectDependencies = (projectId: string) =>
  */
 export const useProjectPipeline = (projectId: string, name: string) =>
   useQuery({
-    queryKey: ["server-projects", sourceKey(), projectId, "pipelines", name],
+    queryKey: qk.projects.pipeline(projectId, name),
     queryFn: () =>
       client.get(`/projects/${projectId}/pipelines/${name}`).then((r) => r.data),
     staleTime: 60 * 1000,
@@ -206,7 +206,7 @@ export interface ProjectDatasets {
  */
 export const useProjectDatasets = (projectId: string) =>
   useQuery<ProjectDatasets>({
-    queryKey: ["server-projects", sourceKey(), projectId, "datasets"],
+    queryKey: qk.projects.datasets(projectId),
     queryFn: () =>
       client.get(`/projects/${projectId}/datasets`).then((r) => r.data),
     staleTime: 30 * 1000,
@@ -273,7 +273,7 @@ export interface PipelineNodeSchema {
  */
 export const useNodeSchema = (projectId: string, pipeline: string, node: string) =>
   useQuery<PipelineNodeSchema>({
-    queryKey: ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", node, "schema"],
+    queryKey: qk.projects.nodeSchema(projectId, pipeline, node),
     queryFn: () =>
       client
         .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/${node}/schema`)
@@ -319,7 +319,7 @@ export interface PipelineNodeSchemas {
  */
 export const usePipelineNodeSchemas = (projectId: string, pipeline: string) =>
   useQuery<PipelineNodeSchemas>({
-    queryKey: ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema"],
+    queryKey: qk.projects.nodeSchemas(projectId, pipeline),
     queryFn: () =>
       client
         .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/schema`)
@@ -340,7 +340,7 @@ export const usePipelineNodeSchemas = (projectId: string, pipeline: string) =>
  */
 export const useNodes = () =>
   useQuery({
-    queryKey: ["nodes", sourceKey()],
+    queryKey: qk.nodes.all(),
     queryFn: () => client.get("/nodes").then((r) => r.data),
     staleTime: 60 * 1000,
   });
@@ -351,7 +351,7 @@ export const useNodes = () =>
  */
 export const useNode = (name: string) =>
   useQuery({
-    queryKey: ["nodes", sourceKey(), name],
+    queryKey: qk.nodes.detail(name),
     queryFn: () => client.get(`/nodes/${name}`).then((r) => r.data),
     staleTime: 60 * 1000,
     enabled: !!name,
@@ -368,7 +368,7 @@ export const useNode = (name: string) =>
  * opening the editor from a list row — can `fetchQuery` it and hit the same cache.
  */
 export const nodeCodeQuery = (name: string) => ({
-  queryKey: ["nodes", sourceKey(), name, "code"],
+  queryKey: qk.nodes.code(name),
   // Untyped like the endpoint's other consumers read it (NodeCodePage also uses `module_path`).
   queryFn: async (): Promise<any> => {
     try {
@@ -420,7 +420,7 @@ export interface ExecutionListFilters {
  */
 export const useExecutionList = (filters: ExecutionListFilters = {}) =>
   useQuery({
-    queryKey: ["executions", sourceKey(), filters],
+    queryKey: qk.executions.list(filters),
     queryFn: () =>
       client
         .get("/executions", {
@@ -445,7 +445,7 @@ export const useExecutionList = (filters: ExecutionListFilters = {}) =>
  */
 export const useQueueStatus = () =>
   useQuery({
-    queryKey: ["executions", sourceKey(), "queue"],
+    queryKey: qk.executions.queue(),
     queryFn: () => client.get("/executions/queue").then((r) => r.data),
     staleTime: 5 * 1000,
     refetchInterval: 15_000,
@@ -461,7 +461,7 @@ export const useQueueStatus = () =>
  */
 export const useExecutionStatus = (executionId: string) => {
   return useQuery({
-    queryKey: ["executions", sourceKey(), executionId],
+    queryKey: qk.executions.detail(executionId),
     queryFn: () => client.get(`/executions/${executionId}`).then((r) => r.data),
     enabled: !!executionId,
     refetchInterval: (query: { state: { data?: ExecutionDetailResponse } }) => {
@@ -478,7 +478,7 @@ export const useExecutionStatus = (executionId: string) => {
  */
 export const useExecutionLogs = (executionId: string) =>
   useQuery({
-    queryKey: ["executions", sourceKey(), executionId, "logs"],
+    queryKey: qk.executions.logs(executionId),
     queryFn: () => client.get(`/executions/${executionId}/logs`).then((r) => r.data),
     enabled: !!executionId,
     // Logs for a finished execution are immutable — use a long staleTime to
@@ -491,7 +491,7 @@ export const useExecutionLogs = (executionId: string) =>
  * GET /executions/{id}/errors
  * Returns categorized failures: { execution_id, error_count, warning_count,
  * has_critical_errors, errors: [{ error_type, message, category, traceback,
- * traceback_lines, node_id, attempt, recovery_plan }], warnings }.
+ * traceback_lines, node_id, attempt, hint }], warnings }.
  * Only meaningful for failed executions; empty counts otherwise.
  */
 export interface ExecutionErrorDetail {
@@ -504,12 +504,8 @@ export interface ExecutionErrorDetail {
   category: string;
   traceback: string;
   traceback_lines: string[];
-  recovery_plan: {
-    primary: string;
-    alternatives: string[];
-    retry_delay: number | null;
-    notes: string | null;
-  } | null;
+  /** What to look at first for this category of failure. Advice only: nothing retries a run. */
+  hint: string | null;
 }
 
 export interface ExecutionErrorsResponse {
@@ -523,7 +519,7 @@ export interface ExecutionErrorsResponse {
 
 export const useExecutionErrors = (executionId: string | null | undefined) =>
   useQuery({
-    queryKey: ["executions", sourceKey(), executionId, "errors"],
+    queryKey: qk.executions.errors(executionId),
     queryFn: () => client.get(`/executions/${executionId}/errors`).then((r) => r.data),
     enabled: !!executionId,
     // Failures are immutable once recorded; keep the cached result fresh enough
@@ -542,7 +538,7 @@ export const useExecutionErrors = (executionId: string | null | undefined) =>
  */
 export const useGitStatus = () =>
   useQuery({
-    queryKey: ["git", sourceKey(), "status"],
+    queryKey: qk.git.status(),
     queryFn: () => client.get("/git/status").then((r) => r.data),
     staleTime: 5 * 1000,
     refetchInterval: 30_000,
@@ -557,7 +553,7 @@ export const useGitStatus = () =>
  */
 export const useGitLog = ({ path, limit = 50 }: { path?: string; limit?: number } = {}) =>
   useQuery({
-    queryKey: ["git", sourceKey(), "log", { path, limit }],
+    queryKey: qk.git.log(path, limit),
     queryFn: () =>
       client
         .get("/git/log", { params: { ...(path ? { path } : {}), limit } })
@@ -571,7 +567,7 @@ export const useGitLog = ({ path, limit = 50 }: { path?: string; limit?: number 
  */
 export const useGitCommit = (sha: string) =>
   useQuery({
-    queryKey: ["git", sourceKey(), "commit", sha],
+    queryKey: qk.git.commit(sha),
     queryFn: () => client.get(`/git/commit/${sha}`).then((r) => r.data),
     enabled: !!sha,
     staleTime: Infinity, // commits are immutable
@@ -583,7 +579,7 @@ export const useGitCommit = (sha: string) =>
  */
 export const useGitDiff = (sha: string) =>
   useQuery({
-    queryKey: ["git", sourceKey(), "diff", sha],
+    queryKey: qk.git.diff(sha),
     queryFn: () => client.get(`/git/diff/${sha}`).then((r) => r.data),
     enabled: !!sha,
     staleTime: Infinity, // diffs are immutable
@@ -601,7 +597,7 @@ export const useGitDiff = (sha: string) =>
  */
 export const useServerProjects = () =>
   useQuery<WorkspaceProjectList>({
-    queryKey: ["server-projects", sourceKey()],
+    queryKey: qk.projects.all(),
     queryFn: () => client.get("/projects").then((r) => r.data),
     staleTime: 30 * 1000,
   });
@@ -611,7 +607,7 @@ export const useServerProjects = () =>
  */
 export const useServerProject = (projectId: string) =>
   useQuery<WorkspaceProject>({
-    queryKey: ["server-projects", sourceKey(), projectId],
+    queryKey: qk.projects.detail(projectId),
     queryFn: () => client.get(`/projects/${projectId}`).then((r) => r.data),
     staleTime: 30 * 1000,
     enabled: !!projectId,
@@ -627,7 +623,7 @@ export const useImportServerProject = () => {
   return useMutation<WorkspaceProject, Error, { path: string; name?: string; description?: string }>({
     mutationFn: (body) => client.post("/projects/import", body).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      qc.invalidateQueries({ queryKey: qk.projects.all() });
     },
   });
 };
@@ -641,7 +637,7 @@ export const useCreateServerProject = () => {
   return useMutation<WorkspaceProject, Error, WorkspaceProjectCreateRequest>({
     mutationFn: (body) => client.post("/projects", body).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      qc.invalidateQueries({ queryKey: qk.projects.all() });
     },
   });
 };
@@ -654,7 +650,7 @@ export const useUpdateServerProject = (projectId: string) => {
   return useMutation<WorkspaceProject, Error, WorkspaceProjectUpdateRequest>({
     mutationFn: (body) => client.patch(`/projects/${projectId}`, body).then((r) => r.data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      qc.invalidateQueries({ queryKey: qk.projects.all() });
     },
   });
 };
@@ -668,7 +664,7 @@ export const useDeleteServerProject = () => {
     mutationFn: ({ projectId, force }) =>
       client.delete(`/projects/${projectId}`, { params: force ? { force: true } : {} }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      qc.invalidateQueries({ queryKey: qk.projects.all() });
     },
   });
 };
@@ -688,7 +684,7 @@ export interface FileEntry {
  */
 export const useWorkspaceFiles = (path: string = "") =>
   useQuery<{ path: string; entries: FileEntry[] }>({
-    queryKey: ["workspace-files", sourceKey(), path],
+    queryKey: qk.files.dir(path),
     queryFn: () =>
       client.get("/workspace/files", { params: { path } }).then((r) => r.data),
     staleTime: 10 * 1000,
@@ -700,7 +696,7 @@ export const useWorkspaceFiles = (path: string = "") =>
  */
 export const useWorkspaceFileContent = (path: string) =>
   useQuery<{ path: string; content: string; size_bytes: number }>({
-    queryKey: ["workspace-file-content", sourceKey(), path],
+    queryKey: qk.files.content(path),
     queryFn: () =>
       client.get("/workspace/files/content", { params: { path } }).then((r) => r.data),
     staleTime: 15 * 1000,

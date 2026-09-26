@@ -10,7 +10,7 @@ import { withDevtools } from "./createStore";
 export interface SourceStore {
   currentSource: Record<string, unknown> | null;
   activeEnv: string;
-  /** 'local' | 'git' — sourced from SourceInfo.source_type returned by POST /connect */
+  /** 'local' | 'git' — sourced from the resolved source returned by POST /workspace/select */
   sourceType: string | null;
   /** Git URL if sourceType is 'git' */
   gitUrl: string | null;
@@ -40,7 +40,7 @@ const storeCreator: StateCreator<SourceStore, [["zustand/persist", unknown]]> = 
   /** Switch the active environment */
   setActiveEnv: (env) => set({ activeEnv: env }),
 
-  /** Store the resolved source type from POST /connect */
+  /** Store the resolved source type from POST /workspace/select */
   setSourceType: (type) => set({ sourceType: type }),
 
   /** Store the Git URL when sourceType is 'git' */

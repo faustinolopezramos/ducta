@@ -155,4 +155,3 @@ export const useCurrentLogs = () => useLogsStore((s) => s.currentLogs);
 // Incrementally-maintained aggregates over all currentLogs (no per-render scan).
 export const useLogLevelCounts = () => useLogsStore((s) => s.levelCounts);
 export const useNodeLogCounts = () => useLogsStore((s) => s.nodeLogCounts);
-export const useLogsConnected = () => useLogsStore((s) => s.isConnected);

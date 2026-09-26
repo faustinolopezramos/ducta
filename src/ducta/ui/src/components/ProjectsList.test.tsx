@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ProjectsList } from "./ProjectsList";
-import type { ProjectItem } from "../store/reducer";
+import type { ProjectSummary } from "../types";
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
 const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
@@ -39,15 +39,15 @@ vi.mock("../api/mutations", () => ({
   apiErrorMessage: (_err: unknown, fallback: string) => fallback,
 }));
 
-const projects: ProjectItem[] = [
-  { id: "batch", name: "batch", pipelineCount: 6, pipelines: [] },
-  { id: "streaming", name: "streaming", pipelineCount: 3, pipelines: [] },
+const projects: ProjectSummary[] = [
+  { id: "batch", name: "batch", pipelineCount: 6 },
+  { id: "streaming", name: "streaming", pipelineCount: 3 },
 ];
 
-function renderDashboard(list: ProjectItem[] = projects) {
+function renderDashboard(list: ProjectSummary[] = projects) {
   return render(
     <MemoryRouter>
-      <ProjectsList projects={list} onDeleteProject={vi.fn()} />
+      <ProjectsList projects={list} />
     </MemoryRouter>
   );
 }
@@ -159,7 +159,7 @@ describe("Projects", () => {
 
 describe("Deleting a project", () => {
   it("requires the exact project name before deleting", () => {
-    renderDashboard([{ id: "project-1", name: "Analytics", pipelines: [] }]);
+    renderDashboard([{ id: "project-1", name: "Analytics" }]);
 
     fireEvent.click(screen.getByRole("button", { name: "Delete Analytics" }));
 

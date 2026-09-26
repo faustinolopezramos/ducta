@@ -141,20 +141,37 @@ def validate_pipeline_spec(name: str, spec: Dict[str, Any]) -> None:
         )
 
 
-def _pipeline_node_names(spec: Dict[str, Any]) -> List[str]:
-    """Extract the plain node names a pipeline spec's `nodes` list refers to."""
+def pipeline_node_names(spec: Dict[str, Any]) -> List[str]:
+    """The node names a pipeline spec's ``nodes`` list refers to.
+
+    Entries are normally plain strings; a dict entry is named by its ``name``
+    (or, failing that, ``id``); a mapping is named by its keys. The single
+    rule every caller uses.
+    """
+    nodes = (spec or {}).get("nodes") or []
+    if isinstance(nodes, dict):
+        return [str(k) for k in nodes]
     names: List[str] = []
-    for entry in spec.get("nodes", []) or []:
+    for entry in nodes:
         if isinstance(entry, str):
             names.append(entry)
-        elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
-            names.append(entry["name"])
+        elif isinstance(entry, dict):
+            name = entry.get("name") or entry.get("id")
+            if isinstance(name, str) and name:
+                names.append(name)
     return names
+
+
+def validate_pipeline(name: str, spec: Dict[str, Any], known_nodes: Dict[str, Any]) -> None:
+    """Every check a pipeline spec must pass before it is saved."""
+    validate_pipeline_spec(name, spec)
+    validate_pipeline_nodes(name, spec, known_nodes)
+    check_no_cycles(name, spec, known_nodes)
 
 
 def validate_pipeline_nodes(name: str, spec: Dict[str, Any], known_nodes: Dict[str, Any]) -> None:
     """Reject a pipeline spec that references a node nowhere in the workspace."""
-    missing = sorted(set(_pipeline_node_names(spec)) - set(known_nodes))
+    missing = sorted(set(pipeline_node_names(spec)) - set(known_nodes))
     if missing:
         raise ConfigValidationError(
             f"Pipeline '{name}' references unknown node(s): {', '.join(missing)}",
@@ -164,7 +181,7 @@ def validate_pipeline_nodes(name: str, spec: Dict[str, Any], known_nodes: Dict[s
 
 def check_no_cycles(name: str, spec: Dict[str, Any], known_nodes: Dict[str, Any]) -> None:
     """Reject a pipeline spec whose nodes form a dependency cycle."""
-    pipeline_nodes = set(_pipeline_node_names(spec))
+    pipeline_nodes = set(pipeline_node_names(spec))
     graph: Dict[str, List[str]] = {
         n: [d for d in (known_nodes.get(n, {}).get("dependencies") or []) if d in pipeline_nodes]
         for n in pipeline_nodes

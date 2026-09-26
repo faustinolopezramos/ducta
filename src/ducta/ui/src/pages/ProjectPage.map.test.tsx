@@ -103,22 +103,17 @@ vi.mock("../api/mutations", () => ({
   apiErrorMessage: (_err: unknown, fallback: string) => fallback,
 }));
 
-vi.mock("../hooks/useServerPipelineHydration", () => ({
-  useServerPipelineHydration: () => undefined,
-}));
-
-const storeState = {
-  present: {
-    projects: [
-      { id: "batch", name: "Batch project", pipelines: [{ id: "ingest", name: "ingest", nodes: [] }] },
+vi.mock("../hooks/useProjects", () => ({
+  useProjectList: () => ({ projects: [{ id: "batch", name: "Batch project" }], isLoading: false }),
+  useProjectPipelines: () => ({
+    pipelines: [
+      { id: "ingest", name: "ingest", nodes: [], active: true },
+      { id: "enrich", name: "enrich", nodes: [], active: true },
     ],
-  },
-  dispatch: vi.fn(),
-};
-
-vi.mock("../store/projectStore", () => ({
-  useProjectStore: (selector?: (s: typeof storeState) => unknown) =>
-    selector ? selector(storeState) : storeState,
+    raw: { pipelines: { ingest: { type: "batch" }, enrich: { type: "streaming" } } },
+    isLoading: false,
+    error: null,
+  }),
 }));
 
 // Imported after the mocks so the component picks them up.

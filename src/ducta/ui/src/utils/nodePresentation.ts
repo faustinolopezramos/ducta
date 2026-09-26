@@ -36,17 +36,6 @@ export function medallionLayer(datasets: readonly string[]): Medallion | null {
   return null;
 }
 
-/** Dataset names for one side of a node, whatever shape the spec used. */
-export function datasetNames(io: unknown): string[] {
-  if (!io) return [];
-  const arr = Array.isArray(io) ? io : [io];
-  return arr
-    .map((entry) =>
-      typeof entry === "string" ? entry : ((entry as { name?: string })?.name ?? "")
-    )
-    .filter(Boolean);
-}
-
 // ── Format glyphs ───────────────────────────────────────────────────────────
 
 /**

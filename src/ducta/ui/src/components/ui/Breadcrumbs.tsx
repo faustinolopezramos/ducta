@@ -1,8 +1,7 @@
 import { Link, useMatches } from "react-router-dom";
 import type { UIMatch } from "react-router-dom";
 import { IconChevronRight } from "@tabler/icons-react";
-import { useProjectStore } from "../../store/projectStore";
-import { selectPresent } from "../../store/reducer";
+import { useProjectList } from "../../hooks/useProjects";
 import "./Breadcrumbs.css";
 
 interface BreadcrumbHandle {
@@ -31,8 +30,7 @@ interface Crumb {
  */
 export function Breadcrumbs() {
   const matches = useMatches();
-  const outerState = useProjectStore();
-  const { projects } = selectPresent(outerState);
+  const { projects } = useProjectList();
 
   // Every wrapper route (RequireWorkspace, WorkspaceShellWrapper, ...) is
   // handle-less, so at most one match ever carries a breadcrumb — the leaf.

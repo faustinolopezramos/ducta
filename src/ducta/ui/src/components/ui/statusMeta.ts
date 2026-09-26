@@ -37,6 +37,7 @@ export type Status =
   | "error"
   | "cancelled"
   | "skipped"
+  | "gate_blocked"
   | "stopped";
 
 // Tabler icon components are forwardRef exotics; ComponentType<any> avoids the
@@ -54,20 +55,55 @@ export interface StatusMeta {
   color: string;
   /** Spin the icon (in-progress states). */
   spin?: boolean;
+  /** Coarse severity, for consumers that only need good / needs-a-look / bad. */
+  tone: StatusTone;
 }
+
+export type StatusTone = "ok" | "warn" | "bad" | "neutral";
 
 /** Canonical mapping: single source of truth for status presentation across the app. */
 export const STATUS_META: Record<Status, StatusMeta> = {
-  idle:            { label: "Idle",            Icon: IconCircle,            glyph: "○", color: colors.textDim },
-  pending:         { label: "Pending",         Icon: IconClock,             glyph: "○", color: colors.textDim },
-  starting:        { label: "Starting",        Icon: IconLoader2,           glyph: "▶", color: colors.blue, spin: true },
-  running:         { label: "Running",         Icon: IconLoader2,           glyph: "▶", color: colors.accent, spin: true },
-  success:         { label: "Success",         Icon: IconCircleCheck,       glyph: "✓", color: colors.green },
-  warning:         { label: "Warning",         Icon: IconAlertTriangle,     glyph: "!", color: colors.amber },
-  partial_failure: { label: "Partial failure", Icon: IconAlertTriangle,     glyph: "!", color: colors.amber },
-  failed:          { label: "Failed",          Icon: IconCircleX,           glyph: "✕", color: colors.red },
-  error:           { label: "Error",           Icon: IconCircleX,           glyph: "✕", color: colors.red },
-  cancelled:       { label: "Cancelled",       Icon: IconBan,               glyph: "■", color: colors.amber },
-  skipped:         { label: "Skipped",         Icon: IconPlayerSkipForward, glyph: "–", color: colors.amber },
-  stopped:         { label: "Stopped",         Icon: IconBan,               glyph: "■", color: colors.textMuted },
+  idle:            { label: "Idle",            Icon: IconCircle,            glyph: "○", color: colors.textDim,   tone: "neutral" },
+  pending:         { label: "Pending",         Icon: IconClock,             glyph: "○", color: colors.textDim,   tone: "warn" },
+  starting:        { label: "Starting",        Icon: IconLoader2,           glyph: "▶", color: colors.blue,      tone: "warn", spin: true },
+  running:         { label: "Running",         Icon: IconLoader2,           glyph: "▶", color: colors.accent,    tone: "warn", spin: true },
+  success:         { label: "Success",         Icon: IconCircleCheck,       glyph: "✓", color: colors.green,     tone: "ok" },
+  warning:         { label: "Warning",         Icon: IconAlertTriangle,     glyph: "!", color: colors.amber,     tone: "warn" },
+  partial_failure: { label: "Partial failure", Icon: IconAlertTriangle,     glyph: "!", color: colors.amber,     tone: "warn" },
+  failed:          { label: "Failed",          Icon: IconCircleX,           glyph: "✕", color: colors.red,       tone: "bad" },
+  error:           { label: "Error",           Icon: IconCircleX,           glyph: "✕", color: colors.red,       tone: "bad" },
+  cancelled:       { label: "Cancelled",       Icon: IconBan,               glyph: "■", color: colors.amber,     tone: "warn" },
+  skipped:         { label: "Skipped",         Icon: IconPlayerSkipForward, glyph: "–", color: colors.amber,     tone: "warn" },
+  // A quality gate rejected a node's data: the run finished without an error
+  // but did not do all of its work. Amber like other did-not-finish outcomes,
+  // yet counted in FAILURE_STATUSES — it needs a look.
+  gate_blocked:    { label: "Gate blocked",    Icon: IconAlertTriangle,     glyph: "!", color: colors.amber,     tone: "warn" },
+  stopped:         { label: "Stopped",         Icon: IconBan,               glyph: "■", color: colors.textMuted, tone: "neutral" },
 };
+
+/** Meta for a raw backend status, or undefined for a value outside the domain. */
+export function statusMetaFor(raw: string | null | undefined): StatusMeta | undefined {
+  return raw ? STATUS_META[raw.toLowerCase() as Status] : undefined;
+}
+
+/**
+ * Every status an execution record can carry — mirrors the backend's
+ * `ExecutionStatus` enum (api/models/execution.py).
+ */
+export const EXECUTION_STATUSES = [
+  "pending",
+  "running",
+  "success",
+  "failed",
+  "cancelled",
+  "skipped",
+  "gate_blocked",
+] as const;
+
+export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];
+
+/** A run (or node) that did not do its work: it broke, or a quality gate stopped it. */
+export const FAILURE_STATUSES: ReadonlySet<string> = new Set(["failed", "error", "gate_blocked"]);
+
+/** Still in flight. */
+export const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);

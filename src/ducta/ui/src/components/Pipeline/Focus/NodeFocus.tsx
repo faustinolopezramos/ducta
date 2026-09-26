@@ -14,15 +14,15 @@ import { Skeleton } from "../../ui/Skeleton";
 import { useBuilderStore } from "../../../store/builderStore";
 import { capitalize, compactDuration, medallionLayer } from "../../../utils/nodePresentation";
 import type { DagCanvasItem } from "../types";
+import { FAILURE_STATUSES } from "../../ui/statusMeta";
+import { statusTone } from "../../ui/StatusBadge";
 import { FocusColumn, FocusPanel } from "./FocusPanel";
 import {
   ChecksList,
   DatasetRef,
-  FAILED_STATES,
   KeyValues,
   NodeRef,
   Pill,
-  STATUS_TONE,
   lastRunLine,
   qualityLine,
 } from "./parts";
@@ -90,7 +90,7 @@ export function NodeFocus({
   const entry = [schema?.module ?? fallback?.module, schema?.fn ?? fallback?.fn].filter(Boolean).join(":");
   const description = schema?.description ?? fallback?.description;
   const status = execState ?? schema?.last_execution_status ?? null;
-  const failed = status ? FAILED_STATES.has(status) : false;
+  const failed = status ? FAILURE_STATUSES.has(status) : false;
 
   const inputs = schema?.inputs ?? (fallback?.inputs ?? []).map((p) => ({ ...p, declared: true }));
   const outputs = schema?.outputs ?? (fallback?.outputs ?? []).map((p) => ({ ...p, declared: true }));
@@ -149,7 +149,7 @@ export function NodeFocus({
             {capitalize(layer ?? schema?.type ?? fallback?.type ?? "node")}
           </span>
           {status && (
-            <Pill tone={STATUS_TONE[status] ?? "neutral"}>
+            <Pill tone={statusTone(status)}>
               {capitalize(status)}
               {schema?.last_execution_duration != null && !execState
                 ? `, ${compactDuration(schema.last_execution_duration)}`

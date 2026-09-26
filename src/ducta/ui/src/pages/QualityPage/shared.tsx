@@ -1,6 +1,5 @@
 import type React from "react";
 import { colors } from "../../theme/tokens";
-import { formatDate as formatDateShared } from "../../utils/formatDate";
 
 // ─────────────────────────────────────────────
 // SHARED STYLES
@@ -37,9 +36,6 @@ export function sectionTitle(icon: React.ReactNode, text: string) {
   );
 }
 
-export function formatDate(iso?: string | null) {
-  return formatDateShared(iso);
-}
 
 export function scoreColor(score?: number | null): string {
   if (typeof score !== "number") return colors.textMuted;

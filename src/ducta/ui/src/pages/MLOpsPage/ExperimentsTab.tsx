@@ -29,7 +29,8 @@ import {
   IconAlertTriangle,
   IconArrowsDiff,
 } from "@tabler/icons-react";
-import { formatDate, findProjectForPipeline } from "./shared";
+import { findProjectForPipeline } from "./shared";
+import { formatDate } from "../../utils/formatDate";
 
 function RunActionsCell({
   experimentId,
@@ -203,7 +204,7 @@ function runColumns({
       key: "created_at",
       header: "Created",
       sortable: true,
-      cell: (run) => formatDate(run.created_at),
+      cell: (run) => formatDate(run.created_at, { includeYear: true }),
     },
     {
       key: "duration_seconds",
@@ -288,7 +289,7 @@ function ExperimentRow({
         <span style={{ fontWeight: 600, color: colors.text, flex: 1 }}>
           {exp.name ?? exp.experiment_id}
         </span>
-        <span style={{ fontSize: 12, color: colors.textMuted }}>{formatDate(exp.created_at)}</span>
+        <span style={{ fontSize: 12, color: colors.textMuted }}>{formatDate(exp.created_at, { includeYear: true })}</span>
         <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
           {String(exp.experiment_id ?? "").slice(0, 8)}
         </span>

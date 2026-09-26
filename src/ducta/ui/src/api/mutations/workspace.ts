@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "../client";
-import { sourceKey } from "../utils";
 import { toastStore } from "../../hooks/useModalStack";
 import { defaultOnError } from "./errors";
+import { qk } from "../queryKeys";
 
 // ── Mutation payload types ────────────────────────────────────────────────────
 
@@ -34,7 +34,7 @@ export const useSelectSource = () => {
     mutationFn: (data: SourceSelectPayload) =>
       client.post("/workspace/select", data).then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["source"] });
+      queryClient.invalidateQueries({ queryKey: qk.source() });
     },
     onError: defaultOnError,
   });
@@ -50,7 +50,7 @@ export const useSetGitConfig = () => {
     mutationFn: ({ name, email }: SetGitConfigPayload) =>
       client.put("/git/config", { name, email }).then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["git"] });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
     },
     onError: defaultOnError,
   });
@@ -66,8 +66,8 @@ export const useSaveConfig = () => {
     mutationFn: ({ env, name, content, expected_commit_sha }: SaveConfigPayload) =>
       client.put(`/configs/${env}/${name}`, { content, expected_commit_sha }).then((r) => r.data),
     onSuccess: (data: { commit_sha?: string }) => {
-      queryClient.invalidateQueries({ queryKey: ["configs"] });
-      queryClient.invalidateQueries({ queryKey: ["git"] });
+      queryClient.invalidateQueries({ queryKey: qk.configs.all() });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
       const sha = data?.commit_sha ? ` · ${data.commit_sha.slice(0, 7)}` : "";
       toastStore.getState().show(`Config saved${sha}`, "success");
     },
@@ -100,9 +100,9 @@ export const useWriteWorkspaceFile = () => {
       client.put("/workspace/files/content", { path, content }),
     onSuccess: (_data, { path }) => {
       const dir = path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
-      queryClient.invalidateQueries({ queryKey: ["workspace-files", sourceKey()] });
-      queryClient.invalidateQueries({ queryKey: ["workspace-file-content", sourceKey(), path] });
-      queryClient.invalidateQueries({ queryKey: ["workspace-files", sourceKey(), dir] });
+      queryClient.invalidateQueries({ queryKey: qk.files.all() });
+      queryClient.invalidateQueries({ queryKey: qk.files.content(path) });
+      queryClient.invalidateQueries({ queryKey: qk.files.dir(dir) });
     },
     onError: defaultOnError,
   });
@@ -118,7 +118,7 @@ export const useDeleteWorkspaceFile = () => {
     mutationFn: (path: string) =>
       client.delete("/workspace/files", { params: { path } }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["workspace-files", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.files.all() });
     },
     onError: defaultOnError,
   });

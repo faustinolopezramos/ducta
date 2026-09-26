@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { IconCircleCheck } from "@tabler/icons-react";
 import type { AttentionItem, RunLike } from "../../utils/dashboardStats";
 import { formatRelative } from "../../utils/timeLabels";
+import { statusMetaFor } from "../ui/statusMeta";
 
 /** Rows shown before the rest are left to the History page. */
 const MAX_ROWS = 6;
@@ -27,7 +28,7 @@ export function RunsPanel({ active, attention, projectName, loading = false }: R
     ...attention.map((item) => ({
       run: item.run,
       meta: [
-        item.run.status === "gate_blocked" ? "gate blocked" : "failed",
+        (statusMetaFor(item.run.status)?.label ?? "Failed").toLowerCase(),
         formatRelative(item.run.started_at ?? item.run.finished_at),
         item.failures > 1 ? `${item.failures}× in 24h` : null,
       ]

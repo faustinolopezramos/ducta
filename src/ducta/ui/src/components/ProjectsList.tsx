@@ -4,7 +4,7 @@ import { useDeleteServerProject, useExecutionList } from "../api/queries";
 import { useSchedules } from "../api/schedulesApi";
 import { toastStore } from "../hooks/useModalStack";
 import { Button, ConfirmDialog, PageContainer, PageHeader } from "./ui";
-import type { ProjectItem } from "../store/reducer";
+import type { ProjectSummary } from "../types";
 import { activityWindowStart, nextScheduledRun, summarizeRuns, type RunLike } from "../utils/dashboardStats";
 import { OpsSummary } from "./Dashboard/OpsSummary";
 import { RunsPanel } from "./Dashboard/RunsPanel";
@@ -12,8 +12,7 @@ import { ProjectsBoard } from "./Dashboard/ProjectsBoard";
 import { NewProjectModal } from "./Dashboard/NewProjectModal";
 
 interface ProjectsListProps {
-  projects: ProjectItem[];
-  onDeleteProject: (projectId: string) => void;
+  projects: ProjectSummary[];
   workspacePath?: string;
 }
 
@@ -25,7 +24,7 @@ interface ProjectsListProps {
  * and when it was created — nothing about whether anything was running, broken
  * or about to run, though every one of those answers was one request away.
  */
-export function ProjectsList({ projects, onDeleteProject, workspacePath }: ProjectsListProps) {
+export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const deleteProject = useDeleteServerProject();
@@ -54,8 +53,8 @@ export function ProjectsList({ projects, onDeleteProject, workspacePath }: Proje
     deleteProject.mutate(
       { projectId: projectToDelete.id, force: true },
       {
+        // The mutation invalidates the project list; the card goes when it refetches.
         onSuccess: () => {
-          onDeleteProject(projectToDelete.id);
           toastStore.getState().show(`Project "${projectToDelete.name}" deleted`, "success");
           setConfirmDelete(null);
         },

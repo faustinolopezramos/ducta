@@ -1,5 +1,5 @@
 """Regression: `_error_logs` (module-level dict) had no lock, unlike its
-sibling registry `resilience_core.py::_resilience_contexts` — multiple
+sibling registry pattern (see `_registry.KeyedRegistry`) — multiple
 concurrent pipeline executions (each in its own thread) calling
 get_error_log/flush_error_log for their own execution_id could race on the
 same dict.

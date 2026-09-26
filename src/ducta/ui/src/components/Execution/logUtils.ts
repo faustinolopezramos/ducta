@@ -1,7 +1,6 @@
 import type { LogLevel, LogEntry } from "../../store/logsStore";
 import { colors } from "../../theme/tokens";
 import { formatDuration } from "../../utils/formatDuration";
-import { STATUS_META } from "../ui/statusMeta";
 
 export type { LogLevel, LogEntry };
 
@@ -15,31 +14,12 @@ export const LEVEL_COLOR: Record<LogLevel, string> = {
   DEBUG:   colors.textDim,
 };
 
-export const LEVEL_SHORT: Record<LogLevel, string> = {
-  ERROR: "ERR", WARNING: "WRN", INFO: "INF", DEBUG: "DBG", SUCCESS: "OK",
-};
-
 // Sentence-case labels for the level-filter toolbar — the pills are UI chrome
 // (sans), not log content, so they read as words rather than mono/uppercase
-// codes like the LEVEL_SHORT per-row markers do.
+// codes.
 export const LEVEL_LABEL: Record<LogLevel | "ALL", string> = {
   ALL: "All", DEBUG: "Debug", INFO: "Info", SUCCESS: "Success", WARNING: "Warning", ERROR: "Error",
 };
-
-// Node/execution-run status → glyph/label/color, sourced from the shared
-// STATUS_META table (see components/ui/statusMeta.ts) so this view of a
-// status never drifts from StatusBadge's or the streaming monitor's.
-export const NODE_STATUS_ICON: Record<string, string> = Object.fromEntries(
-  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.glyph]),
-);
-
-export const NODE_STATUS_LABEL: Record<string, string> = Object.fromEntries(
-  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.label]),
-);
-
-export const EXEC_STATE_COLOR: Record<string, string> = Object.fromEntries(
-  Object.entries(STATUS_META).map(([status, meta]) => [status, meta.color]),
-);
 
 export const LEVELS: Array<LogLevel | "ALL"> = ["ALL", "DEBUG", "INFO", "SUCCESS", "WARNING", "ERROR"];
 

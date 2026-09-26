@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client, { executionClient } from "../client";
-import { sourceKey } from "../utils";
 import { defaultOnError } from "./errors";
+import { qk } from "../queryKeys";
 
 // ── Pipeline mutation payloads (all project-scoped) ───────────────────────────
 
@@ -84,12 +84,12 @@ export const useCreatePipeline = () => {
         .then((r) => r.data),
     onSuccess: (_data, { projectId }) => {
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId, "pipelines"],
+        queryKey: qk.projects.pipelines(projectId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId],
+        queryKey: qk.projects.detail(projectId),
       });
-      queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.projects.all() });
     },
     onError: defaultOnError,
   });
@@ -112,9 +112,9 @@ export const useUpdatePipeline = () => {
       // whole project subtree, same as create/delete already do, not just
       // the narrow "pipelines" key.
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId],
+        queryKey: qk.projects.detail(projectId),
       });
-      queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.projects.all() });
     },
     onError: defaultOnError,
   });
@@ -135,12 +135,12 @@ export const useDeletePipeline = () => {
         .then(() => {}),
     onSuccess: (_data, { projectId }) => {
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId, "pipelines"],
+        queryKey: qk.projects.pipelines(projectId),
       });
       queryClient.invalidateQueries({
-        queryKey: ["server-projects", sourceKey(), projectId],
+        queryKey: qk.projects.detail(projectId),
       });
-      queryClient.invalidateQueries({ queryKey: ["server-projects", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.projects.all() });
     },
     onError: defaultOnError,
   });
@@ -180,7 +180,7 @@ export const useExecutePipeline = () => {
         })
         .then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["executions"] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
     },
     onError: defaultOnError,
   });
@@ -217,7 +217,7 @@ export const useSweepPipeline = () => {
         })
         .then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["executions"] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
     },
     onError: defaultOnError,
   });
@@ -247,7 +247,7 @@ export const useRunNode = () => {
         })
         .then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["executions"] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
     },
     onError: defaultOnError,
   });

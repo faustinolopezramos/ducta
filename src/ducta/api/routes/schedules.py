@@ -27,6 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import CurrentUserDep, SourcePathDep, require_permission
+from ducta.api.exceptions import http_error_on
 from ducta.api.execution.scheduler import (
     PipelineSchedule,
     compute_next_run,
@@ -82,10 +83,8 @@ def _with_next_run(sched: PipelineSchedule) -> ScheduleWithNextRun:
 
 
 def _validate_cron_or_400(cron: str) -> None:
-    try:
+    with http_error_on(422):
         validate_cron(cron)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get(

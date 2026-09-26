@@ -5,6 +5,8 @@
 // what needs attention, what is running, and each project's recent activity.
 // ─────────────────────────────────────────────
 
+import { ACTIVE_STATUSES, FAILURE_STATUSES } from "../components/ui/statusMeta";
+
 /** The fields of an execution record the dashboard reads. */
 export interface RunLike {
   id: string;
@@ -19,9 +21,6 @@ export interface RunLike {
   error_message?: string | null;
 }
 
-/** A run that did not do its work: it broke, or a quality gate stopped it. */
-export const FAILURE_STATUSES: ReadonlySet<string> = new Set(["failed", "error", "gate_blocked"]);
-export const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["running", "pending"]);
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;

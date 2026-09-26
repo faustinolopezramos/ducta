@@ -34,7 +34,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-wider);
   text-transform: uppercase;
@@ -98,7 +98,7 @@
 /* ── Section label, shared by "Needs attention" and "Projects" ───────────── */
 .dash-section-title {
   margin: 0 0 var(--space-3);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: var(--tracking-wider);
   text-transform: uppercase;

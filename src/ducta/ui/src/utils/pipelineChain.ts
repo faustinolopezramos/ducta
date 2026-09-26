@@ -47,11 +47,6 @@ export function dependsOnFromEdges(
   return graph;
 }
 
-/** `graph` as the parents map (`id → ids it depends on`) the lineage utils take. */
-export function toParentsMap(graph: PipelineGraph): Map<string, string[]> {
-  return new Map([...graph].map(([p, deps]) => [p, [...deps]]));
-}
-
 function walk(start: string, next: (id: string) => Iterable<string>): string[] {
   const seen = new Set<string>([start]);
   const out: string[] = [];

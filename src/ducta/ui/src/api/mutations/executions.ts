@@ -1,8 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "../client";
-import { sourceKey } from "../utils";
 import { toastStore } from "../../hooks/useModalStack";
 import { defaultOnError } from "./errors";
+import { qk } from "../queryKeys";
 
 // ── Execution Mutations ───────────────────────────────────────────────────────
 
@@ -16,8 +16,8 @@ export const useRetryExecution = () => {
     mutationFn: (executionId: string) =>
       client.post(`/executions/${executionId}/retry`).then((r) => r.data),
     onSuccess: (_data: unknown, executionId: string) => {
-      queryClient.invalidateQueries({ queryKey: ["executions", sourceKey(), executionId] });
-      queryClient.invalidateQueries({ queryKey: ["executions", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.detail(executionId) });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
       toastStore.getState().show("Execution retried — new run queued.", "success");
     },
     onError: defaultOnError,
@@ -34,7 +34,7 @@ export const useBulkCancelExecutions = () => {
     mutationFn: (executionIds: string[]) =>
       client.post("/executions/bulk-cancel", { execution_ids: executionIds }).then((r) => r.data),
     onSuccess: (data: { cancelled?: string[]; skipped?: string[] }) => {
-      queryClient.invalidateQueries({ queryKey: ["executions", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
       const n = data?.cancelled?.length ?? 0;
       toastStore.getState().show(`Cancelled ${n} execution${n !== 1 ? "s" : ""}.`, "success");
     },
@@ -52,8 +52,8 @@ export const useCancelExecution = () => {
     mutationFn: (executionId: string) =>
       client.post(`/executions/${executionId}/cancel`).then((r) => r.data),
     onSuccess: (_data: unknown, executionId: string) => {
-      queryClient.invalidateQueries({ queryKey: ["executions", sourceKey(), executionId] });
-      queryClient.invalidateQueries({ queryKey: ["executions", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.executions.detail(executionId) });
+      queryClient.invalidateQueries({ queryKey: qk.executions.all() });
     },
     onError: defaultOnError,
   });

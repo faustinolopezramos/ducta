@@ -53,10 +53,30 @@ def validate_identifier(name: str, field: str = "name") -> str:
     return name
 
 
-def validate_environment_name(env: str) -> str:
-    if not re.match(r"^[a-z][a-z0-9_\-]*$", env):
+_PROJECT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}$")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def validate_project_name(name: str) -> str:
+    """The one rule for naming a *new* project (create, import, template).
+
+    Stricter than ``validate_identifier``, which stays the rule for looking up
+    an existing project so older names remain reachable.
+    """
+    if not _PROJECT_NAME_RE.match(name):
         raise ValueError(
-            f"Invalid environment name: '{env}'. Must be lowercase and start with a letter."
+            f"Invalid project name '{name}'. Must start with a letter, be at most "
+            "64 characters, and contain only letters, digits, hyphens or underscores."
+        )
+    return name
+
+
+def validate_environment_name(env: str) -> str:
+    """The one rule for an environment name received from a request."""
+    if not _ENV_NAME_RE.match(env):
+        raise ValueError(
+            f"Invalid environment name '{env}'. Only letters, digits, '_' and '-' "
+            "are allowed (max 64 characters)."
         )
     return env
 

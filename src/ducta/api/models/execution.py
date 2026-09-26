@@ -258,15 +258,6 @@ class BulkCancelResponse(BaseModel):
     )
 
 
-class ErrorRecoveryPlan(BaseModel):
-    """Recommended recovery strategy computed for a recorded failure."""
-
-    primary: str = Field(description="Primary strategy: retry, skip_node, fallback, abort, manual")
-    alternatives: List[str] = Field(default_factory=list, description="Fallback strategies")
-    retry_delay: Optional[float] = Field(default=None, description="Suggested retry delay (s)")
-    notes: Optional[str] = Field(default=None, description="Human-readable guidance")
-
-
 class ExecutionErrorDetail(BaseModel):
     """A single categorized failure with its full Python traceback."""
 
@@ -283,7 +274,9 @@ class ExecutionErrorDetail(BaseModel):
     traceback_lines: List[str] = Field(
         default_factory=list, description="Last traceback lines (frame summary)"
     )
-    recovery_plan: Optional[ErrorRecoveryPlan] = Field(default=None)
+    hint: Optional[str] = Field(
+        default=None, description="What to look at first for this category of failure"
+    )
 
 
 class ExecutionErrorsResponse(BaseModel):

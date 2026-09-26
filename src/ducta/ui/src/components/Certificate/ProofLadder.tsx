@@ -3,7 +3,6 @@ import {
   IconShieldX,
   IconShieldOff,
   IconShieldHalf,
-  IconShieldQuestion,
   IconShield,
   IconLoader2,
   IconRefresh,

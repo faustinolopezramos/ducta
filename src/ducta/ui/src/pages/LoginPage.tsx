@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate, useLocation, Navigate } from "react-router-dom";
-import { useAuthStore, type AuthStoreUser } from "../store/auth";
+import { useAuthStore } from "../store/auth";
 import client from "../api/client";
 import { apiErrorMessage } from "../api/mutations";
 import type { AxiosError } from "axios";

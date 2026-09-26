@@ -28,7 +28,6 @@ import msgpack  # type: ignore
 from fastapi import (  # type: ignore
     APIRouter,
     Depends,
-    HTTPException,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -45,13 +44,12 @@ from ducta.api.dependencies import (
     require_permission,
     resolve_websocket_user,
 )
-from ducta.api.exceptions import ExecutionNotFoundError
+from ducta.api.exceptions import ExecutionNotFoundError, http_error_on
 from ducta.api.execution.manager import ExecutionManager
 from ducta.api.models.auth import User
 from ducta.api.models.execution import (
     BulkCancelRequest,
     BulkCancelResponse,
-    ErrorRecoveryPlan,
     ExecutionErrorDetail,
     ExecutionErrorsResponse,
     ExecutionListResponse,
@@ -182,7 +180,7 @@ async def get_execution_errors(
     exec_manager: ExecutionManagerDep,
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> ExecutionErrorsResponse:
-    """Return categorized failures (type, category, full traceback, recovery plan)
+    """Return categorized failures (type, category, full traceback, hint)
     for a finished execution. Empty result when the run recorded no errors."""
     user_id = current_user.id if current_user else None
     # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
@@ -197,7 +195,9 @@ async def get_execution_errors(
     errors: List[ExecutionErrorDetail] = []
     for entry in summary.get("errors", []):
         error = entry.get("error") or {}
-        plan = entry.get("recovery_plan")
+        # Logs written before `hint` existed carry a `recovery_plan` whose
+        # `notes` held the same guidance.
+        hint = entry.get("hint") or (entry.get("recovery_plan") or {}).get("notes")
         errors.append(
             ExecutionErrorDetail(
                 timestamp=entry.get("timestamp", ""),
@@ -209,7 +209,7 @@ async def get_execution_errors(
                 category=error.get("category", "unknown"),
                 traceback=error.get("traceback", ""),
                 traceback_lines=error.get("traceback_lines", []),
-                recovery_plan=ErrorRecoveryPlan(**plan) if plan else None,
+                hint=hint,
             )
         )
     return ExecutionErrorsResponse(
@@ -278,10 +278,8 @@ async def retry_execution(
     """Clone a terminal execution and re-enqueue it with the same parameters."""
     user_id = current_user.id if current_user else None
     # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
-    try:
+    with http_error_on(400):
         return exec_manager.retry(execution_id, source_path=source_path, user_id=user_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
 
 
 _TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})

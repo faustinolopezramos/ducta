@@ -4,7 +4,8 @@ import { DataTable, type DataTableColumn } from "../ui/DataTable";
 import { Button } from "../ui/Button";
 import { compactDuration } from "../../utils/nodePresentation";
 import { formatDate } from "../../utils/formatDate";
-import { ChecksList, DatasetRef, FAILED_STATES, KeyValues, lastRunLine, qualityLine } from "./Focus/parts";
+import { ChecksList, DatasetRef, KeyValues, lastRunLine, qualityLine } from "./Focus/parts";
+import { FAILURE_STATUSES } from "../ui/statusMeta";
 
 /** One node, as the contract list shows it. */
 export interface ContractRow {
@@ -135,7 +136,7 @@ export function ContractList({
       align: "right",
       cell: (row) => {
         const state = stateOf(row);
-        if (state && FAILED_STATES.has(state)) return <span className="contract-failed">failed</span>;
+        if (state && FAILURE_STATUSES.has(state)) return <span className="contract-failed">failed</span>;
         if (state === "running") return <span className="contract-running">running</span>;
         const took = compactDuration(row.schema?.last_execution_duration);
         return (
@@ -248,7 +249,7 @@ export function ContractList({
             isRowSelected={(row) => row.id === selectedId}
             rowClassName={(row) => {
               const state = stateOf(row);
-              return state && FAILED_STATES.has(state) ? "contract-row--failed" : undefined;
+              return state && FAILURE_STATUSES.has(state) ? "contract-row--failed" : undefined;
             }}
             renderRowDetail={renderDetail}
             expandedRowKey={selectedId}

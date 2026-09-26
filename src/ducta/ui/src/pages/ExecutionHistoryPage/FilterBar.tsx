@@ -2,7 +2,8 @@ import { useRef, useState, type CSSProperties } from "react";
 import { colors, styles } from "../../theme/tokens";
 import { type ExecutionListFilters, useEnvironments, useServerProjects } from "../../api/queries";
 import { IconFilter, IconSearch, IconX } from "@tabler/icons-react";
-import { ALL_STATUSES, DATE_PRESETS, datePresetSince } from "./helpers";
+import { DATE_PRESETS, datePresetSince } from "./helpers";
+import { EXECUTION_STATUSES } from "../../components/ui/statusMeta";
 
 const dateInputStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
@@ -103,7 +104,7 @@ export function FilterBar({
 
       {/* Status pills */}
       <div style={{ display: "flex", gap: 4 }}>
-        {ALL_STATUSES.map((s) => (
+        {EXECUTION_STATUSES.map((s) => (
           <button
             key={s}
             onClick={() => onChange({ ...filters, status: filters.status === s ? undefined : s })}

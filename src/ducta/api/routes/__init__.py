@@ -26,7 +26,6 @@ from ducta.api.routes.auth import router as auth_router
 from ducta.api.routes.certificates import router as certificates_router
 from ducta.api.routes.certificates_standalone import router as certificates_standalone_router
 from ducta.api.routes.configs import router as configs_router
-from ducta.api.routes.connect import router as connect_router
 from ducta.api.routes.environments import router as environments_router
 from ducta.api.routes.execution import router as execution_router
 from ducta.api.routes.execution import ws_router as execution_ws_router
@@ -67,7 +66,6 @@ def register_routes(app: FastAPI) -> None:
     app.include_router(auth_router, prefix=API_PREFIX)
 
     # Workspace — metadata and source resolution
-    app.include_router(connect_router, prefix=API_PREFIX)
     app.include_router(workspace_router, prefix=API_PREFIX)
 
     # Domain hierarchy: Project → Pipeline → Node

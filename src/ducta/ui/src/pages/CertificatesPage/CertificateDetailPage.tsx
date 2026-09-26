@@ -12,7 +12,6 @@ import {
   useCertificateDiff,
   useReproduceCertificate,
   useVerifyCertificate,
-  type CertificateVerifyResult,
 } from "../../api/certificatesApi";
 import { ProofLadder, type ReproduceState } from "../../components/Certificate/ProofLadder";
 import { CopyButton } from "../../components/Certificate/CopyButton";
@@ -35,11 +34,13 @@ export function CertificateDetailPage() {
   // Integrity + authenticity are free — check them the moment the certificate
   // loads rather than waiting for a click. Reproduce stays opt-in: it starts
   // a real pipeline run.
-  const { mutate: verify, isPending: verifying } = useVerifyCertificate();
-  const [verdict, setVerdict] = useState<CertificateVerifyResult | null>(null);
+  const { mutate: verify, isPending: verifying, data: verifyData, variables: verified } = useVerifyCertificate();
+  // The mutation already holds the last result and what it was for; a verdict
+  // for a different certificate than the one on screen is no verdict.
+  const verdict =
+    verified?.projectId === projectId && verified?.runId === runId ? verifyData ?? null : null;
   useEffect(() => {
-    setVerdict(null);
-    if (projectId && runId) verify({ projectId, runId }, { onSuccess: setVerdict });
+    if (projectId && runId) verify({ projectId, runId });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-verify only when the identity changes, not on every `verify` reference
   }, [projectId, runId]);
 
@@ -131,7 +132,7 @@ export function CertificateDetailPage() {
           <ProofLadder
             verify={verdict}
             verifying={verifying}
-            onVerify={() => verify({ projectId, runId }, { onSuccess: setVerdict })}
+            onVerify={() => verify({ projectId, runId })}
             reproduce={reproduceState}
             reproducing={startingReproduce}
             onReproduce={() =>

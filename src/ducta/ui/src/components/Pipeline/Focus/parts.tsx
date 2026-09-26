@@ -55,20 +55,6 @@ export function Pill({
   return <span className={`inspector-pill${tone ? ` tone-${tone}` : ""}`}>{children}</span>;
 }
 
-export const FAILED_STATES = new Set(["failed", "error"]);
-
-export const STATUS_TONE: Record<string, "ok" | "warn" | "bad" | "neutral"> = {
-  success: "ok",
-  completed: "ok",
-  failed: "bad",
-  error: "bad",
-  gate_blocked: "bad",
-  cancelled: "warn",
-  skipped: "warn",
-  running: "warn",
-  pending: "warn",
-};
-
 function formatValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatValue).join(", ");
   if (value && typeof value === "object") return JSON.stringify(value);

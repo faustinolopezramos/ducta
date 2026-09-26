@@ -28,6 +28,7 @@ from loguru import logger  # type: ignore
 
 from ducta.api.exceptions import ConfigFileNotFoundError, ConfigValidationError
 from ducta.api.utils.fsio import atomic_write
+from ducta.api.workspace.utils import CONFIG_EXTENSIONS
 
 # Maximum config file size (10 MB) to prevent YAML bomb / DoS attacks.
 _MAX_CONFIG_FILE_SIZE = 10 * 1024 * 1024
@@ -147,7 +148,7 @@ def load_config_file(path: Path) -> Dict[str, Any]:
         ) from exc
 
 
-_SUPPORTED_EXTENSIONS = (".yaml", ".yml", ".toml", ".json")
+_SUPPORTED_EXTENSIONS = CONFIG_EXTENSIONS
 
 
 def _probe_default_path(

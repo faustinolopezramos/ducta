@@ -40,7 +40,7 @@ Ducta UI is the presentation layer, implementing:
 *   **App shell & routing**: React Router v7 (`createBrowserRouter`) with lazy-loaded pages, protected routes, workspace gating, breadcrumbs, and a top-level error boundary (`App.tsx`).
 *   **Server state**: TanStack **React Query** for fetching/caching, with typed hooks over an Axios client (`api/`).
 *   **Resilient API client**: shared Axios interceptors inject the auth token and per-request `source`, refresh JWTs with a queued single-flight guard, retry transient errors (429/timeout) with exponential backoff, and log out on unrecoverable 401s (`api/client.ts`).
-*   **Client state**: **Zustand** stores for auth, workspace, projects (with undo/redo), builder, logs, settings, and UI theme (`store/`).
+*   **Client state**: **Zustand** stores for client-only state — auth, workspace selection, the canvas builder (with undo/redo), logs and UI preferences (`store/`). Server data (projects, pipelines, nodes) lives only in the React Query cache; see `hooks/useProjects.ts` and `api/queryKeys.ts`.
 *   **Editing**: Monaco editor for node code and config, `react-hook-form` + **Zod** for forms/validation, and `js-yaml` for config round-tripping.
 *   **Live execution**: WebSocket log streaming, virtualized log lists (`react-virtuoso`), and Web Workers for off-main-thread work (`workers/`).
 *   **Generated types**: OpenAPI-derived TypeScript types keep the client in sync with the API (`generated/`).
@@ -109,15 +109,26 @@ function usePipelines(env: string) {
 }
 ```
 
-### Read and update client state (Zustand)
+### Read server data, then change it with a mutation
+Server data (projects, pipelines, nodes…) lives only in the React Query cache —
+never copy it into a Zustand store. Derive views with `useMemo`, write through a
+mutation, and let the mutation's invalidation refetch. Build keys with `qk`
+(`api/queryKeys.ts`), never inline.
 ```tsx
-import { useProjectStore } from "../store/projectStore";
+import { useProjectList } from "../hooks/useProjects";
+import { useDeleteServerProject } from "../api/queries";
 
-function DeleteButton({ id }: { id: string }) {
-  const dispatch = useProjectStore((s) => s.dispatch);
-  return <button onClick={() => dispatch({ type: "DELETE_PROJECT", payload: id })}>Delete</button>;
+function ProjectNames() {
+  const { projects } = useProjectList();
+  const deleteProject = useDeleteServerProject(); // invalidates qk.projects.all()
+  return projects.map((p) => (
+    <button key={p.id} onClick={() => deleteProject.mutate({ projectId: p.id })}>{p.name}</button>
+  ));
 }
 ```
+
+Zustand is for client-only state: UI preferences (`uiStore`), the canvas edit
+history (`builderStore`), live logs (`logsStore`), the auth session.
 
 ### Call the long-timeout execution client
 ```tsx

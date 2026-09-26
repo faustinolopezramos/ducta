@@ -20,32 +20,27 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import ConfigServiceDep, require_permission
-from ducta.api.exceptions import ConcurrencyError, ConfigFileNotFoundError, ConfigValidationError
+from ducta.api.exceptions import (
+    ConcurrencyError,
+    ConfigFileNotFoundError,
+    ConfigValidationError,
+    http_error_on,
+)
 from ducta.api.models.config import ConfigFileResponse, ConfigValidationResponse
+from ducta.api.utils.validators import validate_environment_name
 
 router = APIRouter(prefix="/configs", tags=["Configs"])
 
 
-_ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
-
-
 def _validate_env(env: str) -> None:
-    """Validate environment identifier."""
-    if not _ENV_NAME_RE.match(env):
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Invalid environment name '{env}'. "
-                "Only alphanumeric characters, underscores and hyphens are allowed."
-            ),
-        )
+    with http_error_on(400):
+        validate_environment_name(env)
 
 
 class ConfigUpdateRequest(BaseModel):

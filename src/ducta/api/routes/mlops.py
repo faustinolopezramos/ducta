@@ -20,17 +20,19 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 from loguru import logger
 from pydantic import BaseModel
 
 from ducta.api.dependencies import SourcePathDep, require_permission
+from ducta.api.exceptions import ValidationError
+from ducta.api.utils.git_utils import safe_path
 from ducta.mlrun.config import DEFAULT_REGISTRY_PATH, DEFAULT_TRACKING_PATH
-from ducta.mlrun.exceptions import ExperimentNotFoundError, ModelNotFoundError, RunNotFoundError
 from ducta.mlrun.experiment_tracking import ExperimentTracker, RunStatus
 from ducta.mlrun.model_registry import ModelRegistry, ModelStage, PromotionPolicy
 from ducta.mlrun.storage import LocalStorageBackend
@@ -134,9 +136,17 @@ def _resolve_mlops_storage(
     global_config: Optional[Dict[str, Any]] = None,
     project: Optional[str] = None,
 ) -> str:
-    """Resolve mlops storage path from workspace or explicit override."""
+    """Resolve mlops storage path from workspace or explicit override.
+
+    An explicit *override* comes straight from the request, so it is confined
+    to the workspace: these endpoints delete runs, model versions and GC'd
+    artifacts under it.
+    """
     if override:
-        return override
+        try:
+            return str(safe_path(source_path, override))
+        except ValueError as exc:
+            raise ValidationError(str(exc), detail={"storage_path": override}) from exc
 
     context = _resolve_workspace_context(source_path, env, project)
     if context is not None:
@@ -160,82 +170,76 @@ def _resolve_mlops_storage(
     return str(source_path / "mlops_data")
 
 
-def _make_tracker(storage_path: str) -> ExperimentTracker:
-    storage = LocalStorageBackend(base_path=storage_path)
-    return ExperimentTracker(storage=storage, tracking_path=DEFAULT_TRACKING_PATH)
+class MLOpsScope:
+    """Where an mlops request reads and writes: the workspace, optionally
+    narrowed by env / pipeline / project, or an explicit storage override
+    confined to the workspace. Shared by every endpoint below."""
+
+    def __init__(
+        self,
+        source_path: SourcePathDep,
+        storage_path: Optional[str] = Query(
+            None, description="Override MLOps storage path (must be inside the workspace)"
+        ),
+        env: Optional[str] = Query(
+            None, description="Environment to resolve the storage path from"
+        ),
+        pipeline: Optional[str] = Query(
+            None, description="Pipeline name (schema.pipeline) to scope to"
+        ),
+        project: Optional[str] = _PROJECT_QUERY,
+    ) -> None:
+        self._source_path = source_path
+        self._env = env
+        self._project = project
+        self.storage = _resolve_mlops_storage(
+            source_path, storage_path, env, pipeline, project=project
+        )
+
+    @cached_property
+    def global_config(self) -> Dict[str, Any]:
+        return _resolve_global_config(self._source_path, self._env, self._project)
+
+    def tracker(self) -> ExperimentTracker:
+        storage = LocalStorageBackend(base_path=self.storage)
+        return ExperimentTracker(storage=storage, tracking_path=DEFAULT_TRACKING_PATH)
+
+    def registry(self) -> ModelRegistry:
+        storage = LocalStorageBackend(base_path=self.storage)
+        return ModelRegistry(storage=storage, registry_path=DEFAULT_REGISTRY_PATH)
 
 
-def _make_registry(storage_path: str) -> ModelRegistry:
-    storage = LocalStorageBackend(base_path=storage_path)
-    return ModelRegistry(storage=storage, registry_path=DEFAULT_REGISTRY_PATH)
+MLOpsScopeDep = Annotated[MLOpsScope, Depends()]
 
 
 # ── Experiment endpoints ─────────────────────────────────────────────────────
 
 
-@router.get(
-    "/experiments",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def list_experiments(
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None, description="Override MLOps storage path"),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> List[Dict[str, Any]]:
+@router.get("/experiments", dependencies=[Depends(require_permission("execution.read"))])
+async def list_experiments(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """List all MLOps experiments (most recent first)."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
-
-    def _run():
-        return _make_tracker(resolved).list_experiments()
-
-    try:
-        return await run_in_threadpool(_run)
-    except Exception as exc:
-        logger.error("Failed to list experiments: {}", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(lambda: scope.tracker().list_experiments())
 
 
 @router.get(
     "/experiments/{experiment_id}",
     dependencies=[Depends(require_permission("execution.read"))],
 )
-async def get_experiment(
-    experiment_id: str,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> Dict[str, Any]:
+async def get_experiment(experiment_id: str, scope: MLOpsScopeDep) -> Dict[str, Any]:
     """Get an experiment and its runs."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
 
-    def _run():
-        tracker = _make_tracker(resolved)
-        # Get experiment metadata
+    def _run() -> Dict[str, Any]:
+        tracker = scope.tracker()
         exp = tracker._get_experiment(experiment_id)
-        runs = tracker.list_runs(experiment_id)
         return {
             "experiment_id": exp.experiment_id,
             "name": exp.name,
             "created_at": exp.created_at,
             "artifact_location": exp.artifact_location,
-            "runs": runs,
+            "runs": tracker.list_runs(experiment_id),
         }
 
-    try:
-        return await run_in_threadpool(_run)
-    except ExperimentNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Experiment '{experiment_id}' not found")
-    except Exception as exc:
-        logger.error("Failed to get experiment {}: {}", experiment_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(_run)
 
 
 @router.post(
@@ -243,32 +247,15 @@ async def get_experiment(
     dependencies=[Depends(require_permission("execution.write"))],
 )
 async def close_run(
-    experiment_id: str,
-    run_id: str,
-    body: CloseRunRequest,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
+    experiment_id: str, run_id: str, body: CloseRunRequest, scope: MLOpsScopeDep
 ) -> Dict[str, Any]:
     """Force a run stuck in RUNNING to a terminal status."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
 
-    def _run():
-        tracker = _make_tracker(resolved)
-        run = tracker.close_run(run_id, status=RunStatus(body.status))
+    def _run() -> Dict[str, Any]:
+        run = scope.tracker().close_run(run_id, status=RunStatus(body.status))
         return {"run_id": run.run_id, "status": run.status.value}
 
-    try:
-        return await run_in_threadpool(_run)
-    except RunNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
-    except Exception as exc:
-        logger.error("Failed to close run {}: {}", run_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(_run)
 
 
 @router.delete(
@@ -276,87 +263,23 @@ async def close_run(
     status_code=204,
     dependencies=[Depends(require_permission("execution.write"))],
 )
-async def delete_run(
-    experiment_id: str,
-    run_id: str,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> None:
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
-
-    def _run():
-        _make_tracker(resolved).delete_run(run_id)
-
-    try:
-        await run_in_threadpool(_run)
-    except RunNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found")
-    except Exception as exc:
-        logger.error("Failed to delete run {}: {}", run_id, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+async def delete_run(experiment_id: str, run_id: str, scope: MLOpsScopeDep) -> None:
+    await run_in_threadpool(lambda: scope.tracker().delete_run(run_id))
 
 
 # ── Model endpoints ──────────────────────────────────────────────────────────
 
 
-@router.get(
-    "/models",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def list_models(
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> List[Dict[str, Any]]:
+@router.get("/models", dependencies=[Depends(require_permission("execution.read"))])
+async def list_models(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """List all registered models (latest version per model)."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
-
-    def _run():
-        return _make_registry(resolved).list_models()
-
-    try:
-        return await run_in_threadpool(_run)
-    except Exception as exc:
-        logger.error("Failed to list models: {}", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(lambda: scope.registry().list_models())
 
 
-@router.get(
-    "/models/{name}",
-    dependencies=[Depends(require_permission("execution.read"))],
-)
-async def get_model_versions(
-    name: str,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> List[Dict[str, Any]]:
+@router.get("/models/{name}", dependencies=[Depends(require_permission("execution.read"))])
+async def get_model_versions(name: str, scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """Get all versions of a model."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
-
-    def _run():
-        return _make_registry(resolved).list_model_versions(name)
-
-    try:
-        return await run_in_threadpool(_run)
-    except ModelNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
-    except Exception as exc:
-        logger.error("Failed to get model versions for {}: {}", name, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(lambda: scope.registry().list_model_versions(name))
 
 
 @router.post(
@@ -364,31 +287,12 @@ async def get_model_versions(
     dependencies=[Depends(require_permission("execution.write"))],
 )
 async def promote_model(
-    name: str,
-    body: PromoteModelRequest,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
+    name: str, body: PromoteModelRequest, scope: MLOpsScopeDep
 ) -> Dict[str, Any]:
     """Promote a model version to a new stage."""
-    gs = _resolve_global_config(source_path, env, project)
-    resolved = _resolve_mlops_storage(
-        source_path, storage_path, env, pipeline, global_config=gs, project=project
-    )
+    target_stage = ModelStage(body.stage.capitalize())
 
-    try:
-        target_stage = ModelStage(body.stage.capitalize())
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid stage '{body.stage}'. Valid values: staging, production, archived",
-        )
-
-    policy_cfg = (gs.get("mlops") or {}).get("promotion_policy")
+    policy_cfg = (scope.global_config.get("mlops") or {}).get("promotion_policy")
     policy: Optional[PromotionPolicy] = None
     if isinstance(policy_cfg, dict) and policy_cfg.get("metric"):
         try:
@@ -396,9 +300,10 @@ async def promote_model(
         except Exception as exc:
             logger.warning("Invalid mlops.promotion_policy ignored: {}", exc)
 
-    def _run():
-        registry = _make_registry(resolved)
-        registry.promote_model(name, body.version, target_stage, policy=policy, force=body.force)
+    def _run() -> Dict[str, Any]:
+        scope.registry().promote_model(
+            name, body.version, target_stage, policy=policy, force=body.force
+        )
         return {
             "name": name,
             "version": body.version,
@@ -406,13 +311,7 @@ async def promote_model(
             "promoted": True,
         }
 
-    try:
-        return await run_in_threadpool(_run)
-    except ModelNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Model '{name}' v{body.version} not found")
-    except Exception as exc:
-        logger.error("Failed to promote model {} v{}: {}", name, body.version, exc)
-        raise HTTPException(status_code=400, detail=str(exc))
+    return await run_in_threadpool(_run)
 
 
 @router.delete(
@@ -420,76 +319,34 @@ async def promote_model(
     status_code=204,
     dependencies=[Depends(require_permission("execution.write"))],
 )
-async def delete_model_version(
-    name: str,
-    version: int,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> None:
+async def delete_model_version(name: str, version: int, scope: MLOpsScopeDep) -> None:
     """Delete a specific model version and its artifact."""
-    resolved = _resolve_mlops_storage(source_path, storage_path, env, pipeline, project=project)
-
-    def _run():
-        _make_registry(resolved).delete_model_version(name, version)
-
-    try:
-        await run_in_threadpool(_run)
-    except ModelNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Model '{name}' v{version} not found")
-    except Exception as exc:
-        logger.error("Failed to delete model {} v{}: {}", name, version, exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    await run_in_threadpool(lambda: scope.registry().delete_model_version(name, version))
 
 
-@router.post(
-    "/gc",
-    dependencies=[Depends(require_permission("execution.write"))],
-)
-async def run_gc(
-    body: GcRequest,
-    source_path: SourcePathDep,
-    storage_path: Optional[str] = Query(None),
-    env: Optional[str] = Query(None, description="Environment to resolve the storage path from"),
-    pipeline: Optional[str] = Query(
-        None, description="Pipeline name (schema.pipeline) to scope to"
-    ),
-    project: Optional[str] = _PROJECT_QUERY,
-) -> Dict[str, Any]:
+@router.post("/gc", dependencies=[Depends(require_permission("execution.write"))])
+async def run_gc(body: GcRequest, scope: MLOpsScopeDep) -> Dict[str, Any]:
     """Garbage-collect old model versions."""
-    gs = _resolve_global_config(source_path, env, project)
-    resolved = _resolve_mlops_storage(
-        source_path, storage_path, env, pipeline, global_config=gs, project=project
-    )
 
-    def _run():
+    def _run() -> Dict[str, Any]:
         from ducta.mlrun.config import MLOpsConfig
         from ducta.mlrun.gc import ModelGarbageCollector
 
-        gc_cfg = (gs.get("mlops") or {}).get("gc")
+        gc_cfg = (scope.global_config.get("mlops") or {}).get("gc")
         mlops_config = MLOpsConfig.from_env()
         if isinstance(gc_cfg, dict):
             mlops_config = mlops_config.with_overrides(gc_cfg)
-        gc = ModelGarbageCollector(
-            storage_path=resolved,
+        stats = ModelGarbageCollector(
+            storage_path=scope.storage,
             max_versions_per_model=mlops_config.max_versions_per_model,
             model_retention_days=mlops_config.model_retention_days,
-        )
-        stats = gc.run(dry_run=body.dry_run)
+        ).run(dry_run=body.dry_run)
         return {
             "dry_run": body.dry_run,
             "models_processed": stats.get("models_processed", 0),
             "versions_removed": stats.get("versions_removed", 0),
             "bytes_freed": stats.get("bytes_freed", 0),
-            "storage_path": resolved,
+            "storage_path": scope.storage,
         }
 
-    try:
-        return await run_in_threadpool(_run)
-    except Exception as exc:
-        logger.error("GC failed: {}", exc)
-        raise HTTPException(status_code=500, detail=str(exc))
+    return await run_in_threadpool(_run)

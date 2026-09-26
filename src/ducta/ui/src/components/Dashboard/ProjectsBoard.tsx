@@ -4,18 +4,17 @@ import { IconPackage, IconPlus, IconX } from "@tabler/icons-react";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { StatusBadge } from "../ui/StatusBadge";
-import type { ProjectItem } from "../../store/reducer";
-import { FAILURE_STATUSES, runTimestamp, type ProjectActivity } from "../../utils/dashboardStats";
+import type { ProjectSummary } from "../../types";
+import { runTimestamp, type ProjectActivity } from "../../utils/dashboardStats";
+import { FAILURE_STATUSES } from "../ui/statusMeta";
 import { formatRelative } from "../../utils/timeLabels";
 
 interface ProjectsBoardProps {
-  projects: ProjectItem[];
+  projects: ProjectSummary[];
   activity: Map<string, ProjectActivity>;
   onDelete: (projectId: string) => void;
   onCreate: () => void;
 }
-
-const statusLabel = (status: string) => (status === "gate_blocked" ? "Gate blocked" : undefined);
 
 /**
  * Every project as a card: its name, how many pipelines it holds, and how its
@@ -58,7 +57,7 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
       </h2>
       <ul className="dash-project-grid">
         {rows.map((project) => {
-          const pipelineCount = project.pipelineCount ?? project.pipelines.length;
+          const pipelineCount = project.pipelineCount ?? 0;
           const lastRun = activity.get(project.id)?.lastRun ?? null;
           const failing = Boolean(lastRun && FAILURE_STATUSES.has(lastRun.status));
           return (
@@ -73,7 +72,7 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
                 <div className="dash-project-card-foot">
                   {lastRun ? (
                     <>
-                      <StatusBadge status={lastRun.status} label={statusLabel(lastRun.status)} size="sm" variant="dot" />
+                      <StatusBadge status={lastRun.status} size="sm" variant="dot" />
                       {formatRelative(lastRun.started_at ?? lastRun.finished_at)}
                     </>
                   ) : (

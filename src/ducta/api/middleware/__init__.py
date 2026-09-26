@@ -25,14 +25,12 @@ import uuid
 
 from fastapi import FastAPI, Request, Response  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
-from fastapi.responses import JSONResponse  # type: ignore
 from loguru import logger  # type: ignore
 
 from ducta.api.config import get_settings
-from ducta.api.exceptions import DuctaAPIError
 from ducta.api.middleware.audit import maybe_write_audit
+from ducta.api.middleware.errors import register_exception_handlers
 from ducta.api.middleware.rate_limit import RateLimitMiddleware
-from ducta.core.errors import DuctaError as EngineError
 
 __all__ = ["register_middleware", "RateLimitMiddleware"]
 
@@ -154,57 +152,4 @@ def register_middleware(app: FastAPI) -> None:
 
         return response
 
-    # DuctaAPIError handler
-    @app.exception_handler(DuctaAPIError)
-    async def ducta_exception_handler(request: Request, exc: DuctaAPIError) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", None)
-        logger.bind(
-            request_id=request_id,
-            error_code=exc.error_code,
-            path=request.url.path,
-        ).warning("DuctaAPIError: {message}", message=exc.message)
-
-        body = exc.to_dict()
-        if request_id:
-            body["request_id"] = request_id
-
-        return JSONResponse(status_code=exc.status_code, content=body)
-
-    # Engine error handler. Errors from `ducta.core` are not DuctaAPIError
-    # subclasses, so they used to land in the catch-all below and come back as a
-    # 500 "An unexpected error occurred" — even when the cause was the caller's
-    # own configuration. Each engine error already declares the HTTP status its
-    # kind of failure deserves (404 for an unknown pipeline, 400 for bad config,
-    # 422 for data that failed its checks), so the mapping is read off the
-    # exception instead of guessed here.
-    @app.exception_handler(EngineError)
-    async def engine_exception_handler(request: Request, exc: EngineError) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", None)
-        logger.bind(
-            request_id=request_id,
-            error=type(exc).__name__,
-            path=request.url.path,
-        ).warning("Engine error: {message}", message=exc.message)
-
-        body = exc.to_dict()
-        if request_id:
-            body["request_id"] = request_id
-
-        return JSONResponse(status_code=exc.http_status, content=body)
-
-    # Generic unhandled exception handler
-    @app.exception_handler(Exception)
-    async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", None)
-        logger.bind(request_id=request_id, path=request.url.path).exception(
-            "Unhandled exception: {exc}", exc=exc
-        )
-
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": "INTERNAL_ERROR",
-                "message": "An unexpected error occurred.",
-                "request_id": request_id,
-            },
-        )
+    register_exception_handlers(app)

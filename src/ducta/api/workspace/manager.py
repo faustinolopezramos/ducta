@@ -39,7 +39,11 @@ from ducta.api.utils.git_utils import (
 from ducta.api.utils.platform_utils import posix_relative
 from ducta.api.utils.validators import validate_identifier
 from ducta.api.workspace.loaders import load_config_file, load_environment_yaml
-from ducta.api.workspace.utils import find_base_global_config, find_config_files
+from ducta.api.workspace.utils import (
+    find_base_global_config,
+    find_config_files,
+    has_config_file,
+)
 
 
 class WorkspaceManager:
@@ -100,9 +104,7 @@ class WorkspaceManager:
 
         config_root = self.root
         if self._project_path is not None:
-            _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
-            has_env = any((self._project_path / f"environment{ext}").exists() for ext in _ENV_EXTS)
-            if has_env:
+            if has_config_file(self._project_path, "environment"):
                 config_root = self._project_path
 
         config_paths = find_config_files(config_root, env)

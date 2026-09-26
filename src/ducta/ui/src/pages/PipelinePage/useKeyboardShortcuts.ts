@@ -1,5 +1,6 @@
 import { useEffect, type Dispatch, type SetStateAction } from "react";
 import type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
+import { useBuilderStore } from "../../store/builderStore";
 
 interface NavMaps {
   children: Map<string, string[]>;
@@ -8,7 +9,7 @@ interface NavMaps {
 }
 
 /**
- * ⌘K finder, arrow-key walking, F fit, O orientation, R run node, Esc deselect.
+ * ⌘K finder, ⌘Z / ⌘⇧Z undo/redo, arrow-key walking, F fit, O orientation, R run node, Esc deselect.
  *
  * Arrows follow the flow. Along it they step to a dependency or a consumer;
  * across it, to the neighbour in the same layer — so ↑/↓ walk the dependencies
@@ -65,6 +66,18 @@ export function usePipelineKeyboardShortcuts(params: {
       if (mod && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setPaletteOpen((v) => !v);
+        return;
+      }
+      // Canvas undo/redo (the builder's edit history). Lived in App.tsx, keyed
+      // off the URL, next to a second, project-wide undo that is gone now.
+      const key = e.key.toLowerCase();
+      if (mod && (key === "z" || key === "y")) {
+        const target = e.target as HTMLElement | null;
+        if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
+        e.preventDefault();
+        const builder = useBuilderStore.getState();
+        if (key === "y" || e.shiftKey) builder.redo();
+        else builder.undo();
         return;
       }
       if (paletteOpen || mod || e.altKey) return;

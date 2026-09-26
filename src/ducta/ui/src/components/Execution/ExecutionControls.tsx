@@ -3,7 +3,7 @@ import {
   IconPlayerPlay, IconPlayerStop, IconReload, IconFlask,
   IconCircleCheck, IconCopy, IconSettings, IconTerminal2, IconX,
 } from "@tabler/icons-react";
-import { Button, Toolbar, StatusBadge } from "../ui";
+import { Button, Toolbar } from "../ui";
 import { ExecutionStatus } from "./ExecutionStatus";
 import { ExecutionErrorPanel } from "./ExecutionErrorPanel";
 import { ExecutionParamsPanel } from "./ExecutionParamsPanel";

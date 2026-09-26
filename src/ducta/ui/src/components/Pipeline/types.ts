@@ -63,11 +63,3 @@ export type CanvasSelection =
   | { kind: "node"; id: string }
   | { kind: "dataset"; id: string }
   | null;
-
-/** An edge that exists because a dataset flows across it. */
-export interface DatasetEdge {
-  from: string;
-  to: string;
-  /** null for an explicit `dependencies` edge with no dataset behind it. */
-  dataset: string | null;
-}

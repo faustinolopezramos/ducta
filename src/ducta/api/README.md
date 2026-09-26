@@ -111,9 +111,9 @@ TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
 
 ### Step 3: Connect to a source and inspect configs
 ```bash
-# Register/resolve a source (local path or Git URL) -> returns a project_id
+# Resolve a source (local path, or a Git URL to clone)
 curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  http://127.0.0.1:8000/api/connect -d '{"source":"/path/to/project"}'
+  http://127.0.0.1:8000/api/workspace/select -d '{"path_or_url":"/path/to/project"}'
 
 # List configs for an environment
 curl -H "Authorization: Bearer $TOKEN" \

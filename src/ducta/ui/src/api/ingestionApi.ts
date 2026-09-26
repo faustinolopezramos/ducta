@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
-import { sourceKey } from "./utils";
 import { defaultOnError } from "./mutations/errors";
+import { qk } from "./queryKeys";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -47,13 +47,13 @@ export interface ConnectionUsageResult {
 }
 
 const invalidate = (qc: ReturnType<typeof useQueryClient>) =>
-  qc.invalidateQueries({ queryKey: ["ingestion", sourceKey()] });
+  qc.invalidateQueries({ queryKey: qk.ingestion.all() });
 
 // ─── Hooks ──────────────────────────────────────────────────────────────────────
 
 export const useConnections = () =>
   useQuery<{ connections: ConnectionInfo[] }>({
-    queryKey: ["ingestion", sourceKey(), "connections"],
+    queryKey: qk.ingestion.connections(),
     queryFn: () => client.get("/ingestion/connections").then((r) => r.data),
     staleTime: 30 * 1000,
   });
@@ -90,7 +90,7 @@ export const useRetestConnection = () =>
 
 export const useConnectionUsage = (name: string, enabled: boolean) =>
   useQuery<ConnectionUsageResult>({
-    queryKey: ["ingestion", sourceKey(), "connections", name, "usage"],
+    queryKey: qk.ingestion.usage(name),
     queryFn: () =>
       client.get(`/ingestion/connections/${encodeURIComponent(name)}/usage`).then((r) => r.data),
     enabled: enabled && !!name,

@@ -141,21 +141,3 @@ export function useToastStack() {
  * Usage: toastStore.getState().error("Something went wrong")
  */
 export { useToastStore as toastStore };
-
-/**
- * Combine modal and toast stacks for complete notification system
- */
-export function useNotificationHub() {
-  const modals = useModalStack();
-  const toasts = useToastStack();
-
-  return {
-    modals,
-    toasts,
-    showError: (message: string) => toasts.error(message),
-    showSuccess: (message: string) => toasts.success(message),
-    showConfirm: (title: string, message: string, onConfirm: () => void) => {
-      modals.open('confirm', { title, message, onConfirm });
-    },
-  };
-}

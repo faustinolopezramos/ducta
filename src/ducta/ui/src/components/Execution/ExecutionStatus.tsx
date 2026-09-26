@@ -28,10 +28,6 @@ function useElapsed(startedAt: string | null | undefined) {
   return origin === null ? 0 : Math.max(0, Math.floor((now - origin) / 1000));
 }
 
-function fmtDuration(totalSeconds: number) {
-  return formatDuration(totalSeconds, "compact");
-}
-
 const mutedText: React.CSSProperties = {
   color: "var(--text-muted)",
   fontFamily: "var(--font-mono)",
@@ -121,11 +117,11 @@ export function ExecutionStatus({
       <StatusBadge status={status} size="sm" variant={compact ? "dot" : "subtle"} />
 
       {/* Timer while running */}
-      {status === "running" && execution.started_at && <span style={mutedText}>{fmtDuration(elapsed)}</span>}
+      {status === "running" && execution.started_at && <span style={mutedText}>{formatDuration(elapsed)}</span>}
 
       {/* Final duration */}
       {(status === "success" || status === "failed") && duration_seconds != null && (
-        <span style={mutedText}>{fmtDuration(Math.round(duration_seconds))}</span>
+        <span style={mutedText}>{formatDuration(Math.round(duration_seconds))}</span>
       )}
 
       {/* Error snippet (click to expand) */}

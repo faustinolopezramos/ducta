@@ -1,36 +1,18 @@
 /**
  * projectAdapter.ts
  *
- * Converts between the server-persisted WorkspaceProject (from the API)
- * and the client-side ProjectItem (used by the Zustand reducer).
- *
- * WorkspaceProject is the source of truth (persisted in Git via the API).
- * ProjectItem is the in-memory "enriched view" that holds the full pipeline
- * graph for the current session. Pipelines are loaded on-demand per project.
+ * Converts the server-persisted WorkspaceProject (from the API) into the
+ * ProjectSummary the dashboard renders. The server is the only source of
+ * truth: this is a view of the query cache, never a copy kept in a store.
  */
-import type { WorkspaceProject } from "../types";
-import type { ProjectItem } from "../store/reducer";
+import type { ProjectSummary, WorkspaceProject } from "../types";
 
-/**
- * Converts a server WorkspaceProject into a client ProjectItem.
- * Pipelines start empty — they are loaded on-demand when the user
- * navigates into a project (via useServerProjectPipelines).
- */
-export function serverProjectToItem(sp: WorkspaceProject): ProjectItem {
+export function toProjectSummary(sp: WorkspaceProject): ProjectSummary {
   return {
     id: sp.id,
     name: sp.name,
     description: sp.description,
-    // The server already counted them; the card would otherwise fetch each
-    // project's pipeline list to recount.
     pipelineCount: sp.pipeline_count,
-    pipelines: [],   // Loaded on-demand per project route
-    connections: [],
-    globalSettings: {
-      environment: (sp.metadata?.environment as string) ?? "base",
-      mode:        (sp.metadata?.mode        as string) ?? "local",
-      layer:       (sp.metadata?.layer       as string) ?? "silver_layer",
-    },
     createdAt: sp.created_at,
     updatedAt: sp.updated_at,
   };

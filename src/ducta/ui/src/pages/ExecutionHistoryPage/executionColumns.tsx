@@ -3,7 +3,8 @@ import { IconAlertTriangle, IconGauge, IconPlayerStop, IconRefresh, IconShieldCh
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import type { DataTableColumn } from "../../components/ui/DataTable";
 import { useCancelExecution, useRetryExecution } from "../../api/mutations";
-import { formatDuration, formatTime } from "./helpers";
+import { formatDuration } from "./helpers";
+import { formatDate } from "../../utils/formatDate";
 import "./executionTable.css";
 
 export interface ExecutionListItem {
@@ -210,7 +211,7 @@ export function executionColumns(
       header: "Started",
       sortable: true,
       mono: true,
-      cell: (ex) => formatTime(ex.started_at),
+      cell: (ex) => formatDate(ex.started_at),
     },
     {
       key: "duration_seconds",

@@ -29,7 +29,7 @@ from ducta.api.exceptions import NodeNotFoundError
 from ducta.api.repositories._yaml_record_repository import YamlRecordRepository
 from ducta.api.utils.git_utils import file_commit_sha
 from ducta.api.workspace.loaders import load_config_file
-from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
+from ducta.api.workspace.utils import find_config_file, find_ducta_config, resolve_module_path
 
 
 def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) -> Dict[str, Any]:
@@ -70,32 +70,22 @@ def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) 
 
 def _find_standard_project_nodes_file(project_dir: Path) -> Optional[Path]:
     """Return the nodes config file for a standard (non-layered) project."""
-    _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
-
     # 1. Read environment file to get the declared nodes path
-    for ext in _ENV_EXTS:
-        env_file = project_dir / f"environment{ext}"
-        if env_file.exists():
-            try:
-                env_data = load_config_file(env_file) or {}
-                base_path_str = env_data.get("base_path", ".")
-                base_path = (project_dir / base_path_str).resolve()
-                nodes_rel = env_data.get("env_config", {}).get("base", {}).get("nodes_config_path")
-                if nodes_rel:
-                    candidate = (base_path / nodes_rel).resolve()
-                    if candidate.exists():
-                        return candidate
-            except Exception:
-                pass
-            break  # stop after first env file regardless of outcome
+    env_file = find_config_file(project_dir, "environment")
+    if env_file is not None:
+        try:
+            env_data = load_config_file(env_file) or {}
+            base_path = (project_dir / env_data.get("base_path", ".")).resolve()
+            nodes_rel = env_data.get("env_config", {}).get("base", {}).get("nodes_config_path")
+            if nodes_rel:
+                candidate = (base_path / nodes_rel).resolve()
+                if candidate.exists():
+                    return candidate
+        except Exception:
+            pass
 
     # 2. Convention-based fallback: config/nodes.*
-    for ext in (".yaml", ".yml", ".json", ".toml"):
-        candidate = project_dir / "config" / f"nodes{ext}"
-        if candidate.exists():
-            return candidate
-
-    return None
+    return find_config_file(project_dir / "config", "nodes")
 
 
 class NodeRepository(YamlRecordRepository):

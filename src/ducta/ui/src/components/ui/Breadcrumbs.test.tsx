@@ -3,12 +3,8 @@ import { createMemoryRouter, RouterProvider } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { Breadcrumbs } from "./Breadcrumbs";
 
-vi.mock("../../store/projectStore", () => ({
-  useProjectStore: () => ({
-    present: {
-      projects: [{ id: "proj-1", name: "Analytics", pipelines: [] }],
-    },
-  }),
+vi.mock("../../hooks/useProjects", () => ({
+  useProjectList: () => ({ projects: [{ id: "proj-1", name: "Analytics" }], isLoading: false }),
 }));
 
 function renderAt(path: string) {
@@ -55,7 +51,7 @@ describe("Breadcrumbs", () => {
     expect(screen.getByText("Analytics")).toHaveAttribute("aria-current", "page");
   });
 
-  it("falls back to the raw id when the project isn't in the store yet", () => {
+  it("falls back to the raw id when the project isn't listed yet", () => {
     renderAt("/project/unknown-id");
     expect(screen.getByText("unknown-id")).toBeInTheDocument();
   });

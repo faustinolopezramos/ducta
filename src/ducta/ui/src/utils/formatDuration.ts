@@ -8,14 +8,18 @@
  *   millisecond delta (was `logUtils.ts`'s `formatElapsed`).
  * - `"uptime"`   — `Xh Ym` / `Xm Ys` / `Ys`, cascading through hours (was
  *   `LiveMedallionMonitor/helpers.ts`'s `formatUptime`).
+ * - `"precise"`  — `X.Xs` under a minute, `Xm Ys` at or above (was the
+ *   execution history's own copy, which rounded 119.6s to "1m 60s").
  */
-export type DurationStyle = "compact" | "elapsed" | "uptime";
+export type DurationStyle = "compact" | "elapsed" | "uptime" | "precise";
 
 export function formatDuration(seconds: number, style: DurationStyle = "compact"): string {
   const safe = Math.max(0, seconds);
 
-  if (style === "elapsed" && safe < 60) {
-    return `+${safe.toFixed(1)}s`;
+  // Floor to one decimal first so 59.96 reads "59.9s", not "60.0s".
+  const tenths = Math.floor(safe * 10) / 10;
+  if ((style === "elapsed" || style === "precise") && tenths < 60) {
+    return `${style === "elapsed" ? "+" : ""}${tenths.toFixed(1)}s`;
   }
 
   if (style === "uptime") {

@@ -1,4 +1,5 @@
 import { useEffect, useState, lazy, Suspense } from "react";
+import { useParams } from "react-router-dom";
 import {
   CommandPalette,
   ContractList,
@@ -23,33 +24,54 @@ import { AddNodeForm } from "./AddNodeForm";
 import { LogsStatusBar } from "./LogsStatusBar";
 import { PipelineTopBar } from "./PipelineTopBar";
 import { usePipelineKeyboardShortcuts } from "./useKeyboardShortcuts";
-import { usePipelinePageState } from "./usePipelinePageState";
+import { usePipelineEditing } from "./usePipelineEditing";
+import { usePipelineGraph } from "./usePipelineGraph";
+import { usePipelineRun } from "./usePipelineRun";
+import { usePipelineView } from "./usePipelineView";
 
 /** How far a focused node is lifted above centre, clear of the focus sheet. */
 const FOCUS_LIFT_PX = 150;
 
 export function PipelinePage() {
+  const { projectId, pipelineId } = useParams<{ projectId: string; pipelineId: string }>();
   const {
-    projectId, pipelineId, navigate,
+    navigate,
     lens, setLens, orientation, setOrientation, toggleOrientation,
-    scope, setScope, hasChain, chainStrip, chainStatus, drawnPipelines,
+    requestedScope, setScope,
     selection, selectedNodeId, selectedDatasetName,
     selectNodeById, selectDatasetByName, setSelection, clearSelection,
-    showOnCanvas, focusDatasetOnCanvas, openPipeline, isOnCanvas, openCodeFor,
-    yamlMarkers, setYamlMarkers, setActiveExecutionId,
-    isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode,
-    runningNodeId, execStatus, setExecStatus,
-    addNodeOpen, setAddNodeOpen, paletteOpen, setPaletteOpen,
-    activeEnv, executionStates, nodeStates, showToast, logsOpen, setLogsOpen,
-    datasetMap, datasetByName, datasetsLoading, schemaById, schemasLoading,
-    pipelinesData, rawPipelineSpec, yamlString, handleSaveYaml, handleAddNode,
-    existingNodeNames,
-    currentProject, currentPipeline, pipelineNodes, dagItems, itemById, strata,
-    parentsMap, lineage, navMaps, neighbours, listOrder, contractRows, isExecuting,
-    handleRunNode, handleExecute, handleValidate, handleCancel,
+    showOnCanvas, focusDatasetOnCanvas, openPipeline,
     onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
+  } = usePipelineView(projectId);
+  const {
+    currentProject, projectsLoading, currentPipeline, pipelineNodes,
+    pipelinesData, rawPipelineSpec, yamlString, existingNodeNames,
+    datasetMap, datasetByName, datasetsLoading,
+    hasChain, chainStrip, scope, drawnPipelines,
+    schemaById, schemasLoading, executionStates, nodeStates,
+    dagItems, itemById, isOnCanvas, parentsMap, lineage, navMaps, neighbours,
+    listOrder, contractRows, strata,
+  } = usePipelineGraph({ projectId, pipelineId, requestedScope, selectedNodeId });
+  const {
+    activeEnv, showToast,
+    setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
+    logsOpen, setLogsOpen, chainStatus,
+    handleRunNode, handleExecute, handleValidate, handleCancel,
+  } = usePipelineRun({ projectId, pipelineId, itemById });
+  const {
+    yamlMarkers, setYamlMarkers,
+    isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode, openCodeFor,
+    addNodeOpen, setAddNodeOpen, paletteOpen, setPaletteOpen,
+    handleSaveYaml, handleAddNode,
     blocker,
-  } = usePipelinePageState();
+  } = usePipelineEditing({
+    projectId,
+    pipelineId,
+    rawPipelineSpec,
+    commitSha: pipelinesData?.commit_sha,
+    selectNodeById,
+    showToast,
+  });
 
   const [showMinimap, setShowMinimap] = useState(false);
 
@@ -73,6 +95,17 @@ export function PipelinePage() {
   const { mutate: updateNodeCode } = useUpdateNodeCode();
 
   if (!currentProject) {
+    if (projectsLoading) {
+      return (
+        <div className="pipeline-error-page">
+          <div className="error-content">
+            <IconCircleDotted size={40} stroke={1.5} color="var(--primary)"
+              className="animate-spin" style={{ marginBottom: "16px" }} />
+            <h1>Loading project…</h1>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="pipeline-error-page">
         <div className="error-content">
@@ -86,13 +119,9 @@ export function PipelinePage() {
   }
 
   if (!currentPipeline) {
-    // The client store hydrates a pipeline's nodes lazily, so on a direct load /
-    // refresh / deep link `currentPipeline` is briefly undefined. Only call it
-    // "not found" once the server listing has arrived AND doesn't contain it —
-    // while that listing is still loading, or already lists this pipeline (store
-    // just hasn't caught up), show a loading state instead of a false error.
-    const stillHydrating = pipelinesData === undefined || Boolean(rawPipelineSpec);
-    if (stillHydrating) {
+    // Only call it "not found" once the server listing has arrived and does
+    // not contain it; while it is still loading, show a loading state.
+    if (pipelinesData === undefined) {
       return (
         <div className="pipeline-error-page">
           <div className="error-content">

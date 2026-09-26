@@ -29,11 +29,17 @@ from fastapi.security import OAuth2PasswordBearer  # type: ignore
 from ducta.api.config import Settings, get_settings
 from ducta.api.core.git_sync import GitSyncManager
 from ducta.api.core.locks import ConfigLockManager
-from ducta.api.exceptions import AuthenticationError, ExpiredTokenError, InvalidTokenError
+from ducta.api.exceptions import (
+    AuthenticationError,
+    ExpiredTokenError,
+    InvalidTokenError,
+    http_error_on,
+)
 from ducta.api.execution.manager import ExecutionManager
 from ducta.api.models.auth import User
 from ducta.api.services.config_service import ConfigService
 from ducta.api.services.node_service import NodeService
+from ducta.api.source.models import ResolvedSource
 from ducta.api.source.resolver import SourceResolver
 from ducta.api.workspace.manager import WorkspaceManager
 
@@ -57,6 +63,13 @@ def _dev_admin_user() -> User:
 
 
 # ── Source path resolution (replaces workspace) ─────────────────────────────
+
+
+def resolve_source(raw: str) -> ResolvedSource:
+    """``SourceResolver.resolve`` with its failures mapped to HTTP errors:
+    a bad path/URL is the caller's fault (400), a failed clone is ours (500)."""
+    with http_error_on(400, ValueError), http_error_on(500, RuntimeError):
+        return SourceResolver.resolve(raw)
 
 
 def get_source_path(
@@ -92,12 +105,7 @@ def get_source_path(
             ),
         )
 
-    try:
-        resolved = SourceResolver.resolve(resolved_source)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    resolved = resolve_source(resolved_source)
 
     request.state.source_path = resolved.path
     request.state.workspace_root = resolved.path

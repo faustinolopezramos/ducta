@@ -20,21 +20,20 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import re
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
+from ducta.api.exceptions import http_error_on
 from ducta.api.models.template import (
     GenerateFromTemplateRequest,
     GenerateFromTemplateResponse,
     TemplateInfo,
 )
+from ducta.api.utils.validators import validate_project_name
 
 router = APIRouter(prefix="/templates", tags=["Templates"])
-
-_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 @router.get(
@@ -62,11 +61,8 @@ async def generate_from_template(
     from ducta.console.core import ConfigFormat
     from ducta.console.template import TemplateGenerator, TemplateType
 
-    if not _NAME_RE.match(body.project_name):
-        raise HTTPException(
-            status_code=422,
-            detail="Project name may contain only letters, digits, underscore, or hyphen",
-        )
+    with http_error_on(422):
+        validate_project_name(body.project_name)
 
     try:
         template_type = TemplateType(body.template)

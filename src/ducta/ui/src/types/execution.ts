@@ -1,10 +1,12 @@
+import type { ExecutionStatus } from "../components/ui/statusMeta";
+
 export interface Execution {
   id: string;
   pipeline_name: string;
   project_id?: string;
   node_name?: string;
   env: string;
-  status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled' | 'skipped';
+  status: ExecutionStatus;
   started_at?: string;
   finished_at?: string;
   duration_seconds?: number;

@@ -1,6 +1,7 @@
 import type { DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
-import { formatDuration, formatTime } from "../ExecutionHistoryPage/helpers";
+import { formatDuration } from "../ExecutionHistoryPage/helpers";
+import { formatDate } from "../../utils/formatDate";
 import type { Execution } from "../../types/execution";
 
 export type CertificateListItem = Execution & { project_id?: string };
@@ -15,7 +16,7 @@ export const certificateColumns: DataTableColumn<CertificateListItem>[] = [
   { key: "pipeline_name", header: "Pipeline", mono: true, sortable: true },
   { key: "project_id", header: "Project", mono: true, sortable: true, cell: (ex) => ex.project_id ?? "—" },
   { key: "env", header: "Env", mono: true, sortable: true },
-  { key: "started_at", header: "Started", mono: true, sortable: true, cell: (ex) => formatTime(ex.started_at) },
+  { key: "started_at", header: "Started", mono: true, sortable: true, cell: (ex) => formatDate(ex.started_at) },
   {
     key: "duration_seconds",
     header: "Duration",

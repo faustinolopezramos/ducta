@@ -65,27 +65,24 @@ export function apiErrorMessage(error: unknown, fallback = "Operation failed"): 
 }
 
 /**
- * Map error codes to user-friendly action messages.
+ * Map error codes to user-friendly action messages. Keys are the `error`
+ * values the API actually sends (ErrorCode in api/models/responses.py).
  */
 export const ERROR_ACTION_MAP: Record<string, string> = {
   CONCURRENCY_ERROR: "Data was modified by another user. Please refresh and try again.",
-  WORKSPACE_ALREADY_EXISTS: "A workspace is already configured at this location.",
   PROJECT_ALREADY_EXISTS: "A project with this name already exists.",
   WORKSPACE_NOT_FOUND: "No workspace is configured. Please select a workspace first.",
   PIPELINE_NOT_FOUND: "The requested pipeline does not exist.",
   NODE_NOT_FOUND: "The requested node does not exist.",
   CONFIG_FILE_NOT_FOUND: "The requested configuration file does not exist.",
-  COMMIT_NOT_FOUND: "The requested commit does not exist.",
   EXECUTION_NOT_FOUND: "The requested execution record does not exist.",
   PROJECT_NOT_FOUND: "The requested project does not exist.",
-  AUTHORIZATION_ERROR: "You do not have permission to perform this action. Contact an admin.",
   AUTHENTICATION_ERROR: "Authentication failed. Please log in again.",
   INVALID_TOKEN: "Your session token is invalid. Please log in again.",
   TOKEN_EXPIRED: "Your session has expired. Please log in again.",
   EXECUTION_ERROR: "Pipeline execution failed. Check the logs for details.",
-  REPOSITORY_ADAPTER_ERROR: "Repository operation failed. Please check your repository configuration.",
   RATE_LIMIT_EXCEEDED: "Too many requests. Please wait a moment and try again.",
-  GIT_OPERATION_ERROR: "A Git operation failed. Check your repository state.",
+  GIT_ERROR: "A Git operation failed. Check your repository state.",
   SYNTAX_ERROR: "The code contains syntax errors. Please fix and try again.",
   CONFIG_VALIDATION_ERROR: "Configuration validation failed. Please check the config format.",
 };

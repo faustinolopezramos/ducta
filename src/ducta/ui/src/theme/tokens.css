@@ -3,7 +3,7 @@
  *
  * Single source of truth for scale tokens (spacing, type, radii, elevation,
  * motion), the extended palette, and SEMANTIC STATUS tokens. Layered ON TOP of
- * theme/ducta-theme.css (the canonical terracotta base + dark-mode neutrals), so
+ * theme/ducta-theme.css (the canonical Blueprint base + dark-mode neutrals), so
  * the brand colors there stay authoritative. This file only ADDS the scales and
  * the derived tokens that the rest of the app already references but were never
  * defined — e.g. semantic.ts (--blue-a12, --purple-a15…) and states.css
@@ -30,6 +30,8 @@
   --space-16: 64px;
 
   /* ── Type scale ──────────────────────────────────────────────────────────── */
+  /* Canvas-only: port labels, chip meta, attribution. Nothing smaller exists. */
+  --text-2xs:  11px;
   --text-xs:   12px;
   --text-sm:   13px;
   --text-base: 14px;
@@ -125,7 +127,7 @@
   --accent-dim: color-mix(in oklab, var(--primary) 8%, transparent);
   --accent-dark: color-mix(in oklab, var(--primary) 80%, black);
   /* Previously used but never defined (states.css / glass.css) — now resolve to
-     the terracotta brand so accented hovers, chips and glass surfaces render. */
+     the petrol brand so accented hovers, chips and glass surfaces render. */
   --accent-hover: color-mix(in oklab, var(--primary) 86%, black);
   --accent-a15: color-mix(in srgb, var(--primary) 15%, transparent);
   --accent-bg: var(--primary-light);
@@ -206,7 +208,7 @@
   --surface-solid: var(--surface-elevated);
   --minimap-bg: var(--surface-elevated);
   /* Previously used but never defined (states.css / glass.css). Warm-tinted so
-     hovers and glass panels stay on the terracotta identity in both themes. */
+     hovers and glass panels stay on the Blueprint identity in both themes. */
   --surface-hover: color-mix(in srgb, var(--primary) 5%, var(--surface));
   --surface-glass: color-mix(in srgb, var(--surface) 82%, transparent);
   --glass-border: color-mix(in srgb, var(--border-hover) 60%, transparent);

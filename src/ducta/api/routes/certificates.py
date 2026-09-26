@@ -138,10 +138,18 @@ class ReproduceRequest(BaseModel):
 _LEGACY_RUNS_DIR = Path(".ducta") / "runs"
 
 
+def _read_certificate(path: Path) -> Dict[str, Any]:
+    """Load a certificate the caller has already located; a file that exists
+    but cannot be parsed is a server-side fault (500)."""
+    try:
+        return load_certificate(path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}") from exc
+
+
 def _project_dir(root: Path, project_id: str) -> Path:
     """The directory a project's runs execute from (same rule as execute/reproduce)."""
-    project_dir = root / "projects" / project_id
-    return project_dir if project_dir.is_dir() else root
+    return WorkspaceManager(root).for_project(project_id).root
 
 
 def _env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
@@ -251,10 +259,7 @@ async def get_certificate(
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> Dict[str, Any]:
     path = _certificate_path(manager.root, project_id, run_id, env=env)
-    try:
-        return load_certificate(path)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}")
+    return _read_certificate(path)
 
 
 @router.post(
@@ -299,11 +304,8 @@ async def diff_certificates_endpoint(
 ) -> CertificateDiffResponse:
     path_a = _certificate_path(manager.root, project_id, run_id, env=env)
     path_b = _certificate_path(manager.root, project_id, other_run_id, env=env)
-    try:
-        cert_a = load_certificate(path_a)
-        cert_b = load_certificate(path_b)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}")
+    cert_a = _read_certificate(path_a)
+    cert_b = _read_certificate(path_b)
     return CertificateDiffResponse(**diff_certificates(cert_a, cert_b))
 
 
@@ -332,10 +334,7 @@ async def reproduce_certificate(
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> ExecutionResponse:
     path = _certificate_path(manager.root, project_id, run_id, env=env)
-    try:
-        cert = load_certificate(path)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}")
+    cert = _read_certificate(path)
 
     pipeline = cert.get("pipeline")
     if not pipeline:

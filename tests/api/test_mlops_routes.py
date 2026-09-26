@@ -14,6 +14,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import pytest
+
+from ducta.api.exceptions import ValidationError
 from ducta.api.routes import mlops as mlops_routes
 
 
@@ -28,8 +31,16 @@ def _fake_context(output_path, env="dev"):
 
 class TestResolveMlopsStoragePrecedence:
     def test_explicit_override_always_wins(self, tmp_path):
-        got = mlops_routes._resolve_mlops_storage(tmp_path, "/explicit/path", env="dev")
-        assert got == "/explicit/path"
+        got = mlops_routes._resolve_mlops_storage(tmp_path, "explicit/path", env="dev")
+        assert got == str((tmp_path / "explicit" / "path").resolve())
+
+    def test_explicit_override_outside_the_workspace_is_rejected(self, tmp_path):
+        # The override comes straight from the request and these endpoints
+        # delete runs, model versions and GC'd artifacts under it.
+        with pytest.raises(ValidationError):
+            mlops_routes._resolve_mlops_storage(tmp_path, "/explicit/path", env="dev")
+        with pytest.raises(ValidationError):
+            mlops_routes._resolve_mlops_storage(tmp_path, "../elsewhere", env="dev")
 
     def test_env_resolves_via_workspace_context_4_tier_fallback(self, tmp_path):
         ctx = _fake_context(str(tmp_path / "output"))

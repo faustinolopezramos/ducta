@@ -9,6 +9,7 @@ import {
 } from "@tabler/icons-react";
 import client from "../../api/client";
 import { Button } from "../ui/Button";
+import { qk } from "../../api/queryKeys";
 
 interface BrowseEntry {
   name: string;
@@ -44,7 +45,7 @@ export function FolderPicker({
   const [cwd, setCwd] = useState<string | null>(null);
 
   const { data, isPending, isError, error } = useQuery<BrowseResponse>({
-    queryKey: ["workspace-browse", cwd],
+    queryKey: qk.workspaceBrowse(cwd),
     queryFn: () =>
       client
         .get("/workspace/browse", { params: cwd ? { path: cwd } : undefined })

@@ -20,9 +20,27 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from contextlib import contextmanager
+from typing import Any, Iterator, Optional, Tuple, Type
+
+from fastapi import HTTPException  # type: ignore
 
 from ducta.api.models.responses import ErrorCode
+
+
+@contextmanager
+def http_error_on(status_code: int, *exc_types: Type[Exception]) -> Iterator[None]:
+    """Translate *exc_types* (default ``ValueError``) raised inside the block
+    into an ``HTTPException`` carrying the exception's message.
+
+    Replaces the ``try: ... except ValueError as exc: raise HTTPException(...)``
+    stanza that routes used to spell out by hand.
+    """
+    catch: Tuple[Type[Exception], ...] = exc_types or (ValueError,)
+    try:
+        yield
+    except catch as exc:
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 class DuctaAPIError(Exception):

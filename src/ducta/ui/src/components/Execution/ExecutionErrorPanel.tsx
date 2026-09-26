@@ -12,14 +12,6 @@ const CATEGORY_LABELS: Record<string, string> = {
   unknown: "Unknown",
 };
 
-const STRATEGY_LABELS: Record<string, string> = {
-  retry: "Retry",
-  skip_node: "Skip node",
-  fallback: "Use fallback",
-  abort: "Abort",
-  manual: "Manual intervention",
-};
-
 /** Category → (fg, bg) from the semantic status tokens, never color alone. */
 function categoryColors(category: string): { fg: string; bg: string } {
   switch (category) {
@@ -124,7 +116,7 @@ function ErrorBlock({ error, index }: { error: ExecutionErrorDetail; index: numb
           {error.message}
         </p>
 
-        {error.recovery_plan && (
+        {error.hint && (
           <p
             style={{
               margin: "0 0 var(--space-2)",
@@ -132,13 +124,8 @@ function ErrorBlock({ error, index }: { error: ExecutionErrorDetail; index: numb
               color: "var(--text-muted)",
             }}
           >
-            <span style={{ fontWeight: "var(--weight-semibold)", color: fg }}>
-              {STRATEGY_LABELS[error.recovery_plan.primary] ?? error.recovery_plan.primary}
-              {error.recovery_plan.retry_delay
-                ? ` in ${error.recovery_plan.retry_delay}s`
-                : ""}
-            </span>
-            {error.recovery_plan.notes ? ` — ${error.recovery_plan.notes}` : ""}
+            <span style={{ fontWeight: "var(--weight-semibold)", color: fg }}>Hint</span>
+            {` — ${error.hint}`}
           </p>
         )}
 

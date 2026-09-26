@@ -61,7 +61,12 @@ class WriteFileRequest(BaseModel):
 
 
 class ConnectRequest(BaseModel):
-    """Request body for POST /api/connect."""
+    """Source to resolve: a local path or a Git URL, exactly one of them.
+
+    Kept as part of the public ``ducta.api`` models; the ``/api/connect``
+    endpoint that used it was removed (``/api/workspace/select`` resolves a
+    source now).
+    """
 
     path: Optional[str] = Field(
         default=None,

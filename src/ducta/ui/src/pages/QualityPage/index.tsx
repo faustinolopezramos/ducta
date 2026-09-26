@@ -21,7 +21,8 @@ import {
   IconShieldCheck,
   IconDatabase,
 } from "@tabler/icons-react";
-import { input, sectionTitle, formatDate, scoreColor } from "./shared";
+import { input, sectionTitle, scoreColor } from "./shared";
+import { formatDate } from "../../utils/formatDate";
 import { DatasetDetail } from "./DatasetDetail";
 import { ScoreSection } from "./ScoreSection";
 import { ChecksCard } from "./ChecksCard";

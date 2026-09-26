@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import client from "../../api/client";
-import { sourceKey } from "../../api/utils";
-import { formatDate as formatDateShared } from "../../utils/formatDate";
+import { qk } from "../../api/queryKeys";
 
 /** Walks every project's pipeline list, calling `visit` for each pipeline
  *  found. Shared by `findProjectForPipeline` (matches by name, any pipeline
@@ -60,7 +59,7 @@ export async function listMlPipelines(): Promise<MlPipelineOption[]> {
 
 export function useMlPipelineOptions() {
   return useQuery<MlPipelineOption[]>({
-    queryKey: ["mlops", sourceKey(), "ml-pipelines"],
+    queryKey: qk.mlops.mlPipelines(),
     queryFn: listMlPipelines,
     staleTime: 60 * 1000,
   });
@@ -75,7 +74,3 @@ export const STAGE_COLOR: Record<string, string> = {
   Production: "var(--success)",
   Archived: "var(--text-muted)",
 };
-
-export function formatDate(iso?: string | null) {
-  return formatDateShared(iso, { includeYear: true });
-}

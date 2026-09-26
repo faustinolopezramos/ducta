@@ -35,6 +35,7 @@ from loguru import logger
 from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.utils.git_utils import sanitize_git_remote_url
 from ducta.api.utils.validators import URLValidationError, validate_git_url
+from ducta.api.workspace.utils import CONFIG_EXTENSIONS, has_config_file
 
 _MAX_CLONE_LOCKS = 256
 
@@ -167,17 +168,16 @@ class SourceResolver:
         config_dir = resolved.path / "config"
         if config_dir.is_dir():
             for f in config_dir.rglob("*"):
-                if f.is_file() and f.suffix in (".yaml", ".yml", ".json", ".toml"):
+                if f.is_file() and f.suffix in CONFIG_EXTENSIONS:
                     config_files.append(str(f.relative_to(resolved.path)))
 
         projects: List[str] = []
         projects_dir = resolved.path / "projects"
         if projects_dir.is_dir():
-            _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
             for project_dir in sorted(projects_dir.iterdir()):
                 if project_dir.is_dir() and (
-                    any((project_dir / f"environment{ext}").exists() for ext in _ENV_EXTS)
-                    or any((project_dir / f"ducta{ext}").exists() for ext in _ENV_EXTS)
+                    has_config_file(project_dir, "environment")
+                    or has_config_file(project_dir, "ducta")
                 ):
                     projects.append(project_dir.name)
 

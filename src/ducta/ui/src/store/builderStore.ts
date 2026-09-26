@@ -6,7 +6,7 @@
 // undo/redo history, dirty state, validation.
 // ─────────────────────────────────────────────
 
-import { create, type StateCreator } from "zustand";
+import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import { withDevtools } from "./createStore";
 import {

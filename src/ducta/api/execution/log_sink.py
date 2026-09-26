@@ -23,9 +23,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from ducta.api.execution.context import execution_id_var
+from ducta.api.execution.context import execution_id_var, node_id_var
 from ducta.api.execution.output_capture import node_status_re
-from ducta.api.execution.resilience_helpers import get_current_node_id
 from ducta.api.models.execution import LogEntry
 
 __all__ = ["make_log_filter", "make_log_sink"]
@@ -86,7 +85,7 @@ def make_log_sink(get_active_id: Any, log_manager: Any, on_append: Any = None): 
                 }
             )
         else:
-            node_id = get_current_node_id()
+            node_id = node_id_var.get()
             if node_id:
                 entry.extra["node_id"] = node_id
 

@@ -22,7 +22,8 @@ import {
   IconRefresh,
   IconAlertTriangle,
 } from "@tabler/icons-react";
-import { STAGE_COLOR, formatDate } from "./shared";
+import { STAGE_COLOR } from "./shared";
+import { formatDate } from "../../utils/formatDate";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { Badge } from "../../components/ui/Badge";
 import { Panel } from "../../components/ui/Panel";
@@ -361,7 +362,7 @@ function versionColumns(
       key: "created_at",
       header: "Created",
       sortable: true,
-      cell: (v) => formatDate(v.created_at),
+      cell: (v) => formatDate(v.created_at, { includeYear: true }),
     },
     {
       key: "metrics",
@@ -461,7 +462,7 @@ function ModelCard({
 
         <div style={{ display: "flex", gap: 16, fontSize: 12, color: colors.textMuted }}>
           <span>Framework: {model.framework ?? "—"}</span>
-          <span>Created: {formatDate(model.created_at)}</span>
+          <span>Created: {formatDate(model.created_at, { includeYear: true })}</span>
         </div>
 
         {expanded && (

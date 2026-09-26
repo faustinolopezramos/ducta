@@ -3,7 +3,8 @@ import { colors, styles } from "../../theme/tokens";
 import { SlidePanel } from "../../components/ui/SlidePanel";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import type { Execution } from "../../types";
-import { formatDuration, formatTime } from "./helpers";
+import { formatDuration } from "./helpers";
+import { formatDate } from "../../utils/formatDate";
 
 type ComparableExecution = Execution & {
   project_id?: string;
@@ -21,8 +22,8 @@ const FIELDS: FieldRow[] = [
   { label: "Node", render: (ex) => ex.node_name ?? "—" },
   { label: "Project", render: (ex) => ex.project_id ?? "—" },
   { label: "Env", render: (ex) => ex.env },
-  { label: "Started", render: (ex) => formatTime(ex.started_at) },
-  { label: "Finished", render: (ex) => formatTime(ex.finished_at) },
+  { label: "Started", render: (ex) => formatDate(ex.started_at) },
+  { label: "Finished", render: (ex) => formatDate(ex.finished_at) },
   { label: "Duration", render: (ex) => formatDuration(ex.duration_seconds) },
   { label: "Exit code", render: (ex) => (ex.exit_code != null ? String(ex.exit_code) : "—") },
   { label: "Model version", render: (ex) => ex.model_version ?? "—" },

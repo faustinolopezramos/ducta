@@ -32,11 +32,10 @@ from loguru import logger  # type: ignore
 
 from ducta.api.config import get_settings
 from ducta.api.execution.context import execution_id_var
-from ducta.api.execution.error_recovery import delete_error_log, flush_error_log, get_error_log
+from ducta.api.execution.error_recovery import flush_error_log, get_error_log
 from ducta.api.execution.manager_shared import _TERMINAL_STATUSES
 from ducta.api.execution.queue import ExecutionPriority
-from ducta.api.execution.resilience_core import delete_resilience_context, get_resilience_context
-from ducta.api.execution.runner import run_pipeline_sync
+from ducta.api.execution.runner import RunSpec, run_pipeline_sync
 from ducta.api.models.execution import ExecutionResponse, ExecutionStatus, SweepResponse
 
 #: Strong references to in-flight DB-store tasks.
@@ -121,7 +120,6 @@ class _DispatchMixin:
         self._log_events[execution_id] = asyncio.Event()
         # Module snapshot/cleanup is taken inside run_pipeline_sync under the global
         # execution-body lock so it cannot race with another run's imports.
-        get_resilience_context(execution_id)
         get_error_log(execution_id)
 
         priority = ExecutionPriority.from_env(env)
@@ -131,23 +129,22 @@ class _DispatchMixin:
             priority=priority,
         )
 
-        task = asyncio.create_task(
-            self._run_execution(
-                execution_id,
-                source_path,
-                pipeline_name,
-                env,
-                node_name,
-                dry_run,
-                start_date,
-                end_date,
-                model_version,
-                hyperparams,
-                sanity_only,
-                reuse_upstream,
-                rerun_all,
-            )
+        spec = RunSpec(
+            source_path=source_path,
+            pipeline_name=pipeline_name,
+            env=env,
+            node_name=node_name,
+            dry_run=dry_run,
+            start_date=start_date,
+            end_date=end_date,
+            model_version=model_version,
+            hyperparams=hyperparams,
+            sanity_only=sanity_only,
+            reuse_upstream=reuse_upstream,
+            rerun_all=rerun_all,
+            project_id=project_id,
         )
+        task = asyncio.create_task(self._run_execution(execution_id, spec))
         with self._task_lock:
             self._running_tasks.add(task)
             self._execution_tasks[execution_id] = task
@@ -158,8 +155,9 @@ class _DispatchMixin:
                 self._execution_tasks.pop(execution_id, None)
             self._timeout_manager.cancel_handler(execution_id)
             self._execution_queue.mark_complete(execution_id)
-            delete_resilience_context(execution_id)
-            delete_error_log(execution_id)
+            # `_run_execution` flushes in its `finally`; this covers a task
+            # cancelled before it got there (e.g. while queued). A no-op otherwise.
+            flush_error_log(execution_id)
             self._log_events.pop(execution_id, None)
 
         task.add_done_callback(_cleanup_task)
@@ -231,18 +229,7 @@ class _DispatchMixin:
     async def _run_execution(
         self,
         execution_id: str,
-        source_path: Path,
-        pipeline_name: str,
-        env: str,
-        node_name: Optional[str],
-        dry_run: bool,
-        start_date: Optional[str],
-        end_date: Optional[str],
-        model_version: Optional[str] = None,
-        hyperparams: Optional[Dict[str, Any]] = None,
-        sanity_only: bool = False,
-        reuse_upstream: bool = False,
-        rerun_all: bool = False,
+        spec: RunSpec,
     ) -> None:
         await self._execution_queue.acquire_slot(execution_id)
 
@@ -257,24 +244,8 @@ class _DispatchMixin:
 
         token = execution_id_var.set(execution_id)
         try:
-            outcome = await asyncio.to_thread(
-                run_pipeline_sync,
-                execution_id,
-                source_path,
-                pipeline_name,
-                env,
-                node_name,
-                dry_run,
-                start_date,
-                end_date,
-                self,  # manager reference for _append_process_output etc.
-                model_version,
-                hyperparams,
-                sanity_only,
-                record.project_id,
-                reuse_upstream,
-                rerun_all,
-            )
+            # `self` is the manager reference for _append_process_output etc.
+            outcome = await asyncio.to_thread(run_pipeline_sync, execution_id, spec, self)
             exit_code = 0
             with self._execution_lock:
                 if not outcome:

@@ -24,12 +24,14 @@ import contextlib
 import os
 import sys
 import threading
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Optional
 
 from loguru import logger  # type: ignore
 
 from ducta.api.execution.output_capture import ProcessOutputCapture
+from ducta.api.workspace.utils import CONFIG_EXTENSIONS, find_config_file, has_config_file
 from ducta.core.errors import DuctaError
 
 _stdout_capture_lock = threading.Lock()
@@ -87,8 +89,6 @@ def _project_owns_pipeline(project_dir: Path, pipeline_name: str) -> bool:
     """Return True if *project_dir* contains the named pipeline."""
     from ducta.api.workspace.loaders import load_config_file
 
-    _PIPE_EXTS = (".yaml", ".yml", ".toml", ".json")
-
     def _pipeline_in_file(path: Path) -> bool:
         try:
             data = load_config_file(path) or {}
@@ -99,22 +99,19 @@ def _project_owns_pipeline(project_dir: Path, pipeline_name: str) -> bool:
     # Standard project: config/pipelines.* (including nested config dirs)
     config_dir = project_dir / "config"
     if config_dir.is_dir():
-        for ext in _PIPE_EXTS:
+        for ext in CONFIG_EXTENSIONS:
             for candidate in config_dir.rglob(f"pipelines{ext}"):
                 if _pipeline_in_file(candidate):
                     return True
 
     # Legacy layout: base/pipeline/pipelines.*
-    for ext in _PIPE_EXTS:
-        legacy = project_dir / "base" / "pipeline" / f"pipelines{ext}"
-        if legacy.exists() and _pipeline_in_file(legacy):
-            return True
+    legacy = find_config_file(project_dir / "base" / "pipeline", "pipelines")
+    if legacy is not None and _pipeline_in_file(legacy):
+        return True
 
     # Layered project: scan layers declared in ducta.yaml
-    for ext in _PIPE_EXTS:
-        ducta_file = project_dir / f"ducta{ext}"
-        if not ducta_file.exists():
-            continue
+    ducta_file = find_config_file(project_dir, "ducta")
+    if ducta_file is not None:
         try:
             ducta_cfg = load_config_file(ducta_file) or {}
             for _layer, layer_cfg in ducta_cfg.get("layers", {}).items():
@@ -140,12 +137,8 @@ def resolve_project_source(source_path: Path, pipeline_name: str) -> Path:
     Falls back to *source_path* unchanged when no match is found or when
     *source_path* is already a single-project directory.
     """
-    _ENV_EXTS = (".yml", ".yaml", ".toml", ".json")
-
     # Single-project: has its own environment file or ducta.yaml — no lookup needed
-    if any((source_path / f"environment{ext}").exists() for ext in _ENV_EXTS):
-        return source_path
-    if any((source_path / f"ducta{ext}").exists() for ext in _ENV_EXTS):
+    if has_config_file(source_path, "environment") or has_config_file(source_path, "ducta"):
         return source_path
 
     projects_dir = source_path / "projects"
@@ -302,14 +295,9 @@ def _run_sanity_checks(ctx: Any, pipeline_name: str) -> None:
     logger.success("All sanity checks passed")
 
 
-def _log_dry_run(
-    engine: Any,
-    pipeline_name: str,
-    node_name: Optional[str],
-    start_date: Optional[str],
-    end_date: Optional[str],
-) -> None:
+def _log_dry_run(engine: Any, spec: RunSpec) -> None:
     """Validate the pipeline and log its plan without executing (``--dry-run``)."""
+    pipeline_name = spec.pipeline_name
     if not engine.validate_pipeline(pipeline_name):
         available = engine.list_pipelines()
         raise RuntimeError(
@@ -319,12 +307,12 @@ def _log_dry_run(
     node_names = info.get("nodes", [])
     logger.info("DRY-RUN MODE: Pipeline '{}' will not be executed", pipeline_name)
     logger.info("  Nodes: {}", ", ".join(node_names) if node_names else "None")
-    if node_name:
-        logger.info("  Single node: {}", node_name)
-    if start_date:
-        logger.info("  Start date: {}", start_date)
-    if end_date:
-        logger.info("  End date: {}", end_date)
+    if spec.node_name:
+        logger.info("  Single node: {}", spec.node_name)
+    if spec.start_date:
+        logger.info("  Start date: {}", spec.start_date)
+    if spec.end_date:
+        logger.info("  End date: {}", spec.end_date)
     logger.success("DRY-RUN completed — no execution performed")
 
 
@@ -367,15 +355,7 @@ def _resolve_execution_context(
 
     # Detect layered project (ducta.yaml) — bypass WorkspaceManager.load_context
     # which only understands environment.yaml-based layouts.
-    _DUCTA_EXTS = (".yaml", ".yml", ".toml", ".json")
-    ducta_file = next(
-        (
-            source_path / f"ducta{ext}"
-            for ext in _DUCTA_EXTS
-            if (source_path / f"ducta{ext}").exists()
-        ),
-        None,
-    )
+    ducta_file = find_config_file(source_path, "ducta")
     added_layer_root_to_sys_path: Optional[str] = None
     if ducta_file is not None:
         from ducta.setting import LayerContextBuilder, LayeredProjectDetector
@@ -444,20 +424,7 @@ def _resolve_execution_context(
 
 
 def _dispatch_pipeline_type(
-    engine: Any,
-    pipeline_type: str,
-    *,
-    pipeline_name: str,
-    node_name: Optional[str],
-    ctx: Any,
-    sanity_only: bool,
-    dry_run: bool,
-    start_date: Optional[str],
-    end_date: Optional[str],
-    model_version: Optional[str],
-    hyperparams: Optional[dict],
-    reuse_upstream: bool,
-    rerun_all: bool,
+    engine: Any, pipeline_type: str, spec: RunSpec, ctx: Any
 ) -> Optional[Dict[str, Any]]:
     """Run the pipeline according to its mode.
 
@@ -467,13 +434,23 @@ def _dispatch_pipeline_type(
     """
     from ducta.stream.constants import PipelineType
 
+    chain_kwargs: Dict[str, Any] = {
+        "pipeline_name": spec.pipeline_name,
+        "node_name": spec.node_name,
+        "start_date": spec.start_date,
+        "end_date": spec.end_date,
+        "model_version": spec.model_version,
+        "hyperparams": spec.hyperparams,
+        "reuse_upstream": spec.reuse_upstream,
+        "rerun_all": spec.rerun_all,
+    }
     outcome: Optional[Dict[str, Any]] = None
-    if sanity_only:
+    if spec.sanity_only:
         # Run node input sanity checks only — no pipeline execution.
-        _run_sanity_checks(ctx, pipeline_name)
-    elif dry_run:
+        _run_sanity_checks(ctx, spec.pipeline_name)
+    elif spec.dry_run:
         # Validate the pipeline exists and log its plan without executing.
-        _log_dry_run(engine, pipeline_name, node_name, start_date, end_date)
+        _log_dry_run(engine, spec)
     elif pipeline_type in (PipelineType.STREAMING.value, PipelineType.HYBRID.value):
         _gs = getattr(ctx, "global_config", {}) or {}
         _transform_modules = _gs.get("streaming_transform_modules") or []
@@ -487,28 +464,9 @@ def _dispatch_pipeline_type(
             engine.register_streaming_transforms(list(_transform_modules))
 
         # Force sync mode so the execution blocks the worker thread while queries are active
-        engine.run_pipeline_chain(
-            pipeline_name=pipeline_name,
-            node_name=node_name,
-            start_date=start_date,
-            end_date=end_date,
-            model_version=model_version,
-            hyperparams=hyperparams,
-            execution_mode="sync",
-            reuse_upstream=reuse_upstream,
-            rerun_all=rerun_all,
-        )
+        engine.run_pipeline_chain(**chain_kwargs, execution_mode="sync")
     else:
-        run_result = engine.run_pipeline_chain(
-            pipeline_name=pipeline_name,
-            node_name=node_name,
-            start_date=start_date,
-            end_date=end_date,
-            model_version=model_version,
-            hyperparams=hyperparams,
-            reuse_upstream=reuse_upstream,
-            rerun_all=rerun_all,
-        )
+        run_result = engine.run_pipeline_chain(**chain_kwargs)
         # Skipped nodes and a blocked quality gate both let
         # run_pipeline return instead of raising, so without this
         # a run that rejected or could not read its data was
@@ -540,22 +498,33 @@ def _shutdown_engine(engine: Any, manager: Any, execution_id: str) -> None:
         logger.error(f"Error shutting down pipeline engine: {e}")
 
 
+@dataclass(frozen=True)
+class RunSpec:
+    """What to run: everything a pipeline execution needs besides its id.
+
+    Built once by ``ExecutionManager.execute`` and passed down whole, instead
+    of threading the same dozen arguments positionally through each layer.
+    """
+
+    source_path: Path
+    pipeline_name: str
+    env: str
+    node_name: Optional[str] = None
+    dry_run: bool = False
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    model_version: Optional[str] = None
+    hyperparams: Optional[Dict[str, Any]] = None
+    sanity_only: bool = False
+    reuse_upstream: bool = False
+    rerun_all: bool = False
+    project_id: Optional[str] = None
+
+
 def run_pipeline_sync(
     execution_id: str,
-    source_path: Path,
-    pipeline_name: str,
-    env: str,
-    node_name: Optional[str],
-    dry_run: bool,
-    start_date: Optional[str],
-    end_date: Optional[str],
+    spec: RunSpec,
     manager: Any,  # ExecutionManager — typed as Any to avoid circular imports
-    model_version: Optional[str] = None,
-    hyperparams: Optional[dict] = None,
-    sanity_only: bool = False,
-    project_id: Optional[str] = None,
-    reuse_upstream: bool = False,
-    rerun_all: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Execute a pipeline synchronously inside a dedicated thread.
 
@@ -563,16 +532,17 @@ def run_pipeline_sync(
     (missing upstream inputs) instead of running — ``None`` for a normal
     completion (success/dry-run/sanity-only).
     """
-    from ducta.api.execution.resilience_helpers import set_current_execution_id
+    from ducta.api.execution.context import execution_id_var
 
     manager.set_active_execution(execution_id)
-    set_current_execution_id(execution_id)
+    execution_id_var.set(execution_id)
 
     timeout_handler = manager.get_or_create_timeout_handler(execution_id)
 
     # For multi-project workspaces (no top-level environment file), resolve the
     # effective project directory so context loading and CWD work correctly.
-    source_path = resolve_project_source(source_path, pipeline_name)
+    pipeline_name, env = spec.pipeline_name, spec.env
+    source_path = resolve_project_source(spec.source_path, pipeline_name)
     ws_root_str = str(source_path)
     added_to_sys_path = False
     added_layer_root_to_sys_path: Optional[str] = None
@@ -597,9 +567,9 @@ def run_pipeline_sync(
                     print_execution_header(
                         pipeline=pipeline_name,
                         env=env,
-                        start_date=start_date,
-                        end_date=end_date,
-                        node=node_name,
+                        start_date=spec.start_date,
+                        end_date=spec.end_date,
+                        node=spec.node_name,
                     )
                 except Exception as exc:
                     logger.debug("Failed to print execution header: {exc}", exc=exc)
@@ -626,8 +596,8 @@ def run_pipeline_sync(
                         # Propagated into MLOps run tags so runs can be traced back
                         # to the owning project (execution is project-scoped, MLOps
                         # storage is workspace-scoped).
-                        if project_id:
-                            _gs["project_id"] = project_id
+                        if spec.project_id:
+                            _gs["project_id"] = spec.project_id
 
                     execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
                     os.chdir(execution_cwd)
@@ -648,21 +618,7 @@ def run_pipeline_sync(
                     # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
                     outcome: Optional[Dict[str, Any]] = None
                     try:
-                        outcome = _dispatch_pipeline_type(
-                            engine,
-                            pipeline_type,
-                            pipeline_name=pipeline_name,
-                            node_name=node_name,
-                            ctx=ctx,
-                            sanity_only=sanity_only,
-                            dry_run=dry_run,
-                            start_date=start_date,
-                            end_date=end_date,
-                            model_version=model_version,
-                            hyperparams=hyperparams,
-                            reuse_upstream=reuse_upstream,
-                            rerun_all=rerun_all,
-                        )
+                        outcome = _dispatch_pipeline_type(engine, pipeline_type, spec, ctx)
                     finally:
                         _link_certificate(ctx, manager, execution_id)
                         _shutdown_engine(engine, manager, execution_id)

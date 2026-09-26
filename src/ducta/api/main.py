@@ -27,9 +27,8 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional
 if TYPE_CHECKING:
     from ducta.api.config import Settings
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -162,34 +161,6 @@ def create_app() -> FastAPI:
 
     register_routes(app)
 
-    # ── Global exception handlers ───────────────────────────────────────────
-    from fastapi import HTTPException
-
-    @app.exception_handler(HTTPException)
-    async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-        request_id = getattr(request.state, "request_id", None)
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "error": "HTTP_ERROR",
-                "message": str(exc.detail),
-                "request_id": request_id,
-            },
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def _validation_error_handler(
-        request: Request, exc: RequestValidationError
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": "VALIDATION_ERROR",
-                "message": "Request validation failed",
-                "detail": exc.errors(),
-            },
-        )
-
     if _UI_DIR.is_dir():
         logger.info("Serving UI from {path}", path=_UI_DIR)
         app.mount("/assets", StaticFiles(directory=_UI_DIR / "assets"), name="ui-assets")
@@ -198,6 +169,10 @@ def create_app() -> FastAPI:
 
         @app.get("/{full_path:path}", include_in_schema=False)
         async def _spa_fallback(full_path: str):
+            # An unknown API path is an API error, not a page: answering it with
+            # index.html (200, text/html) hid typos and removed endpoints.
+            if full_path == "api" or full_path.startswith("api/"):
+                raise HTTPException(status_code=404, detail=f"Not Found: /{full_path}")
             # Resolve and confirm the target stays within the UI dist directory
             # before serving it; otherwise fall back to the SPA entrypoint.
             candidate = (_ui_root / full_path).resolve()

@@ -9,7 +9,7 @@ import {
   type CronBuilderState,
   type CronFrequency,
 } from "../../utils/cron";
-import { formatUtc } from "./helpers";
+import { formatUtc } from "../../utils/timeLabels";
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const DAYS_OF_MONTH = Array.from({ length: 31 }, (_, i) => i + 1);

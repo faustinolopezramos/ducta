@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { coerceFnSpec, inferNodeType, ioNames, nodeIoNames } from "./pipelineAdapter";
+import { coerceFnSpec, inferNodeType, ioNames, nodeIoNames, pipelinesFromServer } from "./pipelineAdapter";
 
 describe("coerceFnSpec", () => {
   it("passes through a string fn", () => {
@@ -93,5 +93,32 @@ describe("nodeIoNames", () => {
   it("is empty for a spec that declares nothing", () => {
     expect(nodeIoNames({ module: "m" }, "input")).toEqual([]);
     expect(nodeIoNames(undefined, "input")).toEqual([]);
+  });
+});
+
+describe("pipelinesFromServer", () => {
+  it("resolves each pipeline's nodes against the workspace node specs", () => {
+    const [pipeline] = pipelinesFromServer(
+      { ingest: { type: "batch", description: "d", nodes: ["read_csv"] } },
+      { read_csv: { module: "src.read", fn: "run", input: "bronze.raw", output: ["silver.clean"], dependencies: ["x"] } },
+    );
+    expect(pipeline).toMatchObject({ id: "ingest", name: "ingest", type: "batch", description: "d", active: true });
+    const [node] = pipeline.nodes;
+    expect(node).toMatchObject({ id: "read_csv", module: "src.read", fn: "run", dependencies: ["x"] });
+    expect(node.inputs.map((p) => p.name)).toEqual(["bronze.raw"]);
+    expect(node.outputs.map((p) => p.name)).toEqual(["silver.clean"]);
+  });
+
+  it("names object entries with a plain string and drops nameless ones (React #31)", () => {
+    const [pipeline] = pipelinesFromServer(
+      { stream: { nodes: [{ key: "detect", module: "t.fraud" }, {}, "plain"] } },
+      {},
+    );
+    expect(pipeline.nodes.map((n) => n.id)).toEqual(["detect", "plain"]);
+    expect(typeof pipeline.nodes[0].fn).toBe("string");
+  });
+
+  it("is a pure view: an empty listing is no pipelines", () => {
+    expect(pipelinesFromServer({}, {})).toEqual([]);
   });
 });

@@ -1,13 +1,12 @@
 /* ─────────────────────────────────────────────────────────────────────────────
- * DUCTA — ORIGINAL "TERRAZO" THEME
+ * DUCTA — "BLUEPRINT" THEME
  *
- * Una identidad cálida y terrosa que se aleja del azul corporativo.
- *   – Acento: terracota
- *   – Fondos light: beige/taupe
- *   – Fondos dark: carbón cálido
- *   – Semántica: teal para éxito, ámbar para warning, rojo profundo para error
+ *   – Accent: petrol (#0B5F73 light, signal cyan in dark) — spent on the data
+ *     flow (edges, ports) and the primary action, nowhere else
+ *   – Grounds: cool paper (light) / deep petrol (dark), neutral surfaces
+ *   – Semantic: teal success, amber warning, deep red danger — state only
  *
- * CANONICAL BASE — the single source of truth for the terracotta identity.
+ * CANONICAL BASE — the single source of truth for the Blueprint identity.
  * (Replaces the legacy monochrome variables.css, which has been removed.)
  * tokens.css layers the derived scales/alpha-variants on top of this file.
  * ───────────────────────────────────────────────────────────────────────────── */

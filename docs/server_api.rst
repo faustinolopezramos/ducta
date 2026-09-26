@@ -44,7 +44,7 @@ Key API resources:
 
 - ``/health``, ``/health/ready``, ``/health/platform``: Liveness/readiness probes and platform info (no auth, no ``/api`` prefix).
 - ``/api/auth``: Login, logout, token refresh, and current-user info (JWT-based).
-- ``/api/workspace``, ``/api/connect``: Resolve and validate a workspace source (local path or Git URL).
+- ``/api/workspace``: Resolve a workspace source (local path or Git URL), auto-detect it, browse directories.
 - ``/api/projects``: Manage projects and their pipelines, including triggering pipeline execution.
 - ``/api/nodes``: Manage workspace-scoped node definitions.
 - ``/api/configs``, ``/api/environments``: Read/update workspace config files and environments.

@@ -26,13 +26,11 @@ from typing import Any, Dict, Optional
 from loguru import logger
 
 from ducta.api.workspace.loaders import load_config_file
-from ducta.api.workspace.utils import find_config_files, find_ducta_config
+from ducta.api.workspace.utils import CONFIG_EXTENSIONS, find_config_files, find_ducta_config
 
 #: Config-name keys produced by ``find_config_files`` for the two registries.
 _INPUT_KEY = "input"
 _OUTPUT_KEY = "output"
-
-_CONFIG_EXTS = (".yaml", ".yml", ".toml", ".json")
 
 
 class DatasetRepository:
@@ -193,7 +191,7 @@ class DatasetRepository:
     @staticmethod
     def _declared_path(project_dir: Path, config_key: str) -> Optional[Path]:
         """Resolve *config_key* out of the project's ``environment.*`` file."""
-        for ext in _CONFIG_EXTS:
+        for ext in CONFIG_EXTENSIONS:
             env_file = project_dir / f"environment{ext}"
             if not env_file.exists():
                 continue
@@ -214,7 +212,7 @@ class DatasetRepository:
         if path.exists():
             yield path
             return
-        for ext in _CONFIG_EXTS:
+        for ext in CONFIG_EXTENSIONS:
             alt = path.with_suffix(ext)
             if alt.exists():
                 yield alt

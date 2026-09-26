@@ -1,7 +1,4 @@
-export type {
-  NodeAdditionalFile, NodeInputOutput, Node,
-  Connection, ProjectGlobalSettings, Pipeline, Project,
-} from './domain';
+export type { NodeAdditionalFile, NodeInputOutput, Node, Pipeline, ProjectSummary } from './domain';
 
 export type { Execution, NodeExecution } from './execution';
 
@@ -10,5 +7,3 @@ export type {
   WorkspaceProjectCreateRequest, WorkspaceProjectUpdateRequest,
   ApiError, WsLogEntry,
 } from './api';
-
-export type { AppState, ReducerAction, FormState, PersistenceConfig } from './state';

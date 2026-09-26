@@ -86,7 +86,7 @@ class ConfigFileWatcher(FileSystemEventHandler):
             logger.debug("Config change detected: {path}", path=path)
             self.on_config_change(path)
         except Exception as e:
-            logger.error("Error in config change callback: {e}", e=e, exc_info=True)
+            logger.opt(exception=e).error("Error in config change callback: {e}", e=e)
 
     def _handle_event(self, event) -> None:
         if event.is_directory:

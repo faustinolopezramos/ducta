@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "./client";
-import { sourceKey } from "./utils";
 import { defaultOnError } from "./mutations/errors";
+import { qk } from "./queryKeys";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -68,27 +68,17 @@ const scopeParams = ({ env, pipelineName, project }: QualityScope) => ({
 
 export const useQualityChecks = () =>
   useQuery<QualityCheckInfo[]>({
-    queryKey: ["quality", sourceKey(), "checks"],
+    queryKey: qk.quality.checks(),
     queryFn: () => client.get("/quality/checks").then((r) => r.data),
     staleTime: 60 * 1000,
   });
 
 export const useQualitySummary = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<QualityDatasetSummary[]>({
-    queryKey: ["quality", sourceKey(), "summary", env ?? null, pipelineName ?? null, project ?? null],
+    queryKey: qk.quality.summary({ env, pipelineName, project }),
     queryFn: () =>
       client
         .get("/quality/summary", { params: scopeParams({ env, pipelineName, project }) })
-        .then((r) => r.data),
-    staleTime: 15 * 1000,
-  });
-
-export const useQualityDatasets = (env?: string, pipelineName?: string, project?: string) =>
-  useQuery<QualityDatasetRef[]>({
-    queryKey: ["quality", sourceKey(), "datasets", env ?? null, pipelineName ?? null, project ?? null],
-    queryFn: () =>
-      client
-        .get("/quality/datasets", { params: scopeParams({ env, pipelineName, project }) })
         .then((r) => r.data),
     staleTime: 15 * 1000,
   });
@@ -101,16 +91,7 @@ export const useQualityRuns = (
   enabled = true
 ) =>
   useQuery<{ status: string; run_ids: string[] }>({
-    queryKey: [
-      "quality",
-      sourceKey(),
-      "reports",
-      dataset,
-      "all",
-      env ?? null,
-      pipelineName ?? null,
-      project ?? null,
-    ],
+    queryKey: qk.quality.runs(dataset, { env, pipelineName, project }),
     queryFn: () =>
       client
         .get(`/quality/reports/${encodeURIComponent(dataset)}`, {
@@ -130,49 +111,11 @@ export const useQualityReport = (
   enabled = true
 ) =>
   useQuery({
-    queryKey: [
-      "quality",
-      sourceKey(),
-      "reports",
-      dataset,
-      runId ?? "latest",
-      env ?? null,
-      pipelineName ?? null,
-      project ?? null,
-    ],
+    queryKey: qk.quality.report(dataset, runId, { env, pipelineName, project }),
     queryFn: () =>
       client
         .get(`/quality/reports/${encodeURIComponent(dataset)}`, {
           params: { run_id: runId, ...scopeParams({ env, pipelineName, project }) },
-        })
-        .then((r) => r.data),
-    enabled: enabled && !!dataset,
-    staleTime: 15 * 1000,
-  });
-
-export const useQualityTrend = (
-  dataset: string,
-  lastN = 20,
-  env?: string,
-  pipelineName?: string,
-  project?: string,
-  enabled = true
-) =>
-  useQuery({
-    queryKey: [
-      "quality",
-      sourceKey(),
-      "trend",
-      dataset,
-      lastN,
-      env ?? null,
-      pipelineName ?? null,
-      project ?? null,
-    ],
-    queryFn: () =>
-      client
-        .get(`/quality/trend/${encodeURIComponent(dataset)}`, {
-          params: { last_n: lastN, ...scopeParams({ env, pipelineName, project }) },
         })
         .then((r) => r.data),
     enabled: enabled && !!dataset,
@@ -201,7 +144,7 @@ export const useQualityScore = (
   enabled = true
 ) =>
   useQuery({
-    queryKey: ["quality", sourceKey(), "score", runId, env ?? null, pipelineName ?? null, project ?? null],
+    queryKey: qk.quality.score(runId, { env, pipelineName, project }),
     queryFn: () =>
       client
         .get(`/quality/score/${encodeURIComponent(runId)}`, {
@@ -220,7 +163,7 @@ export const useRunQualityChecks = () => {
     mutationFn: (vars: RunChecksVars) =>
       client.post("/quality/run", vars).then((r) => r.data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["quality", sourceKey()] });
+      queryClient.invalidateQueries({ queryKey: qk.quality.all() });
     },
     onError: defaultOnError,
   });
@@ -248,7 +191,7 @@ export const useDeleteQualityReport = () => {
         })
         .then(() => undefined),
     onSuccess: (_data, { dataset }) => {
-      queryClient.invalidateQueries({ queryKey: ["quality", sourceKey(), "reports", dataset] });
+      queryClient.invalidateQueries({ queryKey: qk.quality.reports(dataset) });
     },
   });
 };
