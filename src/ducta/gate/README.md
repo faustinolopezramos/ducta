@@ -60,8 +60,34 @@ Configure the engine's behavior under the `global_config` block:
 *   **`fingerprint_policy`** (*record* | *warn* | *fail*): Severity policy when data drift is detected.
 
 ### Dataset Mappings
-*   **Inputs (`InputSchema`)**: Defines source datasets. Supports `format` (CSV, Parquet, Delta, JSON, XML, ORC, Avro, Query, etc.), `filepath`, `options` (custom properties), and `schema`.
-*   **Outputs (`OutputSchema`)**: Defines serialization targets. Keys **must** follow the `schema.sub_folder.table_name` pattern. Supports `format`, `filepath` (auto-resolved from output path if omitted), `write_mode` (overwrite, append, ignore, error), and `options`.
+*   **Inputs (`InputSchema`)**: Defines source datasets. Supports `format` (CSV, Parquet, Delta, JSON, XML, ORC, Avro, Query, etc.), `filepath`, `options` (custom properties), `schema`, and `incremental: {column: <date column>}` — read only rows with that column between the run's `start_date` and `end_date` (pushed down to the source) and fingerprint only that window.
+*   **Outputs (`OutputSchema`)**: Defines serialization targets. Keys **must** follow the `schema.sub_folder.table_name` pattern. Supports `format`, `filepath` (auto-resolved from output path if omitted), `write_mode` (overwrite, append, ignore, error, merge), and `options`.
+
+### MERGE / upsert (Delta)
+
+```yaml
+gold.sales.customers:
+  format: delta
+  write_mode: merge
+  merge:
+    keys: [customer_id]                # required
+    when_matched: update_all           # update_all | {update: [cols]} | ignore
+    when_not_matched: insert_all       # insert_all | ignore
+    delete_when: "s._op = 'D'"         # optional (CDC); s = incoming batch, t = target
+    schema_evolution: false
+```
+
+* The first run creates the table; later runs merge into it.
+* Keys match **null-safely** (`<=>`), so re-running the same batch is idempotent
+  even for rows with NULL keys.
+* Duplicate keys in the incoming batch fail the write **before** merging, naming
+  the keys — instead of Delta's "multiple source rows matched".
+* Rows flagged by `delete_when` are deleted when matched and never inserted.
+* The commit's `operationMetrics` (rows inserted/updated/deleted) are recorded in
+  the run certificate. Preflight rejects `merge` on a non-Delta format.
+* Needs the `delta-spark` Python package (`pip install "ducta[delta]"`). A local
+  session gets the matching Delta jar automatically when any dataset uses
+  `format: delta` (override with `global_config.delta_package`).
 
 ---
 

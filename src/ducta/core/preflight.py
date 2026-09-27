@@ -204,31 +204,6 @@ def _check_io_keys(
             report.error(f"Node '{node_name}': invalid output key '{key}' — {e}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Quality configuration
-#
-# `QualityCheckEntrySchema` and `NodeSchema` are both `extra="allow"`, and
-# deliberately so: plugin checks registered through `register_check` define
-# their own parameters, and streaming nodes carry inline connector configs that
-# no fixed schema can enumerate. The cost was that a misspelling anywhere in
-# these blocks validated clean and then changed behaviour silently — a check
-# name typo surfaced later as a *quality gate block*, which reads as a problem
-# with the data rather than with the config that was never run.
-# ─────────────────────────────────────────────────────────────────────────────
-
-#: Node keys that are legitimate but not declared on `NodeSchema`. `name` is
-#: stamped on by the loader; the rest are consumed by layers that read the raw
-#: node dict rather than the schema.
-#:
-#: Every entry names the module that reads it. That is not decoration: this set
-#: is the difference between a warning users can trust and one that told them
-#: their working configuration was being dropped. It previously omitted `source`
-#: — which preflight's own `_check_ingestion_node` *requires* two functions
-#: below — along with the vectorized-execution keys, the ML node keys and
-#: streaming's `depends_on`, so the warning fired on every ingestion node, every
-#: vectorized node, every ML node and every streaming node in existence.
-#: Anything added here must be a key some layer genuinely reads; if nothing
-#: reads it, the warning is right and the key should go.
 _EXTRA_NODE_KEYS = frozenset(
     {
         "name",  # stamped on by the config loader
@@ -273,8 +248,7 @@ def _check_check_entries(report: PreflightReport, where: str, checks: Dict[str, 
 
     for entry_name, entry in (checks or {}).items():
         entry_dict = entry if isinstance(entry, dict) else {}
-        # Same resolution the engine uses: an explicit `type` names the check
-        # class, otherwise the entry's own key does.
+
         registry_key = entry_dict.get("type") or entry_name
         check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
         if check_class is None:
@@ -292,8 +266,7 @@ def _check_check_entries(report: PreflightReport, where: str, checks: Dict[str, 
         if declared is None:
             continue  # a plugin check that has not declared its parameters
         allowed = set(declared) | set(COMMON_CHECK_PARAMS)
-        # Leading underscores are how the engine injects baselines/history into
-        # a check's config at runtime; they are never user configuration.
+
         unknown = sorted(k for k in entry_dict if not str(k).startswith("_") and k not in allowed)
         if unknown:
             report.error(
@@ -334,22 +307,13 @@ def _check_quality_config(
         _check_quality_gate(report, where, block.get("quality_gate"))
 
 
-#: Config keys belonging to the legacy DStream API. Structured Streaming ignores
-#: them outright, so setting one is silently inert — the tuning the user believes
-#: they applied simply does not happen.
 _LEGACY_DSTREAM_PREFIX = "spark.streaming."
 
 
 def _check_streaming_output_format(
     report: PreflightReport, node_name: str, node_config: Dict[str, Any], policy: Any
 ) -> None:
-    """A streaming sink's format must be one the writer can actually build.
-
-    ``_validate_streaming_requirements`` checks that an output format is
-    *present*; it does not check that it is *supported*. An unsupported one gets
-    as far as query construction before failing, which is a slow and confusing
-    way to learn about a typo.
-    """
+    """A streaming sink's format must be one the writer can actually build."""
     output_config = node_config.get("output")
     if not isinstance(output_config, dict):
         return
@@ -416,6 +380,59 @@ def _check_unknown_node_keys(
         )
 
 
+def _check_merge_outputs(
+    report: PreflightReport,
+    node_name: str,
+    node_config: Dict[str, Any],
+    output_config: Dict[str, Any],
+) -> None:
+    """``write_mode: merge`` needs Delta and a well-formed ``merge:`` block —
+    caught here rather than after the node has computed its whole output."""
+    from ducta.gate.exceptions import ConfigurationError as GateConfigurationError
+    from ducta.gate.writers import validate_merge_spec
+
+    for key in _output_keys(node_config):
+        entry = output_config.get(key) or {}
+        if not isinstance(entry, dict) or entry.get("write_mode") != "merge":
+            continue
+        raw_fmt = entry.get("format", "")
+        # Validated configs carry the OutputFormat enum, whose str() is
+        # "OutputFormat.DELTA" — compare on its value.
+        fmt = str(getattr(raw_fmt, "value", raw_fmt)).lower()
+        if fmt != "delta":
+            report.error(
+                f"Node '{node_name}': output '{key}' uses write_mode 'merge', which is "
+                f"supported only for format 'delta' (got '{fmt or '?'}')"
+            )
+            continue
+        try:
+            validate_merge_spec(entry.get("merge"))
+        except GateConfigurationError as e:
+            report.error(f"Node '{node_name}': output '{key}': {e}")
+
+
+def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
+    """Fail before running when the project's evidence policy cannot be met."""
+    from ducta.core.settings import EVIDENCE_SIGNED, CoreSettings
+
+    try:
+        settings = CoreSettings.from_context(context)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Evidence policy check skipped: {}", e)
+        return
+    for problem in settings.evidence_problems:
+        report.error(f"Evidence policy: {problem}")
+    if settings.evidence_level == EVIDENCE_SIGNED:
+        from ducta.core.certificate import resolve_signing_key
+
+        if resolve_signing_key(context) is None:
+            report.error(
+                "Evidence policy: evidence_level is 'signed' but no signing key is "
+                "configured. Set the DUCTA_CERTIFICATE_KEY environment variable, or "
+                "lower evidence_level to 'required'."
+            )
+
+
 def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     """Validate a single pipeline's configuration without executing it."""
     report = PreflightReport(pipeline_name=pipeline_name)
@@ -475,8 +492,10 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         )
         _check_quality_config(report, node_name, node_configs[node_name])
         _check_unknown_node_keys(report, node_name, node_configs[node_name])
+        _check_merge_outputs(report, node_name, node_configs[node_name], output_config)
 
     _check_profiles(report, context)
+    _check_evidence_policy(report, context)
 
     split_config = pipeline.get("split")
     if split_config:

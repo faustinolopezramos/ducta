@@ -67,3 +67,20 @@ def test_runtime_injected_keys_never_warn(warnings_emitted):
 def test_a_clean_config_is_silent(warnings_emitted):
     GlobalConfigSchema(**_REQUIRED, max_parallel_nodes=8, mode="local")
     assert not warnings_emitted
+
+
+@pytest.mark.parametrize("template_type", ["medallion_basic", "streaming_basic"])
+@pytest.mark.parametrize("evidence_level", ["record", "signed"])
+def test_a_freshly_generated_project_has_no_unknown_keys(
+    template_type, evidence_level, warnings_emitted
+):
+    """The first run of a brand-new project used to print nine "Unknown key"
+    warnings for keys the template itself wrote — noise that teaches users to
+    ignore the one warning that catches real typos."""
+    from ducta.console.template import TemplateFactory, TemplateType
+
+    template = TemplateFactory.create_template(TemplateType(template_type), "p")
+    template.evidence_level = evidence_level
+    GlobalConfigSchema(**template.generate_global_config())
+
+    assert "Unknown key" not in "".join(warnings_emitted)

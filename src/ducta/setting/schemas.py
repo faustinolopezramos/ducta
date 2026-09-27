@@ -307,13 +307,25 @@ class GlobalConfigSchema(BaseModel):
         default=True, description="Enable data fingerprinting for lineage tracking"
     )
     fingerprint_mode: str = Field(
-        default="exact",
+        default="auto",
         description=(
-            "How much of a dataset the fingerprint covers: 'exact' (every row, "
-            "order-independent — what the run certificate needs to mean what it "
-            "says), 'sample' (schema + the first N rows only), or 'schema' "
-            "(schema and row count, no content). The legacy names 'fast' and "
-            "'full' still parse, mapping to 'sample' and 'exact' respectively."
+            "How much of a dataset the fingerprint covers. 'auto' (default): cost "
+            "proportional to what the run processed — a Delta input by its commit "
+            "version (no scan), an input with an incremental window by every row of "
+            "the window, any other input by every row up to fingerprint_exact_max_bytes "
+            "and by a sample above it; outputs by every row of the written batch. "
+            "'exact' (every row, order-independent), 'exact_crypto' (same, SHA-256), "
+            "'sample' (the N rows with the lowest row hash, chosen by content) or "
+            "'schema' (schema and row count, no content) force one strategy. The "
+            "legacy names 'fast' and 'full' still parse."
+        ),
+    )
+    fingerprint_exact_max_bytes: Optional[int] = Field(
+        default=None,
+        description=(
+            "Under fingerprint_mode 'auto', the largest input (bytes on disk) hashed "
+            "in full; larger inputs without an incremental window are sampled. "
+            "Default 10 GiB."
         ),
     )
     fingerprint_sample_rows: int = Field(
@@ -328,12 +340,89 @@ class GlobalConfigSchema(BaseModel):
         ),
     )
 
-    # Run Certificate — a tamper-evident record emitted per terminating run
-    enable_run_certificate: bool = Field(
-        default=True,
+    # Keys CoreSettings reads (core/settings.py) that were missing here, so
+    # setting any of them triggered a false "Unknown key … Ducta does not read
+    # it" warning. `None` defaults on purpose: the validated config is dumped
+    # back into the Context, and a concrete default would reach CoreSettings
+    # as though the user had typed it. CoreSettings owns the real defaults.
+    # tests/setting/test_schema_covers_core_settings.py keeps the two in sync.
+    start_date: Optional[str] = Field(default=None, description="Default run start date.")
+    end_date: Optional[str] = Field(default=None, description="Default run end date.")
+    env: Optional[str] = Field(default=None, description="Environment name override.")
+    project_id: Optional[str] = Field(default=None, description="Project identifier.")
+    node_timeout_seconds: Optional[int] = Field(
+        default=None, description="Per-node time limit in seconds (default 1800, max 86400)."
+    )
+    max_streaming_pipelines: Optional[int] = Field(
+        default=None, description="Maximum concurrent streaming pipelines (default 5)."
+    )
+    preflight_enabled: Optional[bool] = Field(
+        default=None, description="Validate configuration before running (default true)."
+    )
+    strict_module_import: Optional[bool] = Field(
+        default=None,
+        description="Only import node modules under allowed prefixes (default true).",
+    )
+    mlflow: Optional[Dict[str, Any]] = Field(default=None, description="MLflow bridge settings.")
+    ingestion: Optional[Dict[str, Any]] = Field(
+        default=None, description="Ingestion node defaults."
+    )
+    run_lock: Optional[Dict[str, Any]] = Field(
+        default=None,
         description=(
-            "Emit a Run Certificate (config fingerprint, environment, input/output "
-            "fingerprints, quality outcomes, self-hash) per batch/ml/hybrid run"
+            "Exclusive lock on each output dataset for the duration of a run: "
+            "{enabled: true, backend: local|storage, ttl_seconds: 300, "
+            "on_conflict: fail|wait, wait_timeout_seconds: 600, dir: <path or s3://…>}. "
+            "'local' (default) is an OS lock, one host; 'storage' is a renewed lease "
+            "on a shared filesystem or S3, for several hosts."
+        ),
+    )
+    delta_package: Optional[str] = Field(
+        default=None,
+        description=(
+            "Maven coordinate of the Delta Lake jar for local sessions (default: the "
+            "build matching the installed PySpark, e.g. io.delta:delta-spark_2.12:3.2.1)"
+        ),
+    )
+    fail_on_error: Optional[bool] = Field(
+        default=None,
+        description="Whether a failed dataset write aborts the node (default true).",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Free-form project metadata (version, template, owner, …). Not read by Ducta.",
+    )
+
+    # Run Certificate — a tamper-evident record emitted per terminating run
+    evidence_level: Optional[str] = Field(
+        default=None,
+        description=(
+            "How much evidence each run must leave: 'off' (no certificate), 'record' "
+            "(default — written, a write failure only warns), 'required' (a run that "
+            "cannot write its certificate fails), 'signed' (required + HMAC-signed; "
+            "preflight fails without DUCTA_CERTIFICATE_KEY)"
+        ),
+    )
+    require_run_certificate: Optional[bool] = Field(
+        default=None,
+        description="Legacy: fail the run if its certificate cannot be written. "
+        "Prefer evidence_level.",
+    )
+    certificate_signing_key: Optional[str] = Field(
+        default=None,
+        description="HMAC signing key. Prefer the DUCTA_CERTIFICATE_KEY environment "
+        "variable: a key in a config file is usually committed.",
+    )
+    # `None`, not `True`: the validated config is dumped back into the Context,
+    # so a `True` default here reached CoreSettings as though the user had
+    # typed it and made `evidence_level: off` look like a contradiction.
+    # CoreSettings applies the real default (on).
+    enable_run_certificate: Optional[bool] = Field(
+        default=None,
+        description=(
+            "Legacy: emit a Run Certificate (config fingerprint, environment, "
+            "input/output fingerprints, quality outcomes, self-hash) per "
+            "batch/ml/hybrid run. Default on. Prefer evidence_level."
         ),
     )
     run_certificate_dir: str = Field(
@@ -861,6 +950,14 @@ class InputSchema(BaseModel):
         default=None, alias="schema", description="Schema definition (DDL or Pydantic schema)"
     )
     options: Optional[Dict[str, Any]] = Field(default=None, description="Format-specific options")
+    incremental: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "{column: <date column>}: read only rows with column BETWEEN the run's "
+            "start_date and end_date (pushed down to the source), and fingerprint "
+            "only that window"
+        ),
+    )
 
 
 class OutputSchema(BaseModel):

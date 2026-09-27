@@ -79,6 +79,20 @@ class CertificateVerifyResponse(BaseModel):
         default="unsigned",
         description="unsigned | valid | invalid | present (no key) | stripped | unverifiable",
     )
+    level: str = Field(
+        default="none",
+        description=(
+            "What a passing result proves: integrity (self-hash only — detects corruption, "
+            "not deliberate tampering) | authenticated (signature checked) | none (failed)"
+        ),
+    )
+    policy_satisfied: bool = Field(
+        default=True,
+        description=(
+            "False when the certificate's own policy (evidence_level=signed) requires "
+            "authentication and no key was supplied"
+        ),
+    )
 
 
 class CertificateDiffOutputRow(BaseModel):
@@ -283,6 +297,8 @@ async def verify_certificate_endpoint(
         run_id=result.run_id,
         reason=result.reason,
         signature=result.signature,
+        level=result.level,
+        policy_satisfied=result.policy_satisfied,
     )
 
 

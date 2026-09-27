@@ -23,6 +23,7 @@ class TestAnomalyDetectionZeroColumnsEvaluated:
             _baseline={"other_col": {"mean": 1.0, "std": 1.0}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         adapter.mean_std.return_value = (5.0, 1.0)
 
         result = check.run(df=None, config=config, adapter=adapter)
@@ -36,6 +37,7 @@ class TestAnomalyDetectionZeroColumnsEvaluated:
         check = AnomalyDetectionCheck()
         config = SimpleNamespace(columns=["c"], _baseline=None)
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
 
         result = check.run(df=None, config=config, adapter=adapter)
 

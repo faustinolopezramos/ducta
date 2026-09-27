@@ -35,63 +35,39 @@ from loguru import logger  # type: ignore
 from ducta.core.context_utils import get_context_value as _ctx_get
 from ducta.setting.environments import sanitize_env_for_path
 
-# 1.1 added `evidence_complete`; 1.2 added per-dataset `engine`/`algorithm`/
-# `content_hash`; 1.3 added `signed`, which brings the *fact of being signed*
-# inside the hashed content; 1.4 added `code`, the hash of the logic each node
-# ran — until then the certificate attested which data went in and out while
-# saying nothing about what transformed it. Older certificates verify
-# unchanged: the hash is recomputed over whatever keys the file actually
-# carries. They are NOT comparable to 1.2 fingerprints — see
-# `fingerprints_comparable`.
-SCHEMA_VERSION = "1.4"
-#: Mirrors ``ducta.core.settings.DEFAULT_CERTIFICATE_DIR`` — duplicated as a
-#: literal (like ``LEGACY_FINGERPRINT_ALGORITHM`` below) rather than imported,
-#: to keep this module importable without pulling in ``ducta.core.settings``
-#: at module load time. ``tests/core/test_certificate.py`` asserts the two
-#: agree. See ``CoreSettings._resolve_scoped_dir`` for how this template
-#: resolves to a concrete, environment-scoped path (env-scoped even for a
-#: project-configured value, so two environments never collide).
+SCHEMA_VERSION = "1.5"
 DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
-#: Fingerprints written before the algorithm was recorded. Mirrors
-#: ``ducta.mlrun.fingerprint.ALGO_LEGACY`` — duplicated as a literal rather than
-#: imported because `ducta.mlrun` is an optional extra and `certify verify` must
-#: work without it. `tests/core/test_certificate.py` asserts the two agree.
 LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
-_SIGNING_KEY_ENV = "Ducta_CERTIFICATE_KEY"
+_SIGNING_KEY_ENV = "DUCTA_CERTIFICATE_KEY"
+_LEGACY_SIGNING_KEY_ENV = "Ducta_CERTIFICATE_KEY"
 
 
 def resolve_signing_key(context: Any) -> Optional[bytes]:
-    """Optional HMAC signing key from ``Ducta_CERTIFICATE_KEY``/``DUCTA_CERTIFICATE_KEY`` or
-    config; None if unset.
-
-    Signing is off unless a key is provided. A signed certificate proves it was
-    produced by a holder of the key (attribution), on top of tamper-evidence.
+    """Optional HMAC signing key from ``DUCTA_CERTIFICATE_KEY`` (or the legacy
+    ``Ducta_CERTIFICATE_KEY``) or config; None if unset.
     """
-    # Accept both the historical mixed-case name and the conventional all-caps
-    # form — a very plausible typo/convention mismatch would otherwise silently
-    # disable signing with zero warning.
     from ducta.core.settings import CoreSettings
 
-    key = os.environ.get(_SIGNING_KEY_ENV) or os.environ.get(_SIGNING_KEY_ENV.upper())
+    key = os.environ.get(_SIGNING_KEY_ENV)
     if not key:
-        # from_context accepts a Context or a bare settings dict, which is what
-        # resolve_signing_key_from_dir hands in when there is no live Context.
+        key = os.environ.get(_LEGACY_SIGNING_KEY_ENV)
+        if key:
+            logger.debug(
+                "Signing key read from the legacy {} variable; rename it to {}.",
+                _LEGACY_SIGNING_KEY_ENV,
+                _SIGNING_KEY_ENV,
+            )
+    if not key:
         key = CoreSettings.from_context(context).certificate_signing_key
         if key:
-            # A signing key in a config file is a secret in a file that is
-            # normally committed. It also weakens `key_id`: that identifier is a
-            # truncated SHA-256 of the key, harmless for a high-entropy secret
-            # but brute-forceable for the short human-chosen string a config
-            # file invites. Warn rather than refuse — the key still works, and
-            # failing the run over it would be worse than the exposure.
             logger.warning(
                 "Run Certificate signing key read from 'global_config.certificate_signing_key'. "
                 "Prefer the {} environment variable: a key in a config file is usually "
                 "committed to version control, and a short/low-entropy value can be recovered "
                 "from the public 'key_id' field of any certificate it signs.",
-                _SIGNING_KEY_ENV.upper(),
+                _SIGNING_KEY_ENV,
             )
     if not key:
         return None
@@ -99,16 +75,7 @@ def resolve_signing_key(context: Any) -> Optional[bytes]:
 
 
 def resolve_signing_key_from_dir(project_root: Path) -> Optional[bytes]:
-    """Resolve the signing key for a project directory that has no live ``Context``.
-
-    Looks for ``certificate_signing_key`` in a ``global_config.{toml,yaml,yml}``
-    file directly under ``project_root`` or under ``project_root/config``
-    (same ``_dir_convention_paths`` convention as ``setting/config_forms.py``
-    — a project may keep its config root-level or under ``config/``), then
-    falls back to the environment variable via :func:`resolve_signing_key`.
-    Used by the CLI ``certify verify`` command and the certificates API,
-    neither of which builds a full pipeline ``Context``.
-    """
+    """Resolve the signing key for a project directory that has no live ``Context``."""
     gs: Dict[str, Any] = {}
     search_dirs = [Path(project_root), Path(project_root) / "config"]
     for directory in search_dirs:
@@ -162,21 +129,11 @@ def config_fingerprint(context: Any) -> str:
     return _sha256(_canonical_json(configs))
 
 
-#: Kept so existing internal callers keep working; the public spelling is
-#: `config_fingerprint`, which core.executors.facade reads to decide whether a
-#: materialized pipeline may still be reused.
 _config_fingerprint = config_fingerprint
 
 
 def _quality_extension_fingerprints(context: Any) -> Dict[str, Any]:
-    """Hash the custom-check modules named in ``quality.extensions``.
-
-    Their ``@register_check`` verdicts land in this certificate's ``quality``
-    block, so a check rewritten to always pass yields an identically healthy
-    certificate unless the module itself is hashed. Read from config rather
-    than plumbed through the ledger: ``load_quality_extensions`` runs during
-    context construction, long before a run has a ledger to record into.
-    """
+    """Hash the custom-check modules named in ``quality.extensions``."""
     try:
         from ducta.core.code_fingerprint import fingerprint_module
 
@@ -192,12 +149,7 @@ def _quality_extension_fingerprints(context: Any) -> Dict[str, Any]:
 
 
 def _quality_summary(context: Any) -> List[Dict[str, Any]]:
-    """Per-node quality outcomes for the certificate.
-
-    Prefers the compact summaries the executor deposits on ``_quality_results``
-    (passed/score/errors/warnings per node+phase — populated for every run without
-    opt-in). Falls back to persisted ``quality_output_paths`` for backward compat.
-    """
+    """Per-node quality outcomes for the certificate."""
     from ducta.core.ledger import ledger_for
 
     results = ledger_for(context).quality_results
@@ -221,28 +173,7 @@ def _quality_summary(context: Any) -> List[Dict[str, Any]]:
 
 @dataclass
 class RunCertificate:
-    """A verifiable record of one pipeline run.
-
-    ``certificate_hash`` is a keyless SHA-256 over every other field (via
-    :meth:`content`), so :func:`verify_certificate` detects *corruption* — a
-    truncated file, a bad merge, an edit nobody covered up. It is not by itself
-    evidence against a motivated editor, who can recompute the hash over their
-    own content and pass verification.
-
-    :meth:`sign` adds the HMAC over that hash, and that is what makes the
-    certificate tamper-*evident*: producing a valid signature requires the key.
-    Prefer a signed certificate wherever the file is meant to be relied on as
-    evidence rather than as a checksum.
-
-    :attr:`signed` records *that* the certificate was signed, inside the hashed
-    content. Without it, the signature was self-declaring: `signature` and
-    `key_id` sat outside the hash (they have to — the HMAC is computed over it),
-    so deleting both fields and recomputing the hash produced a forged
-    certificate that `verify_certificate` reported as "untampered", even when
-    handed the correct key. Signing now changes the hash, so a stripped
-    signature leaves `signed: true` behind with nothing to verify it — which is
-    detectable, and fails.
-    """
+    """A verifiable record of one pipeline run."""
 
     run_id: str
     pipeline: str
@@ -259,21 +190,12 @@ class RunCertificate:
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
     quality: List[Dict[str, Any]] = field(default_factory=list)
-    #: What each node actually ran: ``{node: {source_hash, module_hash, scope,
-    #: …}}`` plus a ``quality_extensions`` entry for custom check modules.
-    #: ``config_fingerprint`` covers only the config documents, which *name* a
-    #: transformation without committing to its text — so without this, two
-    #: certificates could match field for field over different logic.
     code: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
-    #: False when the run's ledger failed to record something it was asked to.
-    #: The certificate is still emitted — a partial record beats none — but it
-    #: says so, rather than being indistinguishable from a complete one.
     evidence_complete: bool = True
     evidence_gaps: List[str] = field(default_factory=list)
-    #: Whether this certificate carries an HMAC signature. Part of the hashed
-    #: content on purpose — see the class docstring.
     signed: bool = False
+    evidence_level: str = "record"
     certificate_hash: str = ""
     signature: Optional[str] = None
     key_id: Optional[str] = None
@@ -301,6 +223,7 @@ class RunCertificate:
             "evidence_complete": self.evidence_complete,
             "evidence_gaps": self.evidence_gaps,
             "signed": self.signed,
+            "evidence_level": self.evidence_level,
         }
         return data
 
@@ -309,12 +232,7 @@ class RunCertificate:
         return _sha256(_canonical_json(self.content()))
 
     def sign(self, key: bytes) -> None:
-        """Attach an HMAC-SHA256 signature over the certificate hash (attribution).
-
-        Sets :attr:`signed` *before* hashing, so the resulting hash commits to
-        the fact that a signature exists. Removing the signature afterwards no
-        longer yields a self-consistent certificate.
-        """
+        """Attach an HMAC-SHA256 signature over the certificate hash (attribution)."""
         self.signed = True
         digest = hmac.new(key, self.compute_hash().encode("utf-8"), hashlib.sha256).hexdigest()
         self.signature = _SIG_PREFIX + digest
@@ -344,6 +262,16 @@ def _build_code_block(context: Any, ledger: Any) -> Dict[str, Any]:
     return block
 
 
+def _evidence_level(context: Any) -> str:
+    from ducta.core.settings import CoreSettings
+
+    try:
+        return CoreSettings.from_context(context).evidence_level
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not resolve evidence_level for certificate: {}", e)
+        return "record"
+
+
 def build_certificate(
     context: Any,
     *,
@@ -356,12 +284,7 @@ def build_certificate(
     ducta_version: str,
     error: Optional[str] = None,
 ) -> RunCertificate:
-    """Assemble a certificate from the evidence the run left on ``context``.
-
-    Reads input/output fingerprints and quality outputs already stored on the
-    context, captures the current environment, and fingerprints the config. Never
-    raises — a certificate is best-effort and must not break a run.
-    """
+    """Assemble a certificate from the evidence the run left on ``context``."""
     try:
         from ducta.mlrun.environment import EnvironmentSnapshot
 
@@ -393,19 +316,14 @@ def build_certificate(
         error=error,
         evidence_complete=ledger.evidence_complete,
         evidence_gaps=ledger.record_failures,
+        evidence_level=_evidence_level(context),
     )
     cert.certificate_hash = cert.compute_hash()
     return cert
 
 
 def certificate_dir(context: Any, run_id: str) -> Path:
-    """Resolve the run certificate directory for this run.
-
-    ``CoreSettings.run_certificate_dir`` is already fully resolved and
-    environment-scoped (``${output_path}/${environment}/.ducta/runs`` by
-    default; see ``CoreSettings._resolve_scoped_dir``), so this just appends
-    the run id.
-    """
+    """Resolve the run certificate directory for this run."""
     from ducta.core.settings import CoreSettings
 
     settings = CoreSettings.from_context(context)
@@ -413,13 +331,7 @@ def certificate_dir(context: Any, run_id: str) -> Path:
 
 
 def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[Optional[str], str, Path]]:
-    """Yield ``(env, run_id, run_dir)`` for every certificate under ``base_dir``.
-
-    Walks both the legacy flat layout (``base_dir/<run_id>/certificate.json``,
-    ``env`` yielded as ``None``) and the per-environment layout
-    (``base_dir/<env>/<run_id>/certificate.json``), so callers can list runs
-    written before and after the per-environment change transparently.
-    """
+    """Yield ``(env, run_id, run_dir)`` for every certificate under ``base_dir``."""
     if not base_dir.is_dir():
         return
     for entry in sorted(base_dir.iterdir()):
@@ -434,12 +346,7 @@ def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[Optional[str], str, 
 
 
 def find_certificate_dir(base_dir: Path, run_id: str, env: Optional[str] = None) -> Optional[Path]:
-    """Resolve a single run's certificate directory under ``base_dir``.
-
-    When ``env`` is given, the per-environment path is tried first; either
-    way, falls back to scanning both layouts so a run written under a
-    different (or legacy/no) environment is still found by ``run_id``.
-    """
+    """Resolve a single run's certificate directory under ``base_dir``."""
     if env:
         candidate = base_dir / sanitize_env_for_path(env) / run_id
         if (candidate / "certificate.json").is_file():
@@ -490,6 +397,10 @@ def load_certificate(path: Path) -> Dict[str, Any]:
     return data
 
 
+LEVEL_INTEGRITY = "integrity"
+LEVEL_AUTHENTICATED = "authenticated"
+
+
 @dataclass
 class VerifyResult:
     """Outcome of verifying a certificate's integrity."""
@@ -497,17 +408,13 @@ class VerifyResult:
     ok: bool
     run_id: Optional[str]
     reason: str
-    #: unsigned | valid | invalid | present (no key) | stripped | unverifiable
     signature: str = "unsigned"
+    level: str = "none"
+    policy_satisfied: bool = True
 
 
 def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> VerifyResult:
-    """Confirm the certificate at *path* was not altered; when signed and keyed, check the signature.
-
-    Thin wrapper around :func:`verify_certificate_data` for the file-based CLI/API
-    paths — see that function for the actual verification logic and its docstring
-    for the reasoning behind each outcome.
-    """
+    """Confirm the certificate at *path* was not altered; when signed and keyed, check the signature."""
     try:
         data = load_certificate(path)
     except Exception as e:  # noqa: BLE001
@@ -518,24 +425,7 @@ def verify_certificate(path: Path, signing_key: Optional[bytes] = None) -> Verif
 def verify_certificate_data(
     data: Dict[str, Any], signing_key: Optional[bytes] = None
 ) -> VerifyResult:
-    """Confirm an already-parsed certificate dict was not altered; check the signature when keyed.
-
-    Integrity (self-hash) is always checked. If the certificate carries a signature
-    and ``signing_key`` is provided, the HMAC is verified too and a mismatch fails.
-
-    A signature cannot live inside the hash it signs, so `signature`/`key_id` are
-    excluded from the hashed content — which used to mean deleting both and
-    recomputing the hash produced a forgery this function called "untampered",
-    even when handed the right key. Schema 1.3 puts the *claim* of being signed
-    (`signed`) inside the content, so removing the signature is now detectable
-    and fails. A pre-1.3 certificate carries no such claim: when a key is
-    supplied and no signature is present, "never signed" and "signature removed"
-    are indistinguishable, and this reports that rather than guessing.
-
-    Operates purely on *data* — no filesystem access — so a certificate a caller
-    already holds in memory (e.g. pasted/uploaded through the standalone verify
-    endpoint) can be checked without ever being written to disk.
-    """
+    """Confirm an already-parsed certificate dict was not altered; check the signature when keyed."""
     run_id = data.get("run_id")
     stored = data.get("certificate_hash")
     if not stored:
@@ -554,8 +444,6 @@ def verify_certificate_data(
 
     stored_sig = data.get("signature")
     if not stored_sig:
-        # `signed` is inside the hashed content, so the hash check above already
-        # proved this flag is the one the signer wrote.
         if data.get("signed"):
             return VerifyResult(
                 ok=False,
@@ -578,20 +466,52 @@ def verify_certificate_data(
                 ),
                 signature="unverifiable",
             )
-        return VerifyResult(ok=True, run_id=run_id, reason="hash matches — untampered")
-    if signing_key is None:
+        if data.get("evidence_level") == "signed":
+            return VerifyResult(
+                ok=False,
+                run_id=run_id,
+                reason=(
+                    "certificate was issued under evidence_level=signed but carries " "no signature"
+                ),
+            )
         return VerifyResult(
             ok=True,
             run_id=run_id,
-            reason="hash matches — untampered (signed; no key provided to verify signature)",
+            reason=(
+                "integrity OK — unsigned: detects corruption, not deliberate tampering "
+                "(anyone who edits a field can recompute the hash)"
+            ),
+            level=LEVEL_INTEGRITY,
+        )
+    if signing_key is None:
+        policy_signed = data.get("evidence_level") == "signed"
+        reason = (
+            "integrity OK — signed, but the signature was NOT checked (no key "
+            "provided); provide the key to rule out deliberate tampering"
+        )
+        if policy_signed:
+            reason += (
+                ". This certificate's policy (evidence_level=signed) requires "
+                "authentication — verification is incomplete without the key"
+            )
+        return VerifyResult(
+            ok=True,
+            run_id=run_id,
+            reason=reason,
             signature="present (no key)",
+            level=LEVEL_INTEGRITY,
+            policy_satisfied=not policy_signed,
         )
     expected = (
         _SIG_PREFIX + hmac.new(signing_key, stored.encode("utf-8"), hashlib.sha256).hexdigest()
     )
     if hmac.compare_digest(expected, stored_sig):
         return VerifyResult(
-            ok=True, run_id=run_id, reason="hash matches and signature valid", signature="valid"
+            ok=True,
+            run_id=run_id,
+            reason="hash matches and signature valid — untampered",
+            signature="valid",
+            level=LEVEL_AUTHENTICATED,
         )
     return VerifyResult(
         ok=False,
@@ -602,16 +522,7 @@ def verify_certificate_data(
 
 
 def logical_fingerprint(fp: Dict[str, Any]) -> tuple:
-    """The reproducibility-relevant identity of a dataset.
-
-    Excludes ``file_size_bytes``/``file_mtime`` (which can jitter across otherwise
-    identical writes) — so 'reproducible' means 'same data', not 'same bytes'.
-
-    ``algorithm`` leads the tuple so two fingerprints measured differently can
-    never compare equal by accident. Callers should still ask
-    :func:`fingerprints_comparable` first: a mismatch here means "we cannot
-    tell", which is a different answer from "the data changed".
-    """
+    """The reproducibility-relevant identity of a dataset."""
     return (
         fp.get("algorithm") or LEGACY_FINGERPRINT_ALGORITHM,
         fp.get("schema_hash"),
@@ -621,27 +532,14 @@ def logical_fingerprint(fp: Dict[str, Any]) -> tuple:
 
 
 def fingerprints_comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
-    """Whether two serialized fingerprints may be compared at all, and why not.
-
-    A fingerprint only means something relative to the algorithm that produced
-    it. Upgrading Ducta changes every fingerprint's value; reporting that as
-    "the data changed" would be false and would teach operators to ignore the
-    one signal this system exists to give them.
-    """
+    """Whether two serialized fingerprints may be compared at all, and why not."""
     from ducta.mlrun.fingerprint import comparable
 
     return comparable(a, b)
 
 
 def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
-    """Structural diff between two certificates: identity, config, outputs, quality.
-
-    Shared by ``ducta certify diff`` and the certificates API's diff endpoint so
-    both surfaces agree on what "different" means. Outputs are compared by
-    :func:`logical_fingerprint` (schema/rows/sample), not raw bytes — a dataset
-    rewritten with identical content is "same", a reordered/regenerated one with
-    different content is "different".
-    """
+    """Structural diff between two certificates: identity, config, outputs, quality."""
     outputs_a = a.get("outputs", {}) or {}
     outputs_b = b.get("outputs", {}) or {}
     output_rows = []
@@ -649,15 +547,11 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         fp_a = outputs_a.get(key)
         fp_b = outputs_b.get(key)
         reason: Optional[str] = None
-        # Tri-state on purpose: True (same), False (differs), None (measured
-        # differently — no claim possible).
         match: Optional[bool]
         if fp_a is None or fp_b is None:
             match = False
         else:
             ok, reason = fingerprints_comparable(fp_a, fp_b)
-            # `match=None` is the third answer: not "same", not "different", but
-            # "these were measured differently, so no claim can be made".
             match = (logical_fingerprint(fp_a) == logical_fingerprint(fp_b)) if ok else None
         output_rows.append(
             {
@@ -698,10 +592,6 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     pipeline_match = a.get("pipeline") == b.get("pipeline")
     environment_match = a.get("environment_name") == b.get("environment_name")
     status_match = a.get("status") == b.get("status")
-    # `is not False` rather than truthiness: a `None` (not comparable) row must
-    # not silently count as a difference. `outputs_comparable` says whether the
-    # verdict covers everything, so a caller can tell "all match" from "all that
-    # could be checked match".
     outputs_match = all(row["match"] is not False for row in output_rows) if output_rows else True
     outputs_comparable = all(row["match"] is not None for row in output_rows)
 

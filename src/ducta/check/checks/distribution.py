@@ -76,6 +76,10 @@ class DriftDetectionCheck(BaseQualityCheck):
         if not columns:
             return self._create_result(True, "No columns configured for drift detection", {})
 
+        missing = self._missing_columns_result(columns, adapter)
+        if missing is not None:
+            return missing
+
         threshold = (
             config.jensen_shannon_threshold if hasattr(config, "jensen_shannon_threshold") else 0.1
         )
@@ -114,7 +118,8 @@ class DriftDetectionCheck(BaseQualityCheck):
             )
 
         drifts = []
-        details = {}
+        details: Dict[str, Any] = {}
+        column_errors: Dict[str, str] = {}
         columns_evaluated = 0
 
         for column in columns:
@@ -152,16 +157,23 @@ class DriftDetectionCheck(BaseQualityCheck):
 
             except Exception as e:
                 logger.exception(f"Error detecting drift in column '{column}': {e}")
+                column_errors[column] = str(e)
 
         details["_columns_evaluated"] = columns_evaluated
         details["_columns_configured"] = len(columns)
 
         if drifts:
+            if column_errors:
+                details["_column_errors"] = column_errors
             return self._create_result(
                 False,
                 f"Distribution drift detected in {len(drifts)} column(s): {'; '.join(drifts)}",
                 details,
             )
+
+        errored = self._column_errors_result(column_errors, details)
+        if errored is not None:
+            return errored
 
         if columns_evaluated == 0:
             # See temporal.py's AnomalyDetectionCheck for why this is
@@ -266,6 +278,10 @@ class StatisticalCheck(BaseQualityCheck):
         if not columns:
             return self._create_result(True, "No columns configured for statistical test", {})
 
+        missing = self._missing_columns_result(columns, adapter)
+        if missing is not None:
+            return missing
+
         if not _scipy_available():
             return self._create_result(
                 False,
@@ -278,12 +294,16 @@ class StatisticalCheck(BaseQualityCheck):
         # Sample data for driver-side statistical tests to avoid OOM
         max_rows = config.max_rows if hasattr(config, "max_rows") else 100000
         pdf = adapter.sample(max_rows=max_rows)
-        details = {}
+        details: Dict[str, Any] = {}
+        column_errors: Dict[str, str] = {}
         columns_evaluated = 0
 
         for column in columns:
             try:
                 if column not in pdf.columns:
+                    # Present in the dataset (checked above) but absent from
+                    # the driver-side sample: an adapter problem, not a pass.
+                    column_errors[column] = "column missing from sampled data"
                     continue
 
                 data = pdf[column].dropna().values
@@ -303,6 +323,7 @@ class StatisticalCheck(BaseQualityCheck):
                 logger.warning(
                     f"Error in statistical test '{test_type}' for column '{column}': {e}"
                 )
+                column_errors[column] = str(e)
 
         details["_columns_evaluated"] = columns_evaluated
         details["_columns_configured"] = len(columns)
@@ -313,11 +334,17 @@ class StatisticalCheck(BaseQualityCheck):
         ]
 
         if failed_tests:
+            if column_errors:
+                details["_column_errors"] = column_errors
             return self._create_result(
                 False,
                 f"Statistical tests failed for {len(failed_tests)} column(s)",
                 details,
             )
+
+        errored = self._column_errors_result(column_errors, details)
+        if errored is not None:
+            return errored
 
         if columns_evaluated == 0:
             # See AnomalyDetectionCheck in temporal.py for why this is

@@ -59,7 +59,8 @@ Core does not define its own config files — it consumes the `Context` produced
 *   **`execution_timeout_seconds` / `node_timeout_seconds`**: Whole-pipeline and per-node time limits (capped at 24h).
 *   **`preflight_enabled`** (*bool*, default `true`): Run configuration preflight before execution.
 *   **`enable_run_certificate`** (*bool*, default `true`) + **`run_certificate_dir`**: Emit a signed Run Certificate per batch/ml/hybrid run. See "Ducta storage convention" below for where it's written by default.
-*   **`certificate_signing_key`** / `Ducta_CERTIFICATE_KEY` env: Optional HMAC key for certificate attribution.
+*   **`evidence_level`** (`off` | `record` | `required` | `signed`, default `record`): How much evidence each run must leave — the project's choice. `off` writes no certificate; `record` writes one and only warns if it cannot; `required` fails a run that cannot write its certificate; `signed` also requires an HMAC signature, and preflight fails without a key. Recorded inside the certificate, so `certify verify` holds a `signed` certificate to that policy. The legacy `enable_run_certificate` / `require_run_certificate` keys still work; one that contradicts an explicit `evidence_level` is a preflight error.
+*   **`certificate_signing_key`** / `DUCTA_CERTIFICATE_KEY` env: Optional HMAC key for certificate attribution (prefer the env var; the legacy `Ducta_CERTIFICATE_KEY` spelling is still read).
 *   **`mlops_enabled` / `mlops_required`**: Toggle experiment tracking and whether its failure aborts the run.
 *   **`random_seed`**: Global reproducibility seed applied at pipeline start.
 *   **`chain.reuse_materialized` / `chain.staleness_check`**: Skip already-materialized upstream pipelines in a `depends_on` chain. Reuse is refused unless the dates, the config fingerprint, the node modules and (with `staleness_check`, on by default) the input mtimes all still match what produced those outputs.
@@ -77,8 +78,65 @@ Every directory Ducta itself writes to — as opposed to a node's own data outpu
 | Quality reports/baselines/history | `quality.output.base_path` | `${output_path}/${environment}/quality`            | yes — a project may want to browse or ship these |
 | Run certificates               | `run_certificate_dir`   | `${output_path}/${environment}/.ducta/runs`        | no — hidden, framework bookkeeping |
 | Chain-state markers            | `chain.state_dir`       | `${output_path}/${environment}/.ducta/chain_state` | no — hidden, framework bookkeeping |
+| Run-lock files / leases       | `run_lock.dir`          | `${output_path}/${environment}/.ducta/locks`       | no — hidden, framework bookkeeping |
 
 A value that doesn't itself reference `${environment}` (a fixed custom or legacy path) is still scoped per environment automatically — the resolved environment is appended as a path segment — so two environments can never collide in the same directory even with a non-default setting. See `CoreSettings._resolve_scoped_dir` for the resolution logic, and `PipelineExecutor._load_chain_state`/`certificate_dir` for the backward-compatible fallbacks that still read markers/certificates written under Ducta's pre-convention defaults (`.ducta/runs`, `.ducta/chain_state`, relative to the project root).
+
+### Run lock — one writer per output
+
+A run takes an exclusive lock on **every output dataset** it will write before
+it reads any data, and releases it when it ends. A second run touching any of
+those outputs — an overlapping orchestrator retry, the same backfill launched
+twice, a different pipeline writing the same table — does not start: it fails
+with `PipelineLockedError` (CLI exit code **7**), naming the run that holds the
+lock. Nothing ran, so no certificate is written.
+
+```yaml
+run_lock:
+  enabled: true          # default
+  backend: local         # local | storage
+  on_conflict: fail      # fail | wait
+  wait_timeout_seconds: 600
+  ttl_seconds: 300       # storage backend only
+  dir: s3://bucket/ducta-locks   # optional; default ${output_path}/${environment}/.ducta/locks
+```
+
+* `local` is an OS lock (`flock`/`msvcrt`): released by the OS when the holding
+  process dies, so a crash never leaves a lock to clear by hand. One host only.
+* `storage` is a lease renewed every `ttl_seconds/3`, on a shared filesystem
+  (exclusive create) or S3 (conditional writes). A holder that dies stops
+  renewing and the lease can be taken over after `ttl_seconds`. If a running
+  holder ever fails to renew, the certificate records it as an evidence gap.
+
+### Timeouts that stop the work
+
+`node_timeout_seconds` and `execution_timeout_seconds` (the whole run) stop the
+work, not only the bookkeeping. On a timeout the node's **Spark jobs are
+cancelled on the cluster** (each node's jobs carry a tag unique to the run and
+node), its **dataset writes are refused**, and the certificate records the gap.
+A Python thread cannot be killed, so pure-Python work that never touches Spark
+or a writer may still run to completion in the background — it just cannot
+land output. For long pure-Python nodes set `run_in_process: true`: they run in
+their own process, which is terminated on timeout. Before, `execution_timeout_seconds`
+was only a polling cap and a run could exceed it indefinitely.
+
+### Evidence at batch cost
+
+The default `fingerprint_mode: auto` keeps the certificate's cost proportional
+to what the run processed, never to the size of a table's history:
+
+| Dataset | Fingerprint | Cost |
+|---|---|---|
+| Delta input | table id + commit version (`delta-version/v1`) | transaction log only, no scan |
+| Input with `incremental: {column: …}` | every row of the run's date window | the window |
+| Other input ≤ `fingerprint_exact_max_bytes` (10 GiB) | every row | the dataset |
+| Other input above it | deterministic sample, recorded as such | a scan, no shuffle |
+| Output | every row of the written batch + Delta commit metrics | the batch (already cached) |
+
+`certify verify --reproduce` reads each Delta input at the version the
+certificate recorded (`versionAsOf`), so a reproduction is not confused by
+commits made since. `exact`, `exact_crypto`, `sample` and `schema` remain
+available to force one strategy.
 
 ---
 
@@ -110,12 +168,12 @@ clean_sales:
     checks: {empty_dataset: {}}
   data_quality:
     fail_fast: false
-    checks: {null_rate: {column: "id", max: 0.0}}
+    checks: {null_rate: {columns: ["id"], threshold: 0.0}}
 ```
 
 ```bash
 # Sign certificates for attribution (optional)
-export Ducta_CERTIFICATE_KEY="a-long-random-secret"
+export DUCTA_CERTIFICATE_KEY="a-long-random-secret"
 ```
 
 ---

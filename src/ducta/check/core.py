@@ -536,6 +536,39 @@ class BaseQualityCheck(ABC):
             details=details or {},
         )
 
+    def _missing_columns_result(self, columns: List[str], adapter: Any) -> Optional[CheckResult]:
+        """Fail when a configured column does not exist in the dataset.
+
+        Per-column checks used to catch the lookup error for a misspelled or
+        dropped column, log it, and move on — so `null_rate` on `columns: [idd]`
+        reported "all columns within threshold" having checked nothing. A column
+        the user named explicitly and that is not there is a failed check, not
+        a skipped one.
+        """
+        available = set(adapter.get_columns())
+        missing = [c for c in columns if c not in available]
+        if not missing:
+            return None
+        return self._create_result(
+            False,
+            f"Column(s) not found in dataset: {', '.join(missing)}",
+            {"missing_columns": missing, "available_columns": sorted(available)},
+        )
+
+    def _column_errors_result(
+        self, column_errors: Dict[str, str], details: Dict[str, Any]
+    ) -> Optional[CheckResult]:
+        """Fail when a column that exists could not be evaluated (see above)."""
+        if not column_errors:
+            return None
+        details["_column_errors"] = column_errors
+        return self._create_result(
+            False,
+            f"Could not evaluate column(s) {', '.join(column_errors)} — inconclusive, "
+            "not a pass",
+            details,
+        )
+
     def _get_context_adapter(
         self, dataset_name: str, context_datasets: Optional[Dict[str, Any]]
     ) -> Optional[Any]:

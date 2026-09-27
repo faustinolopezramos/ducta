@@ -192,7 +192,7 @@ class TestLoadInputsParallel:
         loader = InputLoader(dict_context)
         release = threading.Event()
 
-        def fake_load(input_key):
+        def fake_load(input_key, *_window):
             if input_key == "bad":
                 raise ReadOperationError("boom")
             release.wait(timeout=5)
@@ -212,7 +212,7 @@ class TestLoadInputsParallel:
         dict_context["global_config"]["fill_none_on_error"] = True
         loader = InputLoader(dict_context)
 
-        def fake_load(input_key):
+        def fake_load(input_key, *_window):
             if input_key == "bad":
                 raise ReadOperationError("boom")
             return input_key.upper()
@@ -226,7 +226,7 @@ class TestLoadInputsParallel:
         dict_context["global_config"]["fill_none_on_error"] = False
         loader = InputLoader(dict_context)
 
-        def fake_load(input_key):
+        def fake_load(input_key, *_window):
             if input_key in ("bad1", "bad2"):
                 raise ReadOperationError("boom")
             return input_key

@@ -124,6 +124,9 @@ class BaseTemplate:
         self.project_name = project_name
         self.config_format = config_format
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        #: Written explicitly into global_config so the project's evidence
+        #: policy is a visible choice, not an invisible default.
+        self.evidence_level = "record"
 
     def generate_sample_code(self) -> Optional[str]:
         """The Python module backing this template's nodes, or None if it needs none."""
@@ -175,10 +178,17 @@ class BaseTemplate:
         """Get common global config for all templates."""
         settings: Dict[str, Any] = {
             "project_name": self.project_name,
-            "version": "1.0.0",
-            "created_at": self.timestamp,
-            "template_type": self.TEMPLATE_TYPE,
-            "architecture": self.ARCHITECTURE,
+            # Descriptive only — Ducta does not read `metadata`, so it lives in
+            # its own block instead of tripping the unknown-key warning on the
+            # very first run of a freshly generated project.
+            "metadata": {
+                "version": "1.0.0",
+                "template_type": self.TEMPLATE_TYPE,
+                "architecture": self.ARCHITECTURE,
+                "created_at": self.timestamp,
+            },
+            # off | record | required | signed — see the evidence_level docs.
+            "evidence_level": self.evidence_level,
             "mode": "local",  # change to 'databricks' or 'distributed' if needed
             # Base dirs for ${input_path}/${output_path} interpolation in the
             # I/O catalogs; required by Context validation.
@@ -188,7 +198,7 @@ class BaseTemplate:
             "fail_on_error": True,
         }
         if self.LAYERS:
-            settings["layers"] = list(self.LAYERS)
+            settings["metadata"]["layers"] = list(self.LAYERS)
         return settings
 
 
@@ -210,9 +220,11 @@ class MedallionBasicTemplate(BaseTemplate):
         base_settings = self.get_common_global_config()
         base_settings.update(
             {
-                "default_date": "2025-01-01",
-                "spark_master": "local[4]",
-                "max_retries": 2,
+                # No `spark_master`/`max_retries`/`default_date`: the template
+                # used to write them, nothing read them, and a knob that does
+                # nothing when edited is worse than no knob. Retries are per
+                # node (`retry:` in nodes.yaml); the local Spark session
+                # always uses `local[*]` (setting/session.py).
                 "fail_on_error": True,
                 # Quality: add custom check modules and reusable profiles here.
                 # Extensions are Python modules containing @register_check classes.
@@ -470,7 +482,6 @@ class StreamingBasicTemplate(BaseTemplate):
         settings = self.get_common_global_config()
         settings.update(
             {
-                "spark_master": "local[4]",
                 # Imported and called before any streaming pipeline starts, so
                 # the transforms below are in the registry by the time the nodes
                 # that name them are built. Without this the CLI needs
@@ -770,12 +781,14 @@ class TemplateGenerator:
         project_name: str,
         create_sample_code: bool = True,
         developer_sandboxes: Optional[List[str]] = None,
+        evidence_level: str = "record",
     ) -> None:
         """Generate complete project structure from template."""
         logger.info("Generating {} template for project '{}'", template_type.value, project_name)
 
         # Create template instance
         template = TemplateFactory.create_template(template_type, project_name, self.config_format)
+        template.evidence_level = evidence_level
         self.template = template
 
         # Create directory structure
@@ -1409,6 +1422,7 @@ class TemplateCommand:
         list_templates: bool = False,
         interactive: bool = False,
         sandbox_developers: Optional[List[str]] = None,
+        evidence_level: str = "record",
     ) -> int:
         """Handle template generation command."""
         try:
@@ -1433,6 +1447,7 @@ class TemplateCommand:
                 config_format,
                 create_sample_code,
                 sandbox_developers,
+                evidence_level,
             )
 
         except TemplateError as e:
@@ -1602,6 +1617,7 @@ class TemplateCommand:
         config_format: str,
         create_sample_code: bool,
         sandbox_developers: Optional[List[str]] = None,
+        evidence_level: str = "record",
     ) -> int:
         """Generate template with specified parameters."""
         try:
@@ -1629,7 +1645,11 @@ class TemplateCommand:
 
             self.generator = TemplateGenerator(output_dir, format_enum)
             self.generator.generate_project(
-                template_enum, project_name, create_sample_code, sandbox_developers
+                template_enum,
+                project_name,
+                create_sample_code,
+                sandbox_developers,
+                evidence_level=evidence_level,
             )
 
             self._show_success_message(
@@ -1709,4 +1729,5 @@ def handle_template_command(parsed_args) -> int:
         create_sample_code=not parsed_args.no_sample_code,
         list_templates=parsed_args.list_templates,
         sandbox_developers=getattr(parsed_args, "sandbox_developers", None),
+        evidence_level=getattr(parsed_args, "evidence_level", None) or "record",
     )

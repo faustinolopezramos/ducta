@@ -58,6 +58,10 @@ class AnomalyDetectionCheck(BaseQualityCheck):
         if not columns:
             return self._create_result(True, "No columns configured for anomaly detection", {})
 
+        missing = self._missing_columns_result(columns, adapter)
+        if missing is not None:
+            return missing
+
         z_score_threshold = (
             config.z_score_threshold if hasattr(config, "z_score_threshold") else 3.0
         )
@@ -70,7 +74,8 @@ class AnomalyDetectionCheck(BaseQualityCheck):
             )
 
         anomalies = []
-        details = {}
+        details: Dict[str, Any] = {}
+        column_errors: Dict[str, str] = {}
         columns_evaluated = 0
 
         for column in columns:
@@ -102,16 +107,23 @@ class AnomalyDetectionCheck(BaseQualityCheck):
                     )
             except Exception as e:
                 logger.exception(f"Error detecting anomaly in column '{column}': {e}")
+                column_errors[column] = str(e)
 
         details["_columns_evaluated"] = columns_evaluated
         details["_columns_configured"] = len(columns)
 
         if anomalies:
+            if column_errors:
+                details["_column_errors"] = column_errors
             return self._create_result(
                 False,
                 f"Anomalies detected in {len(anomalies)} column(s): {'; '.join(anomalies)}",
                 details,
             )
+
+        errored = self._column_errors_result(column_errors, details)
+        if errored is not None:
+            return errored
 
         if columns_evaluated == 0:
             # `passed=True` here used to report a clean pass with zero

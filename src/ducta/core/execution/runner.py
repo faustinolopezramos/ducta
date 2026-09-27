@@ -28,7 +28,12 @@ from typing import Any, Dict, List, Optional, Set
 from loguru import logger  # type: ignore
 
 from ducta.check import QualityOutputManager
-from ducta.core.errors import NodeNotFoundError
+from ducta.core.errors import NodeCancelledError, NodeNotFoundError
+from ducta.core.execution.cancellation import (
+    is_cancelled,
+    tag_current_thread,
+    untag_current_thread,
+)
 from ducta.core.execution.coordinator import ParallelCoordinator
 from ducta.core.execution.ingestion import IngestionExecutor
 from ducta.core.execution.loader import FunctionLoader
@@ -97,7 +102,8 @@ class NodeExecutor:
         )
         self._ml_builder = MLContextBuilder(context, mlops_context, self.is_ml_layer)
         self._trace_lock = threading.Lock()
-        self._proc_pool: Optional[Any] = None
+        #: Live `run_in_process` worker processes, so shutdown can reap them.
+        self._children: Set[Any] = set()
         self._ingestion_executor = IngestionExecutor(
             context=context,
             output_writer=self._output_writer,
@@ -137,6 +143,8 @@ class NodeExecutor:
         logger.info("[node_status] node_id={} status=running", node_name)
 
         self._set_scheduler_pool(node_name)
+        # Tag this node's Spark jobs so a timeout can cancel them on the cluster.
+        tag_current_thread(self.context, node_name)
 
         with resource_manager.resource_context(f"node_{node_name}"):
             try:
@@ -163,7 +171,9 @@ class NodeExecutor:
                     return
 
                 function = self._function_loader.load(node_config)
-                input_dfs = self.input_loader.load_inputs(node_config, node_name)
+                input_dfs = self.input_loader.load_inputs(
+                    node_config, node_name, start_date=start_date, end_date=end_date
+                )
                 input_param_names = self.input_loader.get_input_param_names(node_config)
 
                 sanity_report = self._quality_executor.run_sanity_checks(
@@ -303,6 +313,7 @@ class NodeExecutor:
                     report_node_failure(e, node_name)
                 raise
             finally:
+                untag_current_thread(self.context)
                 duration = time.perf_counter() - start_time
                 logger.debug("Node '{}' executed in {:.2f}s", node_name, duration)
                 self._record_node_trace(node_name, node_status, duration, node_error)
@@ -334,27 +345,11 @@ class NodeExecutor:
             return False
         return True
 
-    def _process_pool(self):
-        """Lazily-created process pool, shared by every cpu_bound node in the run."""
-        if self._proc_pool is None:
-            import multiprocessing
-            from concurrent.futures import ProcessPoolExecutor
-
-            self._proc_pool = ProcessPoolExecutor(
-                max_workers=self.max_workers,
-                mp_context=multiprocessing.get_context("spawn"),
-            )
-        return self._proc_pool
-
     def shutdown(self) -> None:
-        """Release the process pool, if one was created."""
-        pool = getattr(self, "_proc_pool", None)
-        if pool is not None:
-            try:
-                pool.shutdown(wait=True)
-            except Exception as e:  # noqa: BLE001 — cleanup is best-effort
-                logger.debug("Could not shut down the node process pool: {}", e)
-            self._proc_pool = None
+        """Terminate any `run_in_process` worker still alive (best-effort)."""
+        for proc in list(getattr(self, "_children", ())):
+            _stop_process(proc)
+        self._children = set()
 
     def _run_node_in_subprocess(
         self,
@@ -371,7 +366,6 @@ class NodeExecutor:
             OUTCOME_MISSING_DEPENDENCY,
             OUTCOME_SUCCESS,
             build_node_payload,
-            run_node_in_process,
         )
         from ducta.gate.exceptions import MissingDependencyError
 
@@ -387,7 +381,7 @@ class NodeExecutor:
         )
 
         logger.debug("Running node '{}' in a worker process (run_in_process)", node_name)
-        outcome = self._process_pool().submit(run_node_in_process, payload).result()
+        outcome = self._run_child(node_name, payload)
         status = outcome.get("status")
         if status == OUTCOME_SUCCESS:
             return
@@ -397,6 +391,54 @@ class NodeExecutor:
         if status == OUTCOME_MISSING_DEPENDENCY:
             raise MissingDependencyError(error)
         raise RuntimeError(f"Node '{node_name}' failed in worker process: {error}")
+
+    def _run_child(
+        self, node_name: str, payload: Dict[str, Any], target: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """Run the node in its own process, terminating it if the node is cancelled.
+
+        ``target`` defaults to :func:`ducta.core.node_worker.run_node_in_child`;
+        tests substitute a function that never returns.
+        """
+        import multiprocessing
+
+        from ducta.core.node_worker import run_node_in_child
+
+        ctx = multiprocessing.get_context("spawn")
+        parent_conn, child_conn = ctx.Pipe(duplex=False)
+        proc = ctx.Process(
+            target=target or run_node_in_child,
+            args=(payload, child_conn),
+            name=f"ducta-node-{node_name}",
+            daemon=True,
+        )
+        proc.start()
+        child_conn.close()
+        self._children.add(proc)
+        try:
+            while True:
+                if parent_conn.poll(0.2):
+                    try:
+                        outcome = parent_conn.recv()
+                    except EOFError:
+                        outcome = None
+                    proc.join(timeout=10)
+                    break
+                if is_cancelled(self.context, node_name):
+                    _stop_process(proc)
+                    raise NodeCancelledError(node_name)
+                if not proc.is_alive():
+                    outcome = parent_conn.recv() if parent_conn.poll(0) else None
+                    break
+        finally:
+            parent_conn.close()
+            self._children.discard(proc)
+        if outcome is None:
+            return {
+                "status": "failed",
+                "error": f"worker process exited with code {proc.exitcode} and no result",
+            }
+        return outcome
 
     def _record_node_trace(
         self, node_name: str, status: str, duration: float, error: Optional[str]
@@ -502,3 +544,14 @@ class NodeExecutor:
         if not node:
             raise NodeNotFoundError(node_name, list(self.context.nodes_config.keys()))
         return node
+
+
+def _stop_process(proc: Any) -> None:
+    """terminate(), then kill() if it does not exit within 5 seconds."""
+    if not proc.is_alive():
+        return
+    proc.terminate()
+    proc.join(timeout=5)
+    if proc.is_alive():
+        proc.kill()
+        proc.join(timeout=5)

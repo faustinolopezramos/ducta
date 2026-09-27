@@ -97,6 +97,10 @@ class NullRateCheck(BaseQualityCheck):
 
         if not columns:
             columns = adapter.get_columns()
+        else:
+            missing = self._missing_columns_result(columns, adapter)
+            if missing is not None:
+                return missing
 
         total_rows = adapter.count()
         if total_rows == 0:
@@ -106,7 +110,8 @@ class NullRateCheck(BaseQualityCheck):
                 {},
             )
 
-        failures = {}
+        failures: Dict[str, Any] = {}
+        column_errors: Dict[str, str] = {}
         for col in columns:
             try:
                 null_count = adapter.null_count(col)
@@ -119,13 +124,20 @@ class NullRateCheck(BaseQualityCheck):
                     }
             except Exception as e:
                 logger.warning(f"Error checking nulls in column '{col}': {e}")
+                column_errors[col] = str(e)
 
         if failures:
+            if column_errors:
+                failures["_column_errors"] = column_errors
             return self._create_result(
                 False,
                 f"Null rate exceeds {threshold * 100:.1f}% in {len(failures)} column(s)",
                 failures,
             )
+
+        errored = self._column_errors_result(column_errors, {})
+        if errored is not None:
+            return errored
 
         return self._create_result(
             True,

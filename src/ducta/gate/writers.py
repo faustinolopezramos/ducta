@@ -86,6 +86,13 @@ class SparkWriterMixin:
         valid_modes = [mode.value for mode in WriteMode]
         if write_mode not in valid_modes:
             raise ConfigurationError(f"Invalid write_mode '{write_mode}'. Valid: {valid_modes}")
+        if write_mode == WriteMode.MERGE.value:
+            # Reaching here means a non-Delta writer: DeltaWriter handles merge
+            # itself and never configures a plain DataFrameWriter for it.
+            raise ConfigurationError(
+                f"write_mode 'merge' is supported only for format 'delta', not "
+                f"'{self._get_format()}'"
+            )
         return write_mode
 
     def _apply_partition(
@@ -238,9 +245,166 @@ class BaseSparkWriter(BaseIO, SparkWriterMixin):
 
 
 class DeltaWriter(BaseSparkWriter):
-    """Delta Lake writer with advanced partition and selective replace support."""
+    """Delta Lake writer with advanced partition, selective replace and MERGE support."""
 
     FORMAT = "delta"
+
+    def write(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
+        if config.get("write_mode") != WriteMode.MERGE.value:
+            super().write(dataframe, destination, config)
+            return
+        if not destination or not str(destination).strip():
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+        self._print_write_separator(destination)
+        try:
+            DeltaMerge(dataframe, destination, config).run(
+                create=lambda: super(DeltaWriter, self).write(
+                    dataframe, destination, {**config, "write_mode": WriteMode.OVERWRITE.value}
+                )
+            )
+        except (WriteOperationError, ConfigurationError):
+            raise
+        except Exception as error:
+            raise WriteOperationError(f"MERGE into {destination} failed: {error}") from error
+
+
+class DeltaMerge:
+    """Upsert a DataFrame into a Delta table by key.
+
+    ``output.yaml``::
+
+        write_mode: merge
+        merge:
+          keys: [order_id]                 # required
+          when_matched: update_all         # update_all | {update: [cols]} | ignore
+          when_not_matched: insert_all     # insert_all | ignore
+          delete_when: "s._deleted = true" # optional; s = incoming batch, t = target
+          schema_evolution: false
+
+    Keys match null-safely (``<=>``): with plain ``=`` a row whose key is NULL
+    never matches, so every re-run inserts it again and the write stops being
+    idempotent. Duplicate keys in the incoming batch are rejected up front with
+    the offending keys, rather than surfacing as Delta's "multiple source rows
+    matched" halfway through the merge.
+    """
+
+    def __init__(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
+        self.df = dataframe
+        self.destination = destination
+        self.spec = config.get("merge") or {}
+        self.keys = self.spec.get("keys") or []
+        if isinstance(self.keys, str):
+            self.keys = [self.keys]
+        validate_merge_spec(self.spec)
+
+    def run(self, create: Any) -> None:
+        spark = self.df.sparkSession
+        self._check_keys_exist()
+        self._check_no_duplicate_keys()
+
+        target = self._target(spark)
+        if target is None:
+            logger.info("MERGE target {} does not exist yet — creating it", self.destination)
+            create()
+            return
+
+        builder = target.alias("t").merge(
+            self.df.alias("s"),
+            " AND ".join(f"t.`{k}` <=> s.`{k}`" for k in self.keys),
+        )
+        delete_when = self.spec.get("delete_when")
+        if delete_when:
+            builder = builder.whenMatchedDelete(condition=delete_when)
+
+        when_matched = self.spec.get("when_matched", "update_all")
+        if when_matched == "update_all":
+            builder = builder.whenMatchedUpdateAll()
+        elif isinstance(when_matched, dict):
+            builder = builder.whenMatchedUpdate(set={c: f"s.`{c}`" for c in when_matched["update"]})
+
+        if self.spec.get("when_not_matched", "insert_all") == "insert_all":
+            # A row flagged for deletion that is not in the target must not be
+            # inserted just because it did not match.
+            builder = builder.whenNotMatchedInsertAll(
+                condition=f"NOT ({delete_when})" if delete_when else None
+            )
+
+        conf_key = "spark.databricks.delta.schema.autoMerge.enabled"
+        evolve = bool(self.spec.get("schema_evolution", False))
+        previous = spark.conf.get(conf_key, None) if evolve else None
+        if evolve:
+            spark.conf.set(conf_key, "true")
+        try:
+            builder.execute()
+        finally:
+            if evolve:
+                if previous is None:
+                    spark.conf.unset(conf_key)
+                else:
+                    spark.conf.set(conf_key, previous)
+        logger.success("MERGE into {} on {} completed", self.destination, self.keys)
+
+    def _target(self, spark: Any) -> Any:
+        try:
+            from delta.tables import DeltaTable  # type: ignore
+        except ImportError as e:
+            raise ConfigurationError(
+                "write_mode 'merge' needs the delta-spark package (pip install 'ducta[delta]')"
+            ) from e
+        if "/" in self.destination or ":" in self.destination:
+            if not DeltaTable.isDeltaTable(spark, self.destination):
+                return None
+            return DeltaTable.forPath(spark, self.destination)
+        if not spark.catalog.tableExists(self.destination):
+            return None
+        return DeltaTable.forName(spark, self.destination)
+
+    def _check_keys_exist(self) -> None:
+        missing = [k for k in self.keys if k not in self.df.columns]
+        if missing:
+            raise ConfigurationError(
+                f"MERGE into {self.destination}: key column(s) {missing} are not in the "
+                f"output (columns: {self.df.columns})"
+            )
+
+    def _check_no_duplicate_keys(self) -> None:
+        dupes = self.df.groupBy(*self.keys).count().where("count > 1")
+        examples = dupes.limit(5).collect()
+        if examples:
+            total = dupes.count()
+            shown = "; ".join(
+                ", ".join(f"{k}={row[k]!r}" for k in self.keys) + f" (x{row['count']})"
+                for row in examples
+            )
+            raise WriteOperationError(
+                f"MERGE into {self.destination}: {total} key(s) appear more than once in "
+                f"the incoming batch, so the merge is ambiguous — e.g. {shown}. "
+                "Deduplicate the node's output by its merge keys."
+            )
+
+
+def validate_merge_spec(spec: Any) -> None:
+    """Raise ConfigurationError for a malformed ``merge:`` block (used by preflight too)."""
+    if not isinstance(spec, dict) or not spec.get("keys"):
+        raise ConfigurationError("write_mode 'merge' needs merge.keys: [<column>, ...]")
+    when_matched = spec.get("when_matched", "update_all")
+    if not (
+        when_matched in ("update_all", "ignore")
+        or (isinstance(when_matched, dict) and isinstance(when_matched.get("update"), list))
+    ):
+        raise ConfigurationError(
+            "merge.when_matched must be 'update_all', 'ignore' or {update: [columns]}"
+        )
+    if spec.get("when_not_matched", "insert_all") not in ("insert_all", "ignore"):
+        raise ConfigurationError("merge.when_not_matched must be 'insert_all' or 'ignore'")
+    delete_when = spec.get("delete_when")
+    if delete_when is not None:
+        from ducta.check.checks.business import BusinessRulesCheck
+
+        try:
+            BusinessRulesCheck._validate_sql_rule(str(delete_when))
+        except ValueError as e:
+            raise ConfigurationError(f"merge.delete_when: {e}") from e
 
 
 class ParquetWriter(BaseSparkWriter):

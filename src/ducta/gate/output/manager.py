@@ -305,7 +305,7 @@ class DataOutputManager(BaseIO):
         except Exception as error:
             raise WriteOperationError(f"Unity Catalog write failed: {error}") from error
 
-        self._record_fingerprint("output", out_key, full_table_name, dataframe)
+        self._record_output_fingerprint(out_key, full_table_name, dataframe, "delta")
 
     def _write_traditional(
         self, dataframe: Any, config: Dict[str, Any], out_key: str, env: Optional[str] = None
@@ -330,7 +330,32 @@ class DataOutputManager(BaseIO):
 
         handoff.offer(self.context, path, dataframe, config.get("write_mode"))
 
-        self._record_fingerprint("output", out_key, path, dataframe)
+        self._record_output_fingerprint(out_key, path, dataframe, format_name)
+
+    def _record_output_fingerprint(
+        self, out_key: str, target: str, dataframe: Any, format_name: str
+    ) -> None:
+        """Fingerprint what this write wrote — the batch — at a cost proportional to it.
+
+        The DataFrame is the node's cached output, so hashing it re-reads no
+        table. Under ``fingerprint_mode: auto`` it is hashed in full (it is the
+        batch, whatever the size of the table it landed in); the target's size
+        is irrelevant here. For Delta, the commit this write produced — its
+        version and ``operationMetrics`` (rows written, updated, deleted) — is
+        recorded too, read from the transaction log.
+        """
+        configured = self._ctx_get("global_config", {}).get("fingerprint_mode")
+        mode = None if configured and configured != "auto" else "exact"
+        extra: Dict[str, Any] = {"scope": "written batch"}
+        if format_name == "delta":
+            from ducta.gate.fingerprinting import delta_last_operation
+
+            commit = delta_last_operation(self._ctx_spark(), target)
+            if commit is not None:
+                extra["delta_commit"] = commit
+        self._record_fingerprint(
+            "output", out_key, target, dataframe, mode=mode, extra_details=extra
+        )
 
     def _save_model_artifacts(self, node: Dict[str, Any], model_version: str) -> None:
         """Save model artifacts to registry."""

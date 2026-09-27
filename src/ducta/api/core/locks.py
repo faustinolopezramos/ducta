@@ -29,10 +29,7 @@ from typing import Optional
 
 from loguru import logger  # type: ignore
 
-if sys.platform == "win32":
-    import msvcrt
-else:
-    import fcntl
+from ducta.core.locking import try_lock_fd, unlock_fd
 
 
 class ConfigLockError(Exception):
@@ -80,41 +77,26 @@ class ConfigLockManager:
             raise ConfigLockError(f"Failed to acquire lock: {e}")
 
     def _acquire_lock_unix(self, timeout: float = 5.0) -> None:
-        deadline = time.monotonic() + timeout if timeout > 0 else None
-        while True:
-            try:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return
-            except (IOError, OSError):
-                if deadline is not None and time.monotonic() >= deadline:
-                    raise TimeoutError(f"Lock acquisition timeout ({timeout}s)")
-                time.sleep(0.05)
+        self._acquire_polling(timeout)
 
     def _acquire_lock_windows(self, timeout: float = 5.0) -> None:
-        start = time.time()
-        while True:
-            try:
-                msvcrt.locking(self._lock_fd, msvcrt.LK_LOCK, 1)
-                break
-            except OSError:
-                if timeout > 0 and time.time() - start > timeout:
-                    raise TimeoutError(f"Lock acquisition timeout ({timeout}s)")
-                time.sleep(0.1)
+        self._acquire_polling(timeout)
+
+    def _acquire_polling(self, timeout: float) -> None:
+        assert self._lock_fd is not None
+        deadline = time.monotonic() + timeout if timeout > 0 else None
+        while not try_lock_fd(self._lock_fd):
+            if deadline is not None and time.monotonic() >= deadline:
+                raise TimeoutError(f"Lock acquisition timeout ({timeout}s)")
+            time.sleep(0.05)
 
     def _release_lock(self) -> None:
         if not self._is_locked:
             return
 
         try:
-            if sys.platform == "win32" and self._lock_fd is not None:
-                try:
-                    msvcrt.locking(self._lock_fd, msvcrt.LK_UNLCK, 1)
-                except OSError:
-                    pass
-            elif self._lock_fd is not None:
-                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
-
             if self._lock_fd is not None:
+                unlock_fd(self._lock_fd)
                 os.close(self._lock_fd)
                 self._lock_fd = None
         finally:
@@ -128,20 +110,10 @@ class ConfigLockManager:
             return False
         try:
             self._lock_fd = os.open(str(self.lock_file), os.O_CREAT | os.O_WRONLY, 0o600)
-            if sys.platform == "win32":
-                try:
-                    msvcrt.locking(self._lock_fd, msvcrt.LK_LOCK, 1)
-                except OSError:
-                    os.close(self._lock_fd)
-                    self._lock_fd = None
-                    return False
-            else:
-                try:
-                    fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                except (IOError, OSError):
-                    os.close(self._lock_fd)
-                    self._lock_fd = None
-                    return False
+            if not try_lock_fd(self._lock_fd):
+                os.close(self._lock_fd)
+                self._lock_fd = None
+                return False
             self._is_locked = True
             return True
         except Exception as e:

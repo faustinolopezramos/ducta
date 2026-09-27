@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 
@@ -109,8 +109,14 @@ class BaseIO:
         identifier: str,
         dataframe: Any,
         sample_rows: Optional[int] = None,
+        extra_details: Optional[Dict[str, Any]] = None,
+        **options: Any,
     ) -> Optional[Any]:
-        """Compute (if enabled) and store a DataFingerprint under ``_{scope}_fingerprints``."""
+        """Compute (if enabled) and store a DataFingerprint under ``_{scope}_fingerprints``.
+
+        ``options`` (``window``, ``delta``, ``mode``) pass through to
+        :func:`ducta.gate.fingerprinting.compute_fingerprint`.
+        """
         if not self.context_manager.get_nested("global_config.enable_data_fingerprinting", True):
             return None
         try:
@@ -122,6 +128,7 @@ class BaseIO:
                 identifier=identifier,
                 dataframe=dataframe,
                 sample_rows=sample_rows,
+                **options,
             )
         except Exception as error:
             self._note_fingerprint_gap(f"{scope} fingerprint for '{key}'", error)
@@ -132,6 +139,9 @@ class BaseIO:
             self._note_fingerprint_gap(
                 f"{scope} fingerprint for '{key}' degraded", RuntimeError(degraded)
             )
+
+        if extra_details:
+            fingerprint.details.update(extra_details)
 
         store = self.context_manager.get_or_create_dict(f"_{scope}_fingerprints")
         if store is not None:

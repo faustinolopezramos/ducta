@@ -109,8 +109,15 @@ class DeltaReader(SparkReaderBase):
 
         reader = spark.read.options(**config.get("options", {})).format("delta")
 
-        version = config.get("versionAsOf") or config.get("version")
-        timestamp = config.get("timestampAsOf") or config.get("timestamp")
+        # `is None`, not `or`: version 0 — a table's first commit — is falsy,
+        # and `versionAsOf: 0` used to fall through to reading the latest
+        # version without a word.
+        version = config.get("versionAsOf")
+        if version is None:
+            version = config.get("version")
+        timestamp = config.get("timestampAsOf")
+        if timestamp is None:
+            timestamp = config.get("timestamp")
 
         if version is not None:
             logger.info("Loading Delta with versionAsOf={}", version)

@@ -209,6 +209,50 @@ class NodeTimeoutError(ExecutionError):
         self.timeout_seconds = timeout_seconds
 
 
+class NodeCancelledError(ExecutionError):
+    """A node was cancelled (it exceeded its timeout, or the run's) and its
+    remaining work — Spark jobs, dataset writes — was refused."""
+
+    def __init__(self, node: str) -> None:
+        super().__init__(
+            f"Node '{node}' was cancelled after exceeding its time limit; its "
+            "remaining work was refused",
+            node=node,
+        )
+        self.node = node
+
+
+class PipelineLockedError(ExecutionError):
+    """Another run holds the lock on one of this run's output datasets.
+
+    Raised before any data is read, so nothing ran and no certificate is
+    written. Retryable: the other run will finish (or its lease expire).
+    """
+
+    exit_code = 7  # ExitCode.LOCKED
+    http_status = 409
+    retryable = True
+
+    def __init__(self, pipeline: str, key: str, holder: Optional[Dict[str, Any]] = None) -> None:
+        held_by = ""
+        if holder:
+            held_by = (
+                f" — held by run {holder.get('run_id', '?')} (pipeline "
+                f"'{holder.get('pipeline', '?')}', host {holder.get('host', '?')}, "
+                f"pid {holder.get('pid', '?')}, since {holder.get('acquired_at', '?')})"
+            )
+        super().__init__(
+            f"Pipeline '{pipeline}' cannot start: output '{key}' is locked by another "
+            f"run{held_by}",
+            pipeline=pipeline,
+            key=key,
+            holder=holder,
+        )
+        self.pipeline = pipeline
+        self.key = key
+        self.holder = holder
+
+
 class PipelineExecutionError(ExecutionError):
     """The pipeline as a whole failed, naming the node that caused it."""
 
@@ -331,10 +375,12 @@ __all__ = [
     "DuctaError",
     "ExecutionError",
     "MLOpsRequiredError",
+    "NodeCancelledError",
     "NodeExecutionError",
     "NodeNotFoundError",
     "NodeTimeoutError",
     "PipelineExecutionError",
+    "PipelineLockedError",
     "PipelineNotFoundError",
     "PreflightError",
     "SanityCheckFailedError",

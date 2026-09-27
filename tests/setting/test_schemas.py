@@ -57,7 +57,7 @@ class TestGlobalConfigSchema:
         s = GlobalConfigSchema(input_path="/in", output_path="/out")
         assert s.max_parallel_nodes == 4
         assert s.execution_timeout_seconds == 3600
-        assert s.fingerprint_mode == "exact"
+        assert s.fingerprint_mode == "auto"
         # None, not True: unset means "decide per pipeline" (track pipelines that
         # contain ML nodes). A True default would survive model_dump and reach
         # the engine as though the user had asked for tracking everywhere.

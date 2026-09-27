@@ -7,8 +7,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Run lock: one writer per output dataset.** A run locks every output it
+  will write before reading any data. An overlapping run on any of those
+  outputs — an orchestrator retry, a duplicated backfill, another pipeline
+  writing the same table — stops with `PipelineLockedError` (exit code 7),
+  naming the holder. `run_lock.backend: local` (default) is an OS lock released
+  automatically if the holder dies; `storage` is a renewed lease on a shared
+  filesystem or S3 (conditional writes) for multi-host deployments. Measured:
+  two concurrent `ducta start` of the template pipeline → exit 0 and exit 7,
+  one certificate.
+- **`write_mode: merge` — upsert into Delta by key.** `merge.keys`,
+  `when_matched` (update all / some columns / ignore), `when_not_matched`,
+  `delete_when` for CDC, optional schema evolution. Null-safe key matching
+  makes a re-run of the same batch idempotent; duplicate keys in the batch fail
+  before the merge with the offending keys. Commit metrics land in the run
+  certificate. The schema already accepted `merge`, but no writer implemented
+  it — such a configuration validated and then failed at write time.
+- **`incremental: {column: …}` on inputs** — read and fingerprint only the
+  run's date window, pushed down to the source.
+- **Local sessions enable Delta Lake automatically** when a dataset uses
+  `format: delta`, with the jar matching the installed PySpark
+  (`global_config.delta_package` to override). New extra: `ducta[delta]`.
+- **`evidence_level` — the project chooses how much evidence a run must
+  leave.** `off` (no certificate), `record` (default, unchanged behaviour),
+  `required` (a run that cannot write its certificate fails), `signed`
+  (required + HMAC-signed; preflight fails before the run when no key is
+  configured). `ducta template --evidence-level …` writes the choice into a
+  new project. The level is recorded inside the certificate (schema `1.5`), so
+  `certify verify` holds a `signed` certificate to it: unsigned fails, and
+  without the key it reports integrity only and exits non-zero. The legacy
+  `enable_run_certificate` / `require_run_certificate` keys still work; one
+  that contradicts an explicit `evidence_level`, or an unknown level, is a
+  preflight error — an unknown level never falls back to a weaker one.
+
+### Changed
+
+- **Timeouts stop the work.** A timed-out node's Spark jobs are cancelled on
+  the cluster (per-run, per-node job tags) and its writes are refused; before,
+  its thread kept running and could still write after the run was reported
+  failed. `run_in_process` nodes now run one process each and are terminated
+  on timeout. `execution_timeout_seconds` is now enforced for the whole run —
+  it was only a polling cap. Measured: a node with ~16 min of Spark work and a
+  15 s timeout ends the run in 20 s with nothing written.
+- **`fingerprint_mode` defaults to `auto`: evidence at batch cost.** Delta
+  inputs are identified by commit version (no scan); windowed inputs are hashed
+  over the window; other inputs in full up to `fingerprint_exact_max_bytes`
+  (10 GiB), sampled above; outputs over the written batch. `exact` no longer
+  pays a second full scan for a separate `count()`. Measured on 20M rows:
+  0.97 s → 0.09 s (window) / 0.10 s (Delta). Delta fingerprints
+  (`delta-version/v1`) are not comparable with earlier `exact` ones — the
+  diff reports "not comparable", not a change.
+- **`certify verify --reproduce` pins Delta inputs** to the versions the
+  certificate recorded.
+- **`certify verify` says what it proved.** A hash match on an unsigned
+  certificate — or a signed one checked without the key — used to print
+  "hash matches — untampered", although the hash carries no secret and anyone
+  who edits a field can recompute it. Results now carry a `level`
+  (`integrity` | `authenticated`) in the CLI, both verify endpoints and the web
+  app; "untampered" is reserved for a checked signature.
+- **The signing key's environment variable is `DUCTA_CERTIFICATE_KEY`.** The
+  mixed-case `Ducta_CERTIFICATE_KEY` is still read as a fallback.
+- **New projects no longer start with nine "Unknown key" warnings.** The
+  templates wrote keys Ducta never reads: descriptive ones (`version`,
+  `template_type`, `architecture`, `created_at`, `layers`) now live under a
+  `metadata:` block; `spark_master`, `max_retries` and `default_date` are gone,
+  because editing them changed nothing (retries are per node via `retry:`, and
+  the local session always uses `local[*]`).
+
 ### Fixed
 
+- **`versionAsOf: 0` read the latest version.** `DeltaReader` used
+  `config.get("versionAsOf") or …`, and version 0 is falsy: pinning a read to a
+  table's first commit silently read the newest one.
+- **Keys Ducta reads were reported as "Unknown key … Ducta does not read it".**
+  `fail_on_error`, `require_run_certificate`, `certificate_signing_key`,
+  `max_streaming_pipelines`, `node_timeout_seconds`, `preflight_enabled`,
+  `strict_module_import` and others were read by `CoreSettings` or the output
+  manager but missing from `GlobalConfigSchema`. They are declared now (with
+  `None` defaults, so the validated dump never injects a value the user did
+  not write — the same trap as `min_pass_rate` below, which also made
+  `enable_run_certificate` arrive as `true` whether or not it was set), and a
+  test keeps the schema in step with `CoreSettings`.
+- **A check on a misspelled column passed.** `null_rate` caught the lookup
+  error for each column, logged it, and reported "All checked columns within
+  null rate threshold" having checked nothing — so `columns: [categroy]` on a
+  node let data with nulls through its gate. `drift_detection`,
+  `anomaly_detection` and `statistical` had the same shape one step removed:
+  they failed only when *zero* columns were evaluated, so one good column hid a
+  typo or an evaluation error in another. A column named explicitly in a check
+  that is not in the dataset now fails the check (`details.missing_columns`),
+  and a column that exists but could not be evaluated fails it as inconclusive
+  (`details._column_errors`). Columns skipped by design — too few categories,
+  no baseline entry, too few samples — are still skipped, not failed.
 - **A quality gate blocked runs on data it was configured to tolerate.**
   `QualityGateSchema.min_pass_rate` defaulted to `1.0` while
   `QualityGateEvaluator` reads the same key with a default of `0.0` (rule off) —

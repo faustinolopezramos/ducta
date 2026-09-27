@@ -132,6 +132,12 @@ numpy = { version = "^1.24.0", optional = true }
 scipy = { version = "^1.11.0", optional = true }
 optuna = { version = "^3.4.0", optional = true }
 
+# --- Delta Lake (extra: delta) — the Python API for write_mode: merge. The
+# jar itself is resolved by the local session (setting/session.py
+# local_delta_configs) to the build matching the installed PySpark; this pin
+# keeps the Python package on the same major as that jar (Delta 3.x ↔ Spark 3.5).
+delta-spark = { version = "^3.2.0", optional = true }
+
 # --- Databricks Connect (extra: databricks — MUTUALLY EXCLUSIVE with `spark`) ---
 databricks-connect = { version = "^14.0.0", optional = true }
 
@@ -149,8 +155,9 @@ database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
 mlops = ["mlflow", "scikit-learn", "numpy", "scipy", "optuna"]
 monitoring = ["prometheus-client"]
 databricks = ["databricks-connect"]
+delta = ["delta-spark"]
 all = [
-    "pyspark", "pyarrow", "setuptools",
+    "pyspark", "pyarrow", "setuptools", "delta-spark",
     "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
     "GitPython", "watchdog", "redis",

@@ -141,3 +141,16 @@ def build_node_payload(
         "output_path": output_path,
         "quiet": True,
     }
+
+
+def run_node_in_child(payload: Dict[str, Any], conn: Any) -> None:
+    """Entry point of a dedicated node process: run the node, send the outcome.
+
+    One process per node (rather than a shared pool) is what lets a timed-out
+    node be terminated: a pool worker cannot be killed without killing the
+    pool, and every other node running in it.
+    """
+    try:
+        conn.send(run_node_in_process(payload))
+    finally:
+        conn.close()

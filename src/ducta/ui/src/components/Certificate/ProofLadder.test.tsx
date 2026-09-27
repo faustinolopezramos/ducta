@@ -4,7 +4,7 @@ import { ProofLadder } from "./ProofLadder";
 import type { CertificateVerifyResult } from "../../api/certificatesApi";
 
 function verify(overrides: Partial<CertificateVerifyResult>): CertificateVerifyResult {
-  return { ok: true, run_id: "run-1", reason: "hash matches — untampered", signature: "unsigned", ...overrides };
+  return { ok: true, run_id: "run-1", reason: "integrity OK — unsigned", signature: "unsigned", level: "integrity", ...overrides };
 }
 
 describe("ProofLadder", () => {
@@ -18,20 +18,32 @@ describe("ProofLadder", () => {
     expect(screen.getByText("Verified — signed and untampered")).toBeInTheDocument();
   });
 
-  it("treats unsigned as untampered, not as a failure", () => {
+  it("treats unsigned as integrity-only: not a failure, not a claim of untampered", () => {
     render(<ProofLadder verify={verify({ signature: "unsigned" })} reproduce={{ status: "idle" }} />);
-    expect(screen.getByText("Untampered — not signed")).toBeInTheDocument();
+    expect(screen.getByText("Integrity OK — unsigned, not proof against deliberate edits")).toBeInTheDocument();
     expect(screen.getByText("This certificate was never signed.")).toBeInTheDocument();
+  });
+
+  it("says verification is incomplete when the certificate's policy requires a signature check", () => {
+    render(
+      <ProofLadder
+        verify={verify({ ok: true, signature: "present (no key)", policy_satisfied: false })}
+        reproduce={{ status: "idle" }}
+      />,
+    );
+    expect(
+      screen.getByText("Incomplete — this certificate's policy requires a checked signature"),
+    ).toBeInTheDocument();
   });
 
   it("flags a signed-but-unkeyed certificate as a weaker pass, not a plain valid", () => {
     render(
       <ProofLadder
-        verify={verify({ ok: true, signature: "present (no key)", reason: "hash matches — untampered (signed; no key provided to verify signature)" })}
+        verify={verify({ ok: true, signature: "present (no key)", reason: "integrity OK — signed, but the signature was NOT checked" })}
         reproduce={{ status: "idle" }}
       />
     );
-    expect(screen.getByText("Untampered — signed, no key to check it")).toBeInTheDocument();
+    expect(screen.getByText("Integrity OK — signed, signature not checked")).toBeInTheDocument();
   });
 
   it("reports a stripped signature as tampering", () => {

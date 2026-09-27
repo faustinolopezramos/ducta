@@ -460,8 +460,29 @@ class Context(MLConfigMixin):
         self._interpolate_input_paths()
 
     def _get_spark_ml_config(self) -> Dict[str, Any]:
-        """Extract Spark ML configuration from global config."""
-        return self.global_config.get("spark_config", {})
+        """Extract Spark configuration from global config.
+
+        A local session also gets Delta Lake wired in when any input or output
+        of the project is ``format: delta`` — without it, a local Delta read or
+        write failed with a class-not-found from Spark. ``spark_config`` keys
+        always win, and Databricks sessions ship Delta already.
+        """
+        user = dict(self.global_config.get("spark_config", {}) or {})
+        if str(self.execution_mode).lower() != "local" or not self._uses_delta():
+            return user
+        from ducta.setting.session import local_delta_configs
+
+        return {**local_delta_configs(self.global_config.get("delta_package")), **user}
+
+    def _uses_delta(self) -> bool:
+        for catalog in (self.input_config, self.output_config):
+            for entry in (catalog or {}).values():
+                if not isinstance(entry, dict):
+                    continue
+                fmt = entry.get("format", "")
+                if str(getattr(fmt, "value", fmt)).lower() == "delta":
+                    return True
+        return False
 
     def _interpolate_input_paths(self) -> None:
         """Interpolate variables in input/output data paths."""

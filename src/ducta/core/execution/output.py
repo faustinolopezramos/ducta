@@ -26,6 +26,7 @@ from typing import Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta.core.execution.cancellation import ensure_not_cancelled
 from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.settings import CoreSettings
 
@@ -117,6 +118,11 @@ class OutputWriter:
         ml_info: Dict[str, Any],
     ) -> None:
         """Enhanced validation and output saving with ML metadata."""
+        # A node that outlived its timeout has already been reported failed;
+        # its output must not land. (Writes already under way are Spark jobs
+        # carrying the node's tag, and were cancelled with it.)
+        ensure_not_cancelled(self.context, node_name)
+
         if isinstance(result_df, str) and ("://" in result_df or "model_registry" in result_df):
             logger.info("Node '{}' output is an artifact URI. Skipping standard saving.", node_name)
             return

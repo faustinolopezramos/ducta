@@ -326,6 +326,17 @@ class UnifiedArgumentParser:
         template_parser.add_argument(
             "--list-templates", action="store_true", help="List available templates"
         )
+        template_parser.add_argument(
+            "--evidence-level",
+            choices=["off", "record", "required", "signed"],
+            default="record",
+            help=(
+                "How much evidence each run must leave (written to global_config): "
+                "off = no certificate; record = certificate, a write failure only warns "
+                "(default); required = a run without its certificate fails; signed = "
+                "required + HMAC signature, preflight fails without DUCTA_CERTIFICATE_KEY"
+            ),
+        )
 
     @staticmethod
     def _add_config_subcommand(subparsers):

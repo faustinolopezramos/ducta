@@ -41,8 +41,18 @@ class InputLoader(BaseIO):
         self.reader_factory = ReaderFactory(context)
         self._register_custom_formats()
 
-    def load_inputs(self, node: Dict[str, Any], node_name: Optional[str] = None) -> List[Any]:
-        """Load all inputs defined for a processing node."""
+    def load_inputs(
+        self,
+        node: Dict[str, Any],
+        node_name: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[Any]:
+        """Load all inputs defined for a processing node.
+
+        ``start_date``/``end_date`` bound inputs that declare
+        ``incremental: {column: …}``: only that window is read and fingerprinted.
+        """
         resolved_name = node_name or node.get("name") or "unnamed"
         input_keys = self._get_input_keys(node)
         if not input_keys:
@@ -70,7 +80,7 @@ class InputLoader(BaseIO):
                     )
                 raise MissingDependencyError(detail)
 
-        return self._load_inputs_parallel(input_keys, fail_fast)
+        return self._load_inputs_parallel(input_keys, fail_fast, start_date, end_date)
 
     @staticmethod
     def _is_query_format(config: Dict[str, Any]) -> bool:
@@ -110,7 +120,13 @@ class InputLoader(BaseIO):
                 continue
         return newest
 
-    def _load_inputs_parallel(self, input_keys: List[str], fail_fast: bool = True) -> List[Any]:
+    def _load_inputs_parallel(
+        self,
+        input_keys: List[str],
+        fail_fast: bool = True,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[Any]:
         """Load datasets in parallel, preserving input order."""
         fill_none = bool(self.context_manager.get_nested("global_config.fill_none_on_error", False))
         max_workers = self.context_manager.get_nested(
@@ -119,8 +135,13 @@ class InputLoader(BaseIO):
 
         self._print_loading_message(len(input_keys))
 
+        # Dates travel as arguments, not instance state: one InputLoader serves
+        # every node, and nodes load their inputs concurrently.
         outcome = run_parallel(
-            input_keys, self._load_single_dataset, max_workers=max_workers, fail_fast=fail_fast
+            input_keys,
+            lambda key: self._load_single_dataset(key, start_date, end_date),
+            max_workers=max_workers,
+            fail_fast=fail_fast,
         )
 
         if fail_fast and outcome.errors:
@@ -160,7 +181,12 @@ class InputLoader(BaseIO):
                 pass
         logger.info("Loading {} datasets", dataset_count)
 
-    def _load_single_dataset(self, input_key: str) -> Any:
+    def _load_single_dataset(
+        self,
+        input_key: str,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Any:
         """Load a single dataset with proper error handling."""
         config = self._get_dataset_config(input_key)
         format_name = config.get("format", "").lower()
@@ -182,11 +208,66 @@ class InputLoader(BaseIO):
 
         dataframe = reader.read(filepath, config)
 
-        data_fingerprint = self._record_fingerprint("input", input_key, filepath, dataframe)
+        window = self._incremental_window(config, input_key, start_date, end_date)
+        if window is not None:
+            dataframe = self._apply_window(dataframe, window)
+
+        delta = None
+        if format_name == "delta":
+            from ducta.gate.fingerprinting import delta_identity
+
+            pinned = config.get("versionAsOf", config.get("version"))
+            delta = delta_identity(self._ctx_spark(), filepath, pinned)
+
+        data_fingerprint = self._record_fingerprint(
+            "input", input_key, filepath, dataframe, window=window, delta=delta
+        )
         if data_fingerprint is not None:
             self._enforce_fingerprint_policy(input_key, data_fingerprint)
 
         return dataframe
+
+    @staticmethod
+    def _incremental_window(
+        config: Dict[str, Any],
+        input_key: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """``{column, start, end}`` for an input declaring ``incremental``, else None."""
+        incremental = config.get("incremental")
+        if incremental is None:
+            return None
+        column = incremental.get("column") if isinstance(incremental, dict) else None
+        if not column:
+            raise ReadOperationError(
+                f"Input '{input_key}': 'incremental' needs a 'column', e.g. "
+                "incremental: {column: order_date}"
+            )
+        if not (start_date and end_date):
+            logger.warning(
+                "Input '{}' declares incremental column '{}' but the run has no date "
+                "range; reading (and fingerprinting) the whole dataset.",
+                input_key,
+                column,
+            )
+            return None
+        return {"column": column, "start": start_date, "end": end_date}
+
+    @staticmethod
+    def _apply_window(dataframe: Any, window: Dict[str, Any]) -> Any:
+        """Keep rows with ``column BETWEEN start AND end`` (inclusive).
+
+        On Spark this is a predicate the source can push down (partition
+        pruning, Delta data skipping), so the read itself shrinks too.
+        """
+        column, start, end = window["column"], window["start"], window["end"]
+        if hasattr(dataframe, "rdd"):
+            from pyspark.sql import functions as F  # type: ignore
+
+            return dataframe.where(F.col(column).between(start, end))
+        series = dataframe[column]
+        return dataframe[(series >= start) & (series <= end)]
 
     def _enforce_fingerprint_policy(self, input_key: str, data_fingerprint) -> None:
         """Apply fingerprint_policy against the previous successful run."""

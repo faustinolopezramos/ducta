@@ -87,6 +87,9 @@ class ExitCode(Enum):
     EXECUTION_ERROR = 4
     DEPENDENCY_ERROR = 5
     SECURITY_ERROR = 6
+    #: Another run holds the lock on an output of this pipeline. Nothing ran;
+    #: safe to retry later.
+    LOCKED = 7
 
 
 class DuctaError(EngineError):

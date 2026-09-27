@@ -60,6 +60,9 @@ class TestWriteVerifyRoundtrip:
         assert result.ok is True
         assert result.run_id == "run-1"
         assert result.signature == "unsigned"
+        # Unsigned proves integrity only: the message must not claim more.
+        assert result.level == "integrity"
+        assert "untampered" not in result.reason
 
     def test_tampered_file_detected(self, tmp_path):
         path = write_certificate(_make_cert(), tmp_path)
@@ -88,6 +91,7 @@ class TestSigning:
         result = verify_certificate(path, signing_key=self.KEY)
         assert result.ok is True
         assert result.signature == "valid"
+        assert result.level == "authenticated"
 
     def test_wrong_key_fails(self, tmp_path):
         cert = _make_cert()
@@ -104,6 +108,8 @@ class TestSigning:
         result = verify_certificate(path)  # no key provided
         assert result.ok is True
         assert result.signature == "present (no key)"
+        assert result.level == "integrity"
+        assert "NOT checked" in result.reason
 
 
 class TestSignatureCannotBeStripped:

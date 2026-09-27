@@ -34,7 +34,13 @@ ALGO_PANDAS_EXACT = "pandas-sha256/v2"
 ALGO_PANDAS_SAMPLE = "pandas-systematic/v2"
 ALGO_SCHEMA_ONLY = "schema-only/v2"
 ALGO_LEGACY = "legacy/v1"
-VALID_MODES = ("exact", "exact_crypto", "sample", "schema")
+#: A Delta table's identity at a commit: (table id, version). Reads only the
+#: transaction log — no data scanned — and pins the content exactly, since a
+#: Delta version is immutable and can be read back with ``versionAsOf``.
+ALGO_DELTA_VERSION = "delta-version/v1"
+VALID_MODES = ("auto", "exact", "exact_crypto", "sample", "schema")
+#: ``auto`` hashes every row of a dataset up to this size, samples above it.
+DEFAULT_EXACT_MAX_BYTES = 10 * 1024**3
 _FULL_SCAN_MODES = frozenset({"exact", "exact_crypto"})
 _LEGACY_MODES = {"fast": "sample", "full": "exact", "exact-crypto": "exact_crypto"}
 
@@ -112,14 +118,36 @@ class DataFingerprint:
         df: Any,
         sample_rows: int = 100,
         mode: str = "exact",
+        *,
+        window: Optional[Dict[str, Any]] = None,
+        delta: Optional[Dict[str, Any]] = None,
+        exact_max_bytes: Optional[int] = None,
     ) -> "DataFingerprint":
-        """Compute a fingerprint from file metadata + DataFrame content."""
+        """Compute a fingerprint from file metadata + DataFrame content.
+
+        ``window`` records that ``df`` is only the rows of an incremental window
+        (``{column, start, end}``) — the cost is proportional to the batch, and
+        the certificate says which batch. ``delta`` (``{table_id, version}``)
+        lets ``auto`` identify a Delta table by its commit instead of scanning
+        it. ``auto`` picks, in order: the Delta version; ``exact`` for a
+        windowed read or a dataset up to ``exact_max_bytes``; ``sample`` above
+        that — and records which it chose and why.
+        """
         mode = normalize_mode(mode)
         fp = cls(input_key=input_key, filepath=filepath, mode=mode)
         fp.engine = detect_engine(df)
         fp._capture_file_stat(filepath)
         fp._capture_schema(df)
-        if mode in _FULL_SCAN_MODES:
+        if window:
+            fp.details["window"] = dict(window)
+        if mode == "auto":
+            mode = fp._resolve_auto(window, delta, exact_max_bytes)
+            fp.mode = mode
+        if mode == "delta":
+            fp._compute_delta(delta or {})
+            fp._compute_combined_hash()
+            return fp
+        if mode in _FULL_SCAN_MODES and not window:
             fp.raw_file_hash = fp._compute_full_file_hash(filepath)
 
         if fp.engine == "spark":
@@ -138,10 +166,50 @@ class DataFingerprint:
         fp._compute_combined_hash()
         return fp
 
+    def _resolve_auto(
+        self,
+        window: Optional[Dict[str, Any]],
+        delta: Optional[Dict[str, Any]],
+        exact_max_bytes: Optional[int],
+    ) -> str:
+        limit = exact_max_bytes if exact_max_bytes is not None else DEFAULT_EXACT_MAX_BYTES
+        if delta and delta.get("version") is not None:
+            chosen, why = "delta", "Delta table: identified by its commit version, no scan"
+        elif window:
+            chosen, why = "exact", "incremental window: every row of the batch"
+        elif self.file_size_bytes is None:
+            chosen, why = "exact", "size unknown: every row"
+        elif self.file_size_bytes <= limit:
+            chosen, why = "exact", f"{self.file_size_bytes} bytes <= {limit}: every row"
+        else:
+            chosen, why = (
+                "sample",
+                f"{self.file_size_bytes} bytes > fingerprint_exact_max_bytes={limit}: "
+                "sampled — declare an incremental window, or set fingerprint_mode: "
+                "exact, to cover every row",
+            )
+        self.details["auto_selected"] = why
+        return chosen
+
+    def _compute_delta(self, delta: Dict[str, Any]) -> None:
+        table_id = delta.get("table_id") or self.filepath
+        version = delta.get("version")
+        self.engine = "delta"
+        self.algorithm = ALGO_DELTA_VERSION
+        self.content_hash = hashlib.sha256(f"{table_id}:{version}".encode()).hexdigest()
+        self.details["delta_table_id"] = table_id
+        self.details["delta_version"] = version
+
     # ── Spark ────────────────────────────────────────────────────────────────
 
     def _compute_spark(self, df: Any, sample_rows: int) -> None:
         from pyspark.sql import functions as F  # type: ignore
+
+        if self.mode in _FULL_SCAN_MODES:
+            # One pass: the digest aggregation also counts the rows. A separate
+            # `count()` first used to cost a second full scan of the dataset.
+            self._compute_spark_full(df, F)
+            return
 
         self.row_count = df.count()
 
@@ -167,6 +235,14 @@ class DataFingerprint:
             self.details["sampling"] = "deterministic-min-rowhash"
             return
 
+    def _compute_spark_full(self, df: Any, F: Any) -> None:
+        columns = [F.col(c) for c in df.columns]
+        if not columns:
+            self.row_count = df.count()
+            self.algorithm = ALGO_SCHEMA_ONLY
+            self.degraded_reason = "dataframe has no columns"
+            return
+
         if self.mode == "exact_crypto":
             self._compute_spark_exact_crypto(df, columns)
             return
@@ -184,6 +260,7 @@ class DataFingerprint:
         n = int(agg["n"] or 0)
         s = int(agg["s"] or 0)
         x = int(agg["x"] or 0)
+        self.row_count = n
         self.content_hash = hashlib.sha256(f"{n}:{s}:{x}".encode()).hexdigest()
         self.algorithm = ALGO_SPARK_EXACT
 
@@ -211,6 +288,7 @@ class DataFingerprint:
         n = int(agg["n"] or 0)
         a = int(agg["a"] or 0)
         b = int(agg["b"] or 0)
+        self.row_count = n
         self.content_hash = hashlib.sha256(f"{n}:{a}:{b}".encode()).hexdigest()
         self.algorithm = ALGO_SPARK_EXACT_CRYPTO
 

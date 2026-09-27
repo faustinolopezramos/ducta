@@ -259,6 +259,43 @@ class SparkSessionManager:
             return info
 
 
+#: Delta Lake release built for each Spark minor (Scala 2.12 builds).
+_DELTA_FOR_SPARK = {
+    "3.5": "io.delta:delta-spark_2.12:3.2.1",
+    "3.4": "io.delta:delta-core_2.12:2.4.0",
+}
+
+
+def local_delta_configs(package: Optional[str] = None) -> Dict[str, str]:
+    """Spark settings that enable Delta Lake in a local session.
+
+    ``package`` overrides the Maven coordinate; by default it is the Delta
+    release matching the installed PySpark. (The ``delta-spark`` *Python*
+    package's own version is not used: it can be newer than the Spark it runs
+    on, and a Delta 4.x jar does not load on Spark 3.5.)
+    """
+    if not package:
+        try:
+            import pyspark  # type: ignore
+
+            minor = ".".join(pyspark.__version__.split(".")[:2])
+        except Exception:  # noqa: BLE001
+            minor = ""
+        package = _DELTA_FOR_SPARK.get(minor)
+        if package is None:
+            logger.warning(
+                "No known Delta Lake build for PySpark {}; set global_config.delta_package "
+                "to the io.delta Maven coordinate for your Spark version.",
+                minor or "?",
+            )
+            return {}
+    return {
+        "spark.jars.packages": package,
+        "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension",
+        "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+    }
+
+
 class SparkSessionFactory:
     """
     Factory for creating Spark sessions based on the execution mode with ML optimizations.

@@ -25,6 +25,10 @@ export interface CertificateVerifyResult {
   run_id?: string | null;
   reason: string;
   signature: CertificateSignatureState;
+  /** What a passing result proves: self-hash only, or signature checked. */
+  level?: "integrity" | "authenticated" | "none";
+  /** False when the certificate was issued under evidence_level=signed and no key was supplied. */
+  policy_satisfied?: boolean;
 }
 
 export interface PreflightResult {

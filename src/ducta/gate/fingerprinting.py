@@ -30,17 +30,103 @@ def compute_fingerprint(
     identifier: str,
     dataframe: Any,
     sample_rows: Optional[int] = None,
+    window: Optional[Dict[str, Any]] = None,
+    delta: Optional[Dict[str, Any]] = None,
+    mode: Optional[str] = None,
 ) -> Any:
-    """Compute a DataFingerprint, reading fingerprint_mode/sample_rows from global_config."""
+    """Compute a DataFingerprint, reading fingerprint_mode/sample_rows from global_config.
+
+    The default mode is ``auto``: cost proportional to what the run processed
+    (a Delta commit version, an incremental window, or a dataset small enough
+    to hash in full), never a full scan of a large table's whole history.
+    """
     from ducta.mlrun.fingerprint import DataFingerprint  # optional dependency (mlrun)
 
-    mode = context_manager.get_nested("global_config.fingerprint_mode", "exact")
+    mode = mode or context_manager.get_nested("global_config.fingerprint_mode", None) or "auto"
     rows = (
         sample_rows
         if sample_rows is not None
         else context_manager.get_nested("global_config.fingerprint_sample_rows", 100)
     )
-    return DataFingerprint.from_file_and_df(key, identifier, dataframe, sample_rows=rows, mode=mode)
+    max_bytes = context_manager.get_nested("global_config.fingerprint_exact_max_bytes", None)
+    return DataFingerprint.from_file_and_df(
+        key,
+        identifier,
+        dataframe,
+        sample_rows=rows,
+        mode=mode,
+        window=window,
+        delta=delta,
+        exact_max_bytes=int(max_bytes) if max_bytes is not None else None,
+    )
+
+
+def _delta_table(spark: Any, source: str) -> Any:
+    """A ``DeltaTable`` handle for a path or a catalog table name, or None.
+
+    The Python API rather than ``DESCRIBE … delta.`<path>```: Delta's SQL path
+    identifiers do not resolve relative paths, which is how local projects
+    address their data.
+    """
+    from delta.tables import DeltaTable  # type: ignore
+
+    if _looks_like_table_name(source):
+        return DeltaTable.forName(spark, source)
+    if not DeltaTable.isDeltaTable(spark, source):
+        return None
+    return DeltaTable.forPath(spark, source)
+
+
+def delta_identity(spark: Any, source: str, pinned_version: Any = None) -> Optional[Dict[str, Any]]:
+    """``{table_id, version, ...}`` of a Delta table, from its transaction log only.
+
+    ``source`` is a path or a catalog table name. ``pinned_version`` is the
+    ``versionAsOf`` the read used, when it used one — that, not the latest
+    commit, is what the run read. Returns None when ``source`` is not a Delta
+    table or the log cannot be read; the caller then falls back to hashing.
+    """
+    if spark is None or not source:
+        return None
+    try:
+        table = _delta_table(spark, source)
+        if table is None:
+            return None
+        detail = table.detail().first()
+        if pinned_version is not None:
+            version = int(pinned_version)
+        else:
+            version = int(table.history(1).first()["version"])
+        return {
+            "table_id": detail["id"],
+            "version": version,
+            "num_files": detail["numFiles"],
+            "size_bytes": detail["sizeInBytes"],
+        }
+    except Exception:  # noqa: BLE001 — identity is an optimisation; hashing still works
+        return None
+
+
+def delta_last_operation(spark: Any, source: str) -> Optional[Dict[str, Any]]:
+    """Version and ``operationMetrics`` of the latest commit (what a write just did)."""
+    if spark is None or not source:
+        return None
+    try:
+        table = _delta_table(spark, source)
+        if table is None:
+            return None
+        row = table.history(1).first()
+        metrics = row["operationMetrics"] or {}
+        return {
+            "version": int(row["version"]),
+            "operation": row["operation"],
+            "metrics": {k: str(v) for k, v in dict(metrics).items()},
+        }
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _looks_like_table_name(source: str) -> bool:
+    return "/" not in source and ":" not in source and "\\" not in source
 
 
 def diff_schema_columns(

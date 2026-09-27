@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from loguru import logger  # type: ignore
 
 from ducta.core.errors import NodeTimeoutError, PipelineExecutionError
+from ducta.core.execution.cancellation import cancel_node
 from ducta.core.execution.ml_builder import MLContextBuilder
 from ducta.core.execution.output import report_node_failure
 from ducta.core.execution.state import ThreadSafeExecutionState
@@ -70,6 +71,9 @@ class ParallelCoordinator:
         ml_info: Dict[str, Any],
     ) -> None:
         """Coordinate the main execution loop until all nodes complete or failure occurs."""
+        # `execution_timeout_seconds` used to be only a cap on the polling
+        # interval: nothing stopped a run that exceeded it. Measured from here.
+        self._run_started = time.time()
         while execution_state.has_work_pending():
             self._submit_ready_nodes(
                 execution_state=execution_state,
@@ -277,7 +281,12 @@ class ParallelCoordinator:
             self.node_timeout - (now - info["start_time"])
             for _, info in execution_state.get_running_items_snapshot()
         ]
-        return min(remaining) if remaining else None
+        if not remaining:
+            return None
+        run_started = getattr(self, "_run_started", None)
+        if run_started is not None:
+            remaining.append(self.settings.execution_timeout_seconds - (now - run_started))
+        return min(remaining)
 
     def _fail_timed_out_nodes(self, execution_state: ThreadSafeExecutionState) -> None:
         """Mark any running node that exceeded ``node_timeout`` as failed."""
@@ -318,10 +327,61 @@ class ParallelCoordinator:
                 exception=timeout_error,
             )
             execution_state.remove_running_future(future)
+            self._cancel_timed_out(node_name, f"exceeded node_timeout_seconds={self.node_timeout}")
             try:
                 future.cancel()
             except Exception:
                 logger.debug("Could not cancel timed-out future for node '{}'", node_name)
+
+        self._fail_on_execution_timeout(execution_state)
+
+    def _cancel_timed_out(self, node_name: str, why: str) -> None:
+        """Stop what can be stopped of a timed-out node, and say what could not.
+
+        Its Spark jobs are cancelled on the cluster and its writes refused
+        (see ``ducta.core.execution.cancellation``). Pure-Python work in the
+        thread may still run to completion, but it can no longer land output.
+        """
+        cancel_node(self.context, node_name)
+        self._ledger.note_gap(
+            f"node '{node_name}' {why}; its Spark jobs were cancelled and its writes "
+            "refused, but work already committed before the timeout is not rolled back"
+        )
+
+    def _fail_on_execution_timeout(self, execution_state: ThreadSafeExecutionState) -> None:
+        """Fail the run, and cancel every running node, past ``execution_timeout_seconds``."""
+        run_started = getattr(self, "_run_started", None)
+        if run_started is None:
+            return
+        limit = self.settings.execution_timeout_seconds
+        elapsed = time.time() - run_started
+        if elapsed <= limit:
+            return
+        running = execution_state.get_running_items_snapshot()
+        logger.error(
+            "Pipeline exceeded execution_timeout_seconds ({:.0f}s > {}s) — cancelling {} "
+            "running node(s)",
+            elapsed,
+            limit,
+            len(running),
+        )
+        for future, node_info in running:
+            node_name = node_info["node_name"]
+            execution_state.mark_failed(
+                node_name,
+                {
+                    "status": "failed",
+                    "error": f"Pipeline execution timeout exceeded ({limit}s)",
+                    "error_type": "TimeoutError",
+                    "start_time": node_info["start_time"],
+                    "end_time": time.time(),
+                    "config": node_info.get("config", {}),
+                },
+                exception=NodeTimeoutError(node_name, limit),
+            )
+            execution_state.remove_running_future(future)
+            self._cancel_timed_out(node_name, f"was running when the pipeline exceeded {limit}s")
+        execution_state.set_failed()
 
     def _handle_completed_future(
         self,

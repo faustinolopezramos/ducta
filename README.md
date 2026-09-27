@@ -235,7 +235,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.3",
+  "schema_version": "1.5",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -274,9 +274,12 @@ flowchart LR
     { "node": "clean_sales", "phase": "data_quality", "passed": true,
       "score": 1.0, "errors": 0, "warnings": 0, "checks": 3 }
   ],
+  "code": { "nodes": { "nodes.clean_sales": {   // the logic each node ran
+    "scope": "function", "source_hash": "sha256:52aa…" } } },
   "evidence_complete": true,                 // did the run record everything it was asked to?
   "evidence_gaps": [],                       // and if not, what it could not record
   "signed": true,                            // inside the hash, so it cannot be stripped
+  "evidence_level": "signed",                // the project's evidence policy, also hashed
   "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
   "signature": "hmac-sha256:44c9…"           // optional, when a key is configured
 }
@@ -287,7 +290,7 @@ flowchart LR
 ```bash
 ducta certify list                                    # every run recorded here
 ducta certify show   --run-id 9f3c1a70               # a prefix is enough
-ducta certify verify --run-id 9f3c1a70               # tamper check
+ducta certify verify --run-id 9f3c1a70               # integrity (+ signature, with the key)
 ducta certify verify --run-id 9f3c1a70 --reproduce \
   --start-date 2026-01-01 --end-date 2026-01-31       # re-run, compare every output
 ```
@@ -297,6 +300,9 @@ over every other field, computed with no secret. It detects *corruption* — a
 truncated file, a botched merge, a hand-edit someone forgot to cover their
 tracks on — but it is not, on its own, evidence against a motivated editor:
 anyone who changes a field can recompute the hash and `verify` will pass.
+That is why `verify` reports the *level* it reached — `integrity` for a hash
+match alone, `authenticated` only once a signature has been checked against
+the key — and says "untampered" only for the latter.
 
 Set `DUCTA_CERTIFICATE_KEY` and the certificate is HMAC-signed over that hash.
 *That* is what makes it tamper-evident: forging it requires the key, `key_id`
@@ -311,6 +317,21 @@ Certificates written before schema `1.3` carry no such marker, so `verify`
 cannot tell "never signed" from "signature removed" for them: given a key, it
 reports them as *unverifiable* rather than passing them. Verify without a key
 to check their integrity alone.
+
+**Choose how much evidence a run must leave.** `evidence_level` in
+`global_config` is the project's policy, not Ducta's:
+
+| `evidence_level` | Certificate | If it cannot be written | Signing key |
+|---|---|---|---|
+| `off` | none | — | — |
+| `record` *(default)* | written | warning, run still succeeds | optional |
+| `required` | written | the run fails | optional |
+| `signed` | written and signed | the run fails | required — preflight fails without it |
+
+`ducta template --evidence-level signed …` writes the choice into a new
+project. The level is recorded inside the certificate, so a `signed`
+certificate is held to it later: verifying one without the key reports
+integrity only and exits non-zero until the signature is checked.
 
 ---
 

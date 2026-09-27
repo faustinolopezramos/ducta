@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -30,7 +30,6 @@ from ducta.core.context_utils import get_context_value as _get
 from ducta.setting.environments import sanitize_env_for_path
 from ducta.setting.interpolator import VariableInterpolator
 
-# Accepted spellings for boolean-ish configuration values.
 _TRUE_VALUES = frozenset({"true", "yes", "on", "1"})
 _FALSE_VALUES = frozenset({"false", "no", "off", "0", ""})
 MAX_TIMEOUT_SECONDS = 86_400
@@ -39,21 +38,18 @@ DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3_600
 DEFAULT_NODE_TIMEOUT_SECONDS = 1_800
 DEFAULT_MAX_PARALLEL_NODES = 4
 DEFAULT_MAX_STREAMING_PIPELINES = 5
-
-# Ducta storage convention: every state directory the framework itself writes
-# (as opposed to a node's own data output) lives under the environment's data
-# tree, scoped by ${output_path}/${environment} exactly like
-# global_config.quality.output.base_path already does — see docs/README for
-# "Ducta storage convention". Run certificates and chain state hide under a
-# `.ducta/` namespace there so they read as framework bookkeeping, not data;
-# quality reports stay visible at `${output_path}/${environment}/quality`
-# (unchanged) because a project may want to browse/ship those.
 DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
 DEFAULT_CHAIN_STATE_DIR = "${output_path}/${environment}/.ducta/chain_state"
+DEFAULT_RUN_LOCK_DIR = "${output_path}/${environment}/.ducta/locks"
 
 CHAIN_ON_GATE_BLOCKED_STOP = "stop"
 CHAIN_ON_GATE_BLOCKED_CONTINUE = "continue"
 CHAIN_ON_GATE_BLOCKED_CHOICES = (CHAIN_ON_GATE_BLOCKED_STOP, CHAIN_ON_GATE_BLOCKED_CONTINUE)
+EVIDENCE_OFF = "off"  # no certificate
+EVIDENCE_RECORD = "record"  # certificate written; failing to write it only warns
+EVIDENCE_REQUIRED = "required"  # a run that cannot write its certificate fails
+EVIDENCE_SIGNED = "signed"  # required + HMAC-signed; preflight fails without a key
+EVIDENCE_LEVELS = (EVIDENCE_OFF, EVIDENCE_RECORD, EVIDENCE_REQUIRED, EVIDENCE_SIGNED)
 
 
 def coerce_bool(name: str, raw: Any, *, default: bool) -> bool:
@@ -172,8 +168,6 @@ class CoreSettings:
     end_date: Optional[str] = None
 
     # ── Environment ──────────────────────────────────────────────────────────
-    # Single resolved value. Every core call site that used to re-derive this
-    # (with three different precedence orders) now reads this field.
     env: Optional[str] = None
     project_id: Optional[str] = None
 
@@ -194,6 +188,8 @@ class CoreSettings:
     fingerprint_policy: str = "record"
 
     # ── Run certificates ─────────────────────────────────────────────────────
+    evidence_level: str = EVIDENCE_RECORD
+    evidence_problems: Tuple[str, ...] = ()
     enable_run_certificate: bool = True
     require_run_certificate: bool = False
     run_certificate_dir: str = DEFAULT_CERTIFICATE_DIR
@@ -204,6 +200,14 @@ class CoreSettings:
     chain_staleness_check: bool = True
     chain_on_gate_blocked: str = CHAIN_ON_GATE_BLOCKED_STOP
     chain_state_dir: str = DEFAULT_CHAIN_STATE_DIR
+
+    # ── Run lock (see ducta.core.run_lock) ───────────────────────────────────
+    run_lock_enabled: bool = True
+    run_lock_backend: str = "local"
+    run_lock_ttl_seconds: int = 300
+    run_lock_on_conflict: str = "fail"
+    run_lock_wait_timeout_seconds: int = 600
+    run_lock_dir: str = DEFAULT_RUN_LOCK_DIR
 
     quality: Dict[str, Any] = field(default_factory=dict)
     ingestion: Dict[str, Any] = field(default_factory=dict)
@@ -234,7 +238,11 @@ class CoreSettings:
         mlops_section = _as_mapping(gs.get("mlops"))
         mlflow_section = _as_mapping(gs.get("mlflow"))
         chain_section = _as_mapping(gs.get("chain"))
+        run_lock_section = _as_mapping(gs.get("run_lock"))
         resolved_env = cls._resolve_env(context, gs)
+        evidence_level, enable_certificate, require_certificate, evidence_problems = (
+            cls._resolve_evidence(gs)
+        )
 
         return cls(
             max_parallel_nodes=coerce_int(
@@ -269,12 +277,10 @@ class CoreSettings:
             mlops_required=coerce_bool("mlops_required", gs.get("mlops_required"), default=False),
             mlflow_enabled=cls._resolve_mlflow_enabled(mlflow_section),
             fingerprint_policy=str(gs.get("fingerprint_policy") or "record"),
-            enable_run_certificate=coerce_bool(
-                "enable_run_certificate", gs.get("enable_run_certificate"), default=True
-            ),
-            require_run_certificate=coerce_bool(
-                "require_run_certificate", gs.get("require_run_certificate"), default=False
-            ),
+            evidence_level=evidence_level,
+            evidence_problems=evidence_problems,
+            enable_run_certificate=enable_certificate,
+            require_run_certificate=require_certificate,
             run_certificate_dir=cls._resolve_scoped_dir(
                 str(gs.get("run_certificate_dir") or DEFAULT_CERTIFICATE_DIR), gs, resolved_env
             ),
@@ -294,6 +300,33 @@ class CoreSettings:
                 choices=CHAIN_ON_GATE_BLOCKED_CHOICES,
                 default=CHAIN_ON_GATE_BLOCKED_STOP,
             ),
+            run_lock_enabled=coerce_bool(
+                "run_lock.enabled", run_lock_section.get("enabled"), default=True
+            ),
+            run_lock_backend=coerce_choice(
+                "run_lock.backend",
+                run_lock_section.get("backend"),
+                choices=("local", "storage"),
+                default="local",
+            ),
+            run_lock_ttl_seconds=coerce_int(
+                "run_lock.ttl_seconds", run_lock_section.get("ttl_seconds"), default=300, minimum=10
+            ),
+            run_lock_on_conflict=coerce_choice(
+                "run_lock.on_conflict",
+                run_lock_section.get("on_conflict"),
+                choices=("fail", "wait"),
+                default="fail",
+            ),
+            run_lock_wait_timeout_seconds=coerce_int(
+                "run_lock.wait_timeout_seconds",
+                run_lock_section.get("wait_timeout_seconds"),
+                default=600,
+                minimum=0,
+            ),
+            run_lock_dir=cls._resolve_scoped_dir(
+                str(run_lock_section.get("dir") or DEFAULT_RUN_LOCK_DIR), gs, resolved_env
+            ),
             quality=_as_mapping(gs.get("quality")),
             ingestion=_as_mapping(gs.get("ingestion")),
         )
@@ -302,19 +335,6 @@ class CoreSettings:
     def _resolve_scoped_dir(template: str, gs: Mapping[str, Any], env: Optional[str]) -> str:
         """Resolve a Ducta-managed state-directory template (run certificates,
         chain state) to a concrete, environment-scoped path.
-
-        Interpolates ``${output_path}``/``${environment}`` (and any other
-        global_config key) the same way ``quality.output.base_path`` already
-        does, so a project that leaves the setting at its default gets
-        ``${output_path}/${environment}/.ducta/<kind>`` — next to the
-        environment's own data, not the project root (see
-        ``DEFAULT_CERTIFICATE_DIR``/``DEFAULT_CHAIN_STATE_DIR``).
-
-        A template that does not itself reference ``${environment}`` (a
-        project pointing this at a fixed custom/legacy path) is still
-        env-scoped, by appending the sanitized environment as a path segment
-        — otherwise two environments would collide in the same directory,
-        which is the exact bug this convention exists to avoid.
         """
         safe_env = sanitize_env_for_path(env)
         has_env_placeholder = "${environment}" in template
@@ -323,8 +343,59 @@ class CoreSettings:
             variables = {**gs, "output_path": gs.get("output_path", "."), "environment": safe_env}
             resolved = VariableInterpolator.interpolate(template, variables)
         if not has_env_placeholder:
-            resolved = str(Path(resolved) / safe_env)
+            if "://" in resolved:
+                # `Path` would collapse `s3://bucket` to `s3:/bucket`.
+                resolved = f"{resolved.rstrip('/')}/{safe_env}"
+            else:
+                resolved = str(Path(resolved) / safe_env)
         return resolved
+
+    @staticmethod
+    def _resolve_evidence(gs: Mapping[str, Any]) -> Tuple[str, bool, bool, Tuple[str, ...]]:
+        """Resolve ``evidence_level`` and the legacy booleans into one policy."""
+        problems: List[str] = []
+        raw_enable = gs.get("enable_run_certificate")
+        raw_require = gs.get("require_run_certificate")
+        enable = coerce_bool("enable_run_certificate", raw_enable, default=True)
+        require = coerce_bool("require_run_certificate", raw_require, default=False)
+        raw_level = gs.get("evidence_level")
+
+        if raw_level is None:
+            if require and not enable:
+                problems.append(
+                    "require_run_certificate is true but enable_run_certificate is false "
+                    "— no certificate can be written"
+                )
+            if not enable:
+                return EVIDENCE_OFF, enable, require, tuple(problems)
+            return (
+                (EVIDENCE_REQUIRED if require else EVIDENCE_RECORD),
+                True,
+                require,
+                tuple(problems),
+            )
+
+        level = str(raw_level).strip().lower()
+        if level not in EVIDENCE_LEVELS:
+            problems.append(
+                f"evidence_level {raw_level!r} is not one of {', '.join(EVIDENCE_LEVELS)}"
+            )
+
+            level = EVIDENCE_REQUIRED
+
+        derived_enable = level != EVIDENCE_OFF
+        derived_require = level in (EVIDENCE_REQUIRED, EVIDENCE_SIGNED)
+        if raw_enable is not None and enable != derived_enable:
+            problems.append(
+                f"enable_run_certificate={str(enable).lower()} contradicts "
+                f"evidence_level={level!r}; remove the legacy key"
+            )
+        if raw_require is not None and require != derived_require:
+            problems.append(
+                f"require_run_certificate={str(require).lower()} contradicts "
+                f"evidence_level={level!r}; remove the legacy key"
+            )
+        return level, derived_enable, derived_require, tuple(problems)
 
     @staticmethod
     def _resolve_env(context: Any, gs: Mapping[str, Any]) -> Optional[str]:

@@ -479,7 +479,7 @@ def _handle_verify(parsed_args) -> int:
         return ExitCode.VALIDATION_ERROR.value
 
     # Integrity first: a tampered certificate can't be trusted to reproduce against.
-    # A signing key (env Ducta_CERTIFICATE_KEY/DUCTA_CERTIFICATE_KEY, or
+    # A signing key (env DUCTA_CERTIFICATE_KEY, legacy Ducta_CERTIFICATE_KEY, or
     # global_config.certificate_signing_key in the project's config) additionally
     # verifies the signature.
     signing_key = resolve_signing_key_from_dir(Path.cwd())
@@ -488,11 +488,19 @@ def _handle_verify(parsed_args) -> int:
         logger.error("✗ Certificate {} FAILED verification: {}", result.run_id, result.reason)
         return ExitCode.VALIDATION_ERROR.value
     logger.info(
-        "✓ Certificate {} verified: {} [signature: {}]",
+        "✓ Certificate {} verified ({}): {} [signature: {}]",
         result.run_id,
+        result.level,
         result.reason,
         result.signature,
     )
+    if not result.policy_satisfied:
+        logger.error(
+            "✗ Certificate {} was issued under evidence_level=signed and could not be "
+            "authenticated: set DUCTA_CERTIFICATE_KEY to the signing key and verify again.",
+            result.run_id,
+        )
+        return ExitCode.VALIDATION_ERROR.value
     _warn_degraded_fingerprints(path)
 
     if getattr(parsed_args, "reproduce", False):
@@ -529,6 +537,26 @@ def _warn_degraded_fingerprints(path: Path) -> None:
         )
 
 
+def _pin_delta_inputs(context: Any, recorded_inputs: Dict[str, Any]) -> None:
+    """Read each Delta input at the version the certificate recorded.
+
+    Without this a reproduction reads the *current* table, so any commit since
+    the original run makes the outputs differ and the verdict says nothing
+    about the pipeline. Delta keeps old versions (until VACUUM removes their
+    files), so the original input can be read back exactly.
+    """
+    input_config = getattr(context, "input_config", None) or {}
+    for key, fingerprint in recorded_inputs.items():
+        if (fingerprint or {}).get("algorithm") != "delta-version/v1":
+            continue
+        version = (fingerprint.get("details") or {}).get("delta_version")
+        entry = input_config.get(key)
+        if version is None or not isinstance(entry, dict):
+            continue
+        entry["versionAsOf"] = version
+        logger.info("Reproducing with Delta input '{}' pinned to version {}", key, version)
+
+
 def _reproduce(parsed_args, cert_path: Path) -> int:
     """Re-run the certificate's pipeline and confirm every output reproduces.
 
@@ -554,6 +582,7 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
 
         config_manager = _init_config_manager(parsed_args)
         context = execution.ContextInitializer(config_manager).initialize(env)
+        _pin_delta_inputs(context, cert.get("inputs") or {})
         executor = PipelineExecutor(context, str(config_manager.get_config_directory()))
         run = executor.run_pipeline(
             pipeline_name=pipeline,

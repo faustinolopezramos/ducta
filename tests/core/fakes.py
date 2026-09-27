@@ -91,7 +91,11 @@ class FakeInputLoader:
         self.loaded: List[str] = []
 
     def load_inputs(
-        self, node_config: Dict[str, Any], node_name: Optional[str] = None
+        self,
+        node_config: Dict[str, Any],
+        node_name: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> List[FakeFrame]:
         from ducta.gate.exceptions import MissingDependencyError
 

@@ -43,6 +43,8 @@ class WriteMode(Enum):
     APPEND = "append"
     IGNORE = "ignore"
     ERROR = "error"
+    #: Upsert by key (Delta only) — see ``DeltaWriter``.
+    MERGE = "merge"
 
 
 class ExecutionMode(Enum):

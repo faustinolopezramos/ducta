@@ -61,8 +61,13 @@ function heroFromVerify(verify: CertificateVerifyResult | null): { tone: ProofTo
     return { tone: "fail", title: "Hash mismatch — certificate was modified" };
   }
   if (sig === "valid") return { tone: "pass", title: "Verified — signed and untampered" };
-  if (sig === "present (no key)") return { tone: "partial", title: "Untampered — signed, no key to check it" };
-  return { tone: "pass", title: "Untampered — not signed" };
+  // Without a checked signature the self-hash only rules out corruption:
+  // anyone who edits a field can recompute it. "Untampered" is reserved for
+  // the signed-and-checked case above.
+  if (verify.policy_satisfied === false)
+    return { tone: "partial", title: "Incomplete — this certificate's policy requires a checked signature" };
+  if (sig === "present (no key)") return { tone: "partial", title: "Integrity OK — signed, signature not checked" };
+  return { tone: "partial", title: "Integrity OK — unsigned, not proof against deliberate edits" };
 }
 
 // Integrity is checked first, unconditionally, inside the same backend call —
@@ -73,7 +78,7 @@ function integrityFromVerify(verify: CertificateVerifyResult | null): { tone: Pr
   const failedIntegrity =
     !verify.ok && (verify.signature === "unsigned") && /hash mismatch|could not read|no certificate_hash/.test(verify.reason);
   if (failedIntegrity) return { tone: "fail", label: verify.reason };
-  return { tone: "pass", label: "Hash matches — untampered." };
+  return { tone: "pass", label: "Hash matches — no corruption." };
 }
 
 const AUTHENTICITY_COPY: Record<CertificateSignatureState, { tone: ProofTone; label: string }> = {

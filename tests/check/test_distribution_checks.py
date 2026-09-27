@@ -26,6 +26,7 @@ class TestDriftDetectionZeroColumnsEvaluated:
             _baseline={"other_col": {"value_counts": {"a": 3}}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         adapter.value_counts.return_value = {"a": 1}
 
         result = check.run(df=None, config=config, adapter=adapter)
@@ -41,6 +42,7 @@ class TestDriftDetectionZeroColumnsEvaluated:
         check = DriftDetectionCheck()
         config = SimpleNamespace(columns=["c"], use_scipy=False, _baseline=None)
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
 
         result = check.run(df=None, config=config, adapter=adapter)
 
@@ -64,6 +66,7 @@ class TestDriftDetectionMinCategoriesIsNotTopk:
             _baseline={"c": {"value_counts": {"a": 1}}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         adapter.value_counts.return_value = {"a": 1}
 
         check.run(df=None, config=config, adapter=adapter)
@@ -82,6 +85,7 @@ class TestDriftDetectionMinCategoriesIsNotTopk:
             _baseline={"c": {"value_counts": {"a": 1}}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         adapter.value_counts.return_value = {"a": 1}
 
         check.run(df=None, config=config, adapter=adapter)
@@ -97,6 +101,7 @@ class TestDriftDetectionMinCategoriesIsNotTopk:
             _baseline={"sparse_col": {"value_counts": {"a": 10, "b": 5}}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         # Only 2 categories actually exist — below min_categories=5.
         adapter.value_counts.return_value = {"a": 10, "b": 5}
 
@@ -113,6 +118,7 @@ class TestDriftDetectionMinCategoriesIsNotTopk:
             _baseline={"c": {"value_counts": {"a": 1, "b": 1}}},
         )
         adapter = MagicMock()
+        adapter.get_columns.return_value = list(config.columns)
         adapter.value_counts.return_value = {"a": 1, "b": 1}
 
         result = check.run(df=None, config=config, adapter=adapter)
@@ -133,6 +139,8 @@ class TestStatisticalCheckZeroColumnsEvaluated:
         import pandas as pd
 
         adapter = MagicMock()
+
+        adapter.get_columns.return_value = list(config.columns)
         adapter.sample.return_value = pd.DataFrame({"a": [1, 2, 3]})  # far fewer than min_samples
 
         result = check.run(df=None, config=config, adapter=adapter)

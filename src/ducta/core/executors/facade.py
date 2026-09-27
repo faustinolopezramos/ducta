@@ -41,7 +41,8 @@ from ducta.core.executors.streaming import StreamingExecutor
 from ducta.core.ledger import RunLedger
 from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.results import PipelineRunResult, RunStatus
-from ducta.core.settings import CHAIN_ON_GATE_BLOCKED_CONTINUE, CoreSettings
+from ducta.core.run_lock import RunLock, RunLockSettings, output_keys
+from ducta.core.settings import CHAIN_ON_GATE_BLOCKED_CONTINUE, EVIDENCE_SIGNED, CoreSettings
 from ducta.core.utils import extract_pipeline_nodes
 from ducta.gate.constants import WriteMode
 from ducta.setting.contexts import Context
@@ -104,10 +105,6 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
     ) -> PipelineRunResult:
         """Execute one pipeline and return a typed description of what happened."""
-        # Preflight first, before anything constructs an executor. Reading the
-        # pipeline config through `self.batch_executor` builds the whole output
-        # stack as a side effect, so a config error was being reported *after*
-        # the cost of standing that stack up. Preflight needs only the Context.
         self._run_preflight(pipeline_name)
 
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
@@ -144,6 +141,10 @@ class PipelineExecutor:
         from datetime import datetime, timezone
 
         run_id = uuid.uuid4().hex
+        # Before anything reads data: a run that cannot get its outputs to
+        # itself must not start. Raises PipelineLockedError — nothing ran, so
+        # no ledger and no certificate.
+        run_lock = self._acquire_run_lock(pipeline, pipeline_name, node_name, run_id)
         ledger = RunLedger.start(self.context, run_id)
         started_at = datetime.now(timezone.utc)
         result = PipelineRunResult(pipeline=pipeline_name, run_id=run_id)
@@ -173,6 +174,12 @@ class PipelineExecutor:
                 result.resolve_status()
             except Exception as bookkeeping_exc:  # noqa: BLE001 — never mask the real error
                 logger.debug("Could not fold the run trace into the result: {}", bookkeeping_exc)
+            if run_lock.lost:
+                ledger.note_gap(
+                    "the run lock lease was lost during the run; another run may have "
+                    "written the same outputs concurrently"
+                )
+            run_lock.release()
             cert_path, cert_error = self._emit_run_certificate(
                 pipeline_name=pipeline_name,
                 run_id=run_id,
@@ -184,11 +191,6 @@ class PipelineExecutor:
             result.certificate_path = cert_path
             result.certificate_error = cert_error
             if cert_error and self.settings.require_run_certificate and result.ok:
-                # Escalate only on an otherwise-successful run. This block is a
-                # `finally`: on the failing path an exception is already in
-                # flight, and replacing the real error with a bookkeeping one
-                # would hide the thing the user actually needs to see. The
-                # ERROR log and `certificate_error` still carry it there.
                 result.add_error(f"run certificate required but not written: {cert_error}")
             if result.ok and node_name is None:
                 self._record_chain_state(pipeline_name, pipeline_type, start_date, end_date)
@@ -206,6 +208,31 @@ class PipelineExecutor:
             raise failure
         return result
 
+    def _acquire_run_lock(
+        self,
+        pipeline: Dict[str, Any],
+        pipeline_name: str,
+        node_name: Optional[str],
+        run_id: str,
+    ) -> RunLock:
+        """Lock every output this run will write (see ``ducta.core.run_lock``)."""
+        s = self.settings
+        lock = RunLock(
+            RunLockSettings(
+                enabled=s.run_lock_enabled,
+                backend=s.run_lock_backend,
+                ttl_seconds=s.run_lock_ttl_seconds,
+                on_conflict=s.run_lock_on_conflict,
+                wait_timeout_seconds=s.run_lock_wait_timeout_seconds,
+                lock_dir=s.run_lock_dir,
+            ),
+            output_keys(self.context, pipeline, node_name),
+            pipeline=pipeline_name,
+            run_id=run_id,
+        )
+        lock.acquire()
+        return lock
+
     def _collect_batch_outcome(self, result: PipelineRunResult) -> None:
         """Fold the batch executor's non-raising outcomes into the run result."""
         batch = self._batch_executor
@@ -215,9 +242,6 @@ class PipelineExecutor:
         gate_blocked = getattr(node_executor, "gate_blocked", None) or {}
         result.gate_blocked.update(gate_blocked)
 
-        # Nodes the DAG coordinator skipped. Only the atomic `--node` case used
-        # to reach the result, so a run that skipped half its graph for missing
-        # inputs was reported as a clean success.
         result.skipped.update(getattr(node_executor, "skipped", None) or {})
 
         skipped = getattr(batch, "_skipped_atomic_node", None)
@@ -265,36 +289,26 @@ class PipelineExecutor:
         status: str,
         error: Optional[str],
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Assemble and persist the Run Certificate.
-
-        Returns ``(path, reason_not_written)`` — exactly one of the two is set.
-        Still never raises: the caller runs it from a ``finally`` where an
-        exception would mask the run's real error. What changed is that a
-        failure is no longer *silent*. It used to land on ``logger.debug`` and
-        return ``None``, which made "the certificate could not be written"
-        indistinguishable from "this run produced no evidence because it never
-        happened" — the easiest failure mode to induce in the one artifact the
-        whole trust story rests on.
-        """
+        """Assemble and persist the Run Certificate."""
         try:
             from ducta.core import certificate as cert_mod
 
+            for problem in self.settings.evidence_problems:
+                logger.error("Evidence policy: {}", problem)
             if not cert_mod.is_enabled(self.context):
                 if self.settings.require_run_certificate:
-                    # A contradiction worth naming rather than resolving
-                    # silently in either direction.
-                    reason = (
-                        "require_run_certificate is true but enable_run_certificate "
-                        "is false — no certificate can be written"
+                    reason = "; ".join(self.settings.evidence_problems) or (
+                        "a certificate is required but certificates are disabled "
+                        "— no certificate can be written"
                     )
                     logger.error(reason)
                     return None, reason
                 logger.warning(
-                    "Run Certificate disabled by configuration "
-                    "(enable_run_certificate=false); run {} leaves no evidence behind.",
+                    "Run Certificate disabled by configuration (evidence_level=off); "
+                    "run {} leaves no evidence behind.",
                     run_id,
                 )
-                return None, "disabled by configuration (enable_run_certificate=false)"
+                return None, "disabled by configuration (evidence_level=off)"
             try:
                 from ducta import __version__ as ducta_version
             except Exception:  # noqa: BLE001
@@ -316,6 +330,10 @@ class PipelineExecutor:
             signing_key = cert_mod.resolve_signing_key(self.context)
             if signing_key is not None:
                 cert.sign(signing_key)
+            elif self.settings.evidence_level == EVIDENCE_SIGNED:
+                reason = "evidence_level is 'signed' but no signing key is configured"
+                logger.error("Run Certificate NOT written for run {}: {}", run_id, reason)
+                return None, reason
             run_dir = cert_mod.certificate_dir(self.context, run_id)
             path = cert_mod.write_certificate(cert, run_dir)
             logger.info("Run Certificate written: {} (run_id={}, status={})", path, run_id, status)
@@ -324,7 +342,7 @@ class PipelineExecutor:
             logger.opt(exception=True).error(
                 "Run Certificate could NOT be written for run {} (pipeline '{}'): {}. "
                 "This run has left no verifiable evidence. Set "
-                "require_run_certificate: true to make this fail the run.",
+                "evidence_level: required to make this fail the run.",
                 run_id,
                 pipeline_name,
                 e,
@@ -356,16 +374,7 @@ class PipelineExecutor:
     def wait_for_streaming_startup(
         self, execution_id: str, timeout: Optional[float] = None
     ) -> Dict[str, Any]:
-        """Block until the startup pass finishes, then report what actually ran.
-
-        ``run_streaming_pipeline`` returns as soon as the work is queued, so its
-        execution id says nothing about whether any query exists. A caller that
-        has to decide an exit code needs this instead.
-
-        Returns ``{"started": [...], "skipped": {...}, "failed": {...},
-        "status": str}``. Never raises: a manager that cannot answer yields an
-        empty report rather than taking the CLI down with it.
-        """
+        """Block until the startup pass finishes, then report what actually ran."""
         report: Dict[str, Any] = {"started": [], "skipped": {}, "failed": {}, "status": "unknown"}
         if not execution_id:
             return report
@@ -373,8 +382,6 @@ class PipelineExecutor:
             manager = self.streaming_executor.streaming_manager
             manager.wait_for_pipeline_started(execution_id, timeout=timeout)
             status = manager.get_pipeline_status(execution_id) or {}
-            # `query_statuses`, not `queries`: get_pipeline_status deliberately
-            # strips the live query handles and exposes their names here instead.
             report["started"] = sorted(status.get("query_statuses") or {})
             report["skipped"] = dict(status.get("skipped_nodes") or {})
             report["failed"] = dict(status.get("failed_nodes") or {})
@@ -402,11 +409,7 @@ class PipelineExecutor:
 
     @staticmethod
     def _safe_streaming(fn: Callable[[], Any], default: Any) -> Any:
-        """Call ``fn()``, returning ``default`` if the streaming manager raises.
-
-        Shared by the streaming-status/control wrappers below, which
-        previously each carried an identical try/except-return-default shape.
-        """
+        """Call ``fn()``, returning ``default`` if the streaming manager raises."""
         try:
             return fn()
         except Exception:
@@ -606,20 +609,7 @@ class PipelineExecutor:
         chain: List[str],
         pipeline: str,
     ) -> None:
-        """Decide whether an unsuccessful *ancestor* step lets the chain go on.
-
-        ``run_pipeline`` only raises for a ``failed`` run: a blocked quality
-        gate and a skipped node both return normally (see ``run_pipeline`` and
-        ``PipelineRunResult.failed``). That is right for one pipeline — the
-        caller gets a result describing what happened — and wrong for a chain,
-        where "this pipeline did not refresh its outputs" means every pipeline
-        after it reads whatever an earlier run left on disk. Left unchecked, a
-        gate that rejected its data ended with the chain logging success and
-        exiting 0, which is the opposite of what a gate is for.
-
-        ``chain.on_gate_blocked = "continue"`` restores the old behavior for
-        anyone who relies on it, but says out loud what it is doing.
-        """
+        """Decide whether an unsuccessful *ancestor* step lets the chain go on."""
         if result.ok or result.status is RunStatus.RUNNING:
             return
 
@@ -717,17 +707,7 @@ class PipelineExecutor:
     def _provenance_still_matches(
         self, pipeline_name: str, state: Optional[Dict[str, Any]]
     ) -> bool:
-        """Whether the recorded outputs were produced by today's config and code.
-
-        Whether the outputs exist is not the same question as whether reusing
-        them still means anything. Reuse used to answer only the first, so
-        editing a node's transformation and re-running with ``--reuse-upstream``
-        skipped the ancestor and fed its stale output downstream — a silent
-        wrong answer in a tool whose whole pitch is reproducible runs.
-
-        Fails closed when the marker predates this check: one recomputation is
-        cheaper than one unnoticed stale result.
-        """
+        """Whether the recorded outputs were produced by today's config and code."""
         if state is None:
             logger.info(
                 "Not reusing '{}': no chain-state marker records what produced its outputs.",
@@ -819,11 +799,6 @@ class PipelineExecutor:
         """Resolve the active environment name for output-path resolution."""
         return self.settings.env
 
-    #: Pre-restructure default (relative to cwd, not to ${output_path}), kept
-    #: only so `_legacy_*` readers below can still find markers a project
-    #: accumulated before the Ducta storage convention moved chain state under
-    #: ${output_path}/${environment}/.ducta/chain_state — see
-    #: CoreSettings.DEFAULT_CHAIN_STATE_DIR.
     _LEGACY_CHAIN_STATE_DIR = ".ducta/chain_state"
 
     def _chain_state_path(self, pipeline_name: str) -> Path:
@@ -870,32 +845,7 @@ class PipelineExecutor:
             return None
 
     def _code_fingerprint(self, pipeline_name: str) -> Optional[str]:
-        """SHA-256 over the source of the modules backing a pipeline's nodes.
-
-        The config fingerprint covers YAML, not the Python a node points at, so
-        without this a changed transformation was invisible to the reuse check:
-        an ancestor pipeline whose function had been rewritten was skipped as
-        "up to date" and its downstream ran on data the current code would
-        never produce. Resolving each module without importing it keeps this
-        cheap and free of side effects.
-
-        This is the *reuse* hash, not the evidence one. It must resolve modules
-        without importing them, so it can only ever be module-granular and has
-        no callable to attribute a hash to; the certificate's per-node ``code``
-        block comes from ``ducta.core.code_fingerprint`` instead, recorded at
-        load time. Both hash raw file bytes, so "the module changed" means the
-        same thing to both.
-
-        Hashes content, not mtime. An mtime is a property of the filesystem, not
-        of the code: it does not survive a clone, a container rebuild or a
-        ``git archive``, and — the case that actually matters — anything that
-        restores timestamps (``rsync -t``, ``tar -p``, a restored backup) can
-        put *different* code on disk under a timestamp the marker still
-        recognises, which reuses outputs the code on disk would not produce.
-        Markers written by the older ``mtime:`` scheme simply stop matching, so
-        the first run after upgrading recomputes once and re-records — the same
-        fail-closed direction ``_provenance_still_matches`` already takes.
-        """
+        """SHA-256 over the source of the modules backing a pipeline's nodes."""
         try:
             import hashlib
             import importlib.util
@@ -921,15 +871,11 @@ class PipelineExecutor:
                     spec = importlib.util.find_spec(str(module_path))
                     origin = getattr(spec, "origin", None) if spec else None
                     if not origin:
-                        # A module we cannot locate is one we cannot vouch for;
-                        # say so rather than reporting a partial hash.
                         return None
                     source = Path(origin)
                     if not source.is_file():
                         return None
-                    # The module name is part of the digest so that moving a
-                    # node's function to a different module counts as a change
-                    # even when the bytes are identical.
+
                     digest.update(str(module_path).encode("utf-8"))
                     digest.update(b"\0")
                     digest.update(source.read_bytes())
@@ -977,16 +923,7 @@ class PipelineExecutor:
             logger.debug("Could not record chain state for '{}': {}", pipeline_name, e)
 
     def _load_chain_state(self, pipeline_name: str) -> Optional[Dict[str, Any]]:
-        """Read the chain-state marker for a pipeline; None when absent/corrupt.
-
-        Tries, in order: the current path (${output_path}/${environment}
-        /.ducta/chain_state — the Ducta storage convention), the
-        pre-restructure per-environment path (.ducta/chain_state/<env>/,
-        relative to cwd), then the oldest pre-per-environment flat path — so
-        markers recorded before either change aren't silently discarded. A
-        subsequent successful run in this environment migrates the marker to
-        the current path.
-        """
+        """Read the chain-state marker for a pipeline; None when absent/corrupt."""
         try:
             for candidate in (
                 self._chain_state_path(pipeline_name),
@@ -1009,23 +946,7 @@ class PipelineExecutor:
         return list(self.context.pipelines.keys())
 
     def get_pipeline_info(self, pipeline_name: str) -> Dict[str, Any]:
-        """Describe a pipeline for a human: its description and its node *names*.
-
-        ``nodes`` is a list of strings. It used to be whatever
-        ``Context.pipelines`` happened to hold, which is the expanded form — a
-        list of entire node config dicts. Every caller wants names: they join
-        them into a line, print them, or test ``--node`` membership against
-        them. So each one had grown its own ``n if isinstance(n, str) else
-        n.get("name")`` coercion, three of them, and the ones that had not
-        grown it were broken: ``ducta config pipeline-info`` raised
-        ``TypeError: sequence item 0: expected str instance, dict found`` on
-        every project, and the ``--node`` membership test never matched a real
-        node.
-
-        ``extract_pipeline_nodes`` already normalizes all three shapes this can
-        arrive in (plain string, single-key dict, dict with ``name``), so the
-        normalization lives once, here, where the shape is known.
-        """
+        """Describe a pipeline for a human: its description and its node *names*."""
         if pipeline_name not in self.context.pipelines:
             return {
                 "exists": False,
