@@ -104,9 +104,6 @@ optimistic-concurrency token: send back the ``commit_sha`` you read —
 and a change someone else committed in between answers ``409`` instead of
 being overwritten.
 
-A workspace still in Ducta 0.2's layout is reported with the command that
-converts it (``ducta config migrate``); the API does not read that layout.
-
 Integration
 -----------
 

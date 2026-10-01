@@ -103,9 +103,11 @@ To add a step, add a node here and the datasets it writes to ``catalog.yaml``.
 ``ducta config validate`` checks the result without running anything.
 
 .. tip::
-   Two starter templates exist — ``ducta template --list-templates`` shows them:
-   ``medallion_basic`` (batch ETL, bronze → silver → gold) and
-   ``streaming_basic`` (Structured Streaming).
+   Four starter templates exist — ``ducta template --list-templates`` shows them:
+   ``medallion_basic`` (batch ETL, bronze → silver → gold), ``streaming_basic``
+   (Structured Streaming), ``ml_basic`` (a churn model with a declarative split
+   and a baseline gate) and ``hybrid_basic`` (a batch node feeding a stream, in
+   one pipeline). Each one runs as generated.
 
 Step 5: Pure Python Logic
 -------------------------

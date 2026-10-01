@@ -228,8 +228,8 @@ class ProjectService:
                 detail={"expected": str(expected_location), "actual": str(source)},
             )
 
-        # Importing registers a project that is already in place; it must be a
-        # format-2 project (a format-1 one is reported with how to migrate it).
+        # Importing registers a project that is already in place; it must have
+        # a ducta.yaml with `version: 2`.
         self._repo.store(project_id)
         logger.info("Project '{id}' imported from {path}", id=project_id, path=source)
         settings = self._repo.get_settings(project_id)

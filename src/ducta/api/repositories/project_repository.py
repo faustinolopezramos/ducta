@@ -83,13 +83,6 @@ class ProjectRepository:
         """The project's configuration store; ProjectNotFoundError if there is none."""
         found = find_project_root(self.project_dir(project_id))
         if found is None:
-            from ducta.console.config import FORMAT1_MESSAGE, format1_markers
-
-            p_dir = self.project_dir(project_id)
-            if p_dir.is_dir() and format1_markers(p_dir):
-                raise ValidationError(
-                    FORMAT1_MESSAGE.format(root=p_dir), detail={"project_id": project_id}
-                )
             raise ProjectNotFoundError(
                 f"Project '{project_id}' not found", detail={"project_id": project_id}
             )
@@ -118,7 +111,7 @@ class ProjectRepository:
 
     def get_settings(self, project_id: str) -> Dict[str, Any]:
         """name/description/variables/metadata/created_at/updated_at, from ducta.yaml."""
-        self.store(project_id)  # raises for unknown or format-1 projects
+        self.store(project_id)  # raises for unknown projects
         data = yaml.safe_load(self.manifest_path(project_id).read_text(encoding="utf-8")) or {}
         metadata = dict(data.get("metadata") or {})
         return {

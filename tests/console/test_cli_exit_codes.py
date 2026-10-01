@@ -145,10 +145,6 @@ class TestProjectProblemsAreConfigurationErrors:
     def test_no_project(self, tmp_path, run_in):
         assert run_in(tmp_path, "start", "--pipeline", "etl") == ExitCode.CONFIGURATION_ERROR.value
 
-    def test_a_project_that_still_needs_migrating(self, tmp_path, run_in):
-        (tmp_path / "environment.yaml").write_text("env_config: {}\n")
-        assert run_in(tmp_path, "start", "--pipeline", "etl") == ExitCode.CONFIGURATION_ERROR.value
-
     @pytest.mark.parametrize(
         "argv", [["start", "--pipeline", "etl"], ["config", "validate"]], ids=["start", "validate"]
     )

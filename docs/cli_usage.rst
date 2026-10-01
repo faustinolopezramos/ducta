@@ -95,8 +95,7 @@ Orchestrators can act on the exit code of ``ducta start``:
      - Unexpected error.
    * - 2
      - The project cannot run as configured: no project found, invalid
-       configuration, a failed preflight, or a project that still needs
-       ``ducta config migrate``.
+       configuration, or a failed preflight.
    * - 3
      - Invalid command-line arguments — an unknown pipeline name, a malformed
        date.
@@ -130,11 +129,21 @@ Orchestrators can act on the exit code of ``ducta start``:
    * - ``streaming_basic``
      - Structured Streaming from a file source through registered transforms,
        with per-node checkpoints.
+   * - ``ml_basic``
+     - A churn model: Spark features, scikit-learn training, the split and
+       hyperparameters declared in the pipeline file, a seeded run, and a
+       baseline gate before the model is registered. Needs ``ducta[spark,mlops]``.
+   * - ``hybrid_basic``
+     - One ``type: hybrid`` pipeline: a batch node builds a dimension table, then
+       a streaming query enriches orders against it (stream-static join). Runs
+       to completion with ``ducta start --pipeline orders --mode sync``.
 
 Options: ``--project-name`` (required), ``--output-path DIR`` (default: a new
 directory named after the project), ``--no-sample-code``,
-``--sandbox-developers alice bob`` (a ``sandbox_<name>`` environment each) and
-``--evidence-level {off,record,required,signed}``.
+``--sandbox-developers alice bob`` (a ``sandbox_<name>`` environment each),
+``--evidence-level {off,record,required,signed}`` and
+``--format {yaml,toml,json}`` (default ``yaml``, which keeps the explanatory
+comments).
 
 ``ducta config`` — inspect and check a project
 ----------------------------------------------
@@ -145,7 +154,10 @@ directory named after the project), ``--no-sample-code``,
    ducta config list-pipelines [--env ENV] [--filter TEXT] [--format table|json|list]
    ducta config pipeline-info --pipeline NAME [--env ENV]
    ducta config schema [--out DIR]
-   ducta config migrate [--path DIR] [--write | --out DIR | --check]
+   ducta config show [--env ENV] [--pipeline NAME] [--format yaml|toml|json] [--engine]
+   ducta config explain PATH [--env ENV]
+   ducta config diff ENV_A ENV_B
+   ducta config convert --to yaml|toml|json --out DIR
 
 - ``validate`` checks the schema and every reference between files, then
   imports each node's function and checks its signature — without starting
@@ -153,9 +165,14 @@ directory named after the project), ``--no-sample-code``,
 - ``schema`` prints the JSON Schema of ``ducta.yaml``, ``catalog.yaml`` and
   pipeline files; ``--out .`` refreshes ``.ducta/schema/`` for editor
   completion.
-- ``migrate`` converts a project from Ducta 0.2's layout, verifying it is
-  equivalent in every environment first — see :ref:`migrating`.
-
+- ``show`` prints the project as it resolves for an environment — templates,
+  defaults and overrides applied — in any of the three formats; ``--engine``
+  prints the five documents the engine reads.
+- ``explain`` says where one value comes from (file, template, defaults or
+  environment), with the file and line of each step.
+- ``diff`` lists every value that differs between two environments.
+- ``convert`` rewrites the configuration files in another format, in a new
+  directory; comments are not carried over.
 ``ducta stream`` — streaming pipelines
 --------------------------------------
 

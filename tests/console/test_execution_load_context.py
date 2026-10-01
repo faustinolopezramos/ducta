@@ -47,9 +47,8 @@ class TestLoadContext:
         load_context(project)
         loader.assert_called_once_with(project.resolve(), "base")
 
-    def test_a_format_1_project_is_refused_with_the_migrate_command(self, tmp_path, loader):
-        (tmp_path / "environment.yaml").write_text("env_config: {}\n")
-        with pytest.raises(ConfigurationError, match="ducta config migrate"):
+    def test_a_directory_without_a_project_is_refused(self, tmp_path, loader):
+        with pytest.raises(ConfigurationError, match="No Ducta project found"):
             load_context(tmp_path)
         loader.assert_not_called()
 

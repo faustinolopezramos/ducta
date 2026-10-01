@@ -3,8 +3,7 @@
 The project is the nearest directory holding a format-2 ``ducta.yaml``, found
 from ``--base-path`` (default: the current directory) upwards. A command run
 with ``--base-path`` from an unrelated launch directory is normal usage, and
-must run inside that project, not the launch directory. A format-1 project is
-refused with the command that converts it.
+must run inside that project, not the launch directory.
 """
 
 from __future__ import annotations
@@ -58,18 +57,9 @@ class TestFindingTheProject:
         assert mgr.project_root is None
         assert mgr.get_config_directory() == tmp_path
 
-    @pytest.mark.parametrize(
-        "marker", ["environment.yaml", "settings.json", "config/global_config.yaml"]
-    )
-    def test_a_format_1_project_points_at_migrate(self, tmp_path, marker):
-        (tmp_path / marker).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / marker).write_text("{}\n")
-        with pytest.raises(ConfigurationError, match="ducta config migrate --path"):
-            ConfigManager(str(tmp_path))
-
-    def test_a_format_1_manifest_named_ducta_yaml_points_at_migrate(self, tmp_path):
+    def test_a_manifest_without_version_2_is_not_a_project(self, tmp_path):
         (tmp_path / "ducta.yaml").write_text("project: {type: layered}\nlayers: {}\n")
-        with pytest.raises(ConfigurationError, match="configuration format 1"):
+        with pytest.raises(ConfigurationError, match="version: 2"):
             ConfigManager(str(tmp_path))
 
 

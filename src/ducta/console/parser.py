@@ -56,9 +56,6 @@ class UnifiedArgumentParser:
             ducta stream run --pipeline events --env dev
             ducta stream status
 
-            # Upgrading a project from Ducta 0.2
-            ducta config migrate --write
-
             Note: Orchestration management (schedules, runs) is now exclusively available
             through the API REST interface. Use the API endpoints to manage pipeline
             orchestration, scheduling, and run management.
@@ -307,6 +304,16 @@ class UnifiedArgumentParser:
             help="List of developer names for sandbox environments",
         )
         template_parser.add_argument(
+            "--format",
+            dest="config_format",
+            choices=["yaml", "toml", "json"],
+            default="yaml",
+            help=(
+                "Format of ducta, catalog and pipeline files (default: yaml, which keeps "
+                "the explanatory comments; toml and json are the same project without them)"
+            ),
+        )
+        template_parser.add_argument(
             "--no-sample-code",
             action="store_true",
             help="Do not include sample code in generated template",
@@ -376,30 +383,65 @@ class UnifiedArgumentParser:
         )
         validate_parser.add_argument("--env", help="Environment to use")
 
-        migrate_parser = config_subparsers.add_parser(
-            "migrate",
-            help="Convert a format-1 project to format 2 (ducta.yaml + catalog.yaml + pipelines/)",
+        show_parser = config_subparsers.add_parser(
+            "show",
+            help="Print the project as it resolves for an environment",
             description=(
-                "Reads every environment of a format-1 project, converts it to format 2 "
-                "and verifies, environment by environment, that the result compiles to "
-                "the same engine configuration. Without --write or --out it only reports."
+                "The project after templates (extends), defaults and the environment's "
+                "overrides are applied: what Ducta actually runs. Use --format to read it "
+                "as YAML, TOML or JSON."
             ),
         )
-        migrate_parser.add_argument(
-            "--path", default=None, help="Project directory (default: current directory)"
+        show_parser.add_argument("--env", help="Environment to resolve (default: the base project)")
+        show_parser.add_argument(
+            "--pipeline", default=None, help="Only this pipeline and the datasets it touches"
         )
-        mode = migrate_parser.add_mutually_exclusive_group()
-        mode.add_argument(
-            "--write",
+        show_parser.add_argument(
+            "--format",
+            dest="output_format",
+            choices=["yaml", "toml", "json"],
+            default="yaml",
+            help="Output format (default: yaml)",
+        )
+        show_parser.add_argument(
+            "--engine",
             action="store_true",
-            help="Write format 2 in place; format-1 files move to .ducta/format1-backup/",
+            help="Print the five documents the engine reads instead of the project's shape",
         )
-        mode.add_argument("--out", default=None, help="Write the format-2 files to this directory")
-        mode.add_argument(
-            "--check",
-            action="store_true",
-            help="Exit 1 if the project still uses format 1 (for CI)",
+
+        explain_parser = config_subparsers.add_parser(
+            "explain",
+            help="Say where one setting's value comes from",
+            description=(
+                "Follows a value through the file, the pipeline template, defaults and the "
+                "environment's overrides, with the file and line of each step."
+            ),
         )
+        explain_parser.add_argument(
+            "path",
+            help="e.g. settings.max_parallel_nodes or pipelines.etl.nodes.load.retry",
+        )
+        explain_parser.add_argument("--env", help="Environment to resolve (default: base)")
+
+        diff_parser = config_subparsers.add_parser(
+            "diff", help="Show what differs between two environments"
+        )
+        diff_parser.add_argument("env_a", help="First environment (use 'base' for none)")
+        diff_parser.add_argument("env_b", help="Second environment")
+
+        convert_parser = config_subparsers.add_parser(
+            "convert",
+            help="Write the project's configuration files in another format",
+            description=(
+                "Rewrites ducta, catalog, pipelines/ and templates/ as YAML, TOML or JSON "
+                "in a new directory. Comments are not carried over; your Python and data "
+                "are not copied."
+            ),
+        )
+        convert_parser.add_argument(
+            "--to", dest="to_format", choices=["yaml", "toml", "json"], required=True
+        )
+        convert_parser.add_argument("--out", required=True, help="New directory to write into")
 
         schema_parser = config_subparsers.add_parser(
             "schema", help="Print (or write) the JSON Schema of the format-2 configuration files"

@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Ducta now has a single configuration version. The migration path from 0.2 is
+gone, and `ducta template` writes the current format directly.
+
+### Added
+
+- **TOML and JSON project files.** `ducta.toml` / `ducta.json`, `catalog.*`
+  and `pipelines/*.*` are read as `ducta.yaml` is, and errors name the file and
+  line in every format. `ducta template --format toml|json` writes a template in
+  either, and `ducta config convert` rewrites a project.
+- **`defaults`** in `ducta.yaml` (project) and in a pipeline file: values every
+  dataset (`defaults.catalog`, by glob) and node (`defaults.node`,
+  `defaults.stream`) gets unless it sets its own.
+- **Pipeline templates**: `extends: templates/name` with `params:` and
+  `${params.x}` placeholders, under the file's own keys.
+- **Inline checks**: a `quality` or `checks` block can list its checks directly
+  beside `gate`, without the `checks:` level.
+- **Typed check parameters.** `ducta config validate` rejects an unknown
+  parameter, a value of the wrong type or range, and a near miss of a built-in
+  check's name, with file and line; the editor schema offers every check's
+  parameters. Custom checks opt in with `CONFIG_SCHEMA`.
+- **`ducta config show | explain | diff | convert`**: the project as it
+  resolves for an environment, where one value comes from, what differs between
+  two environments, and the files in another format.
+- **`ml_basic` and `hybrid_basic` templates**: a churn model with a declarative
+  split, versioned hyperparameters and a baseline gate; and one `type: hybrid`
+  pipeline whose batch node feeds a stream-static join.
+- Stream triggers accept an interval (`trigger: 10s`, `5 minutes`) or
+  `available_now` / `once`.
+
+### Fixed
+
+- **Stream nodes ignored `checkpoint_location`, `trigger`, `output_mode` and
+  `query_name` written beside `input`.** The engine reads them from the node's
+  `streaming:` block only, and the loader accepted the flat keys and dropped them
+  silently. `stream:` is now a closed schema: those keys, and the same keys under
+  `output:`, are errors that say they belong in `streaming:`, and a typo in
+  `input`, `output` or `streaming` is an error with a suggestion.
+- `ducta certify verify` looked for the signing key in `global_config.yaml`
+  only, so a `certificate_signing_key` in `ducta.yaml` was never found.
+
+### Removed
+
+- **`ducta config migrate`** and everything that read configuration format 1
+  (`environment.yaml` + `config/*`): `ducta.setting.project_migrate`, the
+  format-1 detection in the CLI and the API, and the upgrade guide. To move a
+  0.2 project, run `ducta config migrate` from Ducta 0.3.0 first.
+
+### Changed
+
+- **`ducta template` writes `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml`
+  itself**, as commented YAML, instead of rendering the old layout and
+  converting it. The generated files explain each non-obvious key, use
+  `inputs: {parameter: dataset}`, and ship real `environments:` overrides
+  (`dev` runs serially with debug logging, `prod` widens `max_parallel_nodes`).
+  The scaffold is validated against the project schema and compiled in every
+  environment by the test suite.
+- `ducta.setting.project_decompile` holds what the API's project store still
+  uses from the old module: `decompile`, `canonical` and `write_schemas`.
+
 ## [0.3.0] - 2026-09-27
 
 Configuration format 1 is gone: Ducta reads only `ducta.yaml` + `catalog.yaml`

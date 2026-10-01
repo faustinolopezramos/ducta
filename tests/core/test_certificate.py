@@ -220,39 +220,44 @@ class TestResolveSigningKey:
         assert resolve_signing_key(ctx) == b"from-config"
 
 
+def _project_with_settings(root, settings: str) -> None:
+    (root / "ducta.yaml").write_text(
+        f"version: 2\nproject: p\npaths: {{input: data, output: data}}\nsettings:\n{settings}"
+    )
+
+
 class TestResolveSigningKeyFromDir:
-    def test_reads_key_from_global_config_yaml(self, tmp_path, monkeypatch):
+    def test_reads_key_from_the_project_settings(self, tmp_path, monkeypatch):
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        (tmp_path / "global_config.yaml").write_text("certificate_signing_key: dir-based-key\n")
+        _project_with_settings(tmp_path, "  certificate_signing_key: dir-based-key\n")
         assert resolve_signing_key_from_dir(tmp_path) == b"dir-based-key"
 
-    def test_falls_back_to_env_var_when_no_config_file(self, tmp_path, monkeypatch):
+    def test_falls_back_to_env_var_when_there_is_no_project(self, tmp_path, monkeypatch):
         monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "env-fallback-key")
         assert resolve_signing_key_from_dir(tmp_path) == b"env-fallback-key"
 
-    def test_reads_key_from_global_config_under_config_subdir(self, tmp_path, monkeypatch):
-        """Regression: a project keeping global_config.* under config/ (a
-        layout `setting/config_forms.py`'s `_dir_convention_paths` already
-        supports) used to be invisible to `certify verify` — only the
-        project root itself was searched."""
+    def test_the_env_var_wins_over_the_project_settings(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "env-key")
+        _project_with_settings(tmp_path, "  certificate_signing_key: file-key\n")
+        assert resolve_signing_key_from_dir(tmp_path) == b"env-key"
+
+    def test_finds_a_project_kept_under_a_config_subdir(self, tmp_path, monkeypatch):
+        """A wrapper directory whose project lives in ``config/``: the project
+        root is not the directory the command was started from."""
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         (tmp_path / "config").mkdir()
-        (tmp_path / "config" / "global_config.yaml").write_text(
-            "certificate_signing_key: config-subdir-key\n"
+        _project_with_settings(
+            tmp_path / "config", "  certificate_signing_key: config-subdir-key\n"
         )
         assert resolve_signing_key_from_dir(tmp_path) == b"config-subdir-key"
 
-    def test_prefers_root_over_config_subdir_when_both_exist(self, tmp_path, monkeypatch):
+    def test_a_broken_project_yields_no_key_instead_of_raising(self, tmp_path, monkeypatch):
         monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        (tmp_path / "global_config.yaml").write_text("certificate_signing_key: root-key\n")
-        (tmp_path / "config").mkdir()
-        (tmp_path / "config" / "global_config.yaml").write_text(
-            "certificate_signing_key: config-subdir-key\n"
-        )
-        assert resolve_signing_key_from_dir(tmp_path) == b"root-key"
+        (tmp_path / "ducta.yaml").write_text("version: 2\nproject: [not, a, name]\n")
+        assert resolve_signing_key_from_dir(tmp_path) is None
 
 
 class TestCertificateDirIsPerEnvironment:

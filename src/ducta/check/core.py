@@ -496,6 +496,10 @@ class BaseQualityCheck(ABC):
     #: `COMMON_CHECK_PARAMS` is always accepted and need not be repeated, and
     #: keys starting with `_` are treated as engine-injected, never user config.
     CONFIG_PARAMS: ClassVar[Optional[FrozenSet[str]]] = None
+    #: Optional ``{param: JSON-Schema fragment}`` (see ``ducta.check.params``): types
+    #: and ranges for the parameters, enforced by ``ducta config validate`` and
+    #: published to editors. Built-in checks are described there instead.
+    CONFIG_SCHEMA: ClassVar[Optional[Dict[str, Dict[str, Any]]]] = None
 
     def __init__(self, name: str, severity: CheckSeverity = CheckSeverity.ERROR) -> None:
         self.name = name

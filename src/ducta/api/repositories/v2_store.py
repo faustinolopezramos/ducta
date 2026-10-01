@@ -23,7 +23,7 @@ The API contract does not change with the file format: clients read and write
 nodes, pipelines and configuration documents in the engine's shape (``module``
 /``function``/``input``/``output``…). For a format-2 project this store
 compiles those views from ``ducta.yaml``/``catalog.yaml``/``pipelines/`` and
-translates writes back with the same functions ``ducta config migrate`` uses.
+translates writes back with ``ducta.setting.project_decompile``.
 
 Every write is a transaction: edit the files (round-trip YAML, so comments and
 key order in files people also edit by hand survive), re-validate the whole
@@ -197,8 +197,7 @@ class V2ProjectStore:
 
     @property
     def pipelines_dir(self) -> Path:
-        """The OCC unit for nodes and pipelines — as `nodes.yaml`/`pipelines.yaml`
-        were in format 1, so clients' commit SHAs keep their meaning."""
+        """The OCC unit for nodes and pipelines: clients' commit SHAs cover this folder."""
         return self.root / PIPELINES_DIR
 
     def pipeline_path(self, name: str) -> Path:
@@ -270,7 +269,7 @@ class V2ProjectStore:
         )
 
     def _to_v2_node(self, name: str, spec: Dict[str, Any], project: Project) -> Dict[str, Any]:
-        from ducta.setting.project_migrate import _decompile_node, _producers
+        from ducta.setting.project_decompile import _decompile_node, _producers
 
         nodes = copy.deepcopy(compile_project(project)["nodes_config"])
         nodes[name] = spec
@@ -375,13 +374,13 @@ class V2ProjectStore:
         env: str = "base",
         expected_sha: Optional[str] = None,
     ) -> str:
-        """Replace one engine document for ``env`` and store it as format 2.
+        """Replace one engine document for ``env`` and store it as project files.
 
-        The result is verified like a migration: the project, compiled for
+        The result is verified: the project, compiled for
         ``env``, must be equivalent to the documents the client sent, or
         nothing is kept.
         """
-        from ducta.setting.project_migrate import _SAME, _diff, canonical, decompile
+        from ducta.setting.project_decompile import _SAME, _diff, canonical, decompile
 
         if doc_name not in _DOC_KEYS:
             raise ConfigFileNotFoundError(
@@ -459,7 +458,7 @@ class V2ProjectStore:
 
         def verify() -> None:
             after = compile_project(validate_project(self.root, None if base_env else env))
-            from ducta.setting.project_migrate import _first_difference
+            from ducta.setting.project_decompile import _first_difference
 
             diff = _first_difference(canonical(intended), canonical(after))
             if diff:

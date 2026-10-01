@@ -200,9 +200,6 @@ ducta start --env dev --pipeline sales_daily \
 
 Ducta reads `raw_sales`, runs `clean_sales`, validates the output, writes
 `sales_clean`, and records a run certificate — all from that configuration.
-A project from Ducta 0.2 (`environment.yaml` + `config/*`) is converted with
-`ducta config migrate`, which proves the result equivalent in every environment
-before it writes anything.
 
 ### 5. Prefer a visual workspace?
 

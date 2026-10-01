@@ -21,15 +21,25 @@ checks"), not about exact copy, so wording can change freely.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ducta.check.core import DFAdapter
-from ducta.console.template import MedallionBasicTemplate
+from ducta.console.template import MedallionBasicTemplate, TemplateGenerator, TemplateType
+from ducta.setting.project_loader import compile_project, validate_project
 
 
 @pytest.fixture
 def template():
     return MedallionBasicTemplate("demo")
+
+
+@pytest.fixture
+def docs(tmp_path: Path) -> dict:
+    """The engine documents the generated medallion project compiles to."""
+    TemplateGenerator(tmp_path / "p").generate_project(TemplateType.MEDALLION_BASIC, "demo")
+    return compile_project(validate_project(tmp_path / "p", "dev"))
 
 
 def _rows(csv: str) -> list[str]:
@@ -63,13 +73,13 @@ class TestSampleDataGivesTheChecksSomethingToCatch:
 
 
 class TestChecksActuallyAssertSomething:
-    def test_silver_has_a_blocking_quality_gate(self, template):
-        gate = template.generate_nodes_config()["transform"]["data_quality"]["quality_gate"]
-        assert gate["enabled"] is True
+    def test_silver_has_a_blocking_quality_gate(self, docs):
+        gate = docs["nodes_config"]["transform"]["data_quality"]["quality_gate"]
+        assert gate.get("enabled", True) is True
         assert gate["max_errors"] == 0
 
-    def test_silver_asserts_what_transform_promises(self, template):
-        checks = template.generate_nodes_config()["transform"]["data_quality"]["checks"]
+    def test_silver_asserts_what_transform_promises(self, docs):
+        checks = docs["nodes_config"]["transform"]["data_quality"]["checks"]
         # transform drops nulls and duplicates; the checks must be the ones that
         # notice if it stops.
         assert checks["null_rate"]["threshold"] == 0.0
@@ -78,28 +88,28 @@ class TestChecksActuallyAssertSomething:
         # asserts nothing.
         assert checks["row_count"]["min"] > 1
 
-    def test_check_config_uses_the_keys_the_checks_actually_read(self, template):
+    def test_check_config_uses_the_keys_the_checks_actually_read(self, docs):
         # `null_rate` reads `columns` (a list) and `threshold`. Writing
         # `column`/`max` parses fine and silently checks every column at the
         # default threshold instead.
-        null_rate = template.generate_nodes_config()["transform"]["data_quality"]["checks"][
-            "null_rate"
-        ]
+        null_rate = docs["nodes_config"]["transform"]["data_quality"]["checks"]["null_rate"]
         assert isinstance(null_rate["columns"], list)
         assert "column" not in null_rate and "max" not in null_rate
 
-    def test_no_check_is_enabled_with_an_empty_target(self, template):
-        # `schema: {enabled: true, expected_columns: []}` is a check that runs
-        # and asserts nothing — worse than one that is off, because it reads as
+    def test_no_check_is_enabled_with_an_empty_target(self, docs):
+        # `schema: {expected_columns: []}` is a check that runs and asserts
+        # nothing, which is worse than one that is off, because it reads as
         # coverage.
-        for node, config in template.generate_nodes_config().items():
-            for phase in ("sanity_checks", "data_quality"):
-                for name, check in (config.get(phase, {}).get("checks") or {}).items():
+        for node, config in docs["nodes_config"].items():
+            blocks = [config.get("data_quality") or {}]
+            blocks += list(((config.get("sanity_checks") or {}).get("inputs") or {}).values())
+            for block in blocks:
+                for name, check in (block.get("checks") or {}).items():
                     if not check.get("enabled", True):
                         continue
                     for key in ("expected_columns", "columns"):
                         if key in check:
-                            assert check[key], f"{node}.{phase}.{name}.{key} is empty but enabled"
+                            assert check[key], f"{node}.{name}.{key} is empty but enabled"
 
 
 class TestGeneratedCodeCallsRealAPIs:

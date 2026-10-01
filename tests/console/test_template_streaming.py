@@ -18,20 +18,31 @@ drifts from the engine fails here rather than in a user's first run.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from ducta.console.core import ConfigFormat
 from ducta.console.template import (
     StreamingBasicTemplate,
     TemplateFactory,
+    TemplateGenerator,
     TemplateType,
 )
+from ducta.setting.project_loader import compile_project, validate_project
 from ducta.stream.validators import StreamingValidator
 
 
 @pytest.fixture
 def template() -> StreamingBasicTemplate:
     return StreamingBasicTemplate("demo", ConfigFormat.YAML)
+
+
+@pytest.fixture
+def docs(tmp_path: Path) -> dict:
+    """The engine documents the generated streaming project compiles to."""
+    TemplateGenerator(tmp_path / "p").generate_project(TemplateType.STREAMING_BASIC, "demo")
+    return compile_project(validate_project(tmp_path / "p", "dev"))
 
 
 class TestRegisteredWithTheFactory:
@@ -50,39 +61,38 @@ class TestRegisteredWithTheFactory:
 class TestGeneratedConfigPassesTheRealValidator:
     """The check that matters: the engine's own validator accepts this config."""
 
-    def test_the_pipeline_validates(self, template):
-        pipelines = template.generate_pipelines_config()
-        nodes = template.generate_nodes_config()
-        pipeline = dict(pipelines["events_stream"])
+    def test_the_pipeline_validates(self, docs):
+        pipeline = dict(docs["pipelines_config"]["events_stream"])
+        nodes = docs["nodes_config"]
         pipeline["nodes"] = [{**nodes[name], "name": name} for name in pipeline["nodes"]]
 
         StreamingValidator().validate_streaming_pipeline_config(pipeline)
 
-    def test_every_node_validates(self, template):
-        for name, node in template.generate_nodes_config().items():
+    def test_every_node_validates(self, docs):
+        for name, node in docs["nodes_config"].items():
             StreamingValidator().validate_streaming_node_config({**node, "name": name})
 
 
 class TestShapesTheEngineActuallyReads:
-    def test_trigger_uses_type_and_interval(self, template):
+    def test_trigger_uses_type_and_interval(self, docs):
         """`{processingTime: "5 seconds"}` is Spark's spelling and is rejected."""
-        for node in template.generate_nodes_config().values():
+        for node in docs["nodes_config"].values():
             trigger = node["streaming"]["trigger"]
             assert "type" in trigger
             if trigger["type"] in ("processing_time", "continuous"):
                 assert trigger.get("interval"), "these trigger types require an interval"
 
-    def test_transform_is_referenced_by_key(self, template):
+    def test_transform_is_referenced_by_key(self, docs):
         """StreamingQueryManager._get_transform_function reads `key`."""
-        clean = template.generate_nodes_config()["clean_events"]
+        clean = docs["nodes_config"]["clean_events"]
 
         assert clean["function"]["key"] == "clean_events"
         assert "name" not in clean["function"]
 
-    def test_file_stream_puts_schema_and_format_where_the_reader_looks(self, template):
+    def test_file_stream_puts_schema_and_format_where_the_reader_looks(self, docs):
         """FileStreamReader reads `schema`/`file_format` at the top level and
         `path` from options; a schema under options reaches Spark and is dropped."""
-        for node in template.generate_nodes_config().values():
+        for node in docs["nodes_config"].values():
             input_config = node["input"]
             if input_config.get("format") != "file_stream":
                 continue
@@ -92,32 +102,29 @@ class TestShapesTheEngineActuallyReads:
             assert "schema" not in input_config["options"]
             assert "format" not in input_config["options"]
 
-    def test_each_node_has_its_own_checkpoint(self, template):
+    def test_each_node_has_its_own_checkpoint(self, docs):
         """Two nodes sharing a checkpoint corrupt each other's offsets."""
         locations = [
-            node["streaming"]["checkpoint_location"]
-            for node in template.generate_nodes_config().values()
+            node["streaming"]["checkpoint_location"] for node in docs["nodes_config"].values()
         ]
 
         assert all(locations), "every streaming node needs a checkpoint_location"
         assert len(set(locations)) == len(locations), "checkpoints must not be shared"
 
-    def test_ordering_uses_dependencies_like_batch_nodes(self, template):
-        clean = template.generate_nodes_config()["clean_events"]
+    def test_ordering_uses_dependencies_like_batch_nodes(self, docs):
+        clean = docs["nodes_config"]["clean_events"]
 
         assert clean["dependencies"] == ["ingest_events"]
         assert "depends_on" not in clean
 
-    def test_transforms_module_is_auto_registered(self, template):
+    def test_transforms_module_is_auto_registered(self, template, docs):
         """Without this the user must pass --transforms-modules on every run."""
-        settings = template.generate_global_config()
-
-        assert template.SAMPLE_MODULE in settings["streaming_transform_modules"]
+        assert template.SAMPLE_MODULE in docs["global_config"]["streaming_transform_modules"]
 
 
 class TestGeneratedArtefacts:
-    def test_the_pipeline_is_not_date_ranged(self, template):
-        assert template.generate_pipelines_config()["events_stream"]["requires_dates"] is False
+    def test_the_pipeline_is_not_date_ranged(self, docs):
+        assert docs["pipelines_config"]["events_stream"]["requires_dates"] is False
 
     def test_it_ships_a_transforms_module_defining_register_transforms(self, template):
         code = template.generate_sample_code()
@@ -132,7 +139,7 @@ class TestGeneratedArtefacts:
         assert any('"amount": null' in event for event in template.SAMPLE_EVENTS)
 
     def test_it_has_its_own_readme(self, template):
-        readme = template.generate_readme_v2()
+        readme = template.readme()
 
         assert "ducta stream run" in readme
         assert "checkpoint" in readme.lower()

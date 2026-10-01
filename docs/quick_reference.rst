@@ -20,10 +20,16 @@ Core CLI Commands
      - Shows all available pipelines in your current directory.
    * - ``ducta config validate``
      - Checks every file against the schema and every reference, reporting all problems.
-   * - ``ducta config migrate [--write | --out DIR | --check]``
-     - Upgrades a project from Ducta 0.2's layout, verified equivalent per environment.
    * - ``ducta config schema [--out DIR]``
      - Prints (or writes) the JSON Schemas used for editor autocompletion.
+   * - ``ducta config show [--env ENV] [--pipeline NAME] [--format F]``
+     - The project as it resolves for an environment (templates, defaults, overrides).
+   * - ``ducta config explain PATH [--env ENV]``
+     - Where one value comes from, with the file and line of each step.
+   * - ``ducta config diff ENV_A ENV_B``
+     - Every value that differs between two environments.
+   * - ``ducta config convert --to F --out DIR``
+     - The configuration files rewritten as yaml, toml or json.
    * - ``ducta start --validate-only``
      - Checks DAG integrity and configuration without running code.
    * - ``ducta quality run``

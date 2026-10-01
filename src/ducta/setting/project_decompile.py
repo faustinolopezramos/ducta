@@ -17,231 +17,27 @@ under the License.
 
 SPDX-License-Identifier: Apache-2.0
 
-Migrate a format-1 project to format 2 — and prove the result is equivalent.
+Engine documents → project files (format 2).
 
-``migrate(root)`` reads the project's raw format-1 documents for the base and
-every environment, decompiles them to a format-2 tree (environments reduced to
-what actually differs), then compiles that tree back with the format-2 loader
-and compares it, environment by environment, with the original — after
-removing only what format 2 deliberately drops (see :func:`canonical`). Any
-difference aborts the migration: nothing is written that would run
-differently.
+The inverse of :mod:`ducta.setting.project_loader`'s ``compile_project``:
+``decompile`` turns the five engine documents back into the ``ducta.yaml`` /
+``catalog.yaml`` / ``pipelines/*.yaml`` shape, ``canonical`` reduces documents
+to what the project format keeps, and ``write_schemas`` writes the JSON Schemas
+editors use for completion. The API's project store uses the first two to write
+edits back.
 """
 
 from __future__ import annotations
 
 import copy
-import shutil
-import time
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, cast
 
-import yaml  # type: ignore[import-untyped]
-
-from ducta.setting.exceptions import ConfigurationError
 from ducta.setting.project_loader import (
-    CATALOG_FILE,
-    PIPELINES_DIR,
-    PROJECT_FILE,
     _conventional_path,
-    compile_project,
-    find_project_root,
-    validate_project,
 )
 
-_DOCS = ("global_config", "pipelines_config", "nodes_config", "input_config", "output_config")
-_ENV_FILES = ("environment", "settings")
 _SCHEMA_DIR = ".ducta/schema"
-
-
-class MigrationError(ConfigurationError):
-    def __init__(self, problems: List[str]) -> None:
-        self.problems = problems
-        super().__init__("Cannot migrate this project to format 2:\n  - " + "\n  - ".join(problems))
-
-
-@dataclass
-class MigrationResult:
-    project: Dict[str, Any]
-    catalog: Dict[str, Any]
-    pipelines: Dict[str, Dict[str, Any]]
-    environments: List[str]
-    #: Things the migration changed on purpose, for the summary.
-    notes: List[str] = field(default_factory=list)
-    legacy_files: List[Path] = field(default_factory=list)
-
-
-# ── reading format 1 (raw, uninterpolated) ───────────────────────────────────
-
-
-def _load(path: Path) -> Dict[str, Any]:
-    from ducta.setting.loaders import ConfigLoaderFactory
-
-    data = ConfigLoaderFactory().load_config(str(path))
-    return data if isinstance(data, dict) else {}
-
-
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    from ducta.setting.utils import deep_merge_dicts
-
-    return deep_merge_dicts(base, override)
-
-
-def _find_env_root(root: Path) -> Optional[Path]:
-    for stem in _ENV_FILES:
-        for ext in (".yaml", ".yml", ".json", ".toml"):
-            candidate = root / f"{stem}{ext}"
-            if candidate.is_file() and "env_config" in _load(candidate):
-                return candidate
-    return None
-
-
-def read_format1(root: Path) -> Tuple[Dict[str, Dict[str, Dict[str, Any]]], List[Path]]:
-    """``{env: {doc_name: raw_document}}`` for base and every environment, plus the files read.
-
-    Mirrors the format-1 loader: an environment's documents *replace* the
-    base's, except ``global_config``, which is deep-merged over it.
-    """
-    if _is_layered(root):
-        raise MigrationError(
-            [
-                "layered projects (ducta.yaml with layers:) are not migrated automatically "
-                "yet: migrate each layer's directory on its own"
-            ]
-        )
-
-    env_root = _find_env_root(root)
-    if env_root is not None:
-        spec = _load(env_root)
-        base_dir = (env_root.parent / (spec.get("base_path") or ".")).resolve()
-        env_config: Dict[str, Dict[str, str]] = spec["env_config"]
-        base_paths = env_config.get("base", {})
-        result: Dict[str, Dict[str, Dict[str, Any]]] = {}
-        files = {env_root}
-        for env in env_config:
-            paths = {**base_paths, **env_config.get(env, {})}
-            docs: Dict[str, Dict[str, Any]] = {}
-            for doc in _DOCS:
-                rel = paths.get(f"{doc}_path")
-                if not rel:
-                    raise MigrationError([f"env_config.{env} has no {doc}_path"])
-                path = base_dir / rel
-                files.add(path)
-                docs[doc] = _load(path) if path.is_file() else {}
-            base_global = base_paths.get("global_config_path")
-            env_global = env_config.get(env, {}).get("global_config_path")
-            if env != "base" and base_global and env_global and base_global != env_global:
-                docs["global_config"] = _deep_merge(
-                    _load(base_dir / base_global), docs["global_config"]
-                )
-            result[env] = docs
-        if "base" not in result and result:
-            result["base"] = result[next(iter(result))]
-        return result, sorted(files)
-
-    bundle = _find(root, *_BUNDLE_STEMS)
-    if bundle is not None:
-        data = _load(bundle)
-        if _is_bundle(data):
-            return {"base": {doc: copy.deepcopy(data[doc]) for doc in _DOCS}}, [bundle]
-
-    conv = _dir_convention_paths(root)
-    if conv is not None:
-        docs = {doc: _load(Path(conv[doc])) for doc in _DOCS}
-        return {"base": docs}, sorted(Path(p) for p in conv.values())
-
-    global_file = _find(root, "global", "global_config")
-    grouped = _find(root, "pipeline")
-    if global_file is not None and grouped is not None:
-        g = _load(grouped)
-        docs = {"global_config": _load(global_file)}
-        for doc, section in _QUICKSTART_SECTIONS.items():
-            docs[doc] = g.get(section, {}) or {}
-        return {"base": docs}, [global_file, grouped]
-
-    raise MigrationError([f"no format-1 configuration found in {root}"])
-
-
-def _apply_inline_environments(
-    docs: Dict[str, Dict[str, Any]], env: str
-) -> Dict[str, Dict[str, Any]]:
-    """Resolve format 1's other per-environment mechanism: global_config.environments."""
-    from ducta.setting.environments import get_base_environment, normalize_environment
-
-    docs = copy.deepcopy(docs)
-    inline = docs["global_config"].pop("environments", None)
-    if isinstance(inline, dict) and env != "base":
-        active = normalize_environment(env) or env
-        for candidate in (active, get_base_environment(active)):
-            if isinstance(inline.get(candidate), dict):
-                docs["global_config"] = _deep_merge(docs["global_config"], inline[candidate])
-                break
-    return docs
-
-
-# The format-1 layouts, as far as reading them for migration needs. This module
-# is the only place in Ducta that still understands them.
-_CONFIG_EXTS = (".yaml", ".yml", ".json", ".toml")
-_BUNDLE_STEMS = ("ducta", "config", "bundle")
-_DIR_CONVENTION = {
-    "global_config": ("global_config", "global"),
-    "pipelines_config": ("pipelines",),
-    "nodes_config": ("nodes",),
-    "input_config": ("input",),
-    "output_config": ("output",),
-}
-_QUICKSTART_SECTIONS = {
-    "pipelines_config": "pipelines",
-    "nodes_config": "nodes",
-    "input_config": "input",
-    "output_config": "output",
-}
-_LAYER_DIRS = ("bronze", "silver", "gold", "ml")
-
-
-def _find(directory: Path, *stems: str) -> Optional[Path]:
-    for stem in stems:
-        for ext in _CONFIG_EXTS:
-            candidate = directory / f"{stem}{ext}"
-            if candidate.is_file():
-                return candidate
-    return None
-
-
-def _is_bundle(data: Dict[str, Any]) -> bool:
-    return "env_config" not in data and all(k in data for k in _DOCS)
-
-
-def _dir_convention_paths(root: Path) -> Optional[Dict[str, str]]:
-    result: Dict[str, str] = {}
-    for doc, stems in _DIR_CONVENTION.items():
-        found = next(
-            (f for d in (root, root / "config") if d.is_dir() for f in [_find(d, *stems)] if f),
-            None,
-        )
-        if found is None:
-            return None
-        result[doc] = str(found)
-    return result
-
-
-def _is_layered(root: Path) -> bool:
-    """A format-1 multi-layer project: a `ducta.*` layers manifest, or
-    bronze/silver/gold/ml directories each with their own configuration."""
-    manifest = _find(root, "ducta")
-    if manifest is not None:
-        data = _load(manifest)
-        project = data.get("project")
-        if data.get("version") != 2 and (
-            (isinstance(project, dict) and str(project.get("type", "")).lower() == "layered")
-            or isinstance(data.get("layers"), dict)
-        ):
-            return True
-    return any(
-        (root / layer / "config").is_dir() and _find(root / layer, "global") is not None
-        for layer in _LAYER_DIRS
-    )
 
 
 # ── decompiling to a format-2 tree ───────────────────────────────────────────
@@ -495,8 +291,8 @@ def _decompile_dataset(
     if outp:
         write = _clean(
             {
-                # Format 1 appended when write_mode was unset; format 2
-                # overwrites. Say it explicitly so the behaviour survives.
+                # An engine output with no write_mode appends; a dataset with
+                # no `write:` overwrites. Say it explicitly so it survives.
                 "mode": outp.get("write_mode") or "append",
                 "merge": outp.get("merge"),
                 "partition": outp.get("partition"),
@@ -552,7 +348,7 @@ def _fmt(value: Any) -> Optional[str]:
 def decompile(
     docs: Dict[str, Dict[str, Any]], project_name: str, problems: List[str], notes: List[str]
 ) -> Dict[str, Any]:
-    """One environment's format-1 documents → a format-2 tree."""
+    """One environment's engine documents → a project tree."""
     from ducta.setting.schemas import _RUNTIME_GLOBAL_CONFIG_KEYS, GlobalConfigSchema
 
     g = copy.deepcopy(docs["global_config"])
@@ -779,8 +575,8 @@ def canonical(docs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
             if "format" in e:
                 e["format"] = _fmt(e["format"])
             if outputs:
-                # A format-1 output without write_mode appended; migrate writes
-                # that explicitly, so both sides compare as "append".
+                # An output without write_mode appends; decompile writes that
+                # explicitly, so both sides compare as "append".
                 e.setdefault("write_mode", "append")
             out[name] = _strip_defaults(e)
         return out
@@ -835,104 +631,7 @@ def _first_difference(a: Any, b: Any, path: str = "") -> Optional[str]:
     return None
 
 
-# ── the migration ────────────────────────────────────────────────────────────
-
-
-def migrate(root: Path) -> MigrationResult:
-    """Decompile, verify equivalence per environment, and return the format-2 files."""
-    root = Path(root).resolve()
-    if find_project_root(root) is not None:
-        raise MigrationError([f"{root / PROJECT_FILE} is already format 2"])
-
-    by_env, files = read_format1(root)
-    problems: List[str] = []
-    notes: List[str] = []
-    envs = [e for e in by_env if e != "base"]
-    trees = {
-        env: decompile(_apply_inline_environments(docs, env), root.name, problems, notes)
-        for env, docs in by_env.items()
-    }
-    if not (by_env["base"]["global_config"] or {}).get("project_name"):
-        notes.append(f"project name set to '{root.name}' (global_config had no project_name)")
-    # inline `global_config.environments` may name environments env_config does not
-    inline = (by_env["base"]["global_config"] or {}).get("environments")
-    if isinstance(inline, dict):
-        for env in inline:
-            if env not in trees:
-                envs.append(env)
-                trees[env] = decompile(
-                    _apply_inline_environments(by_env["base"], env), root.name, problems, notes
-                )
-    if problems:
-        raise MigrationError(sorted(set(problems)))
-
-    base = trees["base"]
-    project = {k: base[k] for k in ("version", "project", "paths", "settings") if k in base}
-    if "metadata" in base:
-        project["metadata"] = base["metadata"]
-    environments: Dict[str, Any] = {}
-    for env in envs:
-        diff_problems: List[str] = []
-        override = _diff(
-            {k: v for k, v in base.items() if k in ("settings", "paths", "catalog", "pipelines")},
-            {
-                k: v
-                for k, v in trees[env].items()
-                if k in ("settings", "paths", "catalog", "pipelines")
-            },
-            diff_problems,
-            "",
-        )
-        problems += [f"environment '{env}': {p}" for p in diff_problems]
-        if override is not _SAME:
-            environments[env] = override
-    if environments:
-        project["environments"] = environments
-    if problems:
-        raise MigrationError(sorted(set(problems)))
-
-    result = MigrationResult(
-        project=project,
-        catalog=base["catalog"],
-        pipelines=base["pipelines"],
-        environments=envs,
-        notes=list(dict.fromkeys(notes)),
-        legacy_files=files,
-    )
-    verify(result, by_env, root)
-    return result
-
-
-def verify(
-    result: MigrationResult, by_env: Dict[str, Dict[str, Dict[str, Any]]], root: Path
-) -> None:
-    """Compile the migrated project for every environment and compare with format 1."""
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmp:
-        write_files(result, Path(tmp))
-        mismatches = []
-        for env in ["base", *result.environments]:
-            source = _apply_inline_environments(by_env.get(env, by_env["base"]), env)
-            before = canonical(source)
-            after = canonical(
-                compile_project(validate_project(Path(tmp), None if env == "base" else env))
-            )
-            diff = _first_difference(before, after)
-            if diff:
-                mismatches.append(f"environment '{env}': {diff}")
-    if mismatches:
-        raise MigrationError(["the migrated project would not behave the same:", *mismatches])
-
-
 # ── writing ──────────────────────────────────────────────────────────────────
-
-
-def _dump(path: Path, data: Dict[str, Any], schema: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    header = f"# yaml-language-server: $schema={schema}\n"
-    body = yaml.safe_dump(data, sort_keys=False, allow_unicode=True, default_flow_style=False)
-    path.write_text(header + body, encoding="utf-8")
 
 
 def write_schemas(target: Path) -> None:
@@ -946,35 +645,3 @@ def write_schemas(target: Path) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     for kind, schema in defs.items():
         (folder / f"{kind}.json").write_text(json.dumps(schema, indent=2), encoding="utf-8")
-
-
-def write_files(result: MigrationResult, target: Path) -> List[Path]:
-    target = Path(target)
-    written = [target / PROJECT_FILE, target / CATALOG_FILE]
-    _dump(written[0], result.project, f"{_SCHEMA_DIR}/project.json")
-    _dump(written[1], result.catalog, f"{_SCHEMA_DIR}/catalog.json")
-    for name, pipeline in result.pipelines.items():
-        path = target / PIPELINES_DIR / f"{name}.yaml"
-        _dump(path, pipeline, f"../{_SCHEMA_DIR}/pipeline.json")
-        written.append(path)
-    write_schemas(target)
-    return written
-
-
-def replace_in_place(result: MigrationResult, root: Path) -> Tuple[List[Path], Path]:
-    """Write format 2 into ``root``; move the format-1 files to a backup folder."""
-    root = Path(root).resolve()
-    backup = root / ".ducta" / "format1-backup" / time.strftime("%Y%m%d-%H%M%S")
-    for path in result.legacy_files:
-        if not path.exists() or root not in path.resolve().parents:
-            continue
-        dest = backup / path.resolve().relative_to(root)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(path), str(dest))
-    for name in result.pipelines:
-        clash = root / PIPELINES_DIR / f"{name}.yaml"
-        if clash.exists():
-            dest = backup / clash.relative_to(root)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(clash), str(dest))
-    return write_files(result, root), backup

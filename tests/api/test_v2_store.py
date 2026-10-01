@@ -21,14 +21,13 @@ from ducta.api.repositories.dataset_repository import DatasetRepository  # noqa:
 from ducta.api.repositories.node_repository import NodeRepository  # noqa: E402
 from ducta.api.repositories.project_repository import ProjectRepository  # noqa: E402
 from ducta.api.repositories.v2_store import V2ProjectStore  # noqa: E402
-from ducta.setting import project_migrate as pm  # noqa: E402
-from tests.format1 import format1_project  # noqa: E402
+from ducta.console.template import TemplateGenerator, TemplateType  # noqa: E402
 
 
 @pytest.fixture
 def project(tmp_path) -> Path:
-    root = format1_project(tmp_path / "proj")
-    pm.replace_in_place(pm.migrate(root), root)
+    root = tmp_path / "proj"
+    TemplateGenerator(root).generate_project(TemplateType.MEDALLION_BASIC, "proj")
     etl = root / "pipelines" / "etl.yaml"
     etl.write_text(
         etl.read_text().replace("nodes:\n", "# the ETL graph — keep this comment\nnodes:\n", 1)
@@ -169,9 +168,12 @@ class TestDocumentWrites:
         g = dict(store.documents("prod")["global_config"], max_parallel_nodes=12)
         store.save_document("global_config", g, "prod")
         envs = yaml.safe_load((project / "ducta.yaml").read_text())["environments"]
-        assert envs == {"prod": {"settings": {"max_parallel_nodes": 12}}}
+        # Only the changed value is written; `dev` keeps the template's override.
+        assert envs["prod"] == {"settings": {"max_parallel_nodes": 12}}
+        assert envs["dev"]["settings"]["max_parallel_nodes"] == 1
         assert store.documents("prod")["global_config"]["max_parallel_nodes"] == 12
-        assert store.documents("dev")["global_config"]["max_parallel_nodes"] == 4
+        assert store.documents("dev")["global_config"]["max_parallel_nodes"] == 1
+        assert store.documents("sandbox")["global_config"]["max_parallel_nodes"] == 4
 
     def test_catalog_edit(self, project):
         store = _store(project)

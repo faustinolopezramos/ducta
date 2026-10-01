@@ -402,10 +402,83 @@ no code:
          streaming:
            checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
            output_mode: append
-           trigger: {type: processing_time, interval: 5 seconds}
+           trigger: 5s                       # or '5 minutes', available_now, once
 
 Each kind accepts only its own keys: an ``ingest`` node with ``run:`` is an
-error. See :doc:`streaming` for stream nodes.
+error. A stream node is closed too: how it runs (``checkpoint_location``,
+``trigger``, ``output_mode``, ``query_name``, ``watermark``) goes in its
+``streaming:`` block, and the same key placed beside ``input`` or inside
+``output`` is an error that says so — the engine never read it there.
+``checkpoint_location`` and ``query_name`` have defaults; every node needs its
+own checkpoint. See :doc:`streaming` for stream nodes.
+
+.. _defaults-templates:
+
+Say it once: defaults and pipeline templates
+--------------------------------------------
+
+A value shared by many datasets or nodes is written once.
+
+**Defaults.** ``defaults`` in ``ducta.yaml`` (and, for nodes, in a pipeline file)
+gives datasets and nodes the values they do not set themselves. Precedence, lowest
+first: project ``defaults`` < pipeline ``defaults`` < the dataset or node itself <
+the active environment's overrides.
+
+.. code-block:: yaml
+
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   defaults:
+     catalog:                           # {glob: dataset keys}, applied in order
+       "bronze.*": {format: parquet}
+       "silver.*": {format: parquet}
+       "gold.*": {format: csv}
+     node:                              # retry, timeout_seconds, on_missing_input, fail_fast
+       retry: 2
+     stream:                            # the `stream:` block of every stream node
+       streaming: {trigger: 10s, output_mode: append}
+
+A ``quality`` default applies only to nodes that declare a ``quality`` block, so a
+default gate does not turn every node into one with checks to run.
+``ducta config explain`` shows which values came from defaults.
+
+**Templates.** A pipeline file can build on a template: a pipeline written once,
+with ``${params.name}`` placeholders, kept under ``templates/``. The template's
+keys sit *under* the file's own — mappings merge, lists and scalars replace — and
+a placeholder that is the whole value keeps its type.
+
+.. code-block:: yaml
+
+   # pipelines/ml.risk.yaml
+   extends: templates/ml_xgboost
+   params: {target: At_Risk, method: stratified}
+   description: Early academic-risk warning   # replaces the template's description
+
+.. code-block:: yaml
+
+   # templates/ml_xgboost.yaml
+   params:
+     target: null                         # null: required. A value: its default.
+     method: random
+   type: ml
+   requires_dates: false
+   split: {method: "${params.method}", stratify_col: "${params.target}", seed: 42}
+   nodes:
+     train:
+       description: "Train a model for ${params.target}"
+       run: pipelines.ml:train
+       ml_stage: training
+       inputs: {features: silver.ml.features}
+       outputs: [gold.ml.metrics]
+
+Anything else the file writes is merged over the template: a ``nodes: {train: {retry: 3}}``
+in ``ml.risk.yaml`` adds ``retry`` to the template's ``train`` node and keeps the rest.
+A template is not a pipeline: it is not discovered, it cannot extend another
+template, and a parameter it does not declare is an error. There is no
+conditional and no loop; if a template needs one, it is two templates. TOML has
+no null, so a required parameter is written ``"<required>"`` there.
 
 .. _quality-config:
 
@@ -457,6 +530,31 @@ Profiles live in ``ducta.yaml``:
            checks:
              empty_dataset: {enabled: true}
              duplicates: {columns: [id]}
+
+Checks can also be listed directly, next to the gate, without the ``checks:``
+level; any key that is not ``gate``, ``enabled``, ``fail_fast``, ``profile``,
+``dataset_name`` or ``output`` is read as the name of a check:
+
+.. code-block:: yaml
+
+   # pipelines/etl.yaml
+   nodes:
+     clean:
+       run: pipelines.etl:clean
+       inputs: {raw: orders_raw}
+       outputs: [silver.sales.orders]
+       quality:
+         null_rate: {columns: [order_id], threshold: 0}
+         row_count: {min: 400}
+         gate: {max_errors: 0}
+
+**Parameters are checked when the project is loaded**, with the file and line:
+an unknown parameter (``colums``), a value of the wrong type or outside its range
+(``threshold: 5`` where a share between 0 and 1 is expected), and a near miss of a
+built-in check's name (``null_rte``). The same table feeds the editor schema, so
+``row_count: {min: ...}`` completes. A custom check declares its parameters with a
+``CONFIG_SCHEMA`` on its class to get the same treatment; one that declares
+nothing is accepted as before.
 
 The checks available, their parameters and custom checks are in :doc:`quality`.
 
@@ -536,6 +634,44 @@ to Run Certificates. Instead:
 
 Keep ``.env`` out of version control.
 
+File formats
+------------
+
+A project's files can be YAML, TOML or JSON: ``ducta.yaml``, ``ducta.toml`` or
+``ducta.json``, and the same for ``catalog`` and each file under ``pipelines/``
+(and ``templates/``). The format is only syntax; a project means the same thing
+in all three, and files of different formats can live side by side — one pipeline
+in YAML and another in TOML. A project keeps one file per role: ``ducta.yaml``
+and ``ducta.toml`` together are an error, not a choice.
+
+.. list-table::
+   :widths: 14 43 43
+   :header-rows: 1
+
+   * - Format
+     - Good for
+     - Mind
+   * - YAML
+     - Pipelines: nested nodes and checks read best, and comments carry the
+       explanations (the templates are YAML for this reason).
+     - Words such as ``no`` or ``1e3`` are read as a boolean or a number; quote them.
+   * - TOML
+     - ``ducta.toml``: flat settings and environments that rarely change.
+     - Deep trees turn into long ``[a.b.c.d]`` headers. No null: a ``null`` key is
+       left out.
+   * - JSON
+     - Files written by tools, which round-trip exactly.
+     - No comments. A top-level ``"$schema"`` key names the editor schema and is
+       ignored.
+
+Errors name the file and the line in every format. TOML locates every key written
+as ``key = value`` under its table; a value inside an inline table or a
+multi-line array is located at the line of the key that holds it.
+
+``ducta template --format toml|json`` writes a template in that format, and
+``ducta config convert`` rewrites an existing project (see below). Converted
+files carry no comments.
+
 Checking a project
 ------------------
 
@@ -546,6 +682,26 @@ Checking a project
    ducta config list-pipelines           # what can run
    ducta start --pipeline etl --validate-only   # plus preflight: modules, functions, paths
    ducta config schema --out .           # refresh .ducta/schema/ for editor autocompletion
+
+To see what a project resolves to, and why:
+
+.. code-block:: bash
+
+   ducta config show --env prod                  # the project after templates, defaults, overrides
+   ducta config show --pipeline etl --format toml  # one pipeline and its datasets, as TOML
+   ducta config show --engine --format json      # the five documents the engine reads
+   ducta config explain settings.max_parallel_nodes --env prod
+   ducta config diff dev prod                    # every value that differs
+   ducta config convert --to toml --out ../proj-toml
+
+``explain`` follows one value through the file, the template it extends,
+``defaults`` and the environment, with the file and line of each step:
+
+.. code-block:: text
+
+   settings.max_parallel_nodes = 8
+     file                         4   ducta.yaml:15
+     environments.prod            8   ducta.yaml:32
 
 The JSON Schemas under ``.ducta/schema/`` give editors completion and inline
 errors. With the VS Code YAML extension:
@@ -559,66 +715,6 @@ errors. With the VS Code YAML extension:
        ".ducta/schema/pipeline.json": "pipelines/*.yaml"
      }
    }
-
-.. _migrating:
-
-Upgrading a project from Ducta 0.2
-----------------------------------
-
-Ducta 0.3 reads only this layout. A project still in the previous one
-(``environment.yaml`` + ``config/global_config.yaml``, ``pipelines.yaml``,
-``nodes.yaml``, ``input.yaml``, ``output.yaml``) stops with a message naming the
-command that converts it:
-
-.. code-block:: bash
-
-   ducta config migrate                  # report only: what would change
-   ducta config migrate --out /tmp/v2    # write the new files elsewhere to review
-   ducta config migrate --write          # convert in place; old files → .ducta/format1-backup/
-   ducta config migrate --check          # exit 1 while a project still needs it (CI)
-
-``migrate`` converts every environment and compiles the result back to prove it
-configures the engine identically in each one before it writes anything. Its
-report lists what it changes on purpose: pipeline ``inputs``/``outputs`` (which
-were never read), keys Ducta does not read (moved to ``metadata``) and
-dependencies the data already implies. A project's ``config_fingerprint``
-changes once, because those keys are gone.
-
-``migrate`` runs with Ducta 0.3, so upgrade first and convert after. It handles
-the ``environment.*`` layout and the single-file, directory and two-file
-variants; multi-layer projects (a ``ducta.yaml`` with ``layers:``) are converted
-one layer at a time, each becoming its own project.
-
-.. list-table:: Where each old setting went
-   :widths: 45 55
-   :header-rows: 1
-
-   * - Before (0.2)
-     - Now
-   * - ``environment.yaml`` + ``config/global_config.yaml``
-     - ``ducta.yaml`` (``paths``, ``settings``)
-   * - ``config/input.yaml`` + ``config/output.yaml``
-     - ``catalog.yaml`` (one entry per dataset)
-   * - ``config/pipelines.yaml`` + ``config/nodes.yaml``
-     - ``pipelines/<name>.yaml``
-   * - ``config/<env>/*.yaml``, ``global_config.environments``
-     - ``environments.<env>`` in ``ducta.yaml`` (only what differs)
-   * - ``module`` + ``function``
-     - ``run: module:function``
-   * - ``input`` / ``output`` on a node
-     - ``inputs`` / ``outputs``
-   * - ``dependencies`` / ``depends_on`` on a node
-     - inferred from datasets; ``after:`` otherwise
-   * - ``sanity_checks`` (+ ``input_index``)
-     - dataset ``checks`` in the catalog, or ``input_checks`` on the node
-   * - ``data_quality`` + ``quality_gate`` (``behavior``)
-     - ``quality`` with ``gate`` (``on_fail``)
-   * - ``filepath``, ``write_mode``, ``merge``, ``partition``
-     - ``path``, ``write: {mode, merge, partition}``
-   * - ``timeout`` on a node
-     - ``timeout_seconds``
-   * - ``${input_path}`` / ``${output_path}`` / ``${environment}``
-     - ``${paths.input}`` / ``${paths.output}`` / ``${env}``
 
 Good practice
 -------------

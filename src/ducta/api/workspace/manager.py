@@ -112,11 +112,7 @@ class WorkspaceManager:
 
         root = self._project_root()
         if root is None:
-            from ducta.console.config import FORMAT1_MESSAGE, format1_markers
-
             target = self._project_path or self.root
-            if format1_markers(target):
-                raise ValidationError(FORMAT1_MESSAGE.format(root=target))
             raise ValidationError(f"No Ducta project (ducta.yaml, version 2) in {target}")
         ctx = load_project_v2(root, env, allow_python_config=False)
         self._stamp_context(ctx, env)

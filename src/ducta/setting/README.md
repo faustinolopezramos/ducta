@@ -42,7 +42,10 @@ Every data pipeline needs to know *what* to run, *where* the data lives, and *ho
 Ducta Setting is the declarative configuration layer of the framework:
 *   **Project model** (`project_schema.py`): strict pydantic models for `ducta.yaml` (`ProjectFile`), `catalog.yaml` (`CatalogEntry`) and `pipelines/<name>.yaml` (`PipelineFile`, with `transform`/`ingest`/`stream` node kinds). Unknown keys are errors with a suggestion; `json_schema()` feeds `ducta config schema` and editor completion.
 *   **Loader** (`project_loader.py`): reads the files keeping each key's file and line, applies `environments.<env>` as a deep merge (dotted keys address one value), validates the result and the references between files, and **compiles** it to the five engine documents (`global_config`, `pipelines_config`, `nodes_config`, `input_config`, `output_config`) that `Context` and the engine consume.
-*   **Migration** (`project_migrate.py`): converts a Ducta 0.2 project (`environment.yaml` + `config/*`) and proves the result compiles to the same documents in every environment. It is the only code that still reads that layout.
+*   **File formats** (`project_files.py`): `ducta`, `catalog`, `pipelines/` and `templates/` can be YAML, TOML or JSON, with the line of every key kept for errors (TOML: every `key = value` under its table). One file per role: `ducta.yaml` next to `ducta.toml` is an error.
+*   **Defaults and templates** (`project_defaults.py`): `extends` / `params` build a pipeline on a template (`${params.x}` substitution, no logic), and `defaults` give datasets and nodes the values they do not set. Both run on the raw files, before validation.
+*   **Inspection** (`project_inspect.py`): `resolved_tree`, `explain` (a value's file, template, defaults and environment layers, each with file:line), `diff_trees` and `convert_project` behind `ducta config show | explain | diff | convert`.
+*   **Decompiling** (`project_decompile.py`): engine documents back to project files, used by the API's project store.
 *   **Engine settings schema** (`schemas.py`): `GlobalConfigSchema` declares every setting the engine reads — the keys `settings:` accepts — plus the node/pipeline/dataset models the engine documents are validated against.
 *   **Variable interpolation** (`interpolator.py`): `${VAR}` substitution from the process environment, refusing secret-looking names, with circular-reference guards.
 *   **Environments** (`environments.py`): canonical names (`base`/`dev`/`sandbox`/`staging`/`prod`), aliases (`production` → `prod`, `test` → `sandbox`) and `sandbox_<developer>` variants.
@@ -125,16 +128,7 @@ except ProjectConfigError as exc:
         print(problem)
 ```
 
-### Step 3: Convert a Ducta 0.2 project
-```python
-from pathlib import Path
-from ducta.setting import project_migrate
-
-result = project_migrate.migrate(Path("old_project"))    # verified per environment
-project_migrate.write_files(result, Path("/tmp/new_project"))
-```
-
-### Step 4: Manage the Spark session
+### Step 3: Manage the Spark session
 Session creation and caching are handled for you, but can be driven directly:
 
 ```python

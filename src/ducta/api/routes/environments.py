@@ -48,7 +48,7 @@ async def list_environments(
         default=None, description="Project id to scope to, within the connected workspace"
     ),
 ) -> EnvironmentsResponse:
-    """Return all environment names defined in environment.yaml."""
+    """Return all environment names defined by the project (ducta.yaml)."""
     try:
         manager = manager.for_project(project)
         envs = manager.list_environments()

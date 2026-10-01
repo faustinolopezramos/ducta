@@ -214,7 +214,7 @@ class TestDetection:
         (nested / "config" / "ducta.yaml").write_text(PROJECT)
         assert find_project_root(nested) == nested / "config"
 
-    def test_a_format_1_manifest_is_not_mistaken_for_format_2(self, tmp_path):
+    def test_a_manifest_without_version_2_is_not_a_project(self, tmp_path):
         (tmp_path / "ducta.yaml").write_text("project: {type: layered}\nlayers: {}\n")
         assert find_project_root(tmp_path) is None
 
@@ -244,11 +244,11 @@ class TestLoadProject:
         assert ctx.global_config["output_path"] == "s3://lake/prod"
         assert "etl" in ctx.pipelines_config
 
-    def test_no_project_names_the_directory_and_migrate(self, tmp_path):
+    def test_no_project_names_the_directory_and_the_way_to_create_one(self, tmp_path):
         import ducta
         from ducta.setting.exceptions import ConfigurationError
 
-        with pytest.raises(ConfigurationError, match="config migrate"):
+        with pytest.raises(ConfigurationError, match="ducta template"):
             ducta.load_project(tmp_path)
 
 
@@ -276,3 +276,87 @@ class TestWriteModeDefault:
 
         ctx = ducta.load_project(_project(tmp_path), env="prod")
         assert ctx.output_config["silver.etl.orders"]["write_mode"] == "append"
+
+
+class TestStreamNodes:
+    """`stream:` is closed: run settings live in `streaming:`, and typos are errors."""
+
+    @staticmethod
+    def _stream_project(tmp_path, stream_yaml: str):
+        (tmp_path / "pipelines").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "ducta.yaml").write_text(PROJECT)
+        (tmp_path / "catalog.yaml").write_text("{}\n")
+        (tmp_path / "pipelines" / "s.yaml").write_text(
+            "type: streaming\nrequires_dates: false\nnodes:\n  n:\n    kind: stream\n"
+            "    stream:\n" + "".join(f"      {line}\n" for line in stream_yaml.splitlines())
+        )
+        return tmp_path
+
+    def test_streaming_settings_reach_the_block_the_engine_reads(self, tmp_path):
+        root = self._stream_project(
+            tmp_path,
+            "input: {format: kafka, options: {subscribe: t}}\n"
+            "output: {format: delta, path: out}\n"
+            "streaming: {checkpoint_location: ck, trigger: 10s, output_mode: append}\n",
+        )
+        node = compile_project(validate_project(root, None))["nodes_config"]["n"]
+        assert node["streaming"] == {
+            "checkpoint_location": "ck",
+            "trigger": {"type": "processing_time", "interval": "10 seconds"},
+            "output_mode": "append",
+        }
+        assert "trigger" not in node and "checkpoint_location" not in node
+
+    @pytest.mark.parametrize(
+        "text, interval",
+        [("5 minutes", "5 minutes"), ("2h", "2 hours"), ("30sec", "30 seconds")],
+    )
+    def test_trigger_shorthand(self, tmp_path, text, interval):
+        root = self._stream_project(tmp_path, f"streaming: {{trigger: '{text}'}}\n")
+        node = compile_project(validate_project(root, None))["nodes_config"]["n"]
+        assert node["streaming"]["trigger"] == {"type": "processing_time", "interval": interval}
+
+    def test_terminating_triggers_need_no_interval(self, tmp_path):
+        root = self._stream_project(tmp_path, "streaming: {trigger: available_now}\n")
+        node = compile_project(validate_project(root, None))["nodes_config"]["n"]
+        assert node["streaming"]["trigger"] == {"type": "available_now"}
+
+    def test_a_flat_run_setting_points_at_the_streaming_block(self, tmp_path):
+        root = self._stream_project(tmp_path, "checkpoint_location: ck\n")
+        with pytest.raises(ProjectConfigError, match="belongs in the node's 'streaming:' block"):
+            validate_project(root, None)
+
+    def test_a_run_setting_under_output_points_at_the_streaming_block(self, tmp_path):
+        root = self._stream_project(tmp_path, "output: {format: delta, trigger: 5s}\n")
+        with pytest.raises(ProjectConfigError, match="'streaming:' block"):
+            validate_project(root, None)
+
+    def test_a_typo_in_the_streaming_block_is_an_error_with_a_suggestion(self, tmp_path):
+        root = self._stream_project(tmp_path, "streaming: {checkpoint_locaton: ck}\n")
+        with pytest.raises(ProjectConfigError, match="did you mean 'checkpoint_location'"):
+            validate_project(root, None)
+
+    def test_a_bad_trigger_says_what_is_accepted(self, tmp_path):
+        root = self._stream_project(tmp_path, "streaming: {trigger: soon}\n")
+        with pytest.raises(ProjectConfigError, match="not an interval"):
+            validate_project(root, None)
+        root2 = self._stream_project(tmp_path / "b", "streaming: {trigger: {type: continuous}}\n")
+        with pytest.raises(ProjectConfigError, match="needs an 'interval'"):
+            validate_project(root2, None)
+
+    def test_the_file_stream_schema_keeps_its_name_in_the_engine_document(self, tmp_path):
+        root = self._stream_project(
+            tmp_path,
+            "input: {format: file_stream, file_format: json, schema: 'a STRING', "
+            "options: {path: p}}\n",
+        )
+        node = compile_project(validate_project(root, None))["nodes_config"]["n"]
+        assert node["input"]["schema"] == "a STRING"
+        assert "schema_def" not in node["input"]
+
+    def test_the_transform_is_a_name_or_key_module_params(self, tmp_path):
+        root = self._stream_project(
+            tmp_path, "transform: {key: clean, module: m, params: {x: 1}}\n"
+        )
+        node = compile_project(validate_project(root, None))["nodes_config"]["n"]
+        assert node["function"] == {"key": "clean", "module": "m", "params": {"x": 1}}

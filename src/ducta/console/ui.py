@@ -35,10 +35,6 @@ def _detect_ducta_workspace() -> Optional[str]:
     from ducta.api.workspace.utils import normalize_workspace_path
 
     _ENV_NAMES = (
-        "environment.yaml",
-        "environment.yml",
-        "environment.toml",
-        "environment.json",
         "ducta.yaml",
         "ducta.yml",
     )

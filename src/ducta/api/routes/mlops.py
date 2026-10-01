@@ -93,8 +93,8 @@ def _resolve_global_config(
     source_path: Path, env: Optional[str], project: Optional[str] = None
 ) -> Dict[str, Any]:
     """Best-effort ``global_config`` dict for this workspace, preferring a
-    real ``Context`` (see ``_resolve_workspace_context``) over the flat-file
-    heuristic below. Shared by ``_resolve_mlops_storage`` and the promotion
+    real ``Context`` (see ``_resolve_workspace_context``) over compiling the
+    project's files directly. Shared by ``_resolve_mlops_storage`` and the promotion
     policy lookup in ``promote_model`` so both agree on the same settings —
     previously ``promote_model`` resolved its policy via
     ``console.mlops_commands._resolve_promotion_policy()``, which discovers a
@@ -113,17 +113,18 @@ def _resolve_global_config(
         from ducta.api.workspace.manager import WorkspaceManager
 
         project_root = WorkspaceManager(source_path).for_project(project).root
-    for candidate in ("global_config.toml", "global_config.yaml", "global_config.yml"):
-        cfg_file = project_root / candidate
-        if cfg_file.is_file():
-            try:
-                from ducta.setting.loaders import ConfigLoaderFactory
+    try:
+        from ducta.setting.project_loader import (
+            compile_project,
+            find_project_root,
+            validate_project,
+        )
 
-                data = ConfigLoaderFactory(allow_python=False).load_config(str(cfg_file))
-                if isinstance(data, dict):
-                    return data
-            except Exception as exc:
-                logger.debug("Could not read global config: {}", exc)
+        root = find_project_root(project_root)
+        if root is not None:
+            return dict(compile_project(validate_project(root, env))["global_config"])
+    except Exception as exc:
+        logger.debug("Could not read global config: {}", exc)
 
     return {}
 

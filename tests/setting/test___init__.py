@@ -22,5 +22,5 @@ def test_every_public_name_is_importable(name):
     ],
 )
 def test_the_format_1_loaders_are_gone(name):
-    """Configuration format 1 is only read by `ducta config migrate`."""
+    """The loaders for the old layered/flexible layouts no longer exist."""
     assert not hasattr(setting, name)

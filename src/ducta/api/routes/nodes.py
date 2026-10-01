@@ -140,8 +140,7 @@ async def update_node(
     pipeline: Optional[str] = Query(
         default=None,
         description="Pipeline to create the node in. Required to create a node in a "
-        "format-2 project (ducta.yaml), where every node lives in a pipeline; ignored "
-        "by format 1.",
+        "project, where every node lives in a pipeline.",
     ),
 ) -> NodeResponse:
     """Update or create a node spec and commit to git."""

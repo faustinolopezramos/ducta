@@ -2,7 +2,7 @@
 
 Import resolves every path through `ProjectRepository` (whose `project_dir`
 carries the `validate_identifier()` traversal guard) and only accepts a
-format-2 project; a format-1 one is refused with the command that converts it.
+project with a ducta.yaml (`version: 2`).
 """
 
 from __future__ import annotations
@@ -47,16 +47,6 @@ class TestImportProjectPathResolution:
         assert response.id == "myproj"
         assert response.description == "daily sales"
         assert response.pipeline_count == 0
-
-    def test_a_format_1_project_is_refused_with_the_migrate_command(
-        self, service: ProjectService, workspace: Path
-    ):
-        source = workspace / "projects" / "old"
-        source.mkdir()
-        (source / "environment.yaml").write_text("env_config: {}\n")
-
-        with pytest.raises(ValidationError, match="ducta config migrate"):
-            service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
 
     def test_a_directory_without_a_project_is_not_found(
         self, service: ProjectService, workspace: Path

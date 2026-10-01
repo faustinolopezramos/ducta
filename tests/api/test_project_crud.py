@@ -92,15 +92,6 @@ class TestUpdate:
             service.update_project("ghost", ProjectUpdateRequest(description="x"))
 
 
-class TestFormat1:
-    def test_a_format_1_project_is_reported_with_the_migrate_command(self, service, workspace):
-        old = workspace / "projects" / "old"
-        old.mkdir()
-        (old / "environment.yaml").write_text("env_config: {}\n")
-        with pytest.raises(ValidationError, match="ducta config migrate --path"):
-            service.get_project("old")
-
-
 class TestDelete:
     def test_removes_the_directory(self, service, workspace):
         _create(service)

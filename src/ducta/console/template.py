@@ -18,7 +18,6 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import json
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -29,13 +28,6 @@ from loguru import logger  # type: ignore
 from ducta.console.core import VALID_NAME_RE as _VALID_NAME_RE
 from ducta.console.core import ConfigFormat, DuctaError, ExitCode
 
-try:
-    import yaml  # type: ignore
-
-    HAS_YAML = True
-except ImportError:
-    HAS_YAML = False
-
 PIPELINES_ETL_MODULE = "pipelines.etl"
 _TEMPLATE_CANCELLED_MSG = "Template generation cancelled"
 
@@ -45,6 +37,8 @@ class TemplateType(Enum):
 
     MEDALLION_BASIC = "medallion_basic"
     STREAMING_BASIC = "streaming_basic"
+    ML_BASIC = "ml_basic"
+    HYBRID_BASIC = "hybrid_basic"
 
 
 class TemplateError(DuctaError):
@@ -64,6 +58,8 @@ class TemplateFactory:
         return {
             TemplateType.MEDALLION_BASIC: MedallionBasicTemplate,
             TemplateType.STREAMING_BASIC: StreamingBasicTemplate,
+            TemplateType.ML_BASIC: MLBasicTemplate,
+            TemplateType.HYBRID_BASIC: HybridBasicTemplate,
         }
 
     @staticmethod
@@ -94,21 +90,16 @@ class TemplateFactory:
 class BaseTemplate:
     """What every project scaffold shares, whatever kind of pipeline it ships.
 
-    The env_config layout, the base global config and the file-extension map
-    are properties of a *Ducta project*, not of any one template. Keeping them
-    here is what makes a second template a matter of describing its pipeline
-    rather than restating the project structure around it.
+    A template *is* the text of a project's three kinds of file: ``ducta.yaml``,
+    ``catalog.yaml`` and one ``pipelines/<name>.yaml`` per pipeline. They are
+    written as YAML text, not built from dicts, so the generated files carry the
+    comments that explain each non-obvious key, which is most of what a template
+    is for. ``tests/console`` generates every template and runs it through the
+    project validator, so the text cannot drift from the schema.
 
-    A subclass supplies the five config documents (``generate_*_config``), its
-    sample data, and the module of Python its nodes point at.
+    A subclass supplies those three texts, its sample data, the module of Python
+    its nodes point at, and a README.
     """
-
-    # File extension mapping by format
-    FORMAT_EXTENSIONS = {
-        ConfigFormat.YAML: ".yaml",
-        ConfigFormat.JSON: ".json",
-        ConfigFormat.TOML: ".toml",
-    }
 
     #: Shown by `ducta template --list-templates`.
     TEMPLATE_NAME = "Base"
@@ -119,14 +110,41 @@ class BaseTemplate:
     SAMPLE_MODULE_PATH = ("pipelines", "etl.py")
     #: The pipeline `ducta start --pipeline <name>` should run first.
     DEFAULT_PIPELINE = "etl"
+    #: Descriptive only: written to the project's ``metadata``.
+    TEMPLATE_TYPE = "base"
+    ARCHITECTURE = "generic"
+    #: What `pip install -r requirements.txt` installs.
+    REQUIREMENTS = "ducta[spark]>=0.1.1\n"
+    #: Appended to the generated ``.gitignore``.
+    GITIGNORE_EXTRA = ""
 
     def __init__(self, project_name: str, config_format: ConfigFormat = ConfigFormat.YAML):
         self.project_name = project_name
         self.config_format = config_format
         self.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        #: Written explicitly into global_config so the project's evidence
+        #: Written explicitly into ``settings`` so the project's evidence
         #: policy is a visible choice, not an invisible default.
         self.evidence_level = "record"
+        #: ``--sandbox-developers``: each gets a ``sandbox_<name>`` environment.
+        self.developer_sandboxes: List[str] = []
+
+    # ── what a subclass supplies ─────────────────────────────────────────────
+
+    def project_yaml(self) -> str:
+        """The text of ``ducta.yaml``."""
+        raise NotImplementedError
+
+    def catalog_yaml(self) -> str:
+        """The text of ``catalog.yaml``."""
+        raise NotImplementedError
+
+    def pipeline_yamls(self) -> Dict[str, str]:
+        """``{pipeline name: text of pipelines/<name>.yaml}``."""
+        raise NotImplementedError
+
+    def readme(self) -> str:
+        """The text of the project's ``README.md``."""
+        raise NotImplementedError
 
     def generate_sample_code(self) -> Optional[str]:
         """The Python module backing this template's nodes, or None if it needs none."""
@@ -136,64 +154,55 @@ class BaseTemplate:
         """CSV seed data written to ``data/input.csv``, or None if unused."""
         return None
 
-    def generate_settings_json(self) -> Dict[str, Any]:
-        """Generate environment configuration with paths matching the format."""
-        file_ext = self.FORMAT_EXTENSIONS[self.config_format]
+    def seed_files(self) -> Dict[str, str]:
+        """Further seed data: ``{path relative to the project: text}``."""
+        return {}
 
-        # Common path patterns for each environment
-        config_paths = {
-            "base": {
-                "global_config_path": f"config/global_config{file_ext}",
-                "pipelines_config_path": f"config/pipelines{file_ext}",
-                "nodes_config_path": f"config/nodes{file_ext}",
-                "input_config_path": f"config/input{file_ext}",
-                "output_config_path": f"config/output{file_ext}",
-            },
-            # Environments override global settings only. The catalogs are
-            # shared: paths already vary per environment via ${environment}.
-            # Listing an input/output file here *replaces* the base catalog
-            # wholesale (it is not merged), which is why the scaffold used to
-            # ship three identical copies of each — that drifted as soon as
-            # someone edited the base one.
-            "dev": {"global_config_path": f"config/dev/global_config{file_ext}"},
-            "sandbox": {"global_config_path": f"config/sandbox/global_config{file_ext}"},
-            "prod": {"global_config_path": f"config/prod/global_config{file_ext}"},
-        }
+    def quick_start(self) -> List[str]:
+        """The commands the generator prints for a first run."""
+        pipeline = self.DEFAULT_PIPELINE
+        return [
+            f"# Run the {pipeline} pipeline",
+            f"ducta start -e dev -p {pipeline}",
+            "",
+            "# Run one node, or turn on debug logging",
+            f"ducta start -e dev -p {pipeline} -n <node>",
+            f"ducta start -e dev -p {pipeline} --log-level DEBUG",
+            "",
+            "# Validate config, no Spark",
+            "ducta config validate --env dev",
+        ]
 
-        return {"base_path": ".", "env_config": config_paths}
+    # ── shared by the texts ──────────────────────────────────────────────────
 
-    #: Stamped into global_config for documentation/provenance. Subclasses
-    #: override to describe their own shape.
-    TEMPLATE_TYPE = "base"
-    ARCHITECTURE = "generic"
-    LAYERS: List[str] = []
+    def _render(self, text: str) -> str:
+        """Fill the ``@@…@@`` markers; YAML's own braces make ``str.format`` unusable."""
+        return (
+            text.replace("@@PROJECT@@", self.project_name)
+            .replace("@@EVIDENCE@@", self.evidence_level)
+            .replace("@@SPARK@@", self._SPARK_NOTE)
+        )
 
-    def get_common_global_config(self) -> Dict[str, Any]:
-        """Get common global config for all templates."""
-        settings: Dict[str, Any] = {
-            "project_name": self.project_name,
-            # Descriptive only — Ducta does not read `metadata`, so it lives in
-            # its own block instead of tripping the unknown-key warning on the
-            # very first run of a freshly generated project.
-            "metadata": {
-                "version": "1.0.0",
-                "template_type": self.TEMPLATE_TYPE,
-                "architecture": self.ARCHITECTURE,
-                "created_at": self.timestamp,
-            },
-            # off | record | required | signed — see the evidence_level docs.
-            "evidence_level": self.evidence_level,
-            "mode": "local",  # change to 'databricks' or 'distributed' if needed
-            # Base dirs for ${input_path}/${output_path} interpolation in the
-            # I/O catalogs; required by Context validation.
-            "input_path": "data",
-            "output_path": "data",
-            "max_parallel_nodes": 4,
-            "fail_on_error": True,
-        }
-        if self.LAYERS:
-            settings["metadata"]["layers"] = list(self.LAYERS)
-        return settings
+    #: PySpark 3.5 bundles an Arrow that cannot run on JDK 21: any Spark -> pandas
+    #: conversion (a model's `toPandas()`, some quality checks) logs a leaked-memory
+    #: error. Arrow only makes the conversion faster, so it is switched off here.
+    _SPARK_NOTE = (
+        "  # PySpark 3.5's bundled Arrow cannot run on JDK 21: converting Spark data to\n"
+        "  # pandas logs a leaked-memory error. Remove this on JDK 8, 11 or 17 to get the\n"
+        "  # faster Arrow conversion.\n"
+        "  spark_config:\n"
+        '    spark.sql.execution.arrow.pyspark.enabled: "false"\n'
+    )
+
+    def _sandbox_note(self) -> str:
+        """A comment naming the developer sandboxes, if any were requested."""
+        if not self.developer_sandboxes:
+            return ""
+        names = ", ".join(f"sandbox_{dev}" for dev in self.developer_sandboxes)
+        return (
+            f"  # Developer sandboxes ({names}) need no entry here: each one uses\n"
+            "  # the `sandbox` overrides, and only needs its own when it differs.\n"
+        )
 
 
 class MedallionBasicTemplate(BaseTemplate):
@@ -205,204 +214,149 @@ class MedallionBasicTemplate(BaseTemplate):
     )
     TEMPLATE_TYPE = "medallion_basic"
     ARCHITECTURE = "medallion"
-    LAYERS = ["bronze", "silver", "gold"]
     SAMPLE_MODULE = PIPELINES_ETL_MODULE
     SAMPLE_MODULE_PATH = ("pipelines", "etl.py")
     DEFAULT_PIPELINE = "etl"
 
-    def generate_global_config(self) -> Dict[str, Any]:
-        base_settings = self.get_common_global_config()
-        base_settings.update(
-            {
-                # No `spark_master`/`max_retries`/`default_date`: the template
-                # used to write them, nothing read them, and a knob that does
-                # nothing when edited is worse than no knob. Retries are per
-                # node (`retry:` in nodes.yaml); the local Spark session
-                # always uses `local[*]` (setting/session.py).
-                "fail_on_error": True,
-                # Quality: add custom check modules and reusable profiles here.
-                # Extensions are Python modules containing @register_check classes.
-                # Profiles are reusable bundles of check defaults applied per-node.
-                "quality": {
-                    "extensions": [],
-                    "profiles": {
-                        "default": {
-                            "checks": {
-                                "empty_dataset": {"enabled": True},
-                            }
-                        },
-                    },
-                },
-            }
+    def project_yaml(self) -> str:
+        return self._render(
+            """\
+# yaml-language-server: $schema=.ducta/schema/project.json
+#
+# The project: its name, where data lives, engine settings, and what changes
+# per environment. Datasets are in catalog.yaml, pipelines in pipelines/.
+version: 2
+project: @@PROJECT@@
+description: Medallion ETL (bronze, silver, gold) with quality gates
+
+# Base directories. Reference them anywhere as ${paths.input} / ${paths.output}.
+paths: {input: data, output: data}
+
+# Every engine setting. `ducta config schema` lists them all.
+settings:
+  mode: local                  # local | distributed | databricks
+  max_parallel_nodes: 4
+  fail_on_error: true
+  # off | record | required | signed: what a run can prove about itself.
+  evidence_level: @@EVIDENCE@@
+@@SPARK@@  quality:
+    # Modules with your own @register_check classes (see pipelines/checks/).
+    # extensions: [pipelines.checks.custom_checks]
+    profiles:
+      default:
+        checks:
+          empty_dataset: {enabled: true}
+
+# Values a dataset or node gets unless it sets its own. Here: the format of each
+# layer, so catalog.yaml only says what is specific to a dataset. Also available:
+# defaults.node (retry, timeout_seconds, ...) and a per-pipeline `defaults:`.
+defaults:
+  catalog:
+    "bronze.*": {format: parquet}
+    "silver.*": {format: parquet}
+    "gold.*": {format: csv}
+
+# An environment states only what differs from the base project above.
+environments:
+  dev:
+    settings: {max_parallel_nodes: 1, log_level: DEBUG}
+  prod:
+    settings: {max_parallel_nodes: 8}
+"""
+            + self._sandbox_note()
+            + """
+# Free-form notes. Ducta does not read this block.
+metadata:
+  template: medallion_basic
+  layers: [bronze, silver, gold]
+"""
         )
-        return base_settings
 
-    def generate_pipelines_config(self) -> Dict[str, Any]:
-        """Single, focused ETL pipeline showcasing Ducta capabilities."""
+    def catalog_yaml(self) -> str:
+        return """\
+# yaml-language-server: $schema=.ducta/schema/catalog.json
+#
+# Every dataset, once, whether a node reads it, writes it, or both.
+# A dotted name (schema.folder.table) with no `path` is stored at
+# ${paths.output}/${env}/<schema>/<folder>/<table>.
+
+source_data:
+  description: Source orders (CSV, JSON or Parquet)
+  format: csv
+  path: data/input.csv
+  options: {header: true, inferSchema: true}
+  # A contract: checked every time a node reads this dataset, before it runs.
+  checks:
+    fail_fast: true
+    empty_dataset: true
+    schema: {expected_columns: [order_id, category, amount, order_date]}
+
+# The format of bronze.*, silver.* and gold.* comes from `defaults.catalog` in
+# ducta.yaml; a dataset states only what is its own. Datasets are overwritten on
+# each run unless you add `write: {mode: append}` (or merge).
+bronze.etl.raw_data:
+  description: Raw data landed by `extract` (bronze)
+
+silver.etl.clean_data:
+  description: Clean data produced by `transform` (silver)
+
+gold.etl.final_output:
+  description: Final output, one row per category (gold)
+"""
+
+    def pipeline_yamls(self) -> Dict[str, str]:
         return {
-            "etl": {
-                "description": "Complete ETL pipeline: Extract → Transform → Load",
-                "type": "batch",
-                "nodes": ["extract", "transform", "load"],
-                # The sample ETL is not incremental — it must run without
-                # --start-date/--end-date, as the generated README promises.
-                "requires_dates": False,
-            },
+            "etl": """\
+# yaml-language-server: $schema=../.ducta/schema/pipeline.json
+#
+# The file name is the pipeline name. Run order comes from the datasets:
+# `transform` reads what `extract` writes, so it runs after it (use `after:`
+# only when nothing connects two nodes).
+description: "Complete ETL pipeline: Extract → Transform → Load"
+type: batch
+requires_dates: false        # not incremental: runs without --start-date/--end-date
+
+nodes:
+  extract:
+    description: "Bronze: land the source exactly as it arrived"
+    run: pipelines.etl:extract
+    inputs: {source_data: source_data}     # {function parameter: dataset}
+    outputs: [bronze.etl.raw_data]
+
+  transform:
+    description: "Silver: deduplicate, drop incomplete and invalid rows"
+    run: pipelines.etl:transform
+    inputs: {raw_data: bronze.etl.raw_data}
+    outputs: [silver.etl.clean_data]
+    # Checks on this node's OUTPUT, evaluated before it is written. They pass
+    # only because `transform` cleans the data: break it and the gate blocks
+    # the run before gold exists.
+    quality:
+      fail_fast: false
+      null_rate: {columns: [amount], threshold: 0.0}
+      duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
+      # A negative amount is a refund or an entry error, not a missing value:
+      # null_rate and duplicates both pass on it, so only this check notices.
+      range: {column: amount, min: 0}
+      # A floor, not a ceiling: catches a transform that drops most rows.
+      row_count: {min: 400}
+      # skip_downstream: gold is skipped and nothing bad is written.
+      # Use stop_all to abort the whole run instead.
+      gate: {max_errors: 0, on_fail: skip_downstream}
+
+  load:
+    description: "Gold: aggregate into one row per category"
+    run: pipelines.etl:load
+    inputs: {clean_data: silver.etl.clean_data}
+    outputs: [gold.etl.final_output]
+    quality:
+      empty_dataset: true
+      row_count: {min: 1}
+"""
         }
 
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        """Three nodes whose checks actually assert what the code just did.
-
-        The checks are deliberately not decoration. Silver's ``null_rate`` and
-        ``duplicates`` pass only because `transform` dropped nulls and
-        duplicates; break that function and the ``quality_gate`` blocks the run
-        before gold is ever written. That is the behaviour worth seeing on a
-        first run, and the previous template never showed it: five spotless rows
-        against ``row_count: {min: 1}`` can only ever pass.
-        """
-        return {
-            "extract": {
-                "description": "Bronze: land the source exactly as it arrived",
-                "module": PIPELINES_ETL_MODULE,
-                "function": "extract",
-                "input": ["source_data"],
-                "output": ["bronze.etl.raw_data"],
-                "dependencies": [],
-                # Checks on the INPUT, before the node runs: fail early if the
-                # source is not what this pipeline was written against.
-                "sanity_checks": {
-                    "enabled": True,
-                    "fail_fast": True,
-                    "checks": {
-                        "empty_dataset": {"enabled": True},
-                        "schema": {
-                            "enabled": True,
-                            "expected_columns": [
-                                "order_id",
-                                "category",
-                                "amount",
-                                "order_date",
-                            ],
-                        },
-                    },
-                },
-            },
-            "transform": {
-                "description": "Silver: deduplicate, drop incomplete and invalid rows",
-                "module": PIPELINES_ETL_MODULE,
-                "function": "transform",
-                "input": ["bronze.etl.raw_data"],
-                "output": ["silver.etl.clean_data"],
-                "dependencies": ["extract"],
-                # Checks on the OUTPUT, after the node runs and BEFORE the write.
-                # A blocking gate here means bad data never reaches storage.
-                "data_quality": {
-                    "enabled": True,
-                    "fail_fast": False,
-                    "checks": {
-                        # `columns` (a list) and `threshold`, not `column`/`max`.
-                        "null_rate": {
-                            "enabled": True,
-                            "columns": ["amount"],
-                            "threshold": 0.0,
-                        },
-                        "duplicates": {
-                            "enabled": True,
-                            "columns": ["order_id"],
-                            "max_duplicate_rate": 0.0,
-                        },
-                        # A negative amount is a refund or entry error, not a
-                        # missing value — null_rate and duplicates both pass on
-                        # these rows untouched, so this is the check that would
-                        # actually notice if `transform` stopped filtering them.
-                        "range": {
-                            "enabled": True,
-                            "column": "amount",
-                            "min": 0,
-                        },
-                        # A floor, not a ceiling: catches a transform that
-                        # silently drops most of the data.
-                        "row_count": {"enabled": True, "min": 400},
-                    },
-                    "quality_gate": {
-                        "enabled": True,
-                        "max_errors": 0,
-                        # skip_downstream: gold is skipped, the run reports the
-                        # block, and nothing bad is written. Use `stop_all` to
-                        # abort the whole run instead.
-                        "behavior": "skip_downstream",
-                    },
-                },
-            },
-            "load": {
-                "description": "Gold: aggregate into one row per category",
-                "module": PIPELINES_ETL_MODULE,
-                "function": "load",
-                "input": ["silver.etl.clean_data"],
-                "output": ["gold.etl.final_output"],
-                "dependencies": ["transform"],
-                "data_quality": {
-                    "enabled": True,
-                    "checks": {
-                        "empty_dataset": {"enabled": True},
-                        "row_count": {"enabled": True, "min": 1},
-                    },
-                },
-            },
-        }
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        """Input catalog: the external source plus intermediate datasets.
-
-        Intermediate datasets must appear here too — downstream nodes read
-        their inputs through this catalog, from the paths the output layer
-        writes to ({output_path}/{environment}/{schema}/{sub_folder}/{table}).
-        """
-        return {
-            "source_data": {
-                "description": "Source dataset (supports CSV, JSON, Parquet)",
-                "format": "csv",
-                "filepath": "data/input.csv",
-                "options": {
-                    "header": True,
-                    "inferSchema": True,
-                },
-            },
-            "bronze.etl.raw_data": {
-                "description": "Raw data extracted by the 'extract' node",
-                "format": "parquet",
-                "filepath": "${output_path}/${environment}/bronze/etl/raw_data",
-            },
-            "silver.etl.clean_data": {
-                "description": "Clean data produced by the 'transform' node",
-                "format": "parquet",
-                "filepath": "${output_path}/${environment}/silver/etl/clean_data",
-            },
-        }
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        """Output catalog keyed by schema.sub_folder.table_name.
-
-        Paths are derived from the key as
-        {output_path}/{environment}/{schema}/{sub_folder}/{table_name}.
-        """
-        return {
-            "bronze.etl.raw_data": {
-                "description": "Extracted raw data (bronze layer)",
-                "format": "parquet",
-                "write_mode": "overwrite",
-            },
-            "silver.etl.clean_data": {
-                "description": "Transformed clean data (silver layer)",
-                "format": "parquet",
-                "write_mode": "overwrite",
-            },
-            "gold.etl.final_output": {
-                "description": "Final output ready for consumption (gold layer)",
-                "format": "csv",
-                "write_mode": "overwrite",
-            },
-        }
+    def readme(self) -> str:
+        return _medallion_readme_v2(self)
 
     #: Rows whose ``amount`` is blank, so `transform` has real nulls to drop and
     #: the silver null_rate check has something to have actually verified.
@@ -465,124 +419,131 @@ class StreamingBasicTemplate(BaseTemplate):
     )
     TEMPLATE_TYPE = "streaming_basic"
     ARCHITECTURE = "streaming"
-    LAYERS = ["bronze", "silver"]
     SAMPLE_MODULE = "pipelines.transforms"
     SAMPLE_MODULE_PATH = ("pipelines", "transforms.py")
     DEFAULT_PIPELINE = "events_stream"
 
-    def generate_global_config(self) -> Dict[str, Any]:
-        settings = self.get_common_global_config()
-        settings.update(
-            {
-                # Imported and called before any streaming pipeline starts, so
-                # the transforms below are in the registry by the time the nodes
-                # that name them are built. Without this the CLI needs
-                # --transforms-modules on every run.
-                "streaming_transform_modules": [self.SAMPLE_MODULE],
-                # Long-running queries: no run certificate is emitted for an
-                # async streaming pipeline, so leaving this on costs nothing and
-                # covers the `--mode sync` case.
-                "max_streaming_pipelines": 5,
-            }
+    def project_yaml(self) -> str:
+        return self._render(
+            """\
+# yaml-language-server: $schema=.ducta/schema/project.json
+#
+# The project: its name, where data lives, engine settings, and what changes
+# per environment. Stream nodes declare their own sources and sinks, so
+# catalog.yaml is empty; the pipeline is in pipelines/events_stream.yaml.
+version: 2
+project: @@PROJECT@@
+description: Structured Streaming - file source, registered transforms, per-node checkpoints
+
+# Base directories. Reference them anywhere as ${paths.input} / ${paths.output}.
+paths: {input: data, output: data}
+
+settings:
+  mode: local                  # local | distributed | databricks
+  max_parallel_nodes: 4
+  fail_on_error: true
+  # off | record | required | signed: what a run can prove about itself.
+  evidence_level: @@EVIDENCE@@
+@@SPARK@@  # Imported before any stream starts, so the transforms are registered by the
+  # time the nodes that name them are built. Without it, every run needs
+  # --transforms-modules.
+  streaming_transform_modules: [pipelines.transforms]
+  # Upper bound on streaming pipelines running at once.
+  max_streaming_pipelines: 5
+
+# Every stream node runs like this unless it says otherwise. `trigger` is an
+# interval ('5s', '2 minutes') or 'available_now' for a run that finishes.
+defaults:
+  stream:
+    streaming: {trigger: 5s, output_mode: append}
+
+# An environment states only what differs from the base project above.
+environments:
+  dev:
+    settings: {log_level: DEBUG}
+"""
+            + self._sandbox_note()
+            + """
+# Free-form notes. Ducta does not read this block.
+metadata:
+  template: streaming_basic
+  layers: [bronze, silver]
+"""
         )
-        return settings
 
-    def generate_pipelines_config(self) -> Dict[str, Any]:
+    def catalog_yaml(self) -> str:
+        return """\
+# yaml-language-server: $schema=.ducta/schema/catalog.json
+#
+# Empty on purpose: every node in this project is a stream node, and stream
+# nodes declare their sources and sinks inline
+# (pipelines/events_stream.yaml). Batch datasets go here.
+{}
+"""
+
+    def pipeline_yamls(self) -> Dict[str, str]:
         return {
-            "events_stream": {
-                "description": "Ingest a file stream, clean it, and land it as Delta-ready Parquet",
-                "type": "streaming",
-                "nodes": ["ingest_events", "clean_events"],
-                # Streaming pipelines are not date-ranged: they run until stopped.
-                "requires_dates": False,
-            },
+            "events_stream": """\
+# yaml-language-server: $schema=../.ducta/schema/pipeline.json
+#
+# A stream node differs from a batch node in three ways:
+#   * it names a registered transform (`transform: {key: ...}`), not
+#     `run: module:function`, and the transform takes (df) or (df, params);
+#   * its input and output are inline, so Ducta cannot infer the order between
+#     nodes: say it with `after:`;
+#   * every node needs its OWN checkpoint_location. Two nodes sharing one
+#     corrupt each other's offsets; delete the directory to replay from the start.
+description: Ingest a file stream, clean it, and land it as Delta-ready Parquet
+type: streaming
+requires_dates: false        # a stream has no date range: it runs until stopped
+
+nodes:
+  ingest_events:
+    description: "Bronze: land the raw event stream exactly as it arrives"
+    kind: stream
+    stream:
+      input:
+        format: file_stream
+        # `file_format`, not options.format: Spark has no "format" option, so it
+        # would be accepted and ignored.
+        file_format: json
+        # Top level, not inside options, and required: a stream cannot infer its
+        # schema. Get it wrong and you get an empty stream, not an error.
+        schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+        options:
+          path: ${paths.input}/events
+          # One file per micro-batch, so the demo shows several batches instead
+          # of swallowing every seed file at once.
+          maxFilesPerTrigger: 1
+      output:
+        format: parquet
+        path: ${paths.output}/${env}/bronze/events
+      streaming:
+        checkpoint_location: ${paths.output}/${env}/_ckpt/ingest_events
+
+  clean_events:
+    description: "Silver: drop incomplete events and stamp an ingest time"
+    kind: stream
+    after: [ingest_events]
+    stream:
+      # `module` is imported and its register_transforms() called before the
+      # lookup, so the node works even without streaming_transform_modules.
+      transform:
+        key: clean_events
+        module: pipelines.transforms
+        params: {min_amount: 0.0}
+      input:
+        format: file_stream
+        file_format: parquet
+        schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+        options: {path: "${paths.output}/${env}/bronze/events"}
+      output:
+        format: parquet
+        path: ${paths.output}/${env}/silver/events
+      streaming:
+        checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+"""
         }
-
-    def generate_nodes_config(self) -> Dict[str, Any]:
-        """Two streaming nodes, wired the way streaming nodes actually wire up.
-
-        Note what is *not* here: no ``module``/``function``. A streaming node
-        names a transform registered in the registry; it orders itself with
-        ``dependencies``, like any other node.
-        """
-        return {
-            "ingest_events": {
-                "description": "Bronze: land the raw event stream exactly as it arrives",
-                "type": "streaming",
-                "input": {
-                    "format": "file_stream",
-                    # `file_format`, not options.format: the reader passes
-                    # options straight to Spark, and Spark has no "format"
-                    # option — it would be accepted and ignored.
-                    "file_format": "json",
-                    # Top level, not inside options, and required: Structured
-                    # Streaming cannot infer a schema from a stream. Get it
-                    # wrong and you get an empty stream, not an error.
-                    "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
-                    "options": {
-                        # The path belongs in options; the top-level spelling is
-                        # deprecated and warns.
-                        "path": "${input_path}/events",
-                        # One file per micro-batch, so the demo shows several
-                        # batches instead of swallowing every seed file at once.
-                        "maxFilesPerTrigger": 1,
-                    },
-                },
-                "output": {
-                    "format": "parquet",
-                    "path": "${output_path}/${environment}/bronze/events",
-                },
-                "streaming": {
-                    # Per node. Two nodes sharing a checkpoint corrupt each
-                    # other's offsets; delete this directory to replay from the start.
-                    "checkpoint_location": "${output_path}/${environment}/_ckpt/ingest_events",
-                    "trigger": {"type": "processing_time", "interval": "5 seconds"},
-                    "output_mode": "append",
-                },
-            },
-            "clean_events": {
-                "description": "Silver: drop incomplete events and stamp an ingest time",
-                "type": "streaming",
-                # Ordering between nodes: `dependencies`, the same key batch
-                # nodes use (`depends_on` is still read, but belongs to
-                # pipelines, where it chains one pipeline after another).
-                "dependencies": ["ingest_events"],
-                "input": {
-                    "format": "file_stream",
-                    "file_format": "parquet",
-                    "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
-                    "options": {"path": "${output_path}/${environment}/bronze/events"},
-                },
-                # A dict naming a transform in the registry by its `key`, with
-                # its params. `module` makes the query manager import it and call
-                # register_transforms() before the lookup, so the node works even
-                # if global_config.streaming_transform_modules is removed.
-                "function": {
-                    "key": "clean_events",
-                    "module": self.SAMPLE_MODULE,
-                    "params": {"min_amount": 0.0},
-                },
-                "output": {
-                    "format": "parquet",
-                    "path": "${output_path}/${environment}/silver/events",
-                },
-                "streaming": {
-                    "checkpoint_location": "${output_path}/${environment}/_ckpt/clean_events",
-                    "trigger": {"type": "processing_time", "interval": "5 seconds"},
-                    "output_mode": "append",
-                },
-            },
-        }
-
-    def generate_input_config(self) -> Dict[str, Any]:
-        """Streaming nodes carry their I/O inline, so the catalogs stay empty.
-
-        Kept as valid empty documents because Context requires all five.
-        """
-        return {}
-
-    def generate_output_config(self) -> Dict[str, Any]:
-        return {}
 
     def get_sample_data(self) -> Optional[str]:
         """No CSV seed: the generator writes JSON events into the watched folder."""
@@ -656,7 +617,18 @@ def register_transforms(registry: Any) -> None:
     logger.info("Registered streaming transforms: clean_events")
 '''
 
-    def generate_readme_v2(self) -> str:
+    def quick_start(self) -> List[str]:
+        pipeline = self.DEFAULT_PIPELINE
+        return [
+            "# Start the stream (runs until you stop it)",
+            f"ducta stream run --pipeline {pipeline} --env dev",
+            "",
+            "# In another shell: watch it, then stop it",
+            "ducta stream status --env dev",
+            "ducta stream stop --env dev --execution-id <id>",
+        ]
+
+    def readme(self) -> str:
         """README for a streaming project, which runs differently from a batch one."""
         return f"""# {self.project_name}
 
@@ -749,33 +721,700 @@ Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 """
 
 
+class MLBasicTemplate(BaseTemplate):
+    """A churn model end to end: features in Spark, training in scikit-learn.
+
+    What a first ML pipeline gets wrong is rarely the model: it is an unseeded
+    split, hyperparameters buried in code, and a model shipped without asking
+    whether it beats predicting the majority class. Each is declared in the
+    pipeline file here (``split``, ``hyperparams``) or enforced by the node
+    (the baseline gate), and the README says which is which.
+    """
+
+    TEMPLATE_NAME = "ML Basic"
+    TEMPLATE_DESCRIPTION = (
+        "Churn model: Spark features, scikit-learn training, declarative split, "
+        "versioned hyperparameters and a baseline gate"
+    )
+    TEMPLATE_TYPE = "ml_basic"
+    ARCHITECTURE = "ml"
+    SAMPLE_MODULE = "pipelines.churn"
+    SAMPLE_MODULE_PATH = ("pipelines", "churn.py")
+    DEFAULT_PIPELINE = "churn_model"
+    REQUIREMENTS = "ducta[spark,mlops]>=0.1.1\n"
+    GITIGNORE_EXTRA = "\n# Models and experiment tracking\nmodels/\nmlops_data/\n"
+
+    def quick_start(self) -> List[str]:
+        pipeline = self.DEFAULT_PIPELINE
+        return [
+            "# Train the model (tracked, with a baseline gate)",
+            f"ducta start -e dev -p {pipeline}",
+            "",
+            "# Override a hyperparameter for one run",
+            f"ducta start -e dev -p {pipeline} --hyperparams '{{\"max_depth\": 3}}'",
+            "",
+            "# Validate config, no Spark",
+            "ducta config validate --env dev",
+        ]
+
+    def project_yaml(self) -> str:
+        return self._render(
+            """\
+# yaml-language-server: $schema=.ducta/schema/project.json
+#
+# The project: its name, where data lives, engine settings, and what changes
+# per environment. Datasets are in catalog.yaml, the pipeline in pipelines/.
+version: 2
+project: @@PROJECT@@
+description: Customer churn model - Spark features, scikit-learn training
+
+# Base directories. Reference them anywhere as ${paths.input} / ${paths.output}.
+paths: {input: data, output: data}
+
+settings:
+  mode: local                  # local | distributed | databricks
+  max_parallel_nodes: 2
+  fail_on_error: true
+  # off | record | required | signed: what a run can prove about itself.
+  evidence_level: @@EVIDENCE@@
+  # Seeds random / numpy and gives every node its own deterministic seed
+  # (ml_context["node_seed"]), so a run can be repeated exactly.
+  random_seed: 42
+@@SPARK@@  # Experiments, runs and the model registry. `type: ml` pipelines are tracked
+  # automatically; mlops_required: true aborts a run that cannot be tracked.
+  mlops_enabled: true
+  mlops_required: false
+  mlops_path: mlops_data
+
+# Values a dataset or node gets unless it sets its own: the format per layer.
+defaults:
+  catalog:
+    "silver.*": {format: parquet}
+    "gold.*": {format: csv}
+
+# An environment states only what differs from the base project above.
+environments:
+  dev:
+    settings: {log_level: DEBUG}
+  prod:
+    # In production a model that cannot be tracked must not be shipped.
+    settings: {mlops_required: true}
+"""
+            + self._sandbox_note()
+            + """
+# Free-form notes. Ducta does not read this block.
+metadata:
+  template: ml_basic
+"""
+        )
+
+    def catalog_yaml(self) -> str:
+        return """\
+# yaml-language-server: $schema=.ducta/schema/catalog.json
+#
+# Every dataset, once. The format of silver.* and gold.* comes from
+# `defaults.catalog` in ducta.yaml.
+
+customers:
+  description: One row per customer, with whether they churned
+  format: csv
+  path: data/customers.csv
+  options: {header: true, inferSchema: true}
+  # A contract: checked every time a node reads this dataset, before it runs.
+  checks:
+    fail_fast: true
+    empty_dataset: true
+    schema:
+      expected_columns: [customer_id, tenure_months, monthly_spend, support_calls, plan, churned]
+
+silver.churn.features:
+  description: Clean, de-duplicated model inputs
+
+gold.churn.metrics:
+  description: What the trained model scored, against the baseline
+"""
+
+    def pipeline_yamls(self) -> Dict[str, str]:
+        return {
+            "churn_model": """\
+# yaml-language-server: $schema=../.ducta/schema/pipeline.json
+#
+# An ML pipeline versions what a notebook would bury in code: the split and the
+# hyperparameters live here, so every run records exactly what it used. Override
+# hyperparameters for one run with `--hyperparams '{"max_depth": 3}'`.
+description: "Churn: prepare features, train, register the model"
+type: ml
+requires_dates: false
+model_version: "1.0.0"
+
+hyperparams: {n_estimators: 100, max_depth: 6}
+
+# Applied by the training node with ducta.mlrun.split_dataframe. Model selection
+# happens on `val`; `test` is scored once, at the end, for an honest estimate.
+split: {method: stratified, stratify_col: churned, test_size: 0.2, val_size: 0.2, seed: 42}
+
+nodes:
+  prepare_features:
+    description: "Drop duplicates and incomplete rows; keep what the model may see"
+    run: pipelines.churn:prepare_features
+    inputs: {customers: customers}
+    outputs: [silver.churn.features]
+    # Checks on this node's OUTPUT, before it is written.
+    quality:
+      empty_dataset: true
+      null_rate: {columns: [tenure_months, monthly_spend, plan, churned], threshold: 0.0}
+      duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
+      range: {column: tenure_months, min: 0}
+      row_count: {min: 500}
+      gate: {max_errors: 0, on_fail: skip_downstream}
+
+  train:
+    description: "Train a random forest; register it only if it beats the baseline"
+    run: pipelines.churn:train
+    ml_stage: training
+    inputs: {features: silver.churn.features}
+    outputs: [gold.churn.metrics]
+"""
+        }
+
+    #: Customers with a blank ``monthly_spend`` and customers repeated verbatim,
+    #: so the feature node has something real to drop (as in the medallion data).
+    _BLANK_SPEND = frozenset({17, 83, 140, 222, 301, 377, 450, 512, 560, 589})
+    _DUPLICATED = (5, 99, 187, 264, 333, 401)
+    _PLANS = ("basic", "plus", "pro")
+
+    def seed_files(self) -> Dict[str, str]:
+        """``data/customers.csv``: churn driven by support calls, short tenure and the basic plan."""
+        scored = []
+        for i in range(1, 601):
+            plan = self._PLANS[i % 3]
+            noise = (((i * 1103515245 + 12345) % 2147483648) / 2147483648 - 0.5) * 3.0
+            support = (i * 5) % 7
+            tenure = 1 + (i * 7) % 60
+            plan_effect = 1.0 if plan == "basic" else -0.5 if plan == "pro" else 0.0
+            score = 0.7 * support - 0.04 * tenure + plan_effect + noise
+            scored.append((i, tenure, support, plan, score))
+        cutoff = sorted(s[4] for s in scored)[int(len(scored) * 0.7)]
+        rows = []
+        for i, tenure, support, plan, score in scored:
+            if i in self._BLANK_SPEND:
+                spend = ""
+            else:
+                spend = f"{20 + (i * 13) % 80 + (15 if plan == 'pro' else 0)}.00"
+            rows.append(f"{i},{tenure},{spend},{support},{plan},{1 if score > cutoff else 0}")
+        by_id = {int(r.split(",", 1)[0]): r for r in rows}
+        rows.extend(by_id[i] for i in self._DUPLICATED)
+        header = "customer_id,tenure_months,monthly_spend,support_calls,plan,churned"
+        return {"data/customers.csv": "\n".join([header, *rows]) + "\n"}
+
+    def generate_sample_code(self) -> Optional[str]:
+        return '''"""
+Churn model: prepare features in Spark, then train and register with scikit-learn.
+
+``prepare_features`` receives and returns a Spark DataFrame. ``train`` converts
+its input to pandas, which is what scikit-learn takes. Ducta also hands any node
+that accepts it an
+``ml_context``: the versioned hyperparameters and split, a deterministic seed,
+and the experiment tracker and model registry of the run it already opened.
+
+Four habits this module keeps, and your own nodes should too:
+
+1. a reproducible split, with the seed from config, never an unseeded one;
+2. hyperparameters from ``pipelines/churn_model.yaml``, never hard-coded;
+3. a baseline: a model is only worth registering if it beats the trivial one;
+4. the test set is scored once, after the model is chosen on validation data.
+"""
+from typing import Any, Optional
+
+from loguru import logger
+
+
+def prepare_features(
+    customers: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """Drop duplicates and incomplete rows, and keep only what the model may see.
+
+    Rows with a missing value are dropped, not filled: inventing a spend of 0
+    would teach the model that "unknown" means "free", and would also make the
+    ``null_rate`` check in the pipeline pass for the wrong reason.
+    """
+    from pyspark.sql import functions as F
+
+    before = customers.count()
+    cleaned = (
+        customers.dropDuplicates(["customer_id"])
+        .dropna(subset=["tenure_months", "monthly_spend", "plan", "churned"])
+        .withColumn("churned", F.col("churned").cast("int"))
+        .select(
+            "customer_id",
+            "tenure_months",
+            "monthly_spend",
+            "support_calls",
+            "plan",
+            "churned",
+        )
+    )
+    logger.info("Features: kept {:,} of {:,} customers", cleaned.count(), before)
+    return cleaned
+
+
+def train(features: Any, ml_context: Any = None) -> Any:
+    """Train a random forest and register it if it beats the majority-class baseline."""
+    import pandas as pd
+    from sklearn.dummy import DummyClassifier
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import f1_score, roc_auc_score
+
+    from ducta.mlrun import persist_model, split_dataframe
+
+    ml_context = ml_context or {}
+    params = {"n_estimators": 100, "max_depth": 6, **(ml_context.get("hyperparams") or {})}
+    seed = ml_context.get("node_seed", 42)
+
+    # The model needs pandas. Converting here, not in the catalog, works whether
+    # the dataset is read back from disk or handed over in memory.
+    if hasattr(features, "toPandas"):
+        features = features.toPandas()
+
+    # One-hot encode `plan`; it has three fixed values, so doing it before the
+    # split leaks nothing.
+    data = pd.get_dummies(features.drop(columns=["customer_id"]), columns=["plan"], dtype=int)
+
+    # The split is declared in pipelines/churn_model.yaml. Passing ml_context
+    # lets the run certificate prove this is the split that actually ran.
+    train_df, val_df, test_df = split_dataframe(
+        data, ml_context.get("split"), default_seed=seed, ml_context=ml_context
+    )
+    target = "churned"
+    x_train, y_train = train_df.drop(columns=[target]), train_df[target]
+    x_val, y_val = val_df.drop(columns=[target]), val_df[target]
+    x_test, y_test = test_df.drop(columns=[target]), test_df[target]
+
+    baseline = DummyClassifier(strategy="prior").fit(x_train, y_train)
+    baseline_auc = roc_auc_score(y_val, baseline.predict_proba(x_val)[:, 1])  # 0.5: no signal
+
+    model = RandomForestClassifier(**params, random_state=seed).fit(x_train, y_train)
+    val_auc = roc_auc_score(y_val, model.predict_proba(x_val)[:, 1])
+    # Scored once, after the model is chosen: never used to tune or to decide.
+    test_auc = roc_auc_score(y_test, model.predict_proba(x_test)[:, 1])
+    test_f1 = f1_score(y_test, model.predict(x_test))
+    logger.info("AUC val={:.3f} test={:.3f} (baseline {:.3f})", val_auc, test_auc, baseline_auc)
+
+    # A gate relative to the baseline, not an absolute threshold: on imbalanced
+    # data the majority-class predictor can clear almost any fixed bar.
+    if val_auc < baseline_auc + 0.05:
+        raise ValueError(
+            f"The model does not beat the baseline: val AUC {val_auc:.3f} vs {baseline_auc:.3f}"
+        )
+
+    metrics = {
+        "val_auc": float(val_auc),
+        "test_auc": float(test_auc),
+        "test_f1": float(test_f1),
+        "baseline_auc": float(baseline_auc),
+    }
+    persist_model(
+        model,
+        ml_context,
+        name="churn-model",
+        framework="sklearn",
+        metrics=metrics,
+        hyperparameters=params,
+        X=x_train,
+        y=y_train,
+    )
+    return pd.DataFrame([metrics])
+'''
+
+    def readme(self) -> str:
+        return f"""# {self.project_name}
+
+A **customer churn** pipeline built with **Ducta**: features in Spark, a
+scikit-learn model, and the things that make a model trustworthy declared in
+configuration rather than buried in code.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+ducta start --env dev --pipeline churn_model
+```
+
+`data/customers.csv` is deliberately imperfect: 10 customers with no
+`monthly_spend` and 6 repeated rows, so `prepare_features` has work to do and
+its quality gate has something to verify.
+
+```
+customers          606 rows   as they arrived
+silver features    590 rows   de-duplicated, incomplete rows dropped
+gold metrics         1 row    val / test AUC, F1 and the baseline AUC
+```
+
+## What lives where
+
+| | Where | Why there |
+|---|---|---|
+| Split (stratified, 60/20/20, seed 42) | `pipelines/churn_model.yaml` | versioned and recorded with every run |
+| Hyperparameters | `pipelines/churn_model.yaml` | override once with `--hyperparams '{{"max_depth": 3}}'` |
+| Random seed | `ducta.yaml` (`random_seed`) | one number makes a run repeatable |
+| Experiment tracking, model registry | `ducta.yaml` (`mlops_*`) | `type: ml` pipelines are tracked automatically |
+| Baseline gate | `pipelines/churn.py` | the model is registered only if it beats the trivial one |
+
+## Then look at what happened
+
+```bash
+ducta certify list                       # every run recorded here
+ducta certify show   --run-id <run-id>   # what ran, on which data, with which split
+ducta config validate                    # config check, no Spark
+```
+
+## Project structure
+
+```
+{self.project_name}/
+├── ducta.yaml                    # project, paths, settings, per-environment overrides
+├── catalog.yaml                  # every dataset once (the source has a contract)
+├── pipelines/
+│   ├── churn_model.yaml          # the ML pipeline: split, hyperparameters, nodes
+│   └── churn.py                  # prepare_features (Spark) and train (scikit-learn)
+├── .ducta/schema/                # JSON Schemas: autocompletion in VS Code/JetBrains
+└── data/customers.csv            # sample source
+```
+
+## What to change first
+
+1. Point `customers` in `catalog.yaml` at your own data, and update its `schema` contract.
+2. Replace the target, the feature columns and the model in `pipelines/churn.py`.
+3. Keep the split, the baseline gate and the one-time test score.
+
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""
+
+
+class HybridBasicTemplate(BaseTemplate):
+    """One pipeline whose batch phase feeds its streaming phase.
+
+    ``type: hybrid`` runs every batch node to the end, with the full batch
+    engine (parallelism, retries, quality gates), and only then starts the
+    queries, so a stream node can depend on a batch node. A batch *pipeline*
+    cannot depend on a streaming one, because a stream never completes. The
+    stream here is a ``file_stream`` over JSON files, so it runs with nothing
+    installed but Spark; swapping it for Kafka is shown in the README.
+    """
+
+    TEMPLATE_NAME = "Hybrid Basic"
+    TEMPLATE_DESCRIPTION = (
+        "Batch dimension table feeding a stream-static join, in one `type: hybrid` pipeline"
+    )
+    TEMPLATE_TYPE = "hybrid_basic"
+    ARCHITECTURE = "hybrid"
+    SAMPLE_MODULE = "pipelines.orders"
+    SAMPLE_MODULE_PATH = ("pipelines", "orders.py")
+    DEFAULT_PIPELINE = "orders"
+
+    def quick_start(self) -> List[str]:
+        pipeline = self.DEFAULT_PIPELINE
+        return [
+            "# Run the batch phase, then the stream, to completion",
+            f"ducta start -e dev -p {pipeline} --mode sync",
+            "",
+            "# Validate config, no Spark",
+            "ducta config validate --env dev",
+        ]
+
+    def project_yaml(self) -> str:
+        return self._render(
+            """\
+# yaml-language-server: $schema=.ducta/schema/project.json
+#
+# The project: its name, where data lives, engine settings, and what changes
+# per environment. Batch datasets are in catalog.yaml; the stream node declares
+# its own source and sink in pipelines/orders.yaml.
+version: 2
+project: @@PROJECT@@
+description: Batch dimension table enriching an order stream
+
+# Base directories. Reference them anywhere as ${paths.input} / ${paths.output}.
+paths: {input: data, output: data}
+
+settings:
+  mode: local                  # local | distributed | databricks
+  max_parallel_nodes: 2
+  fail_on_error: true
+  # off | record | required | signed: what a run can prove about itself.
+  evidence_level: @@EVIDENCE@@
+@@SPARK@@  # Imported before any stream starts, so the transform is registered by the
+  # time the node that names it is built.
+  streaming_transform_modules: [pipelines.orders]
+  max_streaming_pipelines: 5
+
+# Values a dataset or node gets unless it sets its own.
+defaults:
+  catalog:
+    "silver.*": {format: parquet}
+
+# An environment states only what differs from the base project above.
+environments:
+  dev:
+    settings: {log_level: DEBUG}
+"""
+            + self._sandbox_note()
+            + """
+# Free-form notes. Ducta does not read this block.
+metadata:
+  template: hybrid_basic
+"""
+        )
+
+    def catalog_yaml(self) -> str:
+        return """\
+# yaml-language-server: $schema=.ducta/schema/catalog.json
+#
+# The batch side's datasets. The stream node's source and sink are inline in
+# pipelines/orders.yaml; its output is not a catalog dataset.
+
+products:
+  description: Product dimension (reference data, updated by batch)
+  format: csv
+  path: data/products.csv
+  options: {header: true, inferSchema: true}
+  checks:
+    fail_fast: true
+    empty_dataset: true
+    schema: {expected_columns: [product_id, category, unit_price]}
+
+silver.shop.products:
+  description: Clean product dimension, the static side of the stream join
+"""
+
+    def pipeline_yamls(self) -> Dict[str, str]:
+        return {
+            "orders": """\
+# yaml-language-server: $schema=../.ducta/schema/pipeline.json
+#
+# `type: hybrid`: the batch node runs to the end first, then the query starts.
+# If the batch phase fails or a gate blocks it, no query starts. A stream node
+# says what it waits for with `after:` (its input is inline, so Ducta cannot
+# infer the order from a dataset).
+description: "Hybrid: build the product dimension (batch), then enrich orders (stream)"
+type: hybrid
+requires_dates: false
+
+nodes:
+  # -- batch phase ----------------------------------------------------------
+  build_products:
+    description: "Clean the product dimension and write it as Parquet"
+    run: pipelines.orders:build_products
+    inputs: {products_raw: products}
+    outputs: [silver.shop.products]
+    quality:
+      empty_dataset: true
+      null_rate: {columns: [product_id, unit_price], threshold: 0.0}
+      duplicates: {columns: [product_id], max_duplicate_rate: 0.0}
+      gate: {max_errors: 0, on_fail: skip_downstream}
+
+  # -- streaming phase ------------------------------------------------------
+  enrich_orders:
+    description: "Join each order with its product and compute the revenue"
+    kind: stream
+    after: [build_products]
+    stream:
+      input:
+        format: file_stream
+        file_format: json
+        # Required: a stream cannot infer its schema.
+        schema: order_id STRING, product_id INT, quantity INT, ts TIMESTAMP
+        options:
+          path: ${paths.input}/orders
+          # One file per micro-batch, so the demo shows several batches.
+          maxFilesPerTrigger: 1
+      # `params` is a plain dict and cannot carry a DataFrame, so the dimension
+      # is passed as a path and read inside the transform. Keep it under a key
+      # named `path`: that is what gets ${paths.output} and ${env} expanded.
+      transform:
+        key: enrich_orders
+        module: pipelines.orders
+        params:
+          products: {path: "${paths.output}/${env}/silver/shop/products"}
+      output:
+        format: parquet
+        path: ${paths.output}/${env}/gold/shop/orders_enriched
+      streaming:
+        checkpoint_location: ${paths.output}/${env}/_ckpt/enrich_orders
+        output_mode: append
+        # Processes what is there and stops, so the whole pipeline finishes and
+        # can run in CI. Use `10s` to keep the query running instead.
+        trigger: available_now
+"""
+        }
+
+    _CATEGORIES = ("electronics", "grocery", "apparel", "home", "toys")
+
+    def seed_files(self) -> Dict[str, str]:
+        """``data/products.csv`` (one dirty row) and five order files, one event each."""
+        rows = [
+            f"{pid},{self._CATEGORIES[pid % len(self._CATEGORIES)]},{5 + (pid * 11) % 90}.50"
+            for pid in range(1, 31)
+        ]
+        # A verbatim duplicate: build_products deduplicates, and its gate checks it.
+        rows.append(rows[6])
+        files = {"data/products.csv": "\n".join(["product_id,category,unit_price", *rows]) + "\n"}
+        for n in range(1, 6):
+            events = [
+                '{"order_id": "o%d%d", "product_id": %d, "quantity": %d, "ts": "2026-01-01T10:%02d:00"}'
+                % (n, k, 1 + (n * 7 + k * 5) % 30, 1 + (n + k) % 4, n * 10 + k)
+                for k in range(1, 4)
+            ]
+            files[f"data/orders/orders_{n:03d}.json"] = "\n".join(events) + "\n"
+        return files
+
+    def generate_sample_code(self) -> Optional[str]:
+        return '''"""
+The batch node and the streaming transform of the `orders` hybrid pipeline.
+
+``build_products`` is an ordinary batch node. ``enrich_orders`` is a streaming
+transform: Ducta calls it as ``fn(df)`` or ``fn(df, params)`` with the
+streaming DataFrame, and it must return one. It gets no start/end date,
+because a stream has no date range.
+"""
+from typing import Any, Dict, Optional
+
+from loguru import logger
+
+
+def build_products(
+    products_raw: Any,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Any:
+    """Drop repeated products so the join below matches each order exactly once."""
+    cleaned = products_raw.dropDuplicates(["product_id"])
+    logger.info("Products: {:,} distinct", cleaned.count())
+    return cleaned
+
+
+def enrich_orders(df: Any, params: Optional[Dict[str, Any]] = None) -> Any:
+    """Stream-static join: attach each order's category and compute its revenue.
+
+    The products are plain Parquet written by the batch node. Spark treats a
+    static DataFrame joined with a streaming one as a stream-static join and
+    reads the table as it is at the start of each micro-batch, so re-running
+    ``build_products`` with corrected data is picked up by a running stream.
+    """
+    from pyspark.sql import functions as F
+
+    path = ((params or {}).get("products") or {}).get("path")
+    if not path:
+        raise ValueError("enrich_orders needs params.products.path (see pipelines/orders.yaml)")
+    products = df.sparkSession.read.parquet(path).select("product_id", "category", "unit_price")
+    return (
+        df.join(products, "product_id", "left")
+        .withColumn("revenue", F.round(F.col("quantity") * F.col("unit_price"), 2))
+        .select("order_id", "product_id", "category", "quantity", "revenue", "ts")
+    )
+
+
+def register_transforms(registry: Any) -> None:
+    """Called by Ducta before the pipeline starts: maps the name a node uses to the function."""
+    registry.register("enrich_orders", enrich_orders)
+    logger.info("Registered streaming transforms: enrich_orders")
+'''
+
+    def readme(self) -> str:
+        return f"""# {self.project_name}
+
+A **hybrid** pipeline built with **Ducta**: a batch node builds a product
+dimension, then a streaming query enriches a stream of orders against it, all
+in one execution.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+ducta start --env dev --pipeline orders --mode sync
+```
+
+`type: hybrid` runs the batch phase to the end first (with its quality gate),
+and only then starts the query. If the batch phase fails or the gate blocks it,
+no query starts. The query uses `trigger: available_now`: it processes the five
+order files in `data/orders/` and stops, so the run finishes and fits in CI.
+
+```
+products.csv        31 rows    one repeated product
+silver products     30 rows    de-duplicated, the static side of the join
+gold orders         15 rows    each order with its category and revenue
+```
+
+## What is different from a batch pipeline
+
+**1. Order between a stream node and the rest is explicit.** The stream node's
+input is inline, so Ducta cannot infer the order from a dataset:
+`after: [build_products]`.
+
+**2. A transform cannot receive a DataFrame.** `params` is a plain dict, so the
+dimension travels as a *path* and the transform reads it. Keep the path under a
+key named `path`: that is what gets `${{paths.output}}` and `${{env}}` expanded.
+
+**3. A batch pipeline cannot depend on a streaming one**, because a stream never
+completes. Inside a `type: hybrid` pipeline, a stream can depend on batch nodes.
+
+## Keep the query running
+
+Replace `trigger: available_now` with `trigger: 10s` in `pipelines/orders.yaml`,
+start it with `ducta stream run --pipeline orders --env dev`, and drop another
+`.json` file into `data/orders/` to watch it picked up.
+
+## Switching the source to Kafka
+
+Replace the `input` block of `enrich_orders`:
+
+```yaml
+input:
+  format: kafka
+  options:
+    kafka.bootstrap.servers: "localhost:9092"
+    subscribe: "orders"
+    startingOffsets: "latest"
+```
+
+Kafka delivers `key`/`value` as bytes, so parse the JSON in your transform
+(`from_json(col("value").cast("string"), schema)`) before the join.
+
+## Project structure
+
+```
+{self.project_name}/
+├── ducta.yaml                  # project, paths, settings, per-environment overrides
+├── catalog.yaml                # the batch datasets (the source has a contract)
+├── pipelines/
+│   ├── orders.yaml             # the hybrid pipeline: a batch node, then a stream node
+│   └── orders.py               # build_products + the streaming transform
+├── .ducta/schema/              # JSON Schemas: autocompletion in VS Code/JetBrains
+└── data/
+    ├── products.csv            # sample dimension
+    └── orders/                 # the watched source directory
+```
+
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""
+
+
 class TemplateGenerator:
     """Generates complete project templates with directory structure."""
 
-    FORMAT_DESCRIPTORS = {
-        ConfigFormat.YAML: ("environment.yaml", ".yaml"),  # Conda-compatible
-        ConfigFormat.JSON: ("settings.json", ".json"),  # Pure JSON
-        ConfigFormat.TOML: ("environment.toml", ".toml"),  # Type-safe TOML
-    }
+    #: The project files' formats a template can be written in.
+    FORMATS = (ConfigFormat.YAML, ConfigFormat.TOML, ConfigFormat.JSON)
 
     def __init__(self, output_path: Path, config_format: ConfigFormat = ConfigFormat.YAML):
-        if config_format != ConfigFormat.YAML:
+        if config_format not in self.FORMATS:
             raise TemplateError(
-                "Project configuration is YAML (ducta.yaml, catalog.yaml, pipelines/)"
+                "Project configuration is YAML, TOML or JSON "
+                f"(got '{config_format.value}'): ducta.<ext>, catalog.<ext>, pipelines/"
             )
         self.output_path = Path(output_path)
         self.config_format = config_format
-        descriptor_name, file_ext = self.FORMAT_DESCRIPTORS[config_format]
-        self._settings_filename = descriptor_name
-        self._file_extension = file_ext
-        _writers = {
-            ConfigFormat.YAML: self._write_yaml_file,
-            ConfigFormat.JSON: self._write_json_file,
-            ConfigFormat.TOML: self._write_toml_file,
-        }
-        self._writer = _writers.get(config_format)
-        if not self._writer:
-            raise TemplateError(f"Unsupported format: {config_format}")
 
     def generate_project(
         self,
@@ -788,160 +1427,76 @@ class TemplateGenerator:
         """Generate a project: ducta.yaml + catalog.yaml + pipelines/*.yaml, and code."""
         logger.info("Generating {} template for project '{}'", template_type.value, project_name)
 
-        # Create template instance
         template = TemplateFactory.create_template(template_type, project_name, self.config_format)
         template.evidence_level = evidence_level
+        template.developer_sandboxes = list(developer_sandboxes or [])
         self.template = template
 
-        # Create directory structure
-        self._create_directory_structure(developer_sandboxes)
+        self._write_config_files(template)
 
-        # Generate configuration files
-        self._generate_config_files(template, developer_sandboxes)
-
-        # Generate sample code if requested
         if create_sample_code:
             self._generate_sample_code(template)
 
-        # Generate additional project files
         self._generate_project_files(template)
-
-        self._convert_to_format2(template)
+        self._write_text_file(self.output_path / "README.md", template.readme())
 
         logger.success("Project '{}' generated successfully at {}", project_name, self.output_path)
 
-    def _convert_to_format2(self, template: BaseTemplate) -> None:
-        """Turn the templates' engine documents into the project's files.
+    def _write_config_files(self, template: BaseTemplate) -> None:
+        """``ducta.*``, ``catalog.*``, ``pipelines/*.*`` and the editor schemas."""
+        from ducta.setting.project_decompile import write_schemas
 
-        A template defines its content as the engine's five documents (the
-        ``generate_*_config`` methods). They are written out as an intermediate
-        layout and converted by the same code as ``ducta config migrate``, which
-        proves the result compiles back to those documents in every
-        environment; the intermediate files are then removed.
+        ext = self.config_format.value
+        schemas = ".ducta/schema"
+        self._write_text_file(
+            self.output_path / f"ducta.{ext}",
+            self._as_format(template.project_yaml(), f"{schemas}/project.json"),
+        )
+        self._write_text_file(
+            self.output_path / f"catalog.{ext}",
+            self._as_format(template.catalog_yaml(), f"{schemas}/catalog.json"),
+        )
+        pipelines_dir = self.output_path / "pipelines"
+        pipelines_dir.mkdir(parents=True, exist_ok=True)
+        (pipelines_dir / "__init__.py").touch()
+        for name, text in template.pipeline_yamls().items():
+            self._write_text_file(
+                pipelines_dir / f"{name}.{ext}",
+                self._as_format(text, f"../{schemas}/pipeline.json"),
+            )
+        write_schemas(self.output_path)
+
+    def _as_format(self, yaml_text: str, schema: str) -> str:
+        """The template's YAML text, as the generator's format.
+
+        YAML is written as is, comments included. TOML and JSON are the same
+        document converted, so the explanatory comments are not carried over
+        (JSON has none; TOML's would need a second copy of every template).
         """
-        import shutil
+        if self.config_format == ConfigFormat.YAML:
+            return yaml_text
+        import yaml  # type: ignore
 
-        from ducta.setting.project_migrate import migrate, write_files
+        data = yaml.safe_load(yaml_text) or {}
+        if self.config_format == ConfigFormat.JSON:
+            import json
 
-        result = migrate(self.output_path)
-        for path in result.legacy_files:
-            path.unlink(missing_ok=True)
-        config_dir = self.output_path / "config"
-        if config_dir.is_dir() and not any(p.is_file() for p in config_dir.rglob("*")):
-            shutil.rmtree(config_dir)
-        write_files(result, self.output_path)
-
-        pipeline_file = f"pipelines/{template.DEFAULT_PIPELINE}.yaml"
-        replacements = {
-            "config/nodes.yaml": pipeline_file,
-            "config/input.yaml": "catalog.yaml",
-            "config/output.yaml": "catalog.yaml",
-            "config/global_config.yaml": "ducta.yaml (settings)",
-        }
-        for code_file in (self.output_path / "pipelines").rglob("*.py"):
-            text = code_file.read_text(encoding="utf-8")
-            for old, new in replacements.items():
-                text = text.replace(old, new)
-            code_file.write_text(text, encoding="utf-8")
-
-        readme_v2 = getattr(template, "generate_readme_v2", None)
-        text = readme_v2() if callable(readme_v2) else _medallion_readme_v2(template)
-        self._write_text_file(self.output_path / "README.md", text)
-
-    def _create_directory_structure(self, developer_sandboxes: Optional[List[str]] = None) -> None:
-        """Create minimal but complete project structure."""
-        directories = [
-            "config",
-            "config/dev",
-            "config/sandbox",
-            "config/prod",
-            "pipelines",
-            "data",
-            "data/bronze",
-            "data/silver",
-            "data/gold",
-            "logs",
-        ]
-
-        # Add developer sandbox directories
-        if developer_sandboxes:
-            for dev in developer_sandboxes:
-                directories.append(f"config/sandbox_{dev}")
-
-        for directory in directories:
-            dir_path = self.output_path / directory
-            dir_path.mkdir(parents=True, exist_ok=True)
-
-            # Create __init__.py for pipelines
-            if directory == "pipelines":
-                (dir_path / "__init__.py").touch()
-
-    def _generate_config_files(
-        self, template: MedallionBasicTemplate, developer_sandboxes: Optional[List[str]] = None
-    ) -> None:
-        """Generate all configuration files."""
-        configs = {
-            "global_config": template.generate_global_config(),
-            "pipelines": template.generate_pipelines_config(),
-            "nodes": template.generate_nodes_config(),
-            "input": template.generate_input_config(),
-            "output": template.generate_output_config(),
-        }
-
-        # Generate main settings file with format-specific writer
-        settings_file = self.output_path / self._settings_filename
-
-        self._writer(settings_file, template.generate_settings_json())
-
-        # Generate configuration files for each environment
-        environments = ["base", "dev", "sandbox", "prod"]
-
-        # Add developer sandbox environments
-        if developer_sandboxes:
-            environments.extend([f"sandbox_{dev}" for dev in developer_sandboxes])
-
-        for env in environments:
-            config_dir = self.output_path / "config" / (env if env != "base" else "")
-
-            for config_name, config_data in configs.items():
-                if env != "base":
-                    # An environment's global config is deep-merged over the
-                    # base one: it only needs the keys that differ.
-                    if config_name == "global_config":
-                        file_path = config_dir / f"global_config{self._file_extension}"
-                        self._write_config_file(file_path, {})
-                    continue
-
-                file_path = config_dir / f"{config_name}{self._file_extension}"
-                self._write_config_file(file_path, config_data)
-
-    def _write_config_file(self, file_path: Path, config_data: Dict[str, Any]) -> None:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        self._writer(file_path, config_data)
-
-    def _write_yaml_file(self, file_path: Path, data: Dict[str, Any]) -> None:
-        """Write YAML file."""
-        if not HAS_YAML:
-            raise TemplateError("PyYAML not available. Install with: pip install PyYAML")
-
-        with open(file_path, "w", encoding="utf-8") as f:
-            yaml.dump(data, f, default_flow_style=False, indent=2)
-
-    def _write_json_file(self, file_path: Path, data: Dict[str, Any]) -> None:
-        """Write JSON file."""
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-    def _write_toml_file(self, file_path: Path, data: Dict[str, Any]) -> None:
-        """Write TOML file."""
+            return json.dumps({"$schema": schema, **data}, indent=2, ensure_ascii=False) + "\n"
         try:
             import tomli_w  # type: ignore
-        except ImportError:
+        except ImportError as e:
             raise TemplateError(
-                "TOML template generation requires 'tomli_w'. Install with: pip install tomli-w"
-            )
-        with open(file_path, "wb") as f:
-            tomli_w.dump(data, f)
+                "TOML template generation requires 'tomli-w'. Install with: pip install tomli-w"
+            ) from e
+        return f"#:schema {schema}\n" + tomli_w.dumps(data)
+
+    def _localize(self, text: str) -> str:
+        """Point a README or docstring at ``ducta.toml`` instead of ``ducta.yaml``, and so on."""
+        import re
+
+        ext = self.config_format.value
+        text = re.sub(r"\b(ducta|catalog)\.yaml\b", rf"\1.{ext}", text)
+        return re.sub(r"(pipelines/[\w.]+)\.yaml\b", rf"\1.{ext}", text)
 
     def _generate_sample_code(self, template: Optional[BaseTemplate] = None) -> None:
         """Write the Python module this template's nodes point at.
@@ -1008,9 +1563,9 @@ def extract(
     faithful, replayable copy of the source -- if you clean here, you can never
     prove what the source actually said.
 
-    Ducta has already loaded ``source_data`` per ``config/input.yaml`` (format,
+    Ducta has already loaded ``source_data`` per ``catalog.yaml`` (format,
     header, inferSchema), and will write the return value per
-    ``config/output.yaml``. You only write the transformation.
+    ``catalog.yaml``. You only write the transformation.
     """
     if source_data is None:
         raise ValueError("No data provided from source")
@@ -1243,13 +1798,13 @@ class PositiveValuesCheck(BaseQualityCheck):
         # `ducta[spark]` rather than ducta + a loose pyspark pin: the extra is
         # what the project actually declares as compatible, and pinning pyspark
         # separately invites a combination Ducta was never tested against.
-        requirements = """ducta[spark]>=0.1.1
-"""
+        requirements = template.REQUIREMENTS
         requirements_file = self.output_path / "requirements.txt"
         self._write_text_file(requirements_file, requirements)
 
         # .gitignore
-        gitignore = """__pycache__/
+        gitignore = (
+            """__pycache__/
 *.py[cod]
 *.so
 .Python
@@ -1261,7 +1816,11 @@ dist/
 *.egg-info/
 .eggs/
 
-# Data
+# Data: what a run writes, per environment (`paths.output` is data/)
+data/dev/
+data/sandbox/
+data/sandbox_*/
+data/prod/
 data/raw/
 data/processed/
 !data/input.csv
@@ -1285,6 +1844,8 @@ htmlcov/
 metastore_db/
 spark-warehouse/
 """
+            + template.GITIGNORE_EXTRA
+        )
         gitignore_file = self.output_path / ".gitignore"
         self._write_text_file(gitignore_file, gitignore)
 
@@ -1301,6 +1862,9 @@ spark-warehouse/
         if sample_data is not None:
             self._write_text_file(self.output_path / "data" / "input.csv", sample_data)
 
+        for relative, text in template.seed_files().items():
+            self._write_text_file(self.output_path / relative, text)
+
         events = getattr(template, "SAMPLE_EVENTS", None)
         if events:
             events_dir = self.output_path / "data" / "events"
@@ -1312,6 +1876,8 @@ spark-warehouse/
 
     def _write_text_file(self, file_path: Path, content: str) -> None:
         """Write text file."""
+        if self.config_format != ConfigFormat.YAML and file_path.suffix in (".py", ".md"):
+            content = self._localize(content)
         file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(content)
@@ -1332,6 +1898,7 @@ class TemplateCommand:
         list_templates: bool = False,
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
+        config_format: str = "yaml",
     ) -> int:
         """Handle template generation command."""
         try:
@@ -1353,6 +1920,7 @@ class TemplateCommand:
                 create_sample_code,
                 sandbox_developers,
                 evidence_level,
+                config_format,
             )
 
         except TemplateError as e:
@@ -1445,6 +2013,7 @@ class TemplateCommand:
         create_sample_code: bool,
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
+        config_format: str = "yaml",
     ) -> int:
         """Generate template with specified parameters."""
         try:
@@ -1464,7 +2033,7 @@ class TemplateCommand:
                 logger.info(_TEMPLATE_CANCELLED_MSG)
                 return ExitCode.VALIDATION_ERROR.value
 
-            self.generator = TemplateGenerator(output_dir)
+            self.generator = TemplateGenerator(output_dir, ConfigFormat(config_format))
             self.generator.generate_project(
                 template_enum,
                 project_name,
@@ -1473,9 +2042,7 @@ class TemplateCommand:
                 evidence_level=evidence_level,
             )
 
-            self._show_success_message(
-                project_name, output_dir, self.generator.template, self.generator._settings_filename
-            )
+            self._show_success_message(project_name, output_dir, self.generator.template)
 
             return ExitCode.SUCCESS.value
 
@@ -1484,61 +2051,38 @@ class TemplateCommand:
             return ExitCode.GENERAL_ERROR.value
 
     def _show_success_message(
-        self, project_name: str, output_dir: Path, template: "BaseTemplate", config_filename: str
+        self, project_name: str, output_dir: Path, template: "BaseTemplate"
     ) -> None:
         """Show success message with next steps, tailored to *template*'s
         module path, default pipeline and run command — these differ between
         a batch template (``ducta start``) and a streaming one (``ducta
         stream run``)."""
+        ext = self.generator.config_format.value if self.generator else "yaml"
         logger.success("✅ Project '{}' created successfully!", project_name)
         logger.info("📁 Location: {}", output_dir.absolute())
         logger.info("\n📋 Next steps:")
         logger.info("1️⃣  cd {}", output_dir)
         logger.info("2️⃣  pip install -r requirements.txt")
-        config_filename = "ducta.yaml"
-        logger.info("3️⃣  Point catalog.yaml at your data")
+        logger.info("3️⃣  Point catalog.{} at your data", ext)
         logger.info(
-            "4️⃣  Customize {} and pipelines/{}.yaml",
+            "4️⃣  Customize {} and pipelines/{}.{}",
             "/".join(template.SAMPLE_MODULE_PATH),
             template.DEFAULT_PIPELINE,
+            ext,
         )
-        logger.info("5️⃣  Per-environment differences go under `environments:` in ducta.yaml")
+        logger.info("5️⃣  Per-environment differences go under `environments:` in ducta.{}", ext)
 
         logger.info("\n🚀 Quick start:")
-        pipeline = template.DEFAULT_PIPELINE
-        if template.ARCHITECTURE == "streaming":
-            logger.info("   # Start the stream (runs until you stop it)")
-            logger.info(
-                "   ducta stream run --config {} --pipeline {} --env dev", config_filename, pipeline
-            )
-            logger.info("")
-            logger.info("   # In another shell: watch it, then stop it")
-            logger.info("   ducta stream status --config {} --env dev", config_filename)
-            logger.info(
-                "   ducta stream stop   --config {} --env dev --execution-id <id>", config_filename
-            )
-        else:
-            logger.info("   # Run the {} pipeline", pipeline)
-            logger.info("   ducta start -e dev -p {}", pipeline)
-            logger.info("")
-            logger.info("   # Run specific node")
-            logger.info("   ducta start -e dev -p {} -n extract", pipeline)
-            logger.info("")
-            logger.info("   # Debug mode")
-            logger.info("   ducta start -e dev -p {} --log-level DEBUG", pipeline)
-            logger.info("")
-            logger.info("   # Validate config")
-            logger.info("   ducta start -e dev -p {} --validate-only", pipeline)
+        for line in template.quick_start():
+            logger.info("   {}", line)
 
-        logger.info("\n✨ Features ready to use:")
-        logger.info("   ✓ Multi-format I/O (CSV → Parquet → CSV)")
-        logger.info("   ✓ Automatic data loading and saving")
-        logger.info("   ✓ Data validation and transformation")
-        logger.info("   ✓ Multi-environment configs (dev/sandbox/prod)")
-        logger.info("   ✓ Structured logging with loguru")
-        logger.info("   ✓ Dependency management between nodes")
+        logger.info("\n🗂  What was generated:")
+        logger.info("   ducta.{}     project, paths, settings, per-environment overrides", ext)
+        logger.info("   catalog.{}   every dataset, once (format, path, contracts)", ext)
+        logger.info("   pipelines/     one file per pipeline, plus the Python it runs")
+        logger.info("   .ducta/schema/ JSON Schemas: editor autocompletion and inline errors")
 
-        logger.info("\n📖 More info: Check README.md or run 'Ducta --help'")
+        logger.info("\n📖 More info: Check README.md or run 'ducta --help'")
 
 
 def handle_template_command(parsed_args) -> int:
@@ -1553,6 +2097,7 @@ def handle_template_command(parsed_args) -> int:
         list_templates=parsed_args.list_templates,
         sandbox_developers=getattr(parsed_args, "sandbox_developers", None),
         evidence_level=getattr(parsed_args, "evidence_level", None) or "record",
+        config_format=getattr(parsed_args, "config_format", None) or "yaml",
     )
 
 

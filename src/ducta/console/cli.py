@@ -110,7 +110,7 @@ def validate_template_arguments(args: argparse.Namespace) -> None:
 def validate_config_arguments(args: argparse.Namespace) -> None:
     if not getattr(args, "config_command", None):
         raise ValidationError(
-            "A config subcommand is required (e.g., list-pipelines, validate, migrate)"
+            "A config subcommand is required (e.g., list-pipelines, validate, schema)"
         )
 
 

@@ -116,7 +116,7 @@ SourcePathDep = Annotated[Path, Depends(get_source_path)]
 
 
 # Keep WorkspaceManager creation for routes that still use it (Git operations, etc.)
-# It no longer validates environment.yaml — just wraps the resolved path.
+# It does not validate the project: it just wraps the resolved path.
 def get_workspace_manager(path: SourcePathDep) -> WorkspaceManager:
     """Return a WorkspaceManager for the resolved source path."""
     return WorkspaceManager(path)

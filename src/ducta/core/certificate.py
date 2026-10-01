@@ -75,28 +75,25 @@ def resolve_signing_key(context: Any) -> Optional[bytes]:
 
 
 def resolve_signing_key_from_dir(project_root: Path) -> Optional[bytes]:
-    """Resolve the signing key for a project directory that has no live ``Context``."""
-    gs: Dict[str, Any] = {}
-    search_dirs = [Path(project_root), Path(project_root) / "config"]
-    for directory in search_dirs:
-        if not directory.is_dir():
-            continue
-        found = False
-        for candidate in ("global_config.toml", "global_config.yaml", "global_config.yml"):
-            cfg_file = directory / candidate
-            if cfg_file.is_file():
-                try:
-                    from ducta.setting.loaders import ConfigLoaderFactory
+    """Resolve the signing key for a project directory that has no live ``Context``.
 
-                    data = ConfigLoaderFactory().load_config(str(cfg_file))
-                    if isinstance(data, dict):
-                        gs = data
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("Could not read {} for signing key: {}", cfg_file, e)
-                found = True
-                break
-        if found:
-            break
+    Reads ``settings`` of the project's ``ducta.yaml`` (the project at
+    ``project_root`` or in its ``config/`` folder); the environment variable
+    still wins, as in :func:`resolve_signing_key`.
+    """
+    gs: Dict[str, Any] = {}
+    try:
+        from ducta.setting.project_loader import (
+            compile_project,
+            find_project_root,
+            validate_project,
+        )
+
+        root = find_project_root(Path(project_root))
+        if root is not None:
+            gs = compile_project(validate_project(root, None))["global_config"]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not read the project in {} for a signing key: {}", project_root, e)
     return resolve_signing_key(gs)
 
 

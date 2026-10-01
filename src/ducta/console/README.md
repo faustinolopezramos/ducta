@@ -39,7 +39,7 @@ Ducta Console is the **control panel you type into**. From a single `ducta` comm
 Ducta Console is the CLI/UX layer, implementing:
 *   **Unified dispatch**: `UnifiedCLI` maps each subcommand to a `(validator, handler)` pair, restores the working directory no matter how a handler exits, and translates failures into stable `ExitCode`s (`cli.py`).
 *   **Argument parsing**: a composed `UnifiedArgumentParser` builds the full subcommand tree (`parser.py`).
-*   **Project discovery**: `ConfigManager` finds the project a command works on — the nearest `ducta.yaml` with `version: 2` from `--base-path` (or the cwd) upwards — runs the command from its root, and reports a project still in Ducta 0.2's layout with the `ducta config migrate` command (`config.py`).
+*   **Project discovery**: `ConfigManager` finds the project a command works on — the nearest `ducta.yaml` with `version: 2` from `--base-path` (or the cwd) upwards — runs the command from its root, and reports a missing project with how to create one (`config.py`).
 *   **Validation**: field/enum/JSON/date validators for command-line arguments (`validation.py`); project files are validated by `ducta.setting.project_loader`.
 *   **Execution bridge**: `load_context(path, env)` builds a project's `Context`; thin wrappers construct a `PipelineExecutor` and run batch/streaming pipelines (`execution.py`).
 *   **Project scaffolding**: `template.py` generates runnable projects (`ducta.yaml`, `catalog.yaml`, `pipelines/`), verified to compile in every environment.
@@ -56,8 +56,8 @@ Invoked as `ducta <subcommand> [options]`:
 |------------|---------|
 | `start`    | Run a batch/ML/hybrid pipeline (`--pipeline`, `--env`, `--start-date`, `--end-date`, `--node`, `--dry-run`, `--validate-only`) |
 | `stream`   | `run` / `status` / `stop` a streaming pipeline (`--mode sync\|async`, `--execution-id`) |
-| `template` | Scaffold a new project (`--template`, `--project-name`, `--output-path`, `--evidence-level`) |
-| `config`   | `validate`, `list-pipelines`, `pipeline-info`, `schema`, and `migrate` a Ducta 0.2 project |
+| `template` | Scaffold a new project (`--template`, `--project-name`, `--output-path`, `--evidence-level`, `--format yaml|toml|json`) |
+| `config`   | `validate`, `list-pipelines`, `pipeline-info`, `schema`, `show`, `explain`, `diff`, `convert` |
 | `ui` / `server` | Launch the local web UI / API server (`--host`, `--port`, `--no-browser`) |
 | `quality`  | `list` / `run` / `report` / `trend` / `score` / `validate-config` for data quality |
 | `experiment` | `list` tracked experiments (`--storage-path`) |

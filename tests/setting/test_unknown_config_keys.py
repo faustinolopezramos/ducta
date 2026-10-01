@@ -72,15 +72,19 @@ def test_a_clean_config_is_silent(warnings_emitted):
 @pytest.mark.parametrize("template_type", ["medallion_basic", "streaming_basic"])
 @pytest.mark.parametrize("evidence_level", ["record", "signed"])
 def test_a_freshly_generated_project_has_no_unknown_keys(
-    template_type, evidence_level, warnings_emitted
+    template_type, evidence_level, warnings_emitted, tmp_path
 ):
     """The first run of a brand-new project used to print nine "Unknown key"
     warnings for keys the template itself wrote — noise that teaches users to
     ignore the one warning that catches real typos."""
-    from ducta.console.template import TemplateFactory, TemplateType
+    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.setting.project_loader import compile_project, validate_project
 
-    template = TemplateFactory.create_template(TemplateType(template_type), "p")
-    template.evidence_level = evidence_level
-    GlobalConfigSchema(**template.generate_global_config())
+    root = tmp_path / "p"
+    TemplateGenerator(root).generate_project(
+        TemplateType(template_type), "p", evidence_level=evidence_level
+    )
+    for env in (None, "dev", "prod"):
+        GlobalConfigSchema(**compile_project(validate_project(root, env))["global_config"])
 
     assert "Unknown key" not in "".join(warnings_emitted)

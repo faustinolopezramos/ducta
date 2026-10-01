@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from loguru import logger
 
@@ -32,10 +32,7 @@ from ducta.console.core import CLIConfig, ConfigurationError, ExitCode
 def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
     cmd = getattr(parsed_args, "config_command", None)
 
-    # Neither needs a loadable project: migrate reads format 1 itself, and the
-    # schema is static.
-    if cmd == "migrate":
-        return _handle_migrate(parsed_args)
+    # The schema is static: it needs no loadable project.
     if cmd == "schema":
         return _handle_schema(parsed_args)
 
@@ -47,6 +44,8 @@ def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
         return _handle_pipeline_info(parsed_args, config_manager)
     elif cmd == "validate":
         return _handle_validate(parsed_args, config_manager)
+    elif cmd in _INSPECT_COMMANDS:
+        return _handle_inspect(cmd, parsed_args, config_manager)
     else:
         logger.error("Unknown config command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value
@@ -209,72 +208,10 @@ def _handle_pipeline_info(parsed_args, config_manager: ConfigManager) -> int:
         return ExitCode.EXECUTION_ERROR.value
 
 
-def _handle_migrate(parsed_args) -> int:
-    from ducta.setting.project_loader import find_project_root
-    from ducta.setting.project_migrate import (
-        MigrationError,
-        migrate,
-        replace_in_place,
-        write_files,
-    )
-
-    root = Path(
-        getattr(parsed_args, "path", None) or getattr(parsed_args, "base_path", None) or "."
-    )
-    root = root.resolve()
-    if getattr(parsed_args, "check", False):
-        if find_project_root(root) is not None:
-            logger.success("{} uses configuration format 2", root)
-            return ExitCode.SUCCESS.value
-        logger.error("{} uses configuration format 1 — run `ducta config migrate`", root)
-        return ExitCode.GENERAL_ERROR.value
-
-    try:
-        result = migrate(root)
-    except MigrationError as e:
-        logger.error("{}", e)
-        return ExitCode.VALIDATION_ERROR.value
-
-    before = len(result.legacy_files)
-    after = 2 + len(result.pipelines)
-    overrides = sorted((result.project.get("environments") or {}).keys())
-    logger.info(
-        "Verified: format 2 compiles to the same configuration in every environment ({})",
-        ", ".join(["base", *result.environments]),
-    )
-    logger.info(
-        "{} format-1 file(s) → {} format-2 file(s); {} pipeline(s), {} dataset(s); "
-        "environments with overrides: {}",
-        before,
-        after,
-        len(result.pipelines),
-        len(result.catalog),
-        ", ".join(overrides) or "none (identical to base)",
-    )
-    for note in result.notes:
-        logger.warning("  {}", note)
-
-    out = getattr(parsed_args, "out", None)
-    if getattr(parsed_args, "write", False):
-        written, backup = replace_in_place(result, root)
-        logger.success(
-            "Wrote {} file(s) in {}. Format-1 files moved to {}",
-            len(written),
-            root,
-            backup.relative_to(root),
-        )
-    elif out:
-        written = write_files(result, Path(out))
-        logger.success("Wrote {} file(s) to {}", len(written), Path(out).resolve())
-    else:
-        logger.info("Nothing written. Re-run with --write (in place) or --out DIR.")
-    return ExitCode.SUCCESS.value
-
-
 def _handle_schema(parsed_args) -> int:
     import json
 
-    from ducta.setting.project_migrate import write_schemas
+    from ducta.setting.project_decompile import write_schemas
     from ducta.setting.project_schema import json_schema
 
     out = getattr(parsed_args, "out", None)
@@ -283,4 +220,107 @@ def _handle_schema(parsed_args) -> int:
         logger.success("JSON Schemas written under {}", Path(out).resolve() / ".ducta/schema")
     else:
         print(json.dumps(json_schema(), indent=2))
+    return ExitCode.SUCCESS.value
+
+
+_INSPECT_COMMANDS = ("show", "explain", "diff", "convert")
+
+
+def _handle_inspect(cmd: str, parsed_args, config_manager: ConfigManager) -> int:
+    """``show`` / ``explain`` / ``diff`` / ``convert``: what the project resolves to."""
+    from ducta.setting.project_loader import ProjectConfigError
+
+    assert config_manager.project_root is not None  # ConfigManager requires a project
+    root = Path(config_manager.project_root)
+    try:
+        if cmd == "show":
+            return _show(root, parsed_args)
+        if cmd == "explain":
+            return _explain(root, parsed_args)
+        if cmd == "diff":
+            return _diff(root, parsed_args)
+        return _convert(root, parsed_args)
+    except ProjectConfigError as e:
+        for problem in e.problems:
+            logger.error("{}", problem)
+        return ExitCode.VALIDATION_ERROR.value
+
+
+def _env(value: Optional[str]) -> Optional[str]:
+    return None if value in (None, "base") else value
+
+
+def _show(root: Path, parsed_args) -> int:
+    from ducta.setting import project_inspect as inspect
+
+    env = _env(getattr(parsed_args, "env", None))
+    fmt = getattr(parsed_args, "output_format", "yaml")
+    if getattr(parsed_args, "engine", False):
+        from ducta.setting.project_loader import compile_project, validate_project
+
+        data: Any = compile_project(validate_project(root, env))
+    else:
+        data = inspect.resolved_tree(root, env, getattr(parsed_args, "pipeline", None))
+    print(inspect.dump(data, fmt), end="")
+    return ExitCode.SUCCESS.value
+
+
+def _explain(root: Path, parsed_args) -> int:
+    import difflib
+
+    from ducta.setting import project_inspect as inspect
+    from ducta.setting.project_loader import apply_environment, read_project
+
+    env = _env(getattr(parsed_args, "env", None))
+    result = inspect.explain(root, parsed_args.path, env)
+    dotted = ".".join(result.path)
+    if not result.found:
+        tree = apply_environment(read_project(root), env)
+        parent: Any = tree
+        for key in result.path[:-1]:
+            parent = parent.get(key, {}) if isinstance(parent, dict) else {}
+        siblings = list(parent) if isinstance(parent, dict) else []
+        close = difflib.get_close_matches(result.path[-1], [str(k) for k in siblings], n=1)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        logger.error("'{}' is not set{}", dotted, hint)
+        return ExitCode.VALIDATION_ERROR.value
+    print(f"{dotted} = {_short(result.value)}")
+    for layer in result.layers:
+        where = f"   {layer.at}" if layer.at else ""
+        print(f"  {layer.name:<28} {_short(layer.value)}{where}")
+    return ExitCode.SUCCESS.value
+
+
+def _short(value: Any) -> str:
+    import json
+
+    text = json.dumps(value, default=str, ensure_ascii=False)
+    return text if len(text) <= 100 else text[:97] + "..."
+
+
+def _diff(root: Path, parsed_args) -> int:
+    from ducta.setting import project_inspect as inspect
+
+    a, b = _env(parsed_args.env_a), _env(parsed_args.env_b)
+    changes = inspect.diff_trees(inspect.resolved_tree(root, a), inspect.resolved_tree(root, b))
+    if not changes:
+        print(f"{parsed_args.env_a} and {parsed_args.env_b} resolve to the same project")
+        return ExitCode.SUCCESS.value
+    for path, before, after in changes:
+        left = "(not set)" if before is inspect.MISSING else _short(before)
+        right = "(not set)" if after is inspect.MISSING else _short(after)
+        print(f"{path}: {left} -> {right}")
+    return ExitCode.SUCCESS.value
+
+
+def _convert(root: Path, parsed_args) -> int:
+    from ducta.setting import project_inspect as inspect
+
+    written = inspect.convert_project(root, Path(parsed_args.out), parsed_args.to_format)
+    logger.success(
+        "{} file(s) written to {} as {}",
+        len(written),
+        Path(parsed_args.out).resolve(),
+        parsed_args.to_format,
+    )
     return ExitCode.SUCCESS.value
