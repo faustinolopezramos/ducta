@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from ducta.check.storage import DEFAULT_PIPELINE_NAME
 
@@ -52,6 +52,23 @@ def _pandas_loader_for(format: str):
     if loader is None:
         raise ValueError(f"Unsupported format '{format}'. Use parquet, csv, or json.")
     return loader
+
+
+def _import_extensions(project_root: Path, modules: List[str]) -> None:
+    """Import custom check modules, resolved from the project root as a run does."""
+    import sys
+
+    from ducta.check.core import load_quality_extensions
+
+    entry = str(project_root.resolve())
+    added = entry not in sys.path
+    if added:
+        sys.path.insert(0, entry)
+    try:
+        load_quality_extensions(modules)
+    finally:
+        if added:
+            sys.path.remove(entry)
 
 
 class QualityService:
@@ -88,12 +105,12 @@ class QualityService:
     ) -> Dict[str, Any]:
         """Run data-quality checks on a local file and return a report dict."""
         from ducta.check import FileStorageBackend, ValidationPhaseRunner
-        from ducta.console.config import load_config_file
+        from ducta.setting.loaders import ConfigLoaderFactory
 
         df = _pandas_loader_for(format)(input_path)
 
-        # Load checks config
-        raw_config = load_config_file(config_path)
+        # A standalone checks file (YAML, JSON or TOML), not a project file.
+        raw_config = ConfigLoaderFactory(allow_python=False).load_config(config_path) or {}
         checks_config = raw_config.get("checks", raw_config)
 
         dataset_name = Path(input_path).stem
@@ -261,63 +278,78 @@ class QualityService:
     @staticmethod
     def validate_node_config(
         node_name: str,
-        config_path: str,
-        global_config_path: Optional[str] = None,
+        project_root: Union[str, Path],
+        env: Optional[str] = None,
+        load_extensions: bool = True,
     ) -> Dict[str, Any]:
-        """Validate quality config for a node without executing any checks."""
+        """Validate a node's quality configuration without executing any checks.
+
+        Reads the project at ``project_root`` as ``env`` sees it, so profile
+        references resolve against that environment's ``settings.quality``.
+        ``load_extensions`` imports the project's ``quality.extensions`` so
+        custom checks are known; the API server passes False (it never imports
+        workspace code), and an unregistered check is then only a warning.
+        """
         from ducta.check import QUALITY_CHECKS_REGISTRY
-        from ducta.console.config import load_config_file
+        from ducta.setting.project_loader import compile_project, validate_project
 
         errors: List[str] = []
         warnings: List[str] = []
 
-        # Load node config
-        raw = load_config_file(config_path)
-        nodes = raw.get("nodes", raw)
+        root = Path(project_root)
+        docs = compile_project(validate_project(root, None if env in (None, "base") else env))
+        extensions = (docs["global_config"].get("quality") or {}).get("extensions") or []
+        if extensions and load_extensions:
+            _import_extensions(root, extensions)
+        nodes = docs["nodes_config"]
         if node_name not in nodes:
-            errors.append(f"Node '{node_name}' not found in '{config_path}'")
+            errors.append(f"Node '{node_name}' is not in the project")
             return {"valid": False, "errors": errors, "warnings": warnings}
-
         node_cfg = nodes[node_name]
 
-        # Load profiles if global_config provided
-        profiles: Dict[str, Any] = {}
-        if global_config_path:
-            try:
-                gs = load_config_file(global_config_path)
-                raw_profiles = gs.get("quality", {}).get("profiles", {})
-                profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
-            except Exception as exc:
-                warnings.append(f"Could not load global_config: {exc}")
+        raw_profiles = (docs["global_config"].get("quality") or {}).get("profiles") or {}
+        profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
 
-        def _validate_checks_section(section_key: str) -> None:
-            section = node_cfg.get(section_key, {})
-            if not section.get("enabled", False):
-                return
+        # The blocks the engine runs for this node: `quality` on its output, and
+        # each input's contract (catalog `checks` merged with `input_checks`).
+        blocks: List[Tuple[str, Dict[str, Any]]] = [
+            ("'quality'", node_cfg.get("data_quality") or {})
+        ]
+        sanity = node_cfg.get("sanity_checks") or {}
+        if sanity.get("checks"):
+            blocks.append(("input checks", sanity))
+        for dataset, block in (sanity.get("inputs") or {}).items():
+            blocks.append((f"checks on input '{dataset}'", block or {}))
 
+        for origin, section in blocks:
+            # A block without `enabled` runs, as in the engine.
+            if not section or section.get("enabled", True) is False:
+                continue
             profile_name = section.get("profile")
             if profile_name and profile_name not in profiles:
-                warnings.append(
-                    f"Profile '{profile_name}' referenced in {section_key} is not defined "
-                    "in global_config"
+                # A run fails on an unknown profile (QualityConfigError), so it is an error.
+                errors.append(
+                    f"Profile '{profile_name}' used by {origin} is not defined in "
+                    "settings.quality.profiles"
                 )
-
-            for check_name, check_cfg in section.get("checks", {}).items():
-                if not isinstance(check_cfg, dict):
+            for check_name, check_cfg in (section.get("checks") or {}).items():
+                if isinstance(check_cfg, dict) and not check_cfg.get("enabled", True):
                     continue
-                if not check_cfg.get("enabled", True):
+                if check_name in QUALITY_CHECKS_REGISTRY:
                     continue
-                if check_name not in QUALITY_CHECKS_REGISTRY:
+                if extensions and not load_extensions:
+                    warnings.append(
+                        f"Check '{check_name}' ({origin}) is not built in; it may come from "
+                        f"the project's quality.extensions, which were not imported here"
+                    )
+                else:
                     errors.append(
-                        f"Unknown check '{check_name}' in node '{node_name}' "
-                        f"({section_key}). Available: {sorted(QUALITY_CHECKS_REGISTRY)}"
+                        f"Unknown check '{check_name}' in node '{node_name}' ({origin}). "
+                        f"Available: {sorted(QUALITY_CHECKS_REGISTRY)}"
                     )
 
-        _validate_checks_section("sanity_checks")
-        _validate_checks_section("data_quality")
-
         if not node_cfg.get("sanity_checks") and not node_cfg.get("data_quality"):
-            warnings.append(f"Node '{node_name}' has no 'sanity_checks' or 'data_quality' section")
+            warnings.append(f"Node '{node_name}' has no quality checks")
 
         return {"valid": len(errors) == 0, "errors": errors, "warnings": warnings}
 

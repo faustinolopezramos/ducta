@@ -19,30 +19,25 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
 
 from ducta.console import execution
-from ducta.console.config import ConfigDiscovery, ConfigManager
-from ducta.console.core import CLIConfig, ConfigCache, ExitCode
+from ducta.console.config import ConfigManager
+from ducta.console.core import CLIConfig, ConfigurationError, ExitCode
 
 
 def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
     cmd = getattr(parsed_args, "config_command", None)
 
-    if cmd == "list-configs":
-        discovery = ConfigDiscovery(getattr(parsed_args, "base_path", None))
-        discovery.list_all()
-        return ExitCode.SUCCESS.value
-
-    # Layered projects (ducta.yaml + per-layer configs) have no top-level
-    # environment file, so normal config discovery fails. Route validate
-    # through the layer detector instead — same routing `ducta start` uses.
-    if cmd == "validate":
-        layered_rc = _try_validate_layered(parsed_args)
-        if layered_rc is not None:
-            return layered_rc
+    # Neither needs a loadable project: migrate reads format 1 itself, and the
+    # schema is static.
+    if cmd == "migrate":
+        return _handle_migrate(parsed_args)
+    if cmd == "schema":
+        return _handle_schema(parsed_args)
 
     config_manager = _init_config_manager(parsed_args, config)
 
@@ -52,38 +47,15 @@ def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
         return _handle_pipeline_info(parsed_args, config_manager)
     elif cmd == "validate":
         return _handle_validate(parsed_args, config_manager)
-    elif cmd == "clear-cache":
-        ConfigCache.invalidate_all()
-        logger.info("Configuration cache cleared")
-        return ExitCode.SUCCESS.value
     else:
         logger.error("Unknown config command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value
 
 
 def _init_config_manager(parsed_args, config: Optional[CLIConfig] = None) -> ConfigManager:
-    layer_context = getattr(config, "layer_context", None) if config else None
-
-    if layer_context:
-        config_manager = ConfigManager.from_layer_config(layer_context)
-        logger.info(f"Using layered project configuration: layer={layer_context.get('layer')}")
-    else:
-        config_manager = ConfigManager(
-            base_path=getattr(parsed_args, "base_path", config.base_path if config else None),
-            layer_name=getattr(parsed_args, "layer_name", config.layer_name if config else None),
-            use_case=getattr(
-                parsed_args, "use_case_name", config.use_case_name if config else None
-            ),
-            config_type=getattr(parsed_args, "config_type", config.config_type if config else None),
-            interactive=getattr(parsed_args, "interactive", False)
-            or (config.interactive if config else False),
-            # Mirror `ducta start`: tolerate the absence of a canonical
-            # environment.* root so list-pipelines/validate/pipeline-info also
-            # work against a bundle / directory-convention / quickstart project,
-            # resolved later by ContextInitializer's flexible fallback.
-            require_config=False,
-        )
-
+    config_manager = ConfigManager(
+        base_path=getattr(parsed_args, "base_path", config.base_path if config else None)
+    )
     config_manager.change_to_config_directory()
     return config_manager
 
@@ -173,84 +145,6 @@ def _log_preflight_report(name: str, report, prefix: str = "") -> None:
         logger.warning("    WARN   {}", warn)
 
 
-def _try_validate_layered(parsed_args) -> Optional[int]:
-    """Preflight every layer of a layered project; None when not layered.
-
-    Builds each layer's Context directly from its config paths (the same files
-    ``ducta start --layer X`` would load) and reports per-layer results.
-    """
-    try:
-        from ducta.setting.layered_config import LayerContextBuilder, LayeredProjectDetector
-
-        detector = LayeredProjectDetector()
-        if not detector.is_layered_project:
-            return None
-
-        env = getattr(parsed_args, "env", None) or "base"
-        from ducta.core.preflight import validate_all_pipelines
-        from ducta.setting.contexts import Context
-
-        total_errors = 0
-        for layer_name in detector.list_layers():
-            context_args = LayerContextBuilder.build_context_args(detector, layer_name, env)
-            if not context_args:
-                logger.error("✗ layer '{}': config files incomplete", layer_name)
-                total_errors += 1
-                continue
-            context = Context(
-                global_config=context_args["global_config"],
-                pipelines_config=context_args["pipelines_config"],
-                nodes_config=context_args["nodes_config"],
-                input_config=context_args["input_config"],
-                output_config=context_args["output_config"],
-                # Without this, `ducta config validate --env prod` resolved an
-                # environment and then validated the base configuration, so any
-                # error that only exists under an `environments:` override went
-                # unreported.
-                env=context_args["env"],
-                validate=False,
-            )
-            # Layer node functions ("src.X") import relative to the layer root.
-            # Put the layer root first on sys.path and purge any `src` package
-            # cached from a previous layer (every layer names its package `src`,
-            # and the workspace root may have one too).
-            import importlib
-            import os
-            import sys as _sys
-            from pathlib import Path as _Path
-
-            layer_root = str(_Path(context_args["layer_path"]).resolve())
-            _sys.path.insert(0, layer_root)
-            for mod in [m for m in _sys.modules if m == "src" or m.startswith("src.")]:
-                del _sys.modules[mod]
-            importlib.invalidate_caches()
-
-            prev_cwd = os.getcwd()
-            os.chdir(layer_root)
-            try:
-                reports = validate_all_pipelines(context)
-            finally:
-                os.chdir(prev_cwd)
-                try:
-                    _sys.path.remove(layer_root)
-                except ValueError:
-                    pass
-            for name in sorted(reports):
-                report = reports[name]
-                total_errors += len(report.errors)
-                # Parens, not brackets: Rich would swallow "[bronze]" as markup.
-                _log_preflight_report(name, report, prefix=f"({layer_name}) ")
-
-        if total_errors:
-            logger.error("Preflight found {} error(s). Fix them before running.", total_errors)
-            return ExitCode.VALIDATION_ERROR.value
-        logger.info("Preflight passed — all layers valid.")
-        return ExitCode.SUCCESS.value
-    except Exception as e:  # noqa: BLE001 — fall back to normal discovery on any failure
-        logger.debug("Layered validate not applicable: {}", e)
-        return None
-
-
 def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
     """Preflight-validate one pipeline (or all) and report configuration errors."""
     try:
@@ -281,6 +175,10 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
             return ExitCode.VALIDATION_ERROR.value
         logger.info("Preflight passed — configuration is valid.")
         return ExitCode.SUCCESS.value
+    except ConfigurationError as e:
+        # The project does not load: the same code `ducta start` exits with.
+        logger.error("Invalid configuration: {}", e)
+        return ExitCode.CONFIGURATION_ERROR.value
     except Exception as e:
         logger.error("Failed to validate configuration: {}", e)
         return ExitCode.EXECUTION_ERROR.value
@@ -309,3 +207,80 @@ def _handle_pipeline_info(parsed_args, config_manager: ConfigManager) -> int:
     except Exception as e:
         logger.error("Failed to get pipeline info: {}", e)
         return ExitCode.EXECUTION_ERROR.value
+
+
+def _handle_migrate(parsed_args) -> int:
+    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project_migrate import (
+        MigrationError,
+        migrate,
+        replace_in_place,
+        write_files,
+    )
+
+    root = Path(
+        getattr(parsed_args, "path", None) or getattr(parsed_args, "base_path", None) or "."
+    )
+    root = root.resolve()
+    if getattr(parsed_args, "check", False):
+        if find_project_root(root) is not None:
+            logger.success("{} uses configuration format 2", root)
+            return ExitCode.SUCCESS.value
+        logger.error("{} uses configuration format 1 — run `ducta config migrate`", root)
+        return ExitCode.GENERAL_ERROR.value
+
+    try:
+        result = migrate(root)
+    except MigrationError as e:
+        logger.error("{}", e)
+        return ExitCode.VALIDATION_ERROR.value
+
+    before = len(result.legacy_files)
+    after = 2 + len(result.pipelines)
+    overrides = sorted((result.project.get("environments") or {}).keys())
+    logger.info(
+        "Verified: format 2 compiles to the same configuration in every environment ({})",
+        ", ".join(["base", *result.environments]),
+    )
+    logger.info(
+        "{} format-1 file(s) → {} format-2 file(s); {} pipeline(s), {} dataset(s); "
+        "environments with overrides: {}",
+        before,
+        after,
+        len(result.pipelines),
+        len(result.catalog),
+        ", ".join(overrides) or "none (identical to base)",
+    )
+    for note in result.notes:
+        logger.warning("  {}", note)
+
+    out = getattr(parsed_args, "out", None)
+    if getattr(parsed_args, "write", False):
+        written, backup = replace_in_place(result, root)
+        logger.success(
+            "Wrote {} file(s) in {}. Format-1 files moved to {}",
+            len(written),
+            root,
+            backup.relative_to(root),
+        )
+    elif out:
+        written = write_files(result, Path(out))
+        logger.success("Wrote {} file(s) to {}", len(written), Path(out).resolve())
+    else:
+        logger.info("Nothing written. Re-run with --write (in place) or --out DIR.")
+    return ExitCode.SUCCESS.value
+
+
+def _handle_schema(parsed_args) -> int:
+    import json
+
+    from ducta.setting.project_migrate import write_schemas
+    from ducta.setting.project_schema import json_schema
+
+    out = getattr(parsed_args, "out", None)
+    if out:
+        write_schemas(Path(out))
+        logger.success("JSON Schemas written under {}", Path(out).resolve() / ".ducta/schema")
+    else:
+        print(json.dumps(json_schema(), indent=2))
+    return ExitCode.SUCCESS.value

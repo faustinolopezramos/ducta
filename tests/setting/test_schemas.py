@@ -138,7 +138,9 @@ class TestOutputSchema:
     def test_required_format(self):
         s = OutputSchema(format=OutputFormat.DELTA)
         assert s.format == OutputFormat.DELTA
-        assert s.write_mode == WriteMode.APPEND
+        # Unset stays unset, so the writer's default (overwrite) applies.
+        assert s.write_mode is None
+        assert "write_mode" not in s.model_dump(exclude_none=True)
 
     def test_overwrite_mode(self):
         s = OutputSchema(format=OutputFormat.PARQUET, write_mode=WriteMode.OVERWRITE)

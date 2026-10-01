@@ -7,7 +7,148 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-27
+
+Configuration format 1 is gone: Ducta reads only `ducta.yaml` + `catalog.yaml`
++ `pipelines/*.yaml`. `ducta config migrate` — run with 0.3 — is the one place
+that still reads the old layout, to convert it.
+
+### Removed
+
+- **Loading configuration format 1** (`environment.yaml` + `config/*`) in the
+  CLI, the API and the web app, with every alternative layout it accepted
+  (single-file bundle, directory convention, two-file quickstart) and
+  **layered projects** (`ducta.yaml` with `layers:`). A project still in that
+  layout stops with exit code 2 and the command that converts it. `migrate`
+  refuses layered projects with the instruction to convert each layer.
+- `ducta.setting`: `ContextLoader`, `FlexibleConfigResolver`,
+  `LayeredProjectDetector` and the layered helpers; `ducta.console`:
+  `ConfigDiscovery`, `AppConfigManager`, `load_config_file`,
+  `EnvironmentConfigValidator`, `ConfigCache`.
+- CLI: `config list-configs`, `config clear-cache`, `--layer-name`,
+  `--use-case`, `--config-type`, `--interactive`, and `ducta template
+  --format` / `--legacy-config` (templates are always the current format).
+- API: `GET /projects/{id}/config/format`, `POST /projects/{id}/config/migrate`
+  and the migration banner in the web app; `config_format` in
+  `POST /templates/generate`; `PipelineRepository`.
+
+### Changed
+
+- **Projects in the API are format-2 projects.** A workspace is one project or
+  `projects/<id>/` projects; a project's description, variables and timestamps
+  live in its `ducta.yaml` (`description`, `metadata`). Creating a project
+  writes a valid, empty project; importing one requires it to be in place.
+- **The run window is passed only to functions that declare it.** A node
+  function receives `start_date`/`end_date` only if it has those parameters
+  (or `**kwargs`); `def clean(orders): ...` used to fail with "unexpected
+  keyword argument 'start_date'", and preflight demanded the parameters of
+  every function in a pipeline that required dates.
+- **`ducta quality validate-config --node N [--env E]`** checks the node as the
+  project configures it in that environment, including dataset contracts and
+  custom checks from `quality.extensions`; `POST /quality/validate-config`
+  takes `{node_name, env}`. An unknown profile is an error, as it is at run
+  time. (It read a format-1 `nodes` file, and was broken by the removal.)
+- `ducta stream run|status|stop`: `--config` is optional — the project
+  containing the current directory is used.
+- `ducta config validate` exits 2 (configuration error), like `ducta start`,
+  when the project does not load.
+- `mode` defaults to `local` when `settings` omits it (it was required at run
+  time but not by the schema).
+- Unknown keys in pipeline and dataset definitions are reported as
+  `unknown key 'timout' — did you mean 'timeout_seconds'?` instead of
+  pydantic's "Extra inputs are not permitted".
+
 ### Added
+
+- `ducta.load_project(path=None, env=None)`: the `Context` of the project
+  containing `path`, found like the CLI finds it.
+- Settings the engine already read but the schema rejected, so no project could
+  set them: `checkpoints_base`, `streaming_node_start_retries`,
+  `streaming_node_start_retry_delay_seconds`,
+  `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`,
+  `streaming_disable_backpressure_defaults`, `streaming_shuffle_partitions`,
+  `streaming_adaptive_base_interval`, `streaming_adaptive_max_interval_seconds`,
+  `mlops_path`, `mlops_storage_path`, `model_registry_path`. A test now fails
+  when the engine reads a setting the schema does not declare.
+
+### Fixed
+
+- **Outputs without a write mode appended on every run.** The Context
+  validates the engine documents with `OutputSchema`, whose `write_mode`
+  defaulted to `append` and was written back into the document — so every
+  format-2 dataset without `write:` appended on each run, and re-running a
+  pipeline duplicated its data. The writer, the format-2 schema and the docs
+  all state `overwrite` as the default; it now is. `ducta config migrate`
+  writes `write: {mode: append}` for format-1 outputs that set no mode (they
+  did append), so migrated projects keep their behaviour. Found migrating the
+  demo projects: a second run doubled a Silver table.
+- **Preflight contracts read the whole input.** Input checks before a run
+  loaded inputs without the run's dates, so an `incremental` dataset was read
+  and fingerprinted in full before every run.
+- **Terminating streams read empty sources.** With `once`/`available_now`, a
+  stream node started as soon as the node it reads from *started*, found
+  nothing yet and stopped: an `available_now` bronze → silver backfill wrote
+  nothing to silver. Dependants of a terminating node now wait for it to end.
+- `PUT /api/configs/{env}/{name}` passed an argument the service does not take
+  and answered 500 on every call.
+- The integration tests ran the CLI from site-packages instead of the checkout,
+  and without propagating its exit code — so their `returncode == 0` checks
+  could not fail.
+- A UI test leaked `DATABASE_URL` into later tests.
+
+### Documentation
+
+- Rewritten for the current format: configuration reference (settings,
+  datasets, nodes, quality, environments, variables and secrets, upgrading from
+  0.2), CLI reference with exit codes, quality, streaming, best practices,
+  Databricks, MLOps, the REST API overview, and the tutorials (basic examples,
+  batch ETL, streaming, MLOps, Airflow, certificates). The tutorials' projects
+  were run as written. Corrections along the way: `${DB_PASSWORD}` is refused
+  by design (credentials come from the environment or `.env` for database
+  connections), `$VAR` / `$VAR|default` were never supported, a node's several
+  `outputs` each receive the same DataFrame, and `on_missing_input` defaults to
+  `skip`.
+- Every YAML example in the docs and module READMEs that names its file is
+  validated against the schema by the test suite, and the configuration
+  guide's examples must form one valid project in every environment they
+  override.
+
+## [0.2.0] - 2026-09-27
+
+### Added
+
+- **Configuration format 2.** A project is `ducta.yaml` (project, `paths`,
+  `settings`, `environments`), `catalog.yaml` (every dataset once — read,
+  written, or both) and one `pipelines/<name>.yaml` per pipeline with its
+  nodes. It replaces 15 files for the medallion scaffold with 3. Unknown keys
+  are errors reported with file, line and a suggestion; every problem is
+  reported at once. Environments are deep-merged overrides of the whole project
+  (settings, paths, catalog entries, pipelines), with dotted keys that resolve
+  dataset names containing dots. Node kinds (`transform`, `ingest`, `stream`)
+  each accept only their own keys; ordering is inferred from the datasets
+  (`after:` otherwise). The format compiles to the same five documents the
+  engine always read, so the engine, preflight and certificates are unchanged.
+  JSON Schemas for editor autocompletion: `ducta config schema`.
+- **Dataset contracts.** `checks` on a catalog entry are validated wherever a
+  node reads the dataset — once per run, with the same verdict for every
+  consumer — and recorded in the certificate as `phase: contract`. The engine's
+  `sanity_checks` gained `inputs: {dataset: {...}}`: it used to validate only
+  one input, chosen by `input_index`.
+- **`ducta config migrate`** (`--check`, `--out DIR`, `--write`). Reads every
+  environment of a format-1 project in any of its layouts, converts it, and
+  compiles the result back to prove it configures the engine identically in
+  each environment before writing; anything format 2 cannot express aborts
+  with the reason. Measured: the migrated template produces byte-identical
+  outputs (`content_hash`) to the original.
+- **API and web app on format 2.** Same endpoints and payloads; edits are
+  translated to format 2, written in round-trip mode (comments and key order
+  survive — `ruamel.yaml`, in the `api` extra), validated for every
+  environment before the commit, and rolled back on rejection. New
+  `GET /projects/{id}/config/format` and `POST /projects/{id}/config/migrate`
+  (dry run by default, with a preview of every file); the project page offers
+  the migration. Creating a node takes `?pipeline=` in a format-2 project.
+- **Templates generate format 2**; `ducta template --legacy-config` keeps
+  format 1 (so does a non-YAML `--format`).
 
 - **Run lock: one writer per output dataset.** A run locks every output it
   will write before reading any data. An overlapping run on any of those
@@ -42,8 +183,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that contradicts an explicit `evidence_level`, or an unknown level, is a
   preflight error — an unknown level never falls back to a weaker one.
 
+### Deprecated
+
+- **Configuration format 1** (`environment.yaml` + `config/*`, and the bundle,
+  directory-convention and quickstart forms). Still read, with one warning per
+  process (`DUCTA_LEGACY_CONFIG_WARNINGS=off` silences it); planned for removal
+  in `0.3.0`. Run `ducta config migrate`. A migrated project's
+  `config_fingerprint` changes once, because the keys format 2 drops on purpose
+  are gone — chain reuse re-runs once.
+
 ### Changed
 
+- **Streaming nodes honour `dependencies`**, like every other node; only
+  `depends_on` was read, so a streaming node declaring `dependencies:` lost its
+  ordering. The streaming template now uses `dependencies`.
+- **An output's `filepath` is honoured.** It was documented and then ignored:
+  every output went to the path derived from its three-part key, which is why
+  keys had to have exactly three parts. A key with an explicit `filepath` may
+  now be anything; preflight warns when a declared `filepath` moves an output
+  away from where it used to be written.
+- **A node's `timeout` is enforced** — a declared, validated key nothing read.
+- **Pipeline-level `inputs`/`outputs` are deprecated** (never read); preflight
+  says so and the templates no longer write them.
+- **Environments in the format-1 scaffold override global settings only**;
+  the three identical copies of each catalog are gone.
 - **Timeouts stop the work.** A timed-out node's Spark jobs are cancelled on
   the cluster (per-run, per-node job tags) and its writes are refused; before,
   its thread kept running and could still write after the run was reported
@@ -78,6 +241,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The README quickstart used a module the importer rejects** (`module:
+  "nodes"` is outside the allowed prefixes); it now uses `pipelines.sales`.
 - **`versionAsOf: 0` read the latest version.** `DeltaReader` used
   `config.get("versionAsOf") or …`, and version 0 is falsy: pinning a read to a
   table's first commit silently read the newest one.

@@ -12,7 +12,6 @@ export interface TemplateInfo {
 export interface GenerateFromTemplateVars {
   template: string;
   project_name: string;
-  config_format?: "yaml" | "json" | "toml";
   include_sample_code?: boolean;
   sandbox_developers?: string[];
 }

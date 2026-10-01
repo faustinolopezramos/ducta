@@ -39,10 +39,10 @@ Ducta Console is the **control panel you type into**. From a single `ducta` comm
 Ducta Console is the CLI/UX layer, implementing:
 *   **Unified dispatch**: `UnifiedCLI` maps each subcommand to a `(validator, handler)` pair, restores the working directory no matter how a handler exits, and translates failures into stable `ExitCode`s (`cli.py`).
 *   **Argument parsing**: a composed `UnifiedArgumentParser` builds the full subcommand tree (`parser.py`).
-*   **Config discovery & management**: `ConfigDiscovery` / `AppConfigManager` locate and merge configuration across environments, with a `ConfigCache` invalidated per run (`config.py`).
-*   **Validation**: field/enum/JSON/date validators plus an `EnvironmentConfigValidator` with a printable report (`validation.py`).
-*   **Execution bridge**: thin CLI wrappers that build a `Context`, construct a `PipelineExecutor`, and run batch/streaming pipelines (`execution.py`).
-*   **Project scaffolding**: `template.py` generates complete project skeletons in YAML/TOML/JSON.
+*   **Project discovery**: `ConfigManager` finds the project a command works on — the nearest `ducta.yaml` with `version: 2` from `--base-path` (or the cwd) upwards — runs the command from its root, and reports a project still in Ducta 0.2's layout with the `ducta config migrate` command (`config.py`).
+*   **Validation**: field/enum/JSON/date validators for command-line arguments (`validation.py`); project files are validated by `ducta.setting.project_loader`.
+*   **Execution bridge**: `load_context(path, env)` builds a project's `Context`; thin wrappers construct a `PipelineExecutor` and run batch/streaming pipelines (`execution.py`).
+*   **Project scaffolding**: `template.py` generates runnable projects (`ducta.yaml`, `catalog.yaml`, `pipelines/`), verified to compile in every environment.
 *   **Rich UX**: Rich-based logging, schema formatters, and an `error_analyzer` that turns tracebacks into actionable developer guidance (`ux/`).
 *   **Command groups**: execution, quality, config, MLOps (experiment/model), ingestion `init`, and run-certificate `certify` (`commands/`, `mlops_commands.py`).
 
@@ -56,8 +56,8 @@ Invoked as `ducta <subcommand> [options]`:
 |------------|---------|
 | `start`    | Run a batch/ML/hybrid pipeline (`--pipeline`, `--env`, `--start-date`, `--end-date`, `--node`, `--dry-run`, `--validate-only`) |
 | `stream`   | `run` / `status` / `stop` a streaming pipeline (`--mode sync\|async`, `--execution-id`) |
-| `template` | Scaffold a new project (`--template`, `--project-name`, `--format yaml\|json\|toml`, `--output-path`) |
-| `config`   | Inspect config: `list-configs`, `list-pipelines`, validate |
+| `template` | Scaffold a new project (`--template`, `--project-name`, `--output-path`, `--evidence-level`) |
+| `config`   | `validate`, `list-pipelines`, `pipeline-info`, `schema`, and `migrate` a Ducta 0.2 project |
 | `ui` / `server` | Launch the local web UI / API server (`--host`, `--port`, `--no-browser`) |
 | `quality`  | `list` / `run` / `report` / `trend` / `score` / `validate-config` for data quality |
 | `experiment` | `list` tracked experiments (`--storage-path`) |
@@ -77,7 +77,8 @@ ducta --version
 ducta --help
 
 # Scaffold a new project, then run a pipeline
-ducta template --template medallion --project-name my_project --format yaml
+ducta template --template medallion_basic --project-name my_project
+cd my_project
 ducta start --env dev --pipeline sales_daily \
   --start-date 2026-01-01 --end-date 2026-01-31
 
@@ -91,14 +92,14 @@ ducta stream status --execution-id <id> --format table
 ducta stream stop --execution-id <id> --timeout 60
 
 # Data quality on a file
-ducta quality run --input data/sales.parquet --format parquet --config config/checks.yaml
+ducta quality run --input data/sales.parquet --format parquet --config checks.yaml
 
 # MLOps
 ducta experiment list --storage-path ./mlops_data
-ducta model promote sales_model 3 --stage production --storage-path ./mlops_data
+ducta model promote sales_model 3 production --env prod
 
 # Run certificate + local UI
-ducta certify verify .Ducta/runs/<run_id>/certificate.json
+ducta certify verify --run-id <run_id>
 ducta ui --port 8000
 ```
 
@@ -122,19 +123,19 @@ print(exit_code)   # 0 == ExitCode.SUCCESS
 from ducta.console import execution
 
 execution.run_streaming_pipeline_cli(
-    config="config/global.yaml",
+    config="path/to/project",     # ducta.yaml, or any file/directory in the project
     pipeline="events_stream",
     mode="async",
     env="dev",
 )
 ```
 
-### Step 3: Load and validate configuration
+### Step 3: Load a project
 ```python
-from ducta.console import load_config_file, EnvironmentConfigValidator
+from ducta.console.execution import load_context
 
-cfg = load_config_file("config/global.yaml")
-report = EnvironmentConfigValidator().validate(cfg)   # ValidationIssue list
+context = load_context("path/to/project", env="dev")   # validated; raises on problems
+print(sorted(context.pipelines_config))
 ```
 
 ### Step 4: Generate a project template
@@ -143,8 +144,8 @@ import argparse
 from ducta.console import template
 
 args = argparse.Namespace(
-    template="medallion", project_name="my_project",
-    format="yaml", output_path="./my_project", list_templates=False,
+    template="medallion_basic", project_name="my_project", output_path="./my_project",
+    list_templates=False, no_sample_code=False,
 )
 template.handle_template_command(args)
 ```

@@ -151,69 +151,6 @@ def load_config_file(path: Path) -> Dict[str, Any]:
 _SUPPORTED_EXTENSIONS = CONFIG_EXTENSIONS
 
 
-def _probe_default_path(
-    workspace_root: Path, stem: "str | tuple[str, ...]", subdir: str = "config"
-) -> str:
-    """Return the relative path of the first existing config file for *stem*.
-
-    *stem* may be a tuple of alternative names tried in order — e.g.
-    ``("global_config", "global")`` — since projects scaffolded by
-    ``cli/template.py`` use ``global_config.yaml`` while the layered/
-    convention-based loader in ``config/layered_config.py`` uses ``global.yaml``.
-    """
-    stems = (stem,) if isinstance(stem, str) else stem
-
-    # 1. Try in config/ subdirectory (standard layout)
-    for s in stems:
-        for ext in _SUPPORTED_EXTENSIONS:
-            rel = f"{subdir}/{s}{ext}"
-            if (workspace_root / rel).exists():
-                return rel
-
-    # 2. Try in root directory (standalone/flat layout)
-    for s in stems:
-        for ext in _SUPPORTED_EXTENSIONS:
-            rel = f"{s}{ext}"
-            if (workspace_root / rel).exists():
-                return rel
-
-    return f"{subdir}/{stems[0]}.yaml"
-
-
-def load_environment_yaml(workspace_root: Path) -> Dict[str, Any]:
-    """Load the top-level environment file from *workspace_root*."""
-    candidates = [
-        workspace_root / "environment.yaml",
-        workspace_root / "environment.yml",
-        workspace_root / "environment.json",
-        workspace_root / "environment.toml",
-    ]
-    for candidate in candidates:
-        if candidate.exists():
-            logger.debug("Loading environment file: {path}", path=candidate)
-            return load_config_file(candidate)
-
-    logger.debug(
-        "No environment config file found in workspace: {p}. Using defaults.", p=workspace_root
-    )
-    # Probe the actual config directory so projects using .toml / .json config
-    # files work without needing an explicit environment file.
-    return {
-        "base_path": ".",
-        "env_config": {
-            "base": {
-                "global_config_path": _probe_default_path(
-                    workspace_root, ("global_config", "global")
-                ),
-                "pipelines_config_path": _probe_default_path(workspace_root, "pipelines"),
-                "nodes_config_path": _probe_default_path(workspace_root, "nodes"),
-                "input_config_path": _probe_default_path(workspace_root, "input"),
-                "output_config_path": _probe_default_path(workspace_root, "output"),
-            }
-        },
-    }
-
-
 def write_config_file(path: Path, data: Dict[str, Any]) -> None:
     """Write *data* to *path* using the format matching the file's extension."""
     suffix = path.suffix.lower()

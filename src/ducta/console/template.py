@@ -149,21 +149,15 @@ class BaseTemplate:
                 "input_config_path": f"config/input{file_ext}",
                 "output_config_path": f"config/output{file_ext}",
             },
-            "dev": {
-                "global_config_path": f"config/dev/global_config{file_ext}",
-                "input_config_path": f"config/dev/input{file_ext}",
-                "output_config_path": f"config/dev/output{file_ext}",
-            },
-            "sandbox": {
-                "global_config_path": f"config/sandbox/global_config{file_ext}",
-                "input_config_path": f"config/sandbox/input{file_ext}",
-                "output_config_path": f"config/sandbox/output{file_ext}",
-            },
-            "prod": {
-                "global_config_path": f"config/prod/global_config{file_ext}",
-                "input_config_path": f"config/prod/input{file_ext}",
-                "output_config_path": f"config/prod/output{file_ext}",
-            },
+            # Environments override global settings only. The catalogs are
+            # shared: paths already vary per environment via ${environment}.
+            # Listing an input/output file here *replaces* the base catalog
+            # wholesale (it is not merged), which is why the scaffold used to
+            # ship three identical copies of each — that drifted as soon as
+            # someone edited the base one.
+            "dev": {"global_config_path": f"config/dev/global_config{file_ext}"},
+            "sandbox": {"global_config_path": f"config/sandbox/global_config{file_ext}"},
+            "prod": {"global_config_path": f"config/prod/global_config{file_ext}"},
         }
 
         return {"base_path": ".", "env_config": config_paths}
@@ -250,8 +244,6 @@ class MedallionBasicTemplate(BaseTemplate):
                 "description": "Complete ETL pipeline: Extract → Transform → Load",
                 "type": "batch",
                 "nodes": ["extract", "transform", "load"],
-                "inputs": ["source_data"],
-                "outputs": ["gold.etl.final_output"],
                 # The sample ETL is not incremental — it must run without
                 # --start-date/--end-date, as the generated README promises.
                 "requires_dates": False,
@@ -458,7 +450,7 @@ class StreamingBasicTemplate(BaseTemplate):
     * a streaming node's function is a **dict** naming a registered transform,
       not a ``module``/``function`` pair, and it is called ``fn(df)`` or
       ``fn(df, params)`` — not with ``start_date``/``end_date``;
-    * ordering between streaming nodes uses ``depends_on``;
+    * ordering between nodes uses ``dependencies``, as in batch;
     * every node needs its own ``checkpoint_location``, and two nodes sharing
       one corrupts both.
 
@@ -509,9 +501,9 @@ class StreamingBasicTemplate(BaseTemplate):
     def generate_nodes_config(self) -> Dict[str, Any]:
         """Two streaming nodes, wired the way streaming nodes actually wire up.
 
-        Note what is *not* here: no ``module``/``function``, no ``dependencies``.
-        A streaming node names a transform registered in the registry, and orders
-        itself with ``depends_on``.
+        Note what is *not* here: no ``module``/``function``. A streaming node
+        names a transform registered in the registry; it orders itself with
+        ``dependencies``, like any other node.
         """
         return {
             "ingest_events": {
@@ -551,10 +543,10 @@ class StreamingBasicTemplate(BaseTemplate):
             "clean_events": {
                 "description": "Silver: drop incomplete events and stamp an ingest time",
                 "type": "streaming",
-                # Ordering between streaming nodes. Not `dependencies` — that is
-                # the batch/ML key. Ducta reads both, but `depends_on` is what
-                # the streaming engine orders its startup waves by.
-                "depends_on": ["ingest_events"],
+                # Ordering between nodes: `dependencies`, the same key batch
+                # nodes use (`depends_on` is still read, but belongs to
+                # pipelines, where it chains one pipeline after another).
+                "dependencies": ["ingest_events"],
                 "input": {
                     "format": "file_stream",
                     "file_format": "parquet",
@@ -616,17 +608,17 @@ DataFrame and returns one; it gets no ``start_date``/``end_date``, because a
 stream has no date range. Two shapes are accepted:
 
     def fn(df)            -> DataFrame
-    def fn(df, params)    -> DataFrame     # `params` is the node's function.params
+    def fn(df, params)    -> DataFrame     # `params` is the node's transform.params
 
 Nodes reference a transform by the name it was registered under, not by import
-path:
+path — in pipelines/events_stream.yaml:
 
-    function: {name: "clean_events", params: {min_amount: 0.0}}
+    transform: {key: clean_events, module: pipelines.transforms, params: {min_amount: 0.0}}
 
-`register_transforms` is called automatically before the pipeline starts,
-because `global_config.streaming_transform_modules` names this module. Run
-`ducta stream run --pipeline events_stream --config environment.yaml` and drop
-another .json file into data/events/ to watch it picked up.
+`register_transforms` is called automatically before the node starts, because
+the transform names this module. Run
+`ducta stream run --pipeline events_stream --env dev` and drop another .json
+file into data/events/ to watch it picked up.
 """
 from typing import Any, Dict
 
@@ -657,14 +649,14 @@ def clean_events(df: Any, params: Dict[str, Any] | None = None) -> Any:
 def register_transforms(registry: Any) -> None:
     """Called by Ducta before the pipeline starts.
 
-    The registry maps a name to a callable; `function: {name: ...}` in
-    config/nodes.yaml is what looks it up.
+    The registry maps a name to a callable; a stream node's `transform: {key: ...}`
+    in its pipeline file is what looks it up.
     """
     registry.register("clean_events", clean_events)
     logger.info("Registered streaming transforms: clean_events")
 '''
 
-    def generate_readme(self, ext: str) -> str:
+    def generate_readme_v2(self) -> str:
         """README for a streaming project, which runs differently from a batch one."""
         return f"""# {self.project_name}
 
@@ -676,11 +668,11 @@ A **Structured Streaming** pipeline built with **Ducta**.
 pip install -r requirements.txt
 
 # Start the stream (runs until you stop it)
-ducta stream run --config environment{ext} --pipeline events_stream --env dev
+ducta stream run --pipeline events_stream --env dev
 
 # In another shell: watch it, then stop it
-ducta stream status --config environment{ext} --env dev
-ducta stream stop   --config environment{ext} --env dev --execution-id <id>
+ducta stream status --env dev
+ducta stream stop --env dev --execution-id <id>
 ```
 
 `data/events/` ships five seed events. Two have a null `amount`, so the silver
@@ -689,30 +681,42 @@ that folder while the stream runs and watch it get picked up.
 
 ## What is different from a batch pipeline
 
-Three things, and each is hard to guess from the batch scaffold:
-
-**1. A streaming node's function is a dict, not `module` + `function`.**
-
-```yaml
-function: {{key: "clean_events", module: "pipelines.transforms", params: {{min_amount: 0.0}}}}
-```
-
-It names a transform registered in `pipelines/transforms.py`, and it is called
-`fn(df)` or `fn(df, params)` — no `start_date`/`end_date`, because a stream has
-no date range. `global_config.streaming_transform_modules` makes Ducta import
-and register them for you.
-
-**2. Ordering uses `depends_on`, not `dependencies`.**
+**1. A stream node names a registered transform, not `run: module:function`.**
 
 ```yaml
 clean_events:
-  depends_on: ["ingest_events"]
+  kind: stream
+  stream:
+    transform: {{key: clean_events, module: pipelines.transforms, params: {{min_amount: 0.0}}}}
 ```
 
-**3. Every node needs its own `checkpoint_location`.**
+`module` is imported and its `register_transforms(registry)` registers the
+function under `key`. It is called `fn(df)` or `fn(df, params)` — no
+`start_date`/`end_date`, because a stream has no date range.
 
-Two nodes sharing one corrupt each other's offsets. Delete a node's checkpoint
-directory to replay its source from the beginning.
+**2. Ordering is explicit: `after: [ingest_events]`.** A stream node's input
+and output are inline paths, not catalog datasets, so Ducta cannot infer it.
+
+**3. Every node needs its own `checkpoint_location`.** Two nodes sharing one
+corrupt each other's offsets. Delete a node's checkpoint directory to replay
+its source from the beginning.
+
+## A run that finishes: backfills and CI
+
+With a terminating trigger the queries process what exists and stop; a node
+waits for the node it reads from to finish first. Set it for one environment
+in `ducta.yaml`:
+
+```yaml
+environments:
+  sandbox:
+    pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger: {{type: available_now}}
+    pipelines.events_stream.nodes.clean_events.stream.streaming.trigger: {{type: available_now}}
+```
+
+```bash
+ducta stream run --pipeline events_stream --env sandbox --mode sync
+```
 
 ## Switching the source to Kafka
 
@@ -730,21 +734,15 @@ input:
 Kafka delivers `key`/`value` as bytes, so your transform casts them:
 `df.selectExpr("CAST(value AS STRING) as json")` and then `from_json`.
 
-## What streaming does *not* get
-
-Quality checks, data fingerprints and run certificates are batch/ML features.
-A streaming pipeline started with `--mode async` emits no run certificate: it
-has no end to certify. Use `--mode sync` with a `once` or `availableNow`
-trigger if you want a terminating run.
-
 ## Layout
 
 ```
 {self.project_name}/
-├── config/                  # the five config documents, per environment
-├── pipelines/transforms.py  # your streaming transforms + register_transforms
-├── data/events/             # the watched source directory
-└── environment{ext}         # which config file each --env resolves to
+├── ducta.yaml                    # project, paths, settings, per-environment overrides
+├── catalog.yaml                  # datasets (stream nodes declare their own I/O)
+├── pipelines/events_stream.yaml  # the pipeline and its stream nodes
+├── pipelines/transforms.py       # your streaming transforms + register_transforms
+└── data/events/                  # the watched source directory
 ```
 
 Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -761,6 +759,10 @@ class TemplateGenerator:
     }
 
     def __init__(self, output_path: Path, config_format: ConfigFormat = ConfigFormat.YAML):
+        if config_format != ConfigFormat.YAML:
+            raise TemplateError(
+                "Project configuration is YAML (ducta.yaml, catalog.yaml, pipelines/)"
+            )
         self.output_path = Path(output_path)
         self.config_format = config_format
         descriptor_name, file_ext = self.FORMAT_DESCRIPTORS[config_format]
@@ -783,7 +785,7 @@ class TemplateGenerator:
         developer_sandboxes: Optional[List[str]] = None,
         evidence_level: str = "record",
     ) -> None:
-        """Generate complete project structure from template."""
+        """Generate a project: ducta.yaml + catalog.yaml + pipelines/*.yaml, and code."""
         logger.info("Generating {} template for project '{}'", template_type.value, project_name)
 
         # Create template instance
@@ -804,7 +806,47 @@ class TemplateGenerator:
         # Generate additional project files
         self._generate_project_files(template)
 
+        self._convert_to_format2(template)
+
         logger.success("Project '{}' generated successfully at {}", project_name, self.output_path)
+
+    def _convert_to_format2(self, template: BaseTemplate) -> None:
+        """Turn the templates' engine documents into the project's files.
+
+        A template defines its content as the engine's five documents (the
+        ``generate_*_config`` methods). They are written out as an intermediate
+        layout and converted by the same code as ``ducta config migrate``, which
+        proves the result compiles back to those documents in every
+        environment; the intermediate files are then removed.
+        """
+        import shutil
+
+        from ducta.setting.project_migrate import migrate, write_files
+
+        result = migrate(self.output_path)
+        for path in result.legacy_files:
+            path.unlink(missing_ok=True)
+        config_dir = self.output_path / "config"
+        if config_dir.is_dir() and not any(p.is_file() for p in config_dir.rglob("*")):
+            shutil.rmtree(config_dir)
+        write_files(result, self.output_path)
+
+        pipeline_file = f"pipelines/{template.DEFAULT_PIPELINE}.yaml"
+        replacements = {
+            "config/nodes.yaml": pipeline_file,
+            "config/input.yaml": "catalog.yaml",
+            "config/output.yaml": "catalog.yaml",
+            "config/global_config.yaml": "ducta.yaml (settings)",
+        }
+        for code_file in (self.output_path / "pipelines").rglob("*.py"):
+            text = code_file.read_text(encoding="utf-8")
+            for old, new in replacements.items():
+                text = text.replace(old, new)
+            code_file.write_text(text, encoding="utf-8")
+
+        readme_v2 = getattr(template, "generate_readme_v2", None)
+        text = readme_v2() if callable(readme_v2) else _medallion_readme_v2(template)
+        self._write_text_file(self.output_path / "README.md", text)
 
     def _create_directory_structure(self, developer_sandboxes: Optional[List[str]] = None) -> None:
         """Create minimal but complete project structure."""
@@ -862,8 +904,12 @@ class TemplateGenerator:
             config_dir = self.output_path / "config" / (env if env != "base" else "")
 
             for config_name, config_data in configs.items():
-                # Only generate pipelines/nodes for base environment
-                if env != "base" and config_name in ["pipelines", "nodes"]:
+                if env != "base":
+                    # An environment's global config is deep-merged over the
+                    # base one: it only needs the keys that differ.
+                    if config_name == "global_config":
+                        file_path = config_dir / f"global_config{self._file_extension}"
+                        self._write_config_file(file_path, {})
                     continue
 
                 file_path = config_dir / f"{config_name}{self._file_extension}"
@@ -924,7 +970,7 @@ class TemplateGenerator:
         etl_code = '''"""
 Medallion ETL: bronze -> silver -> gold
 
-Each layer does real work, and the quality checks in ``config/nodes.yaml``
+Each layer does real work, and the quality checks in ``pipelines/etl.yaml``
 verify that it did. The sample data ships deliberately dirty (12 rows with a
 missing amount, 8 verbatim duplicates, 10 rows with a negative amount), so:
 
@@ -1102,37 +1148,29 @@ Steps to activate a custom check
 ---------------------------------
 1. Define a class that inherits from ``BaseQualityCheck`` and decorate it with
    ``@register_check("your_check_name")``.
-2. Implement the ``run()`` method and return a ``CheckResult``.
-3. Add the module path to ``quality.extensions`` in
-   ``config/global_config.yaml``:
+2. Implement ``_run_impl()`` and return ``self._create_result(...)``. An
+   exception it raises becomes a failed result, not a crashed run.
+3. Add the module to ``settings.quality.extensions`` in ``ducta.yaml``:
 
    .. code-block:: yaml
 
-       quality:
-         extensions:
-           - pipelines.checks.custom_checks
+       settings:
+         quality:
+           extensions:
+             - pipelines.checks.custom_checks
 
-4. Reference the check in any node in ``config/nodes.yaml``:
+4. Use the check in any node's ``quality`` block (or a dataset's ``checks`` in
+   ``catalog.yaml``):
 
    .. code-block:: yaml
 
        my_node:
-         data_quality:
-           enabled: true
+         quality:
            checks:
-             positive_values:
-               enabled: true
-               column: amount
+             positive_values: {column: amount}
 
-(Scaffolds generated with ``--format toml`` or ``--format json`` use the same
-keys in that format.)
 """
-from ducta.check import (
-    BaseQualityCheck,
-    CheckResult,
-    CheckSeverity,
-    register_check,
-)
+from ducta.check import BaseQualityCheck, CheckSeverity, register_check
 
 
 # ---------------------------------------------------------------------------
@@ -1153,41 +1191,20 @@ class PositiveValuesCheck(BaseQualityCheck):
     def __init__(self):
         super().__init__("positive_values", CheckSeverity.ERROR)
 
-    def run(self, df, config, adapter, context_datasets=None):
+    def _run_impl(self, df, config, adapter, context_datasets=None):
         column = getattr(config, "column", None)
         if not column:
-            return CheckResult(
-                check_name=self.name,
-                passed=False,
-                severity=CheckSeverity.ERROR,
-                message="'column' is required for positive_values check",
-            )
+            return self._create_result(False, "'column' is required for positive_values check")
 
-        try:
-            # Works with Pandas, Polars, and Spark via DFAdapter helpers
-            neg_count = adapter.filter_where(f"{column} <= 0")
-            if neg_count > 0:
-                return CheckResult(
-                    check_name=self.name,
-                    passed=False,
-                    severity=self.severity,
-                    message=f"Column '{column}' has {neg_count} non-positive values",
-                    details={"column": column, "non_positive_count": neg_count},
-                )
-            return CheckResult(
-                check_name=self.name,
-                passed=True,
-                severity=self.severity,
-                message=f"All values in '{column}' are positive",
+        # The adapter runs the same SQL condition on Spark and pandas.
+        non_positive = adapter.filter_where(f"{column} <= 0")
+        if non_positive > 0:
+            return self._create_result(
+                False,
+                f"Column '{column}' has {non_positive} non-positive values",
+                {"column": column, "non_positive_count": non_positive},
             )
-        except Exception as exc:
-            return CheckResult(
-                check_name=self.name,
-                passed=False,
-                severity=CheckSeverity.ERROR,
-                message=f"positive_values check error: {exc}",
-                details={"error": str(exc)},
-            )
+        return self._create_result(True, f"All values in '{column}' are positive")
 
 
 # ---------------------------------------------------------------------------
@@ -1208,7 +1225,7 @@ class PositiveValuesCheck(BaseQualityCheck):
 #     def __init__(self):
 #         super().__init__("email_domain", CheckSeverity.WARNING)
 #
-#     def run(self, df, config, adapter, context_datasets=None):
+#     def _run_impl(self, df, config, adapter, context_datasets=None):
 #         column = getattr(config, "column", "email")
 #         allowed = getattr(config, "allowed_domains", [])
 #         ...
@@ -1217,113 +1234,7 @@ class PositiveValuesCheck(BaseQualityCheck):
         self._write_text_file(custom_file, custom_checks_code)
 
     def _generate_project_files(self, template: MedallionBasicTemplate) -> None:
-        """Generate essential project files only."""
-        # The scaffold honours --format, so the README must name the files that
-        # actually exist on disk: config/input.json, not config/input.yaml.
-        ext = self._file_extension
-        # README.md — templates that describe a different pipeline supply their
-        # own; the medallion text below would otherwise tell a streaming user to
-        # run a batch pipeline that does not exist in their project.
-        custom_readme = getattr(template, "generate_readme", None)
-        if callable(custom_readme):
-            self._write_text_file(self.output_path / "README.md", custom_readme(ext))
-            self._write_support_files(template)
-            return
-
-        readme_content = f"""# {template.project_name}
-
-A medallion ETL pipeline built with **Ducta**.
-
-## Run it
-
-```bash
-pip install -r requirements.txt
-ducta start --env dev --pipeline etl
-```
-
-The sample data is **deliberately dirty** — 12 rows with a missing `amount`,
-8 verbatim duplicates, and 10 rows with a negative `amount` — so the run has
-something real to do:
-
-```
-bronze  508 rows   raw, exactly as it arrived
-silver  478 rows   deduplicated, incomplete and invalid rows dropped
-gold      5 rows   one row per category
-```
-
-## Then prove what happened
-
-```bash
-ducta certify list                       # every run recorded here
-ducta certify show   --run-id <run-id>   # what ran, on which data
-ducta certify verify --run-id <run-id>   # tamper check
-```
-
-The certificate records a content fingerprint and row count for every dataset at
-every layer, so the three row counts above are evidence, not log output. Compare
-two runs with `ducta certify diff <run-a> <run-b>`.
-
-## See the quality gate work
-
-`config/nodes{ext}` asserts on the silver layer that `amount` has no nulls, no
-negative values, and `order_id` has no duplicates, with `quality_gate.max_errors:
-0`. Those checks pass because `transform` cleaned the data. To watch them fail:
-
-1. Open `pipelines/etl.py` and comment out the `cleaned.dropna()` line (or the
-   `filter(...)` block right below it) in `transform`.
-2. Re-run `ducta start --env dev --pipeline etl`.
-
-The gate blocks, `load` is skipped, and **gold is never written** — the checks
-run before the write, so bad data does not reach storage. Undo the change to go
-back to a passing run.
-
-## Project structure
-
-```
-{template.project_name}/
-├── config/
-│   ├── global_config{ext}  # project settings, quality profiles
-│   ├── pipelines{ext}        # which nodes make up which pipeline
-│   ├── nodes{ext}            # per-node I/O, checks and gates
-│   ├── input{ext}            # where data is read from
-│   ├── output{ext}           # where data is written to
-│   └── dev/ sandbox/ prod/   # per-environment overrides
-├── pipelines/
-│   ├── etl.py                # your transformations (plain functions)
-│   └── checks/custom_checks.py
-└── data/
-    ├── input.csv             # sample source
-    └── dev/                  # bronze/ silver/ gold/ written per environment
-        ├── quality/           # quality reports, baselines, history
-        └── .ducta/            # run certificates, chain state (framework state)
-```
-
-## What to change first
-
-1. Point `config/input{ext}` at your own data.
-2. Rewrite the three functions in `pipelines/etl.py`. They are ordinary Python
-   taking a DataFrame and returning one — no decorators, no framework types.
-3. Update the checks in `config/nodes{ext}` to assert what *your* transform
-   guarantees, and set `GROUP_COLUMN`/`VALUE_COLUMN` at the top of `etl.py`.
-
-## Useful commands
-
-```bash
-ducta config list-pipelines                  # what is defined here
-ducta start --env dev --pipeline etl --validate-only   # config check, no Spark
-ducta start --env dev --pipeline etl --log-level DEBUG
-ducta server start --port 8000               # web UI (needs the `api` extra)
-```
-
-Ducta is alpha — see the
-[CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md)
-before depending on it. Docs: https://github.com/faustinolopezramos/ducta
-
-Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-"""
-        readme_file = self.output_path / "README.md"
-        self._write_text_file(readme_file, readme_content)
-
+        """Generate the supporting files (the README is written with the configuration)."""
         self._write_support_files(template)
 
     def _write_support_files(self, template: BaseTemplate) -> None:
@@ -1417,10 +1328,8 @@ class TemplateCommand:
         template_type: Optional[str] = None,
         project_name: Optional[str] = None,
         output_path: Optional[str] = None,
-        config_format: str = "yaml",
         create_sample_code: bool = True,
         list_templates: bool = False,
-        interactive: bool = False,
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
     ) -> int:
@@ -1428,9 +1337,6 @@ class TemplateCommand:
         try:
             if list_templates:
                 return self._list_templates()
-
-            if interactive:
-                return self._interactive_generation()
 
             validation_error = self._validate_inputs(template_type, project_name)
             if validation_error:
@@ -1444,7 +1350,6 @@ class TemplateCommand:
                 template_type,
                 project_name,
                 output_path,
-                config_format,
                 create_sample_code,
                 sandbox_developers,
                 evidence_level,
@@ -1473,7 +1378,7 @@ class TemplateCommand:
         logger.info("Examples:")
         logger.info("  ducta template --template medallion_basic --project-name my_pipeline")
         logger.info(
-            "  ducta template --template medallion_basic --project-name my_pipeline --format json"
+            "  ducta template --template streaming_basic --project-name events --evidence-level signed"
         )
 
         return ExitCode.SUCCESS.value
@@ -1520,83 +1425,6 @@ class TemplateCommand:
                 return ExitCode.VALIDATION_ERROR.value
         return None
 
-    def _validate_config_format(self, format_str: str) -> Optional[int]:
-        """Validate config format string."""
-        valid_formats = [f.value for f in ConfigFormat]
-        if format_str not in valid_formats:
-            logger.error(
-                "Invalid format '{}'. Use one of: {}", format_str, ", ".join(valid_formats)
-            )
-            return ExitCode.VALIDATION_ERROR.value
-        return None
-
-    def _interactive_generation(self) -> int:
-        """Interactive template generation."""
-        try:
-            templates = TemplateFactory.list_available_templates()
-            selected_template = self._select_template(templates)
-            if selected_template is None:
-                return ExitCode.GENERAL_ERROR.value
-
-            project_name = input("Enter project name: ").strip()
-            validation_error = self._validate_project_name(project_name)
-            if validation_error:
-                return validation_error
-
-            default_output = f"./{project_name}"
-            output_path = (
-                input(f"Output path (default: {default_output}): ").strip() or default_output
-            )
-
-            valid_formats = [f.value for f in ConfigFormat]
-            print(f"\nConfig formats: {', '.join(valid_formats)}")
-            config_format = self._prompt_config_format()
-            if config_format is None:
-                return ExitCode.GENERAL_ERROR.value
-
-            create_code = input("Generate sample code? (Y/n): ").strip().lower()
-            create_sample_code = create_code != "n"
-
-            return self._generate_template(
-                selected_template["type"],
-                project_name,
-                output_path,
-                config_format,
-                create_sample_code,
-            )
-
-        except Exception as e:
-            logger.error("Interactive generation failed: {}", e)
-            return ExitCode.GENERAL_ERROR.value
-
-    def _select_template(self, templates: List[Dict[str, str]]) -> Optional[Dict[str, str]]:
-        """Prompt the user to select a template from the list; return None if cancelled."""
-        print("\nAvailable templates:")
-        for i, template in enumerate(templates, 1):
-            print(f"  {i}. {template['name']} - {template['description']}")
-        while True:
-            try:
-                choice = input(f"\nSelect template (1-{len(templates)}): ").strip()
-                if choice.isdigit():
-                    index = int(choice) - 1
-                    if 0 <= index < len(templates):
-                        return templates[index]
-                # Invalid selection -> prompt again
-                print("Invalid selection. Please try again or press Ctrl+C to cancel.")
-            except (KeyboardInterrupt, EOFError):
-                logger.info(_TEMPLATE_CANCELLED_MSG)
-                return None
-
-    def _prompt_config_format(self) -> Optional[str]:
-        """Prompt for config format and validate; return None on validation error."""
-        config_format = input("Config format (default: yaml): ").strip().lower()
-        if not config_format:
-            return "yaml"
-        validation_error = self._validate_config_format(config_format)
-        if validation_error:
-            return None
-        return config_format
-
     @staticmethod
     def _parse_enum_or_error(enum_cls, value: str, label: str, available_label: str):
         """Parse *value* as *enum_cls*, or log the invalid value and its
@@ -1614,7 +1442,6 @@ class TemplateCommand:
         template_type: str,
         project_name: str,
         output_path: Optional[str],
-        config_format: str,
         create_sample_code: bool,
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
@@ -1627,12 +1454,6 @@ class TemplateCommand:
             if template_enum is None:
                 return ExitCode.VALIDATION_ERROR.value
 
-            format_enum = self._parse_enum_or_error(
-                ConfigFormat, config_format, "config format", "formats"
-            )
-            if format_enum is None:
-                return ExitCode.VALIDATION_ERROR.value
-
             if not output_path:
                 output_path = f"./{project_name}"
 
@@ -1643,7 +1464,7 @@ class TemplateCommand:
                 logger.info(_TEMPLATE_CANCELLED_MSG)
                 return ExitCode.VALIDATION_ERROR.value
 
-            self.generator = TemplateGenerator(output_dir, format_enum)
+            self.generator = TemplateGenerator(output_dir)
             self.generator.generate_project(
                 template_enum,
                 project_name,
@@ -1674,11 +1495,14 @@ class TemplateCommand:
         logger.info("\n📋 Next steps:")
         logger.info("1️⃣  cd {}", output_dir)
         logger.info("2️⃣  pip install -r requirements.txt")
-        logger.info("3️⃣  Update config/input.yaml and config/output.yaml for your data")
+        config_filename = "ducta.yaml"
+        logger.info("3️⃣  Point catalog.yaml at your data")
         logger.info(
-            "4️⃣  Customize {} for your business logic", "/".join(template.SAMPLE_MODULE_PATH)
+            "4️⃣  Customize {} and pipelines/{}.yaml",
+            "/".join(template.SAMPLE_MODULE_PATH),
+            template.DEFAULT_PIPELINE,
         )
-        logger.info("5️⃣  Update config/dev/input.yaml and output.yaml for dev environment")
+        logger.info("5️⃣  Per-environment differences go under `environments:` in ducta.yaml")
 
         logger.info("\n🚀 Quick start:")
         pipeline = template.DEFAULT_PIPELINE
@@ -1725,9 +1549,97 @@ def handle_template_command(parsed_args) -> int:
         template_type=parsed_args.template,
         project_name=parsed_args.project_name,
         output_path=parsed_args.output_path,
-        config_format=parsed_args.format,
         create_sample_code=not parsed_args.no_sample_code,
         list_templates=parsed_args.list_templates,
         sandbox_developers=getattr(parsed_args, "sandbox_developers", None),
         evidence_level=getattr(parsed_args, "evidence_level", None) or "record",
     )
+
+
+def _medallion_readme_v2(template: "BaseTemplate") -> str:
+    """README for a format-2 medallion project."""
+    return f"""# {template.project_name}
+
+A medallion ETL pipeline built with **Ducta**.
+
+## Run it
+
+```bash
+pip install -r requirements.txt
+ducta start --env dev --pipeline etl
+```
+
+The sample data is **deliberately dirty** — 12 rows with a missing `amount`,
+8 verbatim duplicates, and 10 rows with a negative `amount` — so the run has
+something real to do:
+
+```
+bronze  508 rows   raw, exactly as it arrived
+silver  478 rows   deduplicated, incomplete and invalid rows dropped
+gold      5 rows   one row per category
+```
+
+## Then prove what happened
+
+```bash
+ducta certify list                       # every run recorded here
+ducta certify show   --run-id <run-id>   # what ran, on which data
+ducta certify verify --run-id <run-id>   # integrity (+ signature, with the key)
+```
+
+## See the quality gate work
+
+`pipelines/etl.yaml` asserts on the silver layer that `amount` has no nulls, no
+negative values, and `order_id` has no duplicates, with a gate of
+`max_errors: 0`. To watch it block:
+
+1. Open `pipelines/etl.py` and comment out the `cleaned.dropna()` line in
+   `transform`.
+2. Re-run `ducta start --env dev --pipeline etl`.
+
+The gate blocks, `load` is skipped, and **gold is never written**.
+
+## Project structure
+
+```
+{template.project_name}/
+├── ducta.yaml             # project, paths, settings, per-environment overrides
+├── catalog.yaml           # every dataset once: format, path, how it is written,
+│                          #   and the checks it must always pass (contracts)
+├── pipelines/
+│   ├── etl.yaml           # the pipeline: its nodes, their inputs/outputs, checks
+│   ├── etl.py             # your transformations (plain functions)
+│   └── checks/custom_checks.py
+├── .ducta/schema/         # JSON Schemas: autocompletion in VS Code/JetBrains
+└── data/
+    ├── input.csv          # sample source
+    └── dev/               # bronze/ silver/ gold/ written per environment
+```
+
+An environment only states what differs — for example, in `ducta.yaml`:
+
+```yaml
+environments:
+  prod:
+    settings: {{max_parallel_nodes: 8, evidence_level: signed}}
+    paths: {{output: s3://my-lake/prod}}
+```
+
+## What to change first
+
+1. Point `source_data` in `catalog.yaml` at your own data.
+2. Rewrite the three functions in `pipelines/etl.py`.
+3. Update the checks in `pipelines/etl.yaml` to assert what *your* transform
+   guarantees.
+
+## Useful commands
+
+```bash
+ducta config list-pipelines                  # what is defined here
+ducta config validate                        # config check, no Spark
+ducta config schema --out .                  # refresh the editor schemas
+ducta server start --port 8000               # web UI (needs the `api` extra)
+```
+
+Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+"""

@@ -60,7 +60,7 @@ def test_template_into_an_empty_cwd_succeeds(tmp_path):
         ],
     )
     assert rc == 0, "scaffolding into an empty directory must not report it as non-empty"
-    assert (tmp_path / "environment.yaml").exists()
+    assert (tmp_path / "ducta.yaml").exists()  # format 2 by default
 
 
 def test_an_explicit_log_file_is_still_honoured(tmp_path):

@@ -59,27 +59,16 @@ def workspace(tmp_path: Path) -> Path:
     """A workspace whose `batch` project keeps its outputs under `./data`."""
     project = tmp_path / "projects" / "batch"
     _write(
-        project / "environment.yml",
+        project / "ducta.yaml",
         """
-        env_config:
-          base:
-            global_config_path: config/global_config.yml
-            pipelines_config_path: config/pipelines.yml
-            nodes_config_path: config/nodes.yml
-            input_config_path: config/input.yml
-            output_config_path: config/output.yml
+        version: 2
+        project: batch
+        paths: {input: ./data, output: ./data}
+        settings: {mode: local}
         """,
     )
-    _write(
-        project / "config" / "global_config.yml",
-        """
-        input_path: './data'
-        output_path: './data'
-        mode: "local"
-        """,
-    )
-    for name in ("pipelines", "nodes", "input", "output"):
-        _write(project / "config" / f"{name}.yml", "{}\n")
+    _write(project / "catalog.yaml", "{}\n")
+    (project / "pipelines").mkdir()
     return tmp_path
 
 

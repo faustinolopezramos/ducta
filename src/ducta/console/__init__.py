@@ -38,14 +38,13 @@ from ducta.console.commands import (
 # ---------------------------------------------------------------------------
 # Config management
 # ---------------------------------------------------------------------------
-from ducta.console.config import AppConfigManager, ConfigDiscovery, ConfigManager, load_config_file
+from ducta.console.config import ConfigManager
 
 # ---------------------------------------------------------------------------
 # CLI core types
 # ---------------------------------------------------------------------------
 from ducta.console.core import (
     CLIConfig,
-    ConfigCache,
     ConfigFormat,
     ConfigurationError,
     DuctaError,
@@ -118,27 +117,9 @@ from ducta.console.ux import (
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
-from ducta.console.validation import (
-    EnvironmentConfigValidator,
-    ValidationIssue,
-    ValidationSeverity,
-    print_validation_report,
-    validate_conflicting_options,
-    validate_date_iso,
-    validate_enum_field,
-    validate_format,
-    validate_json_string,
-    validate_log_level,
-    validate_mode,
-    validate_positive_number,
-    validate_project_name,
-    validate_required_field,
-    validate_timeout,
-)
 
 __all__ = [
     "CLIConfig",
-    "ConfigCache",
     "ConfigFormat",
     "ConfigurationError",
     "DuctaError",
@@ -152,14 +133,7 @@ __all__ = [
     "ValidationError",
     "parse_iso_date",
     "validate_date_range",
-    "AppConfigManager",
-    "ConfigDiscovery",
     "ConfigManager",
-    "load_config_file",
-    "EnvironmentConfigValidator",
-    "ValidationIssue",
-    "ValidationSeverity",
-    "print_validation_report",
     "validate_conflicting_options",
     "validate_date_iso",
     "validate_enum_field",

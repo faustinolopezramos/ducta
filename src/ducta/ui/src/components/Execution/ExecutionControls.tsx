@@ -53,7 +53,7 @@ export function ExecutionControls({
     sourceType, availableEnvs, execution, isStarting, isSweeping,
     isCancelling, isPreflighting, isQueued, isRunning, isActive, isDone, isFailed,
     preflightPipeline, setPreflightResult,
-    setStartDate, setEndDate, setShowParams, setErrorMsg, setShowError,
+    setStartDate, setEndDate, setShowParams, setShowError,
     setModelVersion, setHyperparams, setSweepMode,
     handleRun, handleCopyCommand, handleCancel, handleClear, show,
   } = useExecutionState(pipelineName, projectId, onExecutionStatesChange, onStatusChange, onActiveIdChange);

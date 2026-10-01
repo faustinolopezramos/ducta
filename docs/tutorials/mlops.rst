@@ -45,176 +45,63 @@ Prerequisites
 Step 1: Configure Ducta's MLOps Layer
 --------------------------------------
 
-Ducta discovers configuration from the ``config/`` directory. Add an ``mlops`` block to your ``config/global_config.toml``.
+MLOps settings live under ``settings.mlops`` in ``ducta.yaml``, next to the
+seed that makes training reproducible:
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
+   # ducta.yaml
+   version: 2
+   project: churn
+   paths: {input: data, output: data}
+   settings:
+     random_seed: 42              # seeds random/numpy/torch + ml_context["node_seed"]
+     mlops:
+       backend_type: local
+       storage_path: ./mlops_data
+       model_retention_days: 90
+       metric_buffer_size: 200
+       auto_flush_metrics: true
+   environments:
+     prod:
+       settings.mlops.backend_type: databricks
 
-      .. code-block:: toml
-
-         # config/global_config.toml
-         [mlops]
-         backend_type = "local"
-         storage_path = "./mlops_data"
-         model_retention_days = 90
-         metric_buffer_size = 200
-         auto_flush_metrics = true
-         auto_cleanup_stale = true
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/global_config.yaml
-         mlops:
-           backend_type: local
-           storage_path: ./mlops_data
-           model_retention_days: 90
-           metric_buffer_size: 200
-           auto_flush_metrics: true
-           auto_cleanup_stale: true
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "mlops": {
-             "backend_type": "local",
-             "storage_path": "./mlops_data",
-             "model_retention_days": 90,
-             "metric_buffer_size": 200,
-             "auto_flush_metrics": true,
-             "auto_cleanup_stale": true
-           }
-         }
-
-.. tip::
-
-   **For Databricks/Unity Catalog**, use environment variables for secure authentication:
-   ``DUCTA_MLOPS_BACKEND=databricks``, ``DATABRICKS_CATALOG=prod_catalog``.
+Ducta seeds ``random``, ``numpy`` and ``torch`` globally from ``random_seed``
+and gives each node a deterministic seed of its own.
 
 Step 2: Define the Training Pipeline
 -------------------------------------
 
-Create a pipeline that executes your training script.
+The training data is a dataset like any other:
 
-**Define the pipeline** (``config/pipelines.toml``):
+.. code-block:: yaml
 
-.. tab-set::
+   # catalog.yaml
+   gold.churn.training_set:
+     format: parquet
+     use_pandas: true                 # the node receives a pandas DataFrame
 
-   .. tab-item:: TOML
+The pipeline is ``type: ml``; its hyperparameters and split are versioned here,
+not in code:
 
-      .. code-block:: toml
+.. code-block:: yaml
 
-         # config/pipelines.toml — the key IS the pipeline name (flat, no wrapper)
-         [ml_training]
-         description = "Train and register customer churn prediction model"
-         type = "ml"
-         nodes = ["train_churn_model"]
-         model_version = "1.0.0"
-
-         [ml_training.hyperparams]
-         n_estimators = 150
-         max_depth = 12
-
-         # Declared once here, applied by the node via split_dataframe — the
-         # run certificate then records the split that actually ran.
-         [ml_training.split]
-         method = "stratified"
-         stratify_col = "churn"
-         test_size = 0.2
-         val_size = 0.1
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml
-         ml_training:
-           description: "Train and register customer churn prediction model"
-           type: ml
-           nodes:
-             - train_churn_model
-           model_version: "1.0.0"
-           hyperparams:
-             n_estimators: 150
-             max_depth: 12
-           # Declared once here, applied by the node via split_dataframe — the
-           # run certificate then records the split that actually ran.
-           split:
-             method: stratified
-             stratify_col: churn
-             test_size: 0.2
-             val_size: 0.1
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "ml_training": {
-             "description": "Train and register customer churn prediction model",
-             "type": "ml",
-             "nodes": ["train_churn_model"],
-             "model_version": "1.0.0",
-             "hyperparams": {
-               "n_estimators": 150,
-               "max_depth": 12
-             },
-             "split": {
-               "method": "stratified",
-               "stratify_col": "churn",
-               "test_size": 0.2,
-               "val_size": 0.1
-             }
-           }
-         }
-
-**Define the node** (``config/nodes.toml``):
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — the key IS the node name (flat, no wrapper)
-         [train_churn_model]
-         function = "pipelines.ml.train_and_register"
-         description = "Train RandomForest model and register to registry"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         train_churn_model:
-           function: "pipelines.ml.train_and_register"
-           description: "Train RandomForest model and register to registry"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "train_churn_model": {
-             "function": "pipelines.ml.train_and_register",
-             "description": "Train RandomForest model and register to registry"
-           }
-         }
-
-.. important::
-
-   Set ``random_seed`` in your ``global_config`` so training runs are
-   reproducible. Ducta seeds ``random``, ``numpy`` and ``torch`` globally and
-   exposes a deterministic per-node seed as ``ml_context["node_seed"]``:
-
-   .. code-block:: toml
-
-      # config/global_config.toml (settings live at the top level)
-      random_seed = 42
+   # pipelines/ml_training.yaml
+   description: Train and register the customer churn model
+   type: ml
+   requires_dates: false
+   model_version: "1.0.0"
+   hyperparams: {n_estimators: 150, max_depth: 12}
+   split:                              # applied by the node via split_dataframe
+     method: stratified
+     stratify_col: churn
+     test_size: 0.2
+     val_size: 0.1
+   nodes:
+     train_churn_model:
+       description: Train a RandomForest and register it when it beats the baseline
+       run: pipelines.ml:train_and_register
+       inputs: {training_data: gold.churn.training_set}
 
 Step 3: Create the Training Script
 ----------------------------------
@@ -238,15 +125,16 @@ per-node seed, the pipeline-level experiment run id, and the MLOps context
    from ducta.mlrun import split_dataframe
 
 
-   def train_and_register(training_data: pd.DataFrame, start_date=None, end_date=None, ml_context=None):
+   def train_and_register(training_data: pd.DataFrame, ml_context=None):
        ml_context = ml_context or {}
 
-       # Hyperparameters come from versioned config (pipelines.toml / --hyperparams),
+       # Hyperparameters come from versioned config (pipelines/ml_training.yaml or
+       # --hyperparams),
        # with safe defaults for local runs outside the pipeline.
        params = {"n_estimators": 150, "max_depth": 12, **(ml_context.get("hyperparams") or {})}
        seed = ml_context.get("node_seed", 42)
 
-       # The split is declared once in pipelines.toml ([ml_training.split]) and
+       # The split is declared once in pipelines/ml_training.yaml (split:) and
        # applied here — passing ml_context marks split_applied on it, so the
        # engine can confirm the split it logged to the run is the split that
        # actually ran. Model selection happens on val; test is touched exactly
@@ -349,7 +237,7 @@ winner's.
 Declarative train/test split
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The ``[ml_training.split]`` block from Step 3 versions the split criteria in
+The ``split`` block from Step 2 versions the split criteria in
 the pipeline config instead of hardcoding them in node code, and
 ``train_and_register`` already applies it with one call — passing
 ``ml_context=`` marks ``ml_context["split_applied"]``, so the run certificate
@@ -369,9 +257,9 @@ was configured:
 ``val``, and ``test`` is scored exactly once, at the end, to report an
 unbiased estimate — never used to choose hyperparameters or to decide
 whether to register. Omit ``val_size`` for a plain 2-way ``(train, test)``
-split. Use ``method = "group"`` with ``group_col`` when the same entity
+split. Use ``method: group`` with ``group_col`` when the same entity
 (customer, device) appears in several rows, so it never lands on both sides
-of the split; use ``method = "temporal"`` with ``time_col`` to cut without
+of the split; use ``method: temporal`` with ``time_col`` to cut without
 shuffling time.
 
 .. warning::
@@ -386,12 +274,18 @@ Promotion gates
 Block promotions to Production that do not beat the current model (or the
 trivial baseline) by a margin:
 
-.. code-block:: toml
+.. code-block:: yaml
 
-   [mlops.promotion_policy]
-   metric = "val_f1"
-   min_delta = 0.01
-   compare_to = "current_production"   # or "baseline"
+   # ducta.yaml
+   version: 2
+   project: churn
+   paths: {input: data, output: data}
+   settings:
+     mlops:
+       promotion_policy:
+         metric: val_f1
+         min_delta: 0.01
+         compare_to: current_production   # or baseline
 
 .. code-block:: bash
 
@@ -404,13 +298,17 @@ Reproducibility guards
 
 Two settings turn lineage recording into guarantees:
 
-.. code-block:: toml
+.. code-block:: yaml
 
-   # config/global_config.toml (top-level settings)
-   random_seed = 42            # seeds random/numpy/torch + per-node ml_context["node_seed"]
-   fingerprint_policy = "warn" # record | warn | fail when inputs changed vs previous run
+   # ducta.yaml
+   version: 2
+   project: churn
+   paths: {input: data, output: data}
+   settings:
+     random_seed: 42              # seeds random/numpy/torch + per-node ml_context["node_seed"]
+     fingerprint_policy: warn     # record | warn | fail when inputs changed vs previous run
 
-With ``fingerprint_policy = "fail"`` the pipeline aborts before training on
+With ``fingerprint_policy: fail`` the pipeline aborts before training on
 data that changed since the previous successful run of the same pipeline.
 
 Next Steps

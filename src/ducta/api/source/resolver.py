@@ -35,7 +35,7 @@ from loguru import logger
 from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.utils.git_utils import sanitize_git_remote_url
 from ducta.api.utils.validators import URLValidationError, validate_git_url
-from ducta.api.workspace.utils import CONFIG_EXTENSIONS, has_config_file
+from ducta.setting.project_loader import find_project_root
 
 _MAX_CLONE_LOCKS = 256
 
@@ -134,8 +134,7 @@ class SourceResolver:
             source_type=source_type,
             original_source=source,
             has_git=(local_path / ".git").exists(),
-            has_environment_yaml=(local_path / "environment.yaml").exists()
-            or (local_path / "environment.yml").exists(),
+            has_project=find_project_root(local_path) is not None,
             pull_failed=pull_failed,
         )
 
@@ -155,30 +154,29 @@ class SourceResolver:
                 logger.debug("Could not read git remote: {exc}", exc=exc)
 
         environments: List[str] = []
-        if resolved.has_environment_yaml:
-            try:
-                from ducta.api.workspace.loaders import load_environment_yaml
-
-                env_data = load_environment_yaml(resolved.path)
-                environments = list(env_data.get("env_config", {}).keys())
-            except Exception as exc:
-                logger.debug("Could not load environments: {exc}", exc=exc)
-
         config_files: List[str] = []
-        config_dir = resolved.path / "config"
-        if config_dir.is_dir():
-            for f in config_dir.rglob("*"):
-                if f.is_file() and f.suffix in CONFIG_EXTENSIONS:
+        root = find_project_root(resolved.path)
+        if root is not None:
+            try:
+                import yaml  # type: ignore[import-untyped]
+
+                data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
+                environments = ["base", *(data.get("environments") or {})]
+            except Exception as exc:
+                logger.debug("Could not read environments: {exc}", exc=exc)
+            for f in [
+                root / "ducta.yaml",
+                root / "catalog.yaml",
+                *sorted((root / "pipelines").rglob("*.yaml")),
+            ]:
+                if f.is_file():
                     config_files.append(str(f.relative_to(resolved.path)))
 
         projects: List[str] = []
         projects_dir = resolved.path / "projects"
         if projects_dir.is_dir():
             for project_dir in sorted(projects_dir.iterdir()):
-                if project_dir.is_dir() and (
-                    has_config_file(project_dir, "environment")
-                    or has_config_file(project_dir, "ducta")
-                ):
+                if project_dir.is_dir() and find_project_root(project_dir) is not None:
                     projects.append(project_dir.name)
 
         return SourceInfo(
@@ -187,7 +185,7 @@ class SourceResolver:
             source_type=resolved.source_type,
             has_git=resolved.has_git,
             git_remote=git_remote,
-            has_environment_yaml=resolved.has_environment_yaml,
+            has_project=resolved.has_project,
             environments=environments,
             config_files=config_files,
             projects=projects,
@@ -197,14 +195,7 @@ class SourceResolver:
     _MAX_WORKSPACE_WALK_UP: ClassVar[int] = 5
 
     #: Files whose presence marks a directory as a Ducta workspace root.
-    _WORKSPACE_MARKERS: ClassVar[tuple[str, ...]] = (
-        "environment.yaml",
-        "environment.yml",
-        "environment.toml",
-        "environment.json",
-        "ducta.yaml",
-        "ducta.yml",
-    )
+    _WORKSPACE_MARKERS: ClassVar[tuple[str, ...]] = ("ducta.yaml",)
 
     @classmethod
     def _looks_like_workspace(cls, path: Path) -> bool:
@@ -215,9 +206,9 @@ class SourceResolver:
         which is exactly the layout `ducta ui` is normally launched into.
         """
         try:
-            if any((path / name).exists() for name in cls._WORKSPACE_MARKERS):
+            if find_project_root(path) is not None:
                 return True
-            return (path / "config").is_dir() or (path / "projects").is_dir()
+            return (path / "projects").is_dir()
         except OSError:
             return False
 

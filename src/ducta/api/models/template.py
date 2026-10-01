@@ -38,7 +38,6 @@ class GenerateFromTemplateRequest(BaseModel):
 
     template: str = Field(description="Template type: medallion_basic")
     project_name: str = Field(description="New project name (letters, digits, underscore, hyphen)")
-    config_format: str = Field(default="yaml", description="Config format: yaml, json, or toml")
     include_sample_code: bool = Field(default=True, description="Include sample node code")
     sandbox_developers: List[str] = Field(
         default_factory=list, description="Developer names for sandbox environments"

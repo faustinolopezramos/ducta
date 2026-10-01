@@ -278,7 +278,7 @@ class ParallelCoordinator:
         """
         now = time.time()
         remaining = [
-            self.node_timeout - (now - info["start_time"])
+            self._timeout_for(info) - (now - info["start_time"])
             for _, info in execution_state.get_running_items_snapshot()
         ]
         if not remaining:
@@ -288,8 +288,20 @@ class ParallelCoordinator:
             remaining.append(self.settings.execution_timeout_seconds - (now - run_started))
         return min(remaining)
 
+    def _timeout_for(self, node_info: Dict[str, Any]) -> int:
+        """The node's own ``timeout`` when it declares one, else ``node_timeout_seconds``.
+
+        `timeout` was a declared, validated node key that nothing read: a node
+        configured with `timeout: 60` ran under the global limit, silently.
+        """
+        own = (node_info.get("config") or {}).get("timeout")
+        try:
+            return int(own) if own else self.node_timeout
+        except (TypeError, ValueError):
+            return self.node_timeout
+
     def _fail_timed_out_nodes(self, execution_state: ThreadSafeExecutionState) -> None:
-        """Mark any running node that exceeded ``node_timeout`` as failed."""
+        """Mark any running node that exceeded its timeout as failed."""
         now = time.time()
         for future, node_info in execution_state.get_running_items_snapshot():
             # A finished future can still sit in `running`: `_process_completed_nodes`
@@ -301,7 +313,8 @@ class ParallelCoordinator:
                 continue
 
             elapsed = now - node_info["start_time"]
-            if elapsed <= self.node_timeout:
+            limit = self._timeout_for(node_info)
+            if elapsed <= limit:
                 continue
 
             node_name = node_info["node_name"]
@@ -311,14 +324,14 @@ class ParallelCoordinator:
                 "the process exits.",
                 node_name,
                 elapsed,
-                self.node_timeout,
+                limit,
             )
-            timeout_error = NodeTimeoutError(node_name, self.node_timeout)
+            timeout_error = NodeTimeoutError(node_name, limit)
             execution_state.mark_failed(
                 node_name,
                 {
                     "status": "failed",
-                    "error": f"Node execution timeout exceeded ({self.node_timeout}s)",
+                    "error": f"Node execution timeout exceeded ({limit}s)",
                     "error_type": "TimeoutError",
                     "start_time": node_info["start_time"],
                     "end_time": now,
@@ -327,7 +340,7 @@ class ParallelCoordinator:
                 exception=timeout_error,
             )
             execution_state.remove_running_future(future)
-            self._cancel_timed_out(node_name, f"exceeded node_timeout_seconds={self.node_timeout}")
+            self._cancel_timed_out(node_name, f"exceeded its timeout of {limit}s")
             try:
                 future.cancel()
             except Exception:

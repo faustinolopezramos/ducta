@@ -189,6 +189,13 @@ async def refresh_token(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Rotate: the presented token must stop working once its replacement is
+    # issued, otherwise every refresh leaves one more live token behind.
+    old_jti, old_exp = payload.get("jti", ""), payload.get("exp")
+    if old_jti and old_exp:
+        from datetime import datetime, timezone
+
+        auth_svc.revoke_token(old_jti, datetime.fromtimestamp(old_exp, tz=timezone.utc))
     token_response = _build_token_response(user, auth_svc)
     _set_token_cookie(request, response, token_response, settings)
     return token_response

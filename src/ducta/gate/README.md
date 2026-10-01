@@ -49,32 +49,50 @@ Ducta Gate acts as the physical layer of the Ducta ecosystem, implementing:
 
 ## 2. Configuration & Schemas
 
-Ducta Gate configurations are parsed and validated via Pydantic schemas in the `ducta.setting.schemas` module.
+Users declare datasets once in the project's `catalog.yaml` (see
+`docs/configuration.rst`). `ducta.setting.project_loader` compiles the catalog
+into the two documents Gate reads — `input_config` and `output_config` — with
+`path` becoming `filepath` and the `write:` block flattened into
+`write_mode`, `merge`, `partition`, … — everything below is what Gate sees at
+runtime.
 
-### Global I/O Settings
-Configure the engine's behavior under the `global_config` block:
-*   **`mode`** (*local* | *distributed*): Controls local directory creation vs. cloud storage defaults.
+### Engine settings Gate reads
+Set under `settings:` in `ducta.yaml` (compiled into `global_config`):
+*   **`mode`** (*local* | *databricks* | *distributed*): Controls local directory creation vs. cloud storage defaults.
 *   **`in_memory_handoff`** (*boolean*, default `false`): Enables memory caching for sequential nodes. **Mind the memory profile, which differs by engine:** Spark frames are persisted `MEMORY_AND_DISK`, so they spill rather than exhaust the heap. Pandas frames have no such valve — each handed-off frame is held as a deep copy for the whole run (and `take()` returns another copy per read), with no eviction once the last consumer has read it. Peak memory therefore grows with the number of handed-off nodes, so enable it for pandas pipelines only when the working set comfortably fits in RAM.
 *   **`max_input_workers`** (*integer*): Concurrency limit for parallel reading.
 *   **`enable_data_fingerprinting`** (*boolean*): Generates dataset hashes for data quality auditing.
 *   **`fingerprint_policy`** (*record* | *warn* | *fail*): Severity policy when data drift is detected.
 
-### Dataset Mappings
-*   **Inputs (`InputSchema`)**: Defines source datasets. Supports `format` (CSV, Parquet, Delta, JSON, XML, ORC, Avro, Query, etc.), `filepath`, `options` (custom properties), `schema`, and `incremental: {column: <date column>}` — read only rows with that column between the run's `start_date` and `end_date` (pushed down to the source) and fingerprint only that window.
-*   **Outputs (`OutputSchema`)**: Defines serialization targets. Keys **must** follow the `schema.sub_folder.table_name` pattern. Supports `format`, `filepath` (auto-resolved from output path if omitted), `write_mode` (overwrite, append, ignore, error, merge), and `options`.
+### Datasets
+*   **Reading**: `format` (CSV, Parquet, Delta, JSON, XML, ORC, Avro, Query, …), `path`, `options`, `schema` (DDL), `read: {version | timestamp}` (Delta time travel), and `incremental: {column: <date column>}` — read only rows with that column between the run's `start_date` and `end_date` (pushed down to the source) and fingerprint only that window.
+*   **Writing**: `write: {mode, merge, partition, options, overwrite_strategy, …}`, with `mode` one of overwrite, append, ignore, error, merge. A dataset named `schema.sub_folder.table_name` without a `path` is written to `<paths.output>/<env>/<schema>/<sub_folder>/<table_name>`.
+
+```yaml
+# catalog.yaml
+user_records:
+  format: csv
+  path: ${paths.input}/users.csv
+  options: {header: true, inferSchema: true}
+core.analytics.cleaned_users:           # → data/processed/dev/core/analytics/cleaned_users under --env dev
+  format: parquet
+  write: {mode: overwrite, partition: [country]}
+```
 
 ### MERGE / upsert (Delta)
 
 ```yaml
+# catalog.yaml
 gold.sales.customers:
   format: delta
-  write_mode: merge
-  merge:
-    keys: [customer_id]                # required
-    when_matched: update_all           # update_all | {update: [cols]} | ignore
-    when_not_matched: insert_all       # insert_all | ignore
-    delete_when: "s._op = 'D'"         # optional (CDC); s = incoming batch, t = target
-    schema_evolution: false
+  write:
+    mode: merge
+    merge:
+      keys: [customer_id]                # required
+      when_matched: update_all           # update_all | {update: [cols]} | ignore
+      when_not_matched: insert_all       # insert_all | ignore
+      delete_when: "s._op = 'D'"         # optional (CDC); s = incoming batch, t = target
+      schema_evolution: false
 ```
 
 * The first run creates the table; later runs merge into it.
@@ -87,126 +105,20 @@ gold.sales.customers:
   the run certificate. Preflight rejects `merge` on a non-Delta format.
 * Needs the `delta-spark` Python package (`pip install "ducta[delta]"`). A local
   session gets the matching Delta jar automatically when any dataset uses
-  `format: delta` (override with `global_config.delta_package`).
+  `format: delta` (override with `settings.delta_package`).
 
 ---
 
-## 3. Configuration Examples
-
-Below is how the configurations are structured. Notice that `input_path` and `output_path` are defined under `global_config` (as required by `GlobalConfigSchema`) and are automatically interpolated into dataset filepaths using the `${input_path}` and `${output_path}` variables.
-
-### YAML (`global_config.yaml` & configs)
-```yaml
-# global_config.yaml
-input_path: "data/raw"
-output_path: "data/processed"
-mode: "local"
-in_memory_handoff: true
-fingerprint_policy: "warn"
-max_input_workers: 4
-
-# inputs.yaml
-user_records:
-  format: "csv"
-  filepath: "${input_path}/users.csv"
-  options:
-    header: "true"
-    inferSchema: "true"
-sales_data:
-  format: "parquet"
-  filepath: "${input_path}/sales.parquet"
-
-# outputs.yaml
-core.analytics.cleaned_users:
-  format: "parquet"
-  schema: "core"
-  table_name: "users_clean"
-  # filepath resolves to: data/processed/dev/core/analytics/users_clean (under dev env)
-```
-
-### TOML
-```toml
-# global_config.toml
-input_path = "data/raw"
-output_path = "data/processed"
-mode = "local"
-in_memory_handoff = true
-fingerprint_policy = "warn"
-max_input_workers = 4
-
-# inputs.toml
-[user_records]
-format = "csv"
-filepath = "${input_path}/users.csv"
-options = { header = "true", inferSchema = "true" }
-
-[sales_data]
-format = "parquet"
-filepath = "${input_path}/sales.parquet"
-
-# outputs.toml
-[core.analytics.cleaned_users]
-format = "parquet"
-schema = "core"
-table_name = "users_clean"
-```
-
-### JSON
-```json
-{
-  "global_config": {
-    "input_path": "data/raw",
-    "output_path": "data/processed",
-    "mode": "local",
-    "in_memory_handoff": true,
-    "fingerprint_policy": "warn",
-    "max_input_workers": 4
-  },
-  "input_config": {
-    "user_records": {
-      "format": "csv",
-      "filepath": "${input_path}/users.csv",
-      "options": {
-        "header": "true",
-        "inferSchema": "true"
-      }
-    },
-    "sales_data": {
-      "format": "parquet",
-      "filepath": "${input_path}/sales.parquet"
-    }
-  },
-  "output_config": {
-    "core.analytics.cleaned_users": {
-      "format": "parquet",
-      "schema": "core",
-      "table_name": "users_clean"
-    }
-  }
-}
-```
-
----
-
-## 4. Python Quickstart
+## 3. Python Quickstart
 
 
-### Step 1: Load Context & Initialize Gate
-Integrate your configuration with the `Context` class from `ducta.setting`:
+### Step 1: Load a project & initialize Gate
 
 ```python
-from pathlib import Path
-from ducta.setting.contexts import Context
+import ducta
 from ducta.gate import InputLoader, DataOutputManager
 
-# Load and validate configs
-context = Context(
-    global_config=Path("config/global_config.yaml"),
-    pipelines_config=Path("config/pipelines.yaml"),
-    nodes_config=Path("config/nodes.yaml"),
-    input_config=Path("config/inputs.yaml"),
-    output_config=Path("config/outputs.yaml")
-)
+context = ducta.load_project("path/to/project", env="dev")   # validated Context
 
 # Initialize Gate modules
 loader = InputLoader(context)

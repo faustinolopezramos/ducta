@@ -16,6 +16,15 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
+
+Projects of a workspace.
+
+A workspace is either a Ducta project itself (``ducta.yaml`` at its root) or a
+directory whose ``projects/<id>/`` sub-directories are Ducta projects. Every
+project is self-contained: its settings, catalog and pipelines live in its own
+``ducta.yaml``, ``catalog.yaml`` and ``pipelines/``. A project's API metadata
+(description, variables, timestamps) is kept in ``ducta.yaml`` as well —
+``description`` and ``metadata``.
 """
 
 from __future__ import annotations
@@ -24,31 +33,35 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import yaml  # type: ignore[import-untyped]
 from loguru import logger
 
 from ducta.api.exceptions import (
-    PipelineNotFoundError,
     ProjectAlreadyExistsError,
     ProjectNotFoundError,
     ValidationError,
 )
-from ducta.api.utils.git_utils import commit_files, validate_occ
+from ducta.api.repositories.v2_store import V2ProjectStore, _dump_rt, _load_rt, _sync
 from ducta.api.utils.validators import validate_identifier
-from ducta.api.workspace.loaders import load_config_file, write_config_file
-from ducta.api.workspace.utils import CONFIG_EXTENSIONS, find_ducta_config, has_config_file
+from ducta.setting.project_loader import (
+    CATALOG_FILE,
+    PIPELINES_DIR,
+    PROJECT_FILE,
+    find_project_root,
+)
 
-_PROJECT_SETTINGS_FILE = "project_settings.yaml"
 _PROJECTS_DIR = "projects"
-_PIPELINES_FILE = "pipelines.yaml"
+#: API-owned keys kept under ``metadata`` in ducta.yaml.
+_API_META = ("variables", "created_at", "updated_at")
 
 
 class ProjectRepository:
-    """Reads and writes project directories and their associated YAML files."""
+    """Reads and writes the projects of one workspace."""
 
     def __init__(self, workspace_path: Path) -> None:
         self._root = workspace_path
 
-    # -- Path helpers -----------------------------------------------------------
+    # -- Paths ------------------------------------------------------------------
 
     def projects_root(self) -> Path:
         return self._root / _PROJECTS_DIR
@@ -56,79 +69,40 @@ class ProjectRepository:
     def project_dir(self, project_id: str) -> Path:
         if project_id == "." or project_id == self._root.name:
             return self._root
-
         try:
             validate_identifier(project_id, field="project_id")
         except ValueError as e:
             raise ValidationError(str(e)) from e
         return self.projects_root() / project_id
 
-    def settings_path(self, project_id: str) -> Path:
-        """Find project_settings file in any supported format (YAML, TOML, JSON)."""
-        p_dir = self.project_dir(project_id)
-        # Search in config/ or root
-        search_dirs = [p_dir / "config", p_dir]
-        for d in search_dirs:
-            if not d.is_dir():
-                continue
-            for ext in ["yml", "yaml", "toml", "json"]:
-                candidate = d / f"project_settings.{ext}"
-                if candidate.exists():
-                    return candidate
-        # Default
-        return (p_dir / "config" if (p_dir / "config").is_dir() else p_dir) / _PROJECT_SETTINGS_FILE
+    def manifest_path(self, project_id: str) -> Path:
+        root = find_project_root(self.project_dir(project_id))
+        return (root or self.project_dir(project_id)) / PROJECT_FILE
 
-    def environment_path(self, project_id: str) -> Path:
-        """Find environment file in any supported format (YAML, TOML, JSON)."""
-        p_dir = self.project_dir(project_id)
-        for ext in ["yml", "yaml", "toml", "json"]:
-            candidate = p_dir / f"environment.{ext}"
-            if candidate.exists():
-                return candidate
-        return p_dir / "environment.yml"
+    def store(self, project_id: str) -> V2ProjectStore:
+        """The project's configuration store; ProjectNotFoundError if there is none."""
+        found = find_project_root(self.project_dir(project_id))
+        if found is None:
+            from ducta.console.config import FORMAT1_MESSAGE, format1_markers
 
-    def pipelines_path(self, project_id: str) -> Path:
-        """Find pipelines file in any supported format (YAML, TOML, JSON)."""
-        p_dir = self.project_dir(project_id)
-        search_dirs = [p_dir / "config", p_dir]
-        for d in search_dirs:
-            if not d.is_dir():
-                continue
-            for ext in ["yml", "yaml", "toml", "json"]:
-                candidate = d / f"pipelines.{ext}"
-                if candidate.exists():
-                    return candidate
-        return (p_dir / "config" if (p_dir / "config").is_dir() else p_dir) / _PIPELINES_FILE
+            p_dir = self.project_dir(project_id)
+            if p_dir.is_dir() and format1_markers(p_dir):
+                raise ValidationError(
+                    FORMAT1_MESSAGE.format(root=p_dir), detail={"project_id": project_id}
+                )
+            raise ProjectNotFoundError(
+                f"Project '{project_id}' not found", detail={"project_id": project_id}
+            )
+        return V2ProjectStore(found, self._root)
 
     # -- Queries ----------------------------------------------------------------
 
-    def get_settings(self, project_id: str) -> Dict[str, Any]:
-        """Return parsed project_settings.yaml.
-        Falls back to default metadata if absent but environment.yml exists."""
-        settings_file = self.settings_path(project_id)
-        if settings_file.exists():
-            return load_config_file(settings_file) or {}
-
-        if self.exists(project_id):
-            return {
-                "name": project_id if project_id != "." else self._root.name,
-                "description": (
-                    f"Standalone project: {self._root.name}"
-                    if project_id == "."
-                    else f"Project: {project_id}"
-                ),
-                "created_at": None,
-                "updated_at": None,
-            }
-
-        raise ProjectNotFoundError(
-            f"Project '{project_id}' not found",
-            detail={"project_id": project_id},
-        )
+    def exists(self, project_id: str) -> bool:
+        return find_project_root(self.project_dir(project_id)) is not None
 
     def list_ids(self) -> List[str]:
-        """Sorted list of project IDs."""
-        ids = []
+        """Sorted project IDs: the workspace itself when it is a project, else projects/*."""
+        ids: List[str] = []
         projects_root = self.projects_root()
         if projects_root.is_dir():
             ids.extend(
@@ -138,190 +112,104 @@ class ProjectRepository:
                     if entry.is_dir() and self.exists(entry.name)
                 )
             )
-
-        if not ids:
-            has_root_project = (
-                has_config_file(self._root, "environment")
-                or has_config_file(self._root / "config", "pipelines")
-                or has_config_file(self._root, "pipelines")
-            )
-            if has_root_project:
-                ids.append(self._root.name)
-
+        if not ids and find_project_root(self._root) is not None:
+            ids.append(self._root.name)
         return ids
 
-    def exists(self, project_id: str) -> bool:
-        p_dir = self.project_dir(project_id)
-        # An environment file, a ducta.yaml (multi-layer projects) or a
-        # pipelines file (in config/ or at the top) makes a project.
-        return (
-            has_config_file(p_dir, "environment")
-            or has_config_file(p_dir, "ducta")
-            or has_config_file(p_dir / "config", "pipelines")
-            or has_config_file(p_dir, "pipelines")
-        )
+    def get_settings(self, project_id: str) -> Dict[str, Any]:
+        """name/description/variables/metadata/created_at/updated_at, from ducta.yaml."""
+        self.store(project_id)  # raises for unknown or format-1 projects
+        data = yaml.safe_load(self.manifest_path(project_id).read_text(encoding="utf-8")) or {}
+        metadata = dict(data.get("metadata") or {})
+        return {
+            "name": data.get("project", project_id),
+            "description": data.get("description"),
+            "variables": metadata.pop("variables", {}) or {},
+            "created_at": metadata.pop("created_at", None),
+            "updated_at": metadata.pop("updated_at", None),
+            "metadata": metadata,
+        }
 
     def get_pipelines(self, project_id: str) -> Dict[str, Any]:
-        """Return pipeline dict for a project."""
-        p_dir = self.project_dir(project_id)
-        all_pipelines = {}
-
-        # Check if this is a layered project (ducta.yaml defines layers)
-        ducta_config_file = find_ducta_config(p_dir)
-
-        if ducta_config_file:
-            try:
-                ducta_config = load_config_file(ducta_config_file)
-                layers = ducta_config.get("layers", {})
-
-                # Collect pipelines from all layers
-                for layer_name, layer_config in layers.items():
-                    pipelines_path = layer_config.get("pipelines")
-                    if not pipelines_path:
-                        config_dir = layer_config.get("config")
-                        if config_dir:
-                            pipelines_path = str(Path(config_dir) / "pipelines.yaml")
-                    if pipelines_path:
-                        full_path = p_dir / pipelines_path
-                        if full_path.exists():
-                            try:
-                                layer_pipelines = load_config_file(full_path)
-                                if isinstance(layer_pipelines, dict):
-                                    for pipe_name, pipe_spec in layer_pipelines.items():
-                                        all_pipelines[pipe_name] = pipe_spec
-                                    logger.debug(
-                                        f"Loaded {len(layer_pipelines)} pipelines from layer '{layer_name}'"
-                                    )
-                            except Exception as exc:
-                                logger.debug(
-                                    f"Failed to load layer '{layer_name}' pipelines: {exc}"
-                                )
-
-                if all_pipelines:
-                    return all_pipelines
-            except Exception as exc:
-                logger.debug(f"Failed to parse ducta config: {exc}")
-
-        # Standard project: search in config/ directory
-        config_dir = p_dir / "config"
-        if config_dir.exists():
-            for pipelines_file in config_dir.rglob("pipelines.*"):
-                if pipelines_file.suffix.lower() in CONFIG_EXTENSIONS:
-                    try:
-                        data = load_config_file(pipelines_file)
-                        if isinstance(data, dict) and data:
-                            logger.debug(f"Loaded pipelines from {pipelines_file}")
-                            return data
-                    except Exception as exc:
-                        logger.debug(f"Failed to load {pipelines_file}: {exc}")
-                        continue
-
-        # Legacy fallback
-        legacy_file = p_dir / "base" / "pipeline" / "pipelines.yml"
-        if legacy_file.exists():
-            try:
-                data = load_config_file(legacy_file)
-                return data if isinstance(data, dict) else {}
-            except Exception:
-                pass
-
-        return {}
+        return self.store(project_id).pipelines()
 
     def get_pipeline_count(self, project_id: str) -> int:
         return len(self.get_pipelines(project_id))
 
+    def get_pipelines_commit_sha(self, project_id: str) -> str:
+        store = self.store(project_id)
+        return store.commit_sha(store.pipelines_dir)
+
     # -- Commands ---------------------------------------------------------------
 
-    def create(self, project_id: str, settings: Dict[str, Any]) -> None:
-        """Create directory structure and write initial YAML files.
-        Raises ProjectAlreadyExistsError when project already exists."""
+    def create(self, project_id: str, settings: Dict[str, Any]) -> List[Path]:
+        """Write a new, empty format-2 project; return the files created."""
         if self.exists(project_id):
             raise ProjectAlreadyExistsError(
-                f"Project '{project_id}' already exists",
-                detail={"project_id": project_id},
+                f"Project '{project_id}' already exists", detail={"project_id": project_id}
             )
-        config_dir = self.project_dir(project_id) / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        write_config_file(
-            self.environment_path(project_id),
-            {
-                "project": project_id,
-                "base_path": "../..",
-                "env_config": {
-                    "base": {
-                        "global_config_path": "config/global_config.yaml",
-                        "pipelines_config_path": f"projects/{project_id}/config/pipelines.yaml",
-                        "nodes_config_path": "config/nodes.yaml",
-                        "input_config_path": "config/input.yaml",
-                        "output_config_path": "config/output.yaml",
-                    }
-                },
-            },
+        p_dir = self.project_dir(project_id)
+        (p_dir / PIPELINES_DIR).mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "version": 2,
+            "project": settings.get("name", project_id),
+            "description": settings.get("description") or None,
+            "paths": {"input": "data", "output": "data"},
+            "settings": {},
+            "metadata": _metadata(settings),
+        }
+        manifest = {k: v for k, v in manifest.items() if v is not None}
+        (p_dir / PROJECT_FILE).write_text(
+            yaml.safe_dump(manifest, sort_keys=False, allow_unicode=True), encoding="utf-8"
         )
-        write_config_file(self.settings_path(project_id), settings)
-        write_config_file(self.pipelines_path(project_id), {})
-        logger.info(
-            "Project '{id}' created at {path}",
-            id=project_id,
-            path=self.project_dir(project_id),
-        )
+        (p_dir / CATALOG_FILE).write_text("{}\n", encoding="utf-8")
+        keep = p_dir / PIPELINES_DIR / ".gitkeep"
+        keep.write_text("", encoding="utf-8")
+        logger.info("Project '{id}' created at {path}", id=project_id, path=p_dir)
+        return [p_dir / PROJECT_FILE, p_dir / CATALOG_FILE, keep]
 
-    def update_settings(self, project_id: str, settings: Dict[str, Any]) -> None:
-        """Overwrite project_settings.yaml."""
-        settings_file = self.settings_path(project_id)
-        if not settings_file.exists():
-            raise ProjectNotFoundError(
-                f"Project '{project_id}' not found",
-                detail={"project_id": project_id},
-            )
-        write_config_file(settings_file, settings)
+    def update_settings(self, project_id: str, settings: Dict[str, Any]) -> Path:
+        """Write description and metadata into ducta.yaml (comments are kept)."""
+        store = self.store(project_id)
+        path = store.root / PROJECT_FILE
+        doc = _load_rt(path)
+        if settings.get("description"):
+            doc["description"] = settings["description"]
+        elif "description" in doc:
+            del doc["description"]
+        meta = _metadata(settings)
+        if isinstance(doc.get("metadata"), dict):
+            _sync(doc["metadata"], meta)
+        else:
+            doc["metadata"] = meta
+        _dump_rt(path, doc)
+        store.project()  # still valid
+        return path
 
     def delete_dir(self, project_id: str) -> None:
         """Remove the full project directory from disk (non-git fallback)."""
         pdir = self.project_dir(project_id)
         if not pdir.is_dir():
             raise ProjectNotFoundError(
-                f"Project '{project_id}' not found",
-                detail={"project_id": project_id},
+                f"Project '{project_id}' not found", detail={"project_id": project_id}
             )
         shutil.rmtree(pdir, ignore_errors=True)
         logger.info("Project '{id}' removed from disk", id=project_id)
 
-    def get_pipelines_commit_sha(self, project_id: str) -> str:
-        """Short SHA of the latest commit that touched this project's pipelines.yaml."""
-        from ducta.api.utils.git_utils import file_commit_sha
-
-        return file_commit_sha(self._root, self.pipelines_path(project_id))
-
     def save_pipeline(
         self, project_id: str, name: str, spec: Dict[str, Any], expected_sha: Optional[str] = None
     ) -> str:
-        """Add or update a pipeline entry in the project's pipelines.yaml."""
-        if not self.exists(project_id):
-            raise ProjectNotFoundError(
-                f"Project '{project_id}' not found",
-                detail={"project_id": project_id},
-            )
-        path = self.pipelines_path(project_id)
-        validate_occ(self._root, path, expected_sha)
-        current = self.get_pipelines(project_id)
-        current[name] = spec
-        write_config_file(path, current)
-        return commit_files(self._root, [path], f"chore: update pipeline '{name}'")
+        return self.store(project_id).save_pipeline(name, spec, expected_sha)
 
     def delete_pipeline(
         self, project_id: str, name: str, expected_sha: Optional[str] = None
     ) -> str:
-        """Remove a pipeline entry. Raises PipelineNotFoundError when absent."""
-        path = self.pipelines_path(project_id)
-        validate_occ(self._root, path, expected_sha)
-        current = self.get_pipelines(project_id)
-        if name not in current:
-            raise PipelineNotFoundError(
-                f"Pipeline '{name}' not found in project '{project_id}'",
-                detail={"project_id": project_id, "pipeline": name},
-            )
-        del current[name]
-        write_config_file(path, current)
-        return commit_files(self._root, [path], f"chore: delete pipeline '{name}'")
+        return self.store(project_id).delete_pipeline(name, expected_sha)
+
+
+def _metadata(settings: Dict[str, Any]) -> Dict[str, Any]:
+    meta = dict(settings.get("metadata") or {})
+    for key in _API_META:
+        if settings.get(key) not in (None, {}, ""):
+            meta[key] = settings[key]
+    return meta

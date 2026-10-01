@@ -1,353 +1,252 @@
 CLI Command Reference
 =====================
 
-Ducta commands let you create projects, run pipelines, and manage configuration - all from the command line.
-
-Most Common Commands
---------------------
-
-**Create a new project:**
+Every command runs against a **project**: the nearest directory, from the
+current one upwards, holding a ``ducta.yaml`` (see :doc:`configuration`). Pass
+``--base-path PATH`` to work on a project elsewhere. ``ducta <command> --help``
+lists every option of a command.
 
 .. code-block:: bash
 
-   ducta template --template medallion_basic --project-name my_project
+   ducta template --template medallion_basic --project-name sales   # create a project
+   cd sales
+   ducta config validate --env dev                                  # check it
+   ducta start --env dev --pipeline etl \
+     --start-date 2026-01-01 --end-date 2026-01-31                  # run it
+   ducta certify list                                               # what ran, with evidence
 
-**Run your pipeline:**
-
-.. code-block:: bash
-
-   ducta start --env dev --pipeline my_pipeline   # Basic run (--env and --pipeline are both required)
-   ducta start --env production --pipeline my_pipeline   # Use production config
-   ducta start --env dev --pipeline my_pipeline --node extract   # Run just one step
-   ducta start --env dev --pipeline my_pipeline --validate-only  # Check config (don't run)
-   ducta start --env dev --pipeline my_pipeline --sanity-only    # Run input sanity checks
-
-**See what's configured:**
-
-.. code-block:: bash
-
-   ducta config list-pipelines
-   ducta config pipeline-info --pipeline ETL
-
-**MLOps and Quality (New!):**
-
-.. code-block:: bash
-
-   ducta quality list                       # List available checks
-   ducta quality run --input data.parquet --config checks.toml
-   ducta experiment list                    # List MLOps experiments
-   ducta model promote my_model 1.0.0 staging   # name, version, stage are positional
-
-**Check version:**
-
-.. code-block:: bash
-
-   ducta --version
-
-The ``ducta start`` Command
----------------------------
-
-This is the main command - it executes your pipelines.
-
-**Syntax:**
-
-.. code-block:: bash
-
-   ducta start --env ENVIRONMENT --pipeline PIPELINE_NAME [OPTIONS]
-
-**Common Options:**
-
-- ``--env, -e ENVIRONMENT`` - Execution environment (``dev``, ``staging``, ``prod``, etc.) - **required**
-- ``--pipeline, -p NAME`` - Pipeline name to execute - **required**
-- ``--node, -n NAME`` - Run only this single node
-- ``--mode, -m {sync,async}`` - For streaming/hybrid pipelines: ``async`` (default, return once started) or ``sync`` (block until terminating queries finish)
-- ``--validate-only`` - Check config and DAG without running code
-- ``--dry-run`` - Log all actions without executing the pipeline
-- ``--sanity-only`` - Run sanity checks on all node inputs without executing the pipeline
-- ``--reuse-upstream`` - In a ``depends_on`` chain, skip upstream pipelines that are still up to date and read their outputs from disk instead of recomputing. A pipeline is only reused when its outputs exist *and* the run dates, the configuration, the node modules and the input files are all unchanged since those outputs were written; otherwise it re-runs and says which of them changed
-- ``--rerun-all`` - Force the full ``depends_on`` chain to re-run, ignoring any chain-reuse configuration
-- ``--log-level LEVEL`` - Logging verbosity: ``DEBUG``, ``INFO``, ``WARNING``, ``ERROR``, ``CRITICAL`` (default: ``INFO``)
-- ``--verbose`` - Shortcut for ``--log-level DEBUG``
-- ``--quiet`` - Shortcut for ``--log-level ERROR``
-- ``--log-file PATH`` - Write logs to a specific file
-- ``--start-date YYYY-MM-DD`` - Start of the date range to process
-- ``--end-date YYYY-MM-DD`` - End of the date range to process
-- ``--config-type TYPE`` - Preferred config format: ``yaml``, ``json``, or ``toml``
-- ``--base-path PATH`` - Override the root directory for config discovery
-- ``--layer-name NAME`` - Layer name for config discovery
-- ``--use-case NAME`` - Use case name for config discovery
-- ``--interactive`` - Interactive config selection mode
-- ``--model-version VERSION`` - Model version for ML pipelines
-- ``--hyperparams JSON`` - Hyperparameters as a JSON string
-- ``--sweep PATH`` - Hyperparameter sweep spec (YAML/JSON file); expands list values into a cartesian product and runs one execution per combination, tagged with a common ``sweep_id``
-
-.. note::
-   Ducta no longer has a ``--layer`` or ``--all-layers`` flag. The execution layer
-   (batch/streaming/hybrid/ML) is now detected automatically from ``pipelines.yaml``/``.toml``
-   — there is nothing to pass on the command line for layer selection.
-
-**Examples:**
-
-.. code-block:: bash
-
-   # Run the main ETL pipeline in development
-   ducta start --env dev --pipeline etl
-
-   # Test just the extraction step
-   ducta start --env dev --pipeline etl --node extract
-
-   # Validate config and DAG without running
-   ducta start --env dev --pipeline etl --validate-only
-
-   # Dry run: log what would happen without executing
-   ducta start --env dev --pipeline etl --dry-run
-
-   # Run with debug logging
-   ducta start --env dev --pipeline etl --log-level DEBUG
-
-   # Run for a specific date range
-   ducta start --env prod --pipeline daily_etl \
-     --start-date 2024-01-01 --end-date 2024-01-31
-
-   # Run and write logs to file
-   ducta start --env prod --pipeline daily_etl --log-file ./logs/daily_etl.log
-
-The ``ducta template`` Command
--------------------------------
-
-Generate a new project with example configuration and code:
-
-.. code-block:: bash
-
-   ducta template --template medallion_basic --project-name analytics
-
-Creates a project with:
-
-- Example configuration files (TOML by default)
-- Sample Python functions
-- Ready-to-run pipeline
-
-**Available templates** (``ducta template --list-templates``):
-
-- ``medallion_basic`` - Batch ETL with Bronze/Silver/Gold layers
-- ``ml_ready`` - Medallion + integrated experiment tracking and model registry
-- ``streaming_core`` - Real-time file-stream → Parquet pipeline
-- ``hybrid`` - A batch stage that feeds a streaming stage
-
-**Template options:**
-
-- ``--template NAME`` - Template to use (e.g., ``medallion_basic``)
-- ``--project-name NAME`` - Name for the generated project
-- ``--output-path PATH`` - Where to create the project (default: current directory)
-- ``--format TYPE`` - Config format for generated files: ``toml`` (default), ``yaml``, or ``json``
-- ``--list-templates`` - Show all available templates
-- ``--no-sample-code`` - Generate project structure without sample code
-- ``--sandbox-developers NAME [NAME ...]`` - Create per-developer sandbox environments
-
-**Examples:**
-
-.. code-block:: bash
-
-   # List all available templates
-   ducta template --list-templates
-
-   # Generate project with TOML config (default)
-   ducta template --template medallion_basic --project-name my_etl
-
-   # Generate project with YAML config
-   ducta template --template medallion_basic --project-name my_etl --format yaml
-
-   # Generate project with developer sandboxes
-   ducta template --template medallion_basic --project-name my_etl \
-     --sandbox-developers alice bob charlie
-
-The ``ducta config`` Command
-----------------------------
-
-View your loaded configuration and discover pipelines:
-
-.. code-block:: bash
-
-   ducta config list-pipelines             # Show all pipelines
-   ducta config list-configs               # Show discovered config files
-   ducta config pipeline-info --pipeline ETL # Show details of one pipeline
-   ducta config validate                   # Preflight-validate config (no Spark)
-   ducta config clear-cache                # Clear discovery cache
-
-**Options for ``list-pipelines``:**
-
-- ``--env ENVIRONMENT`` - Filter by environment
-- ``--filter PATTERN`` - Substring filter for pipeline names
-- ``--format {table,json,list}`` - Output format (default: table)
-
-**``config validate``** imports every node function, checks its signature, and
-resolves all input/output keys *without* starting Spark — so it reports every
-configuration error up front. Validate one pipeline with ``--pipeline NAME`` or
-all of them by default.
-
-Streaming (Real-time pipelines)
--------------------------------
-
-Manage continuous data stream pipelines with the ``stream`` subcommand:
-
-.. code-block:: bash
-
-   # Start a streaming pipeline
-   ducta stream run --config config/pipelines.toml --pipeline my_stream
-
-**Options for ``stream run``:**
-
-- ``--config, -c PATH`` - Path to the streaming configuration file - **required**
-- ``--pipeline, -p NAME`` - Name of the pipeline to execute - **required**
-- ``--mode, -m {sync,async}`` - Execution mode (default: async)
-- ``--model-version VERSION`` - Optional model version for ML streaming
-- ``--hyperparams JSON`` - Hyperparameters as a JSON string
-- ``--transforms-module MODULE [MODULE ...]`` - Python module(s) to import before starting the pipeline; each must expose a ``register_transforms(registry)`` function
-
-**Status and Stop:**
-
-.. code-block:: bash
-
-   # Check status of active streams
-   ducta stream status --config config/pipelines.toml --format table
-
-   # Stop a specific execution
-   ducta stream stop --config config/pipelines.toml --execution-id <ID> --timeout 60
-
-Data Quality (``ducta quality``)
+``ducta start`` — run a pipeline
 --------------------------------
 
-Run and manage data quality checks independently or as part of a pipeline.
+.. code-block:: bash
+
+   ducta start --pipeline NAME [--env ENV] [OPTIONS]
+
+.. list-table::
+   :widths: 34 66
+   :header-rows: 1
+
+   * - Option
+     - Meaning
+   * - ``--pipeline, -p NAME``
+     - The pipeline to run (its file name under ``pipelines/``). Required.
+   * - ``--env, -e ENV``
+     - Environment: ``base`` (default), ``dev``, ``sandbox``,
+       ``sandbox_<developer>``, ``staging``, ``prod`` or a name of your own.
+   * - ``--start-date`` / ``--end-date``
+     - The window to process (``YYYY-MM-DD``). Required by pipelines with
+       ``requires_dates: true``; incremental datasets read only this window.
+   * - ``--node, -n NAME``
+     - Run one node only.
+   * - ``--validate-only``
+     - Validate the configuration and run preflight (modules import, functions
+       exist, paths resolve) without running anything.
+   * - ``--sanity-only``
+     - Run the input checks of every node without running the nodes.
+   * - ``--dry-run``
+     - Log what would run, without running it.
+   * - ``--reuse-upstream``
+     - In a ``depends_on`` chain, skip upstream pipelines whose outputs are
+       still valid: same dates, configuration, code and input data as when they
+       were written. Otherwise the upstream re-runs and the log says what
+       changed.
+   * - ``--rerun-all``
+     - Re-run the whole chain, ignoring reuse settings.
+   * - ``--mode, -m {async,sync}``
+     - Streaming and hybrid pipelines: return once started (``async``, default)
+       or wait for the queries to finish (``sync``).
+   * - ``--base-path PATH``
+     - The project directory, when not running from inside it.
+   * - ``--log-level LEVEL``, ``--verbose``, ``--quiet``, ``--log-file PATH``
+     - Logging.
+
+ML pipelines add ``--model-version``, ``--hyperparams JSON``, and
+hyperparameter search: ``--sweep FILE`` (the cartesian product of a grid),
+``--search`` (grid, random or Bayesian search driven by the pipeline's
+``hyperparams_config``), ``--search-metric``, ``--search-trials``,
+``--sweep-parallel N``, ``--max-sweep-size N`` and ``--no-sweep-reuse``. See
+:doc:`mlops`.
 
 .. code-block:: bash
 
-   # List all available check types
-   ducta quality list
+   # One month of the daily pipeline, in production
+   ducta start --env prod --pipeline daily_sales --start-date 2026-01-01 --end-date 2026-01-31
 
-   # Run checks on a data file
-   ducta quality run --input data.parquet --config quality_config.toml
+   # Just one node, with debug logging
+   ducta start --env dev --pipeline etl --node clean --verbose
 
-   # View quality reports for a dataset (--workspace defaults to current directory)
-   ducta quality report --dataset sales_data --workspace .
+   # Everything that can be checked without running
+   ducta start --env prod --pipeline etl --validate-only
 
-   # View quality trends (time-series)
-   ducta quality trend --dataset sales_data --workspace .
+Exit codes
+~~~~~~~~~~
 
-   # Show composite quality score for a specific run
-   ducta quality score --run-id <RUN_ID> --workspace .
+Orchestrators can act on the exit code of ``ducta start``:
 
-   # Validate a node's quality config without executing the pipeline
-   ducta quality validate-config --node extract --config config/nodes.toml
+.. list-table::
+   :widths: 10 90
+   :header-rows: 1
 
-MLOps (``ducta experiment`` & ``ducta model``)
+   * - Code
+     - Meaning
+   * - 0
+     - Success.
+   * - 1
+     - Unexpected error.
+   * - 2
+     - The project cannot run as configured: no project found, invalid
+       configuration, a failed preflight, or a project that still needs
+       ``ducta config migrate``.
+   * - 3
+     - Invalid command-line arguments — an unknown pipeline name, a malformed
+       date.
+   * - 4
+     - The pipeline ran and failed.
+   * - 5
+     - A missing dependency (e.g. an optional extra is not installed).
+   * - 6
+     - A security check refused a path or module.
+   * - 7
+     - **Locked**: another run is writing one of this pipeline's outputs.
+       Nothing ran; retry later (see ``settings.run_lock``).
+
+``ducta template`` — create a project
+-------------------------------------
+
+.. code-block:: bash
+
+   ducta template --template medallion_basic --project-name sales
+   ducta template --list-templates
+
+.. list-table::
+   :widths: 24 76
+   :header-rows: 1
+
+   * - Template
+     - What you get
+   * - ``medallion_basic``
+     - A batch pipeline across bronze/silver/gold with quality gates, sample
+       data and code. Runs as generated.
+   * - ``streaming_basic``
+     - Structured Streaming from a file source through registered transforms,
+       with per-node checkpoints.
+
+Options: ``--project-name`` (required), ``--output-path DIR`` (default: a new
+directory named after the project), ``--no-sample-code``,
+``--sandbox-developers alice bob`` (a ``sandbox_<name>`` environment each) and
+``--evidence-level {off,record,required,signed}``.
+
+``ducta config`` — inspect and check a project
 ----------------------------------------------
 
-Track experiments and manage your model registry.
+.. code-block:: bash
+
+   ducta config validate [--env ENV] [--pipeline NAME]
+   ducta config list-pipelines [--env ENV] [--filter TEXT] [--format table|json|list]
+   ducta config pipeline-info --pipeline NAME [--env ENV]
+   ducta config schema [--out DIR]
+   ducta config migrate [--path DIR] [--write | --out DIR | --check]
+
+- ``validate`` checks the schema and every reference between files, then
+  imports each node's function and checks its signature — without starting
+  Spark. Every problem is reported with its file and line.
+- ``schema`` prints the JSON Schema of ``ducta.yaml``, ``catalog.yaml`` and
+  pipeline files; ``--out .`` refreshes ``.ducta/schema/`` for editor
+  completion.
+- ``migrate`` converts a project from Ducta 0.2's layout, verifying it is
+  equivalent in every environment first — see :ref:`migrating`.
+
+``ducta stream`` — streaming pipelines
+--------------------------------------
 
 .. code-block:: bash
 
-   # List recent experiments
-   ducta experiment list
+   ducta stream run --pipeline events [--env ENV] [--mode async|sync]
+   ducta stream status [--execution-id ID] [--format table|json]
+   ducta stream stop --execution-id ID [--timeout SECONDS]
 
-   # Promote a model to staging/production
-   ducta model promote xgboost_v1 1.2.0 production
+Run from inside the project, or point ``--config`` at its ``ducta.yaml``.
+``--transforms-module MODULE`` imports modules that register transforms before
+the pipeline starts (``settings.streaming_transform_modules`` does the same from
+configuration). See :doc:`streaming`.
 
-   # Clean up old model versions (Garbage Collection)
-   ducta model gc --dry-run
-
-Visual Interface & Server
--------------------------
-
-Launch the Ducta dashboard to visualize your pipelines and execution history.
-
-.. code-block:: bash
-
-   # Launch the full UI (FastAPI backend + React frontend)
-   ducta ui --port 8000
-
-   # Start the local server only
-   ducta server start
-
-**UI Options** (``ducta ui``):
-
-- ``--port PORT`` - Port to run on (default: 8000)
-- ``--host HOST`` - Host to bind to (default: 127.0.0.1)
-- ``--no-browser`` - Don't open the browser automatically
-- ``--source PATH_OR_URL`` - Workspace source path or Git URL to load automatically
-- ``--db PATH`` - Custom path for the SQLite execution history database (default: ``~/.ducta/executions.db``)
-- ``--enable-terminal`` - Enable the embedded web terminal (PTY). **Security note:** grants arbitrary shell execution to authenticated users; off by default.
-
-**Server Options** (``ducta server start``):
-
-- ``--port PORT`` - Port to run on (default: 8000)
-- ``--host HOST`` - Host to bind to (default: 127.0.0.1)
-- ``--no-browser`` - Don't open the browser automatically
-- ``--source PATH_OR_URL`` - Workspace source path or Git URL to load automatically
-- ``--db PATH`` - Custom path for the SQLite execution history database (default: ``~/.ducta/executions.db``)
-
-Database Connections (``ducta init ingestion``)
------------------------------------------------
-
-Configure and test database connections used by ingestion pipelines.
-
-.. code-block:: bash
-
-   # Interactive wizard to set up a new connection
-   ducta init ingestion setup
-
-   # List configured connections
-   ducta init ingestion list
-
-   # Test connectivity for a named connection
-   ducta init ingestion test --source my_postgres
-
-   # Show a connection's details
-   ducta init ingestion info --source my_postgres
-
-Run Certificates (``ducta certify``)
+``ducta certify`` — Run Certificates
 ------------------------------------
 
-Every terminating run writes a self-hashed **Run Certificate** to
-``.ducta/runs/<env>/<run_id>/certificate.json``, recording inputs, outputs, config,
-and quality-gate outcomes. Use ``certify`` to inspect and verify them.
+Every run writes a self-hashed certificate — configuration fingerprint, input
+and output fingerprints, quality outcomes — to
+``<paths.output>/<env>/.ducta/runs/<run_id>/certificate.json``.
 
 .. code-block:: bash
 
-   # List all run certificates
-   ducta certify list
+   ducta certify list [--env ENV]
+   ducta certify show --run-id ID [--json]           # a unique prefix of the id is enough
+   ducta certify verify --run-id ID                  # tamper check (and signature, if signed)
+   ducta certify verify --run-id ID --reproduce \
+     --start-date 2026-01-01 --end-date 2026-01-31   # re-run and compare every output
+   ducta certify diff RUN_A RUN_B                    # what changed between two runs
 
-   # Print one certificate as JSON (run id or a unique prefix)
-   ducta certify show --run-id <RUN_ID>
+See :doc:`tutorials/certificates`.
 
-   # Verify a certificate has not been tampered with
-   ducta certify verify --run-id <RUN_ID>
-
-   # Verify AND re-run the pipeline to prove every output reproduces
-   ducta certify verify --run-id <RUN_ID> --reproduce \
-     --start-date 2024-01-01 --end-date 2024-01-31
-
-Help & Documentation
---------------------
-
-**Get help for any command:**
+``ducta quality`` and ``ducta profile`` — data quality
+------------------------------------------------------
 
 .. code-block:: bash
 
-   ducta --help              # Show all commands
-   ducta start --help        # Help for 'start' command
-   ducta stream --help       # Help for 'stream' command
-   ducta template --help     # Help for 'template' command
-   ducta config --help       # Help for 'config' command
+   ducta quality list                                # every registered check
+   ducta quality validate-config --node clean --env prod
+   ducta quality run --input data.parquet --config checks.yaml
+   ducta quality report --dataset silver.sales.orders --env dev [--all | --run-id ID]
+   ducta quality trend --dataset silver.sales.orders --env dev [--last 20]
+   ducta quality score --run-id ID --env dev
+   ducta profile --input data.parquet [--strictness strict|balanced|lax] [--output checks.yaml]
 
-**Check your Ducta version:**
+- ``validate-config`` checks a node's checks and profiles as an environment
+  configures them, without reading data.
+- ``run`` applies a checks file to a data file, outside any project.
+- ``profile`` reads a dataset and proposes the checks it already satisfies — a
+  starting point for a contract.
+
+See :doc:`quality`.
+
+``ducta experiment`` and ``ducta model`` — MLOps
+------------------------------------------------
 
 .. code-block:: bash
 
-   ducta --version
+   ducta experiment list --env dev [--pipeline NAME] [--limit 20]
+   ducta model promote churn_model 1.2.0 production --env prod
+   ducta model gc --env prod --dry-run
 
-Next Steps
+Promotion goes through the promotion policy; ``--force`` bypasses it and the
+bypass is audit-logged. See :doc:`mlops`.
+
+``ducta init ingestion`` — database connections
+-----------------------------------------------
+
+.. code-block:: bash
+
+   ducta init ingestion setup              # interactive: writes the connection and its .env credentials
+   ducta init ingestion list
+   ducta init ingestion test --source shop_db
+   ducta init ingestion info --source shop_db
+
+``kind: ingest`` nodes read from these connections — see :doc:`configuration`.
+
+``ducta ui`` and ``ducta server`` — web app and API
+---------------------------------------------------
+
+.. code-block:: bash
+
+   ducta ui [--port 8000] [--host 127.0.0.1] [--source PATH_OR_GIT_URL] [--no-browser]
+   ducta server start [--port 8000] [--host 127.0.0.1] [--source PATH_OR_GIT_URL]
+
+Both serve the web app and its REST API. ``--db PATH`` moves the execution
+history (default ``~/.ducta/executions.db``). See :doc:`server_api`.
+
+Next steps
 ----------
 
-- See :doc:`configuration` for detailed configuration options
-- Learn about :doc:`best_practices` for production use
-- Follow a tutorial: :doc:`tutorials/batch_etl` or :doc:`tutorials/streaming`
+- :doc:`configuration` — every file and key
+- :doc:`tutorials/batch_etl` — a pipeline from scratch
+- :doc:`best_practices` — running Ducta in production

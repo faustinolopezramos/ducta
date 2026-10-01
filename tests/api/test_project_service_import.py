@@ -1,17 +1,8 @@
-"""Regression tests for `ProjectService.import_project`.
+"""`ProjectService.import_project`: registering a project already under projects/.
 
-`import_project` used to resolve `projects_root`/`settings_path`/`pipelines_path`
-via private module-level helpers in `services/project.py` that duplicated
-`ProjectRepository`'s equivalents but without the `validate_identifier()` guard
-`ProjectRepository.project_dir` uses to block path traversal (see
-`tests/api/test_project_repository.py`). Those private helpers were removed and
-`import_project` now calls `self._repo` directly, so any future caller of these
-paths gets the same traversal guard for free.
-
-These tests are regression coverage for that refactor: normal imports must still
-land in the same place, the existing `_SAFE_NAME_RE`/expected-location checks
-must still reject bad input, and `import_project` must actually route through
-`ProjectRepository` (not a private duplicate) when resolving paths.
+Import resolves every path through `ProjectRepository` (whose `project_dir`
+carries the `validate_identifier()` traversal guard) and only accepts a
+format-2 project; a format-1 one is refused with the command that converts it.
 """
 
 from __future__ import annotations
@@ -21,7 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ducta.api.exceptions import ValidationError
+from ducta.api.exceptions import ProjectNotFoundError, ValidationError
 from ducta.api.models.project import ImportProjectRequest
 from ducta.api.repositories.project_repository import ProjectRepository
 from ducta.api.services.project import ProjectService
@@ -29,9 +20,17 @@ from ducta.api.services.project import ProjectService
 
 @pytest.fixture
 def workspace(tmp_path: Path) -> Path:
-    (tmp_path / "config").mkdir()
     (tmp_path / "projects").mkdir()
     return tmp_path
+
+
+def _project(directory: Path, description: str = "") -> Path:
+    (directory / "pipelines").mkdir(parents=True)
+    (directory / "ducta.yaml").write_text(
+        f"version: 2\nproject: {directory.name}\ndescription: '{description}'\n"
+        "paths: {input: data, output: data}\n"
+    )
+    return directory
 
 
 @pytest.fixture
@@ -40,37 +39,51 @@ def service(workspace: Path) -> ProjectService:
 
 
 class TestImportProjectPathResolution:
-    def test_normal_import_lands_in_config_subdir(self, service: ProjectService, workspace: Path):
-        source = workspace / "projects" / "myproj"
-        source.mkdir()
+    def test_import_reads_the_project_in_place(self, service: ProjectService, workspace: Path):
+        source = _project(workspace / "projects" / "myproj", "daily sales")
 
         response = service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
 
         assert response.id == "myproj"
-        settings_file = workspace / "projects" / "myproj" / "config" / "project_settings.yaml"
-        pipelines_file = workspace / "projects" / "myproj" / "config" / "pipelines.yaml"
-        assert settings_file.exists()
-        assert pipelines_file.exists()
+        assert response.description == "daily sales"
+        assert response.pipeline_count == 0
+
+    def test_a_format_1_project_is_refused_with_the_migrate_command(
+        self, service: ProjectService, workspace: Path
+    ):
+        source = workspace / "projects" / "old"
+        source.mkdir()
+        (source / "environment.yaml").write_text("env_config: {}\n")
+
+        with pytest.raises(ValidationError, match="ducta config migrate"):
+            service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
+
+    def test_a_directory_without_a_project_is_not_found(
+        self, service: ProjectService, workspace: Path
+    ):
+        source = workspace / "projects" / "empty"
+        source.mkdir()
+
+        with pytest.raises(ProjectNotFoundError):
+            service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
 
     def test_import_uses_project_repository_not_a_private_duplicate(
         self, service: ProjectService, workspace: Path
     ):
-        source = workspace / "projects" / "spied"
-        source.mkdir()
+        source = _project(workspace / "projects" / "spied")
 
         with patch.object(ProjectRepository, "project_dir", wraps=service._repo.project_dir) as spy:
             service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
 
-        # settings_path()/pipelines_path() both call project_dir() internally, so a
-        # successful import must exercise ProjectRepository's guarded implementation.
+        # store()/get_settings() resolve through project_dir(), so a successful
+        # import must exercise ProjectRepository's guarded implementation.
         assert spy.call_count > 0
         assert all(call.args[0] == "spied" for call in spy.call_args_list)
 
     def test_reimport_of_existing_project_is_idempotent(
         self, service: ProjectService, workspace: Path
     ):
-        source = workspace / "projects" / "again"
-        source.mkdir()
+        source = _project(workspace / "projects" / "again")
         first = service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
         second = service.import_project(ImportProjectRequest(path=str(source)), auto_commit=False)
 

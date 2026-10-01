@@ -408,7 +408,10 @@ class BaseExecutor:
             logger.warning(f"Failed to persist global quality summary: {e}")
 
     def _run_preflight_sanity_checks(
-        self, node_configs: Dict[str, Dict[str, Any]]
+        self,
+        node_configs: Dict[str, Dict[str, Any]],
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Dict[str, QualityReport]:
         has_sanity_checks = any(
             (nc.get("sanity_checks") or {}).get("enabled", True)
@@ -433,7 +436,11 @@ class BaseExecutor:
         runner = SanityPhaseRunner(fail_fast=True, profiles=_profiles)
         pipeline_config = {"nodes": node_configs}
         reports = runner.run_preflight_checks(
-            pipeline_config, self.context, pipeline_name=self._mlops_pipeline_name or "_adhoc"
+            pipeline_config,
+            self.context,
+            pipeline_name=self._mlops_pipeline_name or "_adhoc",
+            start_date=start_date,
+            end_date=end_date,
         )
 
         QualityReporter().render_pipeline_summary(reports, show_details=True)

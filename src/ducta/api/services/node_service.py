@@ -82,41 +82,19 @@ class NodeService:
         )
 
     def get_node_python_file_by_module(self, module: str) -> NodeFileInfo:
-        """Resolve and optionally read the Python source file directly by module path."""
-        from ducta.api.workspace.loaders import load_config_file
-        from ducta.api.workspace.utils import find_ducta_config, resolve_module_path
+        """Resolve and optionally read the Python source file of a module.
 
-        py_path = resolve_module_path(self._root, module)
-        if py_path.exists():
-            return self._build_file_info(py_path)
+        Looked up in each project of the workspace (modules resolve from the
+        project root, where the node runs); the workspace root otherwise.
+        """
+        from ducta.api.repositories.v2_store import workspace_stores
+        from ducta.api.workspace.utils import resolve_module_path
 
-        # Fallback: search project layer src/ directories
-        projects_dir = self._root / "projects"
-        if projects_dir.is_dir():
-            for project_dir in sorted(projects_dir.iterdir()):
-                if not project_dir.is_dir():
-                    continue
-                try:
-                    ducta_file = find_ducta_config(project_dir)
-                    if not ducta_file:
-                        continue
-                    ducta_config = load_config_file(ducta_file)
-                    layers = ducta_config.get("layers", {})
-                    for layer_name, layer_cfg in layers.items():
-                        layer_path_str = layer_cfg.get("path", layer_name)
-                        layer_dir = project_dir / layer_path_str
-                        if not layer_dir.is_dir():
-                            continue
-                        try:
-                            layer_candidate = resolve_module_path(layer_dir, module)
-                            if layer_candidate.exists():
-                                return self._build_file_info(layer_candidate)
-                        except ValueError:
-                            pass
-                except Exception:
-                    continue
-
-        return self._build_file_info(py_path)
+        for store in workspace_stores(self._root):
+            candidate = resolve_module_path(store.root, module)
+            if candidate.exists():
+                return self._build_file_info(candidate)
+        return self._build_file_info(resolve_module_path(self._root, module))
 
     def _build_file_info(self, py_path: Path) -> NodeFileInfo:
         """Build a NodeFileInfo for the given path."""
@@ -138,12 +116,16 @@ class NodeService:
         name: str,
         spec: Dict[str, Any],
         expected_sha: Optional[str] = None,
+        pipeline: Optional[str] = None,
     ) -> str:
-        """Save a node spec and git-commit.  Returns new commit SHA."""
+        """Save a node spec and git-commit.  Returns new commit SHA.
+
+        ``pipeline``: where to create a new node in a format-2 project.
+        """
         from ducta.api.models.spec import validate_node_spec
 
         validate_node_spec(name, spec)
-        return self._repo.save(name, spec, expected_sha)
+        return self._repo.save(name, spec, expected_sha, pipeline=pipeline)
 
     def delete_node(self, name: str, expected_sha: Optional[str] = None) -> None:
         """Delete a node spec and git-commit."""

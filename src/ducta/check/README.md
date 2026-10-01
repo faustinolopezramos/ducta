@@ -54,9 +54,9 @@ Ducta Check is the validation layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Checks are configured per node via the `sanity_checks` (pre) and `data_quality` (post) blocks (validated in `ducta.setting.schemas`). A gate can be attached at either level or globally under `global_config.quality.gate`.
+Users write checks in three places (see `docs/quality.rst`): a dataset's `checks` in `catalog.yaml` and a node's `input_checks` — both compiled into the node's `sanity_checks` (pre-execution, per input) — and a node's `quality` block, compiled into `data_quality` (post-execution). The `quality` block's `gate` becomes `quality_gate`; per-input blocks keep theirs as `gate` under `sanity_checks.inputs.<dataset>`; `on_fail` becomes `behavior`. The engine-side keys are:
 
-*   **`sanity_checks`**: `enabled`, `fail_fast`, `input_index`, `profile`, `checks: {name: config}`, optional `sanity_gate`.
+*   **`sanity_checks`**: `inputs: {dataset: {checks, gate, profile, fail_fast}}` (one block per input), or node-wide `enabled`, `fail_fast`, `profile`, `checks`, optional `sanity_gate`.
 *   **`data_quality`**: `enabled`, `fail_fast`, `dataset_name`, `profile`, `checks: {name: config}`, optional `quality_gate`, `output`.
 *   **Gate keys**: `max_errors`, `max_warnings` (`-1` = unlimited), `min_pass_rate`, `score_threshold`, `score_weights`, `required_checks`, `behavior`.
 *   **`output`**: `enabled`, `format`, `write_mode`, `partition_by`, `per_node`, `global_summary`.
@@ -68,38 +68,39 @@ Precedence: node-level config always wins over profile defaults, which win over 
 ## 3. Configuration Examples
 
 ```yaml
-# global_config.yaml — reusable profiles + a default gate
-quality:
-  extensions: ["myproject.custom_checks"]   # auto-loaded @register_check modules
-  profiles:
-    bronze_defaults:
-      checks: {empty_dataset: {}, null_rate: {column: "id", max: 0.0}}
-  gate:
-    max_errors: 0
-    min_pass_rate: 0.95
-    behavior: "skip_downstream"
+# ducta.yaml — reusable profiles and custom checks
+version: 2
+project: sales
+paths: {input: data, output: data}
+settings:
+  quality:
+    extensions: [myproject.custom_checks]    # auto-loaded @register_check modules
+    profiles:
+      bronze_defaults:
+        checks: {empty_dataset: true, null_rate: {columns: [id], threshold: 0}}
+```
 
-# nodes.yaml — a node with both phases + persisted report
-clean_sales:
-  module: "myproject.nodes"
-  function: "clean_sales"
-  input: ["raw_sales"]
-  output: ["core.analytics.sales_clean"]
-  sanity_checks:
-    profile: "bronze_defaults"
-    fail_fast: true
-  data_quality:
-    fail_fast: false
-    checks:
-      row_count: {min: 1000}
-      range: {column: "amount", min: 0}
-      duplicates: {columns: ["id"]}
-    quality_gate:
-      required_checks: ["duplicates"]
-      score_threshold: 0.9
-    output:
-      enabled: true
-      format: "parquet"
+```yaml
+# pipelines/sales.yaml — checks on the input and on the output, plus a persisted report
+nodes:
+  clean_sales:
+    run: myproject.nodes:clean_sales
+    inputs: {raw: raw_sales}
+    outputs: [core.analytics.sales_clean]
+    input_checks:
+      raw_sales:
+        profile: bronze_defaults
+        fail_fast: true
+    quality:
+      fail_fast: false
+      checks:
+        row_count: {min: 1000}
+        range: {column: amount, min: 0}
+        duplicates: {columns: [id]}
+      gate:
+        required_checks: [duplicates]
+        score_threshold: 0.9
+      output: {enabled: true, format: parquet}
 ```
 
 ---
@@ -176,7 +177,7 @@ from ducta.check import QualityService
 report = QualityService.run_checks(
     input_path="data/sales.parquet",
     format="parquet",
-    config_path="config/checks.yaml",
+    config_path="checks.yaml",
     workspace=".",
 )
 trend = QualityService.get_trend("sales", workspace=".")   # historical scores

@@ -39,38 +39,26 @@ The Databricks SDK also supports resolving these from a named profile in ``~/.da
 
 **Step 2: Configure Ducta's execution mode**
 
-Set ``mode`` to ``"databricks"`` and point ``input_path``/``output_path`` at your data locations (Unity Catalog Volumes paths work well here) in your global configuration. These are Ducta's own settings — they are independent of the Databricks credentials above, which come exclusively from the environment.
+Set ``mode: databricks`` and point ``paths`` at your data — Unity Catalog
+Volumes paths work well. Usually only production runs on Databricks, so put it
+in that environment's overrides and keep local development local:
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings: {mode: local}
+   environments:
+     prod:
+       settings: {mode: databricks}
+       paths:
+         input: /Volumes/main/sales/input
+         output: /Volumes/main/sales/output
 
-      .. code-block:: toml
-
-         mode = "databricks"
-
-         # Use Unity Catalog Volumes paths
-         input_path = "/Volumes/catalog/schema/input"
-         output_path = "/Volumes/catalog/schema/output"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         mode: databricks
-
-         input_path: /Volumes/catalog/schema/input
-         output_path: /Volumes/catalog/schema/output
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "mode": "databricks",
-           "input_path": "/Volumes/catalog/schema/input",
-           "output_path": "/Volumes/catalog/schema/output"
-         }
+These are Ducta's own settings, independent of the Databricks credentials
+above, which come only from the environment.
 
 **Step 3: Run your pipeline**
 
@@ -83,54 +71,38 @@ Ducta will execute the pipeline on your Databricks cluster.
 Common Patterns
 ---------------
 
-**Using Delta Lake tables as input/output**
+**Delta Lake tables as inputs and outputs**
 
-Ducta's Delta reader/writer always resolve the dataset's ``filepath`` through Spark's path-based ``.load()``/``.save()`` API (not ``spark.read.table()``), so ``filepath`` must be a filesystem-style location — a Unity Catalog Volumes path, ``dbfs:/`` path, or cloud URI — rather than a ``catalog.schema.table`` identifier.
+Ducta reads and writes Delta through paths (``.load()``/``.save()``), so a
+dataset's ``path`` is a filesystem-style location — a Volumes path, a
+``dbfs:/`` path or a cloud URI — not a ``catalog.schema.table`` identifier:
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
+   # catalog.yaml
+   customers:
+     format: delta
+     path: /Volumes/main/crm/customers
+   silver.crm.customers_clean:              # no path: <paths.output>/<env>/silver/crm/customers_clean
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [customer_id]}
 
-      .. code-block:: toml
+**Registering outputs in Unity Catalog**
 
-         # config/input.toml — flat: the key IS the dataset name
-         [customer_data]
-         filepath = "/Volumes/delta_catalog/main/customers"
-         format = "delta"
+An output with ``format: unity_catalog`` is written as a Delta table and
+registered as ``<catalog_name>.<schema>.<table>``, where schema and table come
+from its three-part name (``silver.crm.customers`` → schema ``silver``, table
+``customers``). ``{environment}`` in ``catalog_name`` keeps environments apart:
 
-      .. code-block:: toml
+.. code-block:: yaml
 
-         # config/output.toml
-         [processed]
-         filepath = "/Volumes/delta_catalog/main/customers_processed"
-         format = "delta"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/input.yaml
-         customer_data:
-           filepath: /Volumes/delta_catalog/main/customers
-           format: delta
-
-      .. code-block:: yaml
-
-         # config/output.yaml
-         processed:
-           filepath: /Volumes/delta_catalog/main/customers_processed
-           format: delta
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "customer_data": {
-             "filepath": "/Volumes/delta_catalog/main/customers",
-             "format": "delta"
-           }
-         }
+   # catalog.yaml
+   silver.crm.customers:
+     format: unity_catalog
+     catalog_name: "main_{environment}"
+     uc_table_mode: external                # external (data at the path) or managed
 
 **Running on a specific cluster**
 

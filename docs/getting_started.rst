@@ -3,7 +3,7 @@ Getting Started
 
 Welcome to Ducta! In this guide, you will build and execute your first professional data pipeline in just a few minutes.
 
-Ducta follows a **Configuration-As-Code** philosophy: you define *what* your pipeline does in simple TOML/YAML files, and *how* it does it in clean Python functions.
+Ducta follows a **Configuration-As-Code** philosophy: you define *what* your pipeline does in a few YAML files, and *how* it does it in clean Python functions.
 
 Step 1: Initialize Your Project
 -------------------------------
@@ -24,37 +24,31 @@ Ducta provides production-ready templates to get you started immediately. Run th
 Step 2: Explore the Project Structure
 -------------------------------------
 
-Ducta enforces a clean separation of concerns:
+Ducta separates *what* runs from *how*:
 
 .. grid:: 1 1 2 2
    :gutter: 2
 
    .. grid-item::
-      **📁 config/**
+      **📄 ducta.yaml · catalog.yaml · pipelines/*.yaml**
 
-      The "Brain" of your project. Define your pipeline logic, data sources, and environment settings here.
+      What runs: settings and environments, every dataset once, and each pipeline with its nodes.
 
    .. grid-item::
-      **📁 pipelines/**
+      **🐍 pipelines/*.py**
 
-      The "Muscle". This is where your pure Python logic lives. No infrastructure code needed.
+      How: plain Python functions. No infrastructure code needed.
 
 .. code-block:: text
 
    my_pipeline/
-   ├── environment.yaml          # Maps each environment to its config files
-   ├── config/
-   │   ├── global_config.yaml  # Project-wide settings
-   │   ├── pipelines.yaml        # Workflows: which nodes run, in what order
-   │   ├── nodes.yaml            # Step definitions
-   │   ├── input.yaml            # Input sources catalog
-   │   ├── output.yaml           # Output destinations catalog
-   │   ├── dev/                  # Per-environment overrides
-   │   ├── sandbox/              # (global_config / input / output only)
-   │   └── prod/
+   ├── ducta.yaml             # project, paths, settings, per-environment overrides
+   ├── catalog.yaml           # every dataset: format, location, how it is written, its checks
    ├── pipelines/
-   │   └── etl.py                # Your Python logic (extract/transform/load)
-   └── .env                      # Secrets & machine-local values
+   │   ├── etl.yaml           # the `etl` pipeline and its nodes
+   │   └── etl.py             # your Python logic (extract/transform/load)
+   ├── .ducta/schema/         # JSON Schemas — autocompletion in your editor
+   └── .env                   # secrets & machine-local values
 
 Step 3: Execute Your First Pipeline
 -----------------------------------
@@ -63,75 +57,55 @@ The template comes with an ``etl`` pipeline ready to run. Let's execute it:
 
 .. code-block:: bash
 
-   ducta start --env base --pipeline etl
+   ducta start --env dev --pipeline etl
 
 **What just happened?**
-When you ran that command, Ducta performed several enterprise-grade actions:
 
-1. **Validation**: Verified that all nodes defined in ``pipelines.yaml`` exist in ``nodes.yaml``.
-2. **Dependency Resolution**: Calculated the correct order of execution.
-3. **Environment Loading**: Automatically picked up variables from your ``.env`` file.
-4. **Execution**: Ran your Python functions and managed the data flow between them.
-5. **Observability**: Generated detailed logs (check the console output!) and execution metrics.
+1. **Validation**: every file was checked against the schema, and every dataset a
+   node names against the catalog — a typo is reported with its file and line.
+2. **Dependency Resolution**: the order came from the data — ``transform`` reads what
+   ``extract`` writes.
+3. **Environment Loading**: ``environments.dev`` in ``ducta.yaml`` (if any) was applied,
+   and variables were read from ``.env``.
+4. **Execution**: your functions ran, with the quality checks and gates in between.
+5. **Evidence**: a run certificate recorded what ran, on which data, with which result
+   (``ducta certify list``).
 
 Step 4: Customizing the Pipeline
 --------------------------------
 
-Open ``config/pipelines.yaml`` (or the TOML/JSON equivalent). You'll see how simple it is to define a workflow:
+Open ``pipelines/etl.yaml``:
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
+   # pipelines/etl.yaml — the file name is the pipeline name
+   description: "Complete ETL pipeline: Extract -> Transform -> Load"
+   requires_dates: false
+   nodes:
+     extract:
+       run: pipelines.etl:extract
+       inputs: [source_data]
+       outputs: [bronze.etl.raw_data]
+     transform:
+       run: pipelines.etl:transform
+       inputs: [bronze.etl.raw_data]
+       outputs: [silver.etl.clean_data]
+       quality:
+         checks:
+           null_rate: {columns: [amount], threshold: 0.0}
+         gate: {max_errors: 0}
+     load:
+       run: pipelines.etl:load
+       inputs: [silver.etl.clean_data]
+       outputs: [gold.etl.final_output]
 
-      .. code-block:: toml
-
-         # config/pipelines.toml — the top-level key IS the pipeline name (flat, no wrapper)
-         [etl]
-         description = "Complete ETL pipeline: Extract -> Transform -> Load"
-         type = "batch"
-         nodes = ["extract", "transform", "load"]
-         inputs = ["source_data"]
-         outputs = ["gold.etl.final_output"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml — the top-level key IS the pipeline name (flat, no wrapper)
-         etl:
-           description: "Complete ETL pipeline: Extract -> Transform -> Load"
-           type: batch
-           nodes:
-             - extract
-             - transform
-             - load
-           inputs:
-             - source_data
-           outputs:
-             - gold.etl.final_output
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "etl": {
-             "description": "Complete ETL pipeline: Extract -> Transform -> Load",
-             "type": "batch",
-             "nodes": ["extract", "transform", "load"],
-             "inputs": ["source_data"],
-             "outputs": ["gold.etl.final_output"]
-           }
-         }
-
-To add a new step, add its name to the ``nodes`` list and define it in
-``config/nodes.yaml``.
+To add a step, add a node here and the datasets it writes to ``catalog.yaml``.
+``ducta config validate`` checks the result without running anything.
 
 .. tip::
-   ``medallion_basic`` is one of four starter templates. Run
-   ``ducta template --list-templates`` to see them all: ``medallion_basic``
-   (batch ETL), ``ml_ready`` (adds experiment tracking + model registry),
-   ``streaming_core`` (real-time), and ``hybrid`` (batch feeding streaming).
+   Two starter templates exist — ``ducta template --list-templates`` shows them:
+   ``medallion_basic`` (batch ETL, bronze → silver → gold) and
+   ``streaming_basic`` (Structured Streaming).
 
 Step 5: Pure Python Logic
 -------------------------

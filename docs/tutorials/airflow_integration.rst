@@ -9,113 +9,93 @@ This tutorial demonstrates how to orchestrate your Ducta pipelines using Apache 
 - **Simplicity**: The Airflow DAGs remain simple and clean. All the complexity of data sources, transformations, and destinations is managed by Ducta's configuration.
 - **Testability**: You can easily test your Ducta pipelines locally without needing an Airflow environment.
 
-A Basic ETL DAG
----------------
+Two ways to run a pipeline
+--------------------------
 
-Here is an example of an Airflow DAG that runs a sequence of Ducta pipelines for a typical Bronze-Silver-Gold ETL process.
+**Run the CLI** (``BashOperator``) when Airflow workers only need to *start*
+work — Ducta runs in its own process with its own environment, and the exit
+code tells Airflow what happened.
 
-Each task in the DAG corresponds to a Ducta pipeline. When a task runs, it invokes the Ducta library, executes the specified pipeline, and reports success or failure back to Airflow.
+**Call Ducta in-process** (``PythonOperator``) when the worker has Ducta and
+Spark installed and you want the run's result object in the task.
+
+With the CLI
+------------
 
 .. code-block:: python
 
-   from airflow import DAG
-   from airflow.operators.python import PythonOperator
    from datetime import datetime, timedelta
-   from ducta import PipelineExecutor, ContextLoader
 
-   # Define the path to your Ducta project directory
-   # In a real Airflow deployment, this would be a fixed path on your Airflow worker nodes
-   # where your Ducta project is deployed.
-   PROJECT_PATH = "/path/to/your/ducta_project"
+   from airflow import DAG
+   from airflow.operators.bash import BashOperator
 
-   CONFIG_PATHS = {
-       "global_config": f"{PROJECT_PATH}/config/base/global_config.toml",
-       "pipelines": f"{PROJECT_PATH}/config/base/pipelines.toml",
-       "nodes": f"{PROJECT_PATH}/config/base/nodes.toml",
-       "input": f"{PROJECT_PATH}/config/base/input.toml",
-       "output": f"{PROJECT_PATH}/config/base/output.toml",
-   }
-
-   default_args = {
-       'owner': 'data-team',
-       'depends_on_past': False,
-       'start_date': datetime(2024, 1, 1),
-       'email_on_failure': False,
-       'email_on_retry': False,
-       'retries': 1,
-       'retry_delay': timedelta(minutes=5),
-   }
-
-   def run_ducta_pipeline(pipeline_name: str, ds: str):
-       """
-       A generic Python callable that executes a Ducta pipeline.
-       """
-       print(f"Executing Ducta pipeline: {pipeline_name} for date {ds}")
-
-       # 1. Load the production context from your Ducta project
-       context = ContextLoader().load_from_paths(CONFIG_PATHS, env="production")
-
-       # 2. Initialize the executor
-       executor = PipelineExecutor(context)
-
-       # 3. Run the pipeline for a specific date.
-       #    run_pipeline raises on failure, which Airflow records as a task
-       #    failure automatically -- no manual success check is needed.
-       executor.run_pipeline(
-           pipeline_name,
-           start_date=ds,
-           end_date=ds,
-       )
-
-       print(f"✅ Ducta pipeline '{pipeline_name}' completed successfully.")
+   PROJECT = "/opt/pipelines/sales"          # a Ducta project deployed on the workers
 
    with DAG(
-       dag_id='ducta_daily_etl',
-       default_args=default_args,
-       description='Daily ETL DAG to run Ducta pipelines for Bronze, Silver, and Gold layers.',
-       schedule_interval='0 2 * * *',  # Runs daily at 2 AM
-       catchup=False,
-       tags=['ducta', 'etl'],
+       dag_id="sales_daily",
+       start_date=datetime(2026, 1, 1),
+       schedule="0 2 * * *",
+       catchup=True,                         # backfills are safe: re-runs are idempotent
+       default_args={"retries": 2, "retry_delay": timedelta(minutes=10)},
    ) as dag:
-
-       run_load_pipeline = PythonOperator(
-           task_id='run_load_pipeline',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'load', 'ds': '{{ ds }}'},
+       daily = BashOperator(
+           task_id="daily",
+           bash_command=(
+               "ducta start --base-path {{ params.project }} --env prod --pipeline daily "
+               "--start-date {{ ds }} --end-date {{ ds }}"
+           ),
+           params={"project": PROJECT},
        )
 
-       run_transform_pipeline = PythonOperator(
-           task_id='run_transform_pipeline',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'transform', 'ds': '{{ ds }}'},
-       )
+A non-zero exit fails the task. Exit code ``7`` means another run holds the
+lock on an output — nothing ran — so an Airflow retry is exactly right; with
+``settings.run_lock.on_conflict: wait`` Ducta waits for the lock itself.
 
-       run_aggregate_pipeline = PythonOperator(
-           task_id='run_aggregate_pipeline',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'aggregate', 'ds': '{{ ds }}'},
-       )
-
-       # Define the task dependencies
-       run_load_pipeline >> run_transform_pipeline >> run_aggregate_pipeline
-
-How it Works
-------------
-
-1.  **`PROJECT_PATH`**: You must define the absolute path to your deployed Ducta project. Your Airflow workers need access to this directory.
-
-2.  **`run_ducta_pipeline` function**: This is the core of the integration. It's a `PythonOperator` callable that:
-    - Loads the Ducta context for your `production` environment via `ContextLoader().load_from_paths(...)`.
-    - Runs a specific pipeline with `PipelineExecutor.run_pipeline(...)`, passing in the execution date (`ds`) from Airflow as `start_date`/`end_date`.
-    - Lets any exception raised by `run_pipeline` propagate, which Airflow automatically records as a failed task.
-
-3.  **DAG Definition**: The DAG itself is standard Airflow code. We define three `PythonOperator` tasks, one for each of our `load`, `transform`, and `aggregate` pipelines.
-
-4.  **Task Dependencies**: We use `>>` to set the execution order, ensuring that the `load` pipeline runs before `transform`, and `transform` runs before `aggregate`.
-
-Next Steps
+In-process
 ----------
 
-- **Deploy**: Place your Ducta project in a directory accessible to your Airflow workers and update `PROJECT_PATH`.
-- **Customize**: Modify the `pipeline_name` in the `op_kwargs` to match your project's pipelines.
-- **Note on scheduling**: Ducta itself has no built-in scheduler. All cron-style scheduling (`schedule_interval` above) and cross-pipeline ordering must come from Airflow (or another external orchestrator) -- Ducta only executes the pipeline you ask it to run when invoked.
+.. code-block:: python
+
+   from datetime import datetime
+
+   from airflow import DAG
+   from airflow.operators.python import PythonOperator
+
+   PROJECT = "/opt/pipelines/sales"
+
+
+   def run_pipeline(pipeline: str, ds: str) -> str:
+       import ducta
+
+       context = ducta.load_project(PROJECT, env="prod")
+       result = ducta.PipelineExecutor(context).run_pipeline(
+           pipeline, start_date=ds, end_date=ds
+       )
+       return result.run_id                  # pushed to XCom: the run's certificate id
+
+
+   with DAG(dag_id="sales_daily_py", start_date=datetime(2026, 1, 1), schedule="@daily") as dag:
+       PythonOperator(
+           task_id="daily",
+           python_callable=run_pipeline,
+           op_kwargs={"pipeline": "daily", "ds": "{{ ds }}"},
+       )
+
+``run_pipeline`` raises when the pipeline fails, which fails the task.
+Relative ``paths`` in the project resolve against the worker's working
+directory, so use absolute or cloud paths for ``prod``.
+
+Chains of pipelines
+-------------------
+
+Airflow tasks can mirror bronze → silver → gold pipelines one by one, or a
+single task can run the chain Ducta already knows: declare
+``depends_on: [bronze]`` in the silver pipeline file and start the last
+pipeline with ``--reuse-upstream``, which skips any upstream whose outputs are
+still valid for the same inputs, dates, code and configuration.
+
+Next steps
+----------
+
+- :doc:`/cli_usage` — every option and exit code of ``ducta start``
+- :doc:`certificates` — using ``run_id`` to prove what a task did

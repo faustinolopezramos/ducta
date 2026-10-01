@@ -81,7 +81,11 @@ class HybridExecutor(BaseExecutor):
 
         self._log_pipeline_start(pipeline_name, ml_info, "HYBRID")
 
-        sanity_reports = self._run_preflight_sanity_checks(node_configs)
+        sanity_reports = self._run_preflight_sanity_checks(
+            node_configs,
+            start_date or self.settings.start_date,
+            end_date or self.settings.end_date,
+        )
         if sanity_reports:
             self._sanity_reports = sanity_reports
 

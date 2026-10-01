@@ -148,13 +148,8 @@ def _check_node_function(
     function = node_config.get("function")
     origin = f"{module}.{function}" if module and function else node_name
 
-    if requires_dates and not _is_streaming_node(node_config):
-        for kwarg in ("start_date", "end_date"):
-            if kwarg not in sig.parameters:
-                report.error(
-                    f"Node '{node_name}': function '{origin}' must accept '{kwarg}' "
-                    f"(the pipeline requires dates). Add '{kwarg}=None' or **kwargs to its signature."
-                )
+    # The run window (start_date/end_date) is passed only to functions that
+    # declare it, so a function without it is fine even when dates are required.
 
     n_inputs = len(_input_keys(node_config))
     if n_inputs and not _accepts_var_positional(sig):
@@ -198,10 +193,20 @@ def _check_io_keys(
             )
             continue
 
+        declared = (output_config.get(key) or {}).get("filepath")
         try:
-            validator.validate_output_key(key)
+            conventional = validator.validate_output_key(key)
         except Exception as e:  # noqa: BLE001 — ConfigurationError → finding
-            report.error(f"Node '{node_name}': invalid output key '{key}' — {e}")
+            conventional = None
+            if not declared:
+                # Only a key with no explicit filepath needs the three-part
+                # shape: it is what the path is derived from.
+                report.error(
+                    f"Node '{node_name}': invalid output key '{key}' — {e}. Give it an "
+                    "explicit 'filepath', or use a schema.sub_folder.table key."
+                )
+        if declared and conventional:
+            _warn_if_filepath_moves_output(report, node_name, key, str(declared), conventional)
 
 
 _EXTRA_NODE_KEYS = frozenset(
@@ -239,6 +244,13 @@ def _quality_blocks(node_config: Dict[str, Any]) -> List[tuple]:
         block = node_config.get(key)
         if isinstance(block, dict):
             blocks.append((key, block))
+    # Dataset contracts: sanity_checks.inputs.<dataset> is a block of its own,
+    # whose gate is `gate`.
+    contracts = (node_config.get("sanity_checks") or {}).get("inputs")
+    if isinstance(contracts, dict):
+        for dataset, block in contracts.items():
+            if isinstance(block, dict):
+                blocks.append((f"sanity_checks.inputs.{dataset}", block))
     return blocks
 
 
@@ -304,7 +316,8 @@ def _check_quality_config(
     for block_name, block in _quality_blocks(node_config):
         where = f"Node '{node_name}'.{block_name}"
         _check_check_entries(report, where, block.get("checks") or {})
-        _check_quality_gate(report, where, block.get("quality_gate"))
+        gate = block.get("gate") if block_name.startswith("sanity_checks.inputs.") else None
+        _check_quality_gate(report, where, gate or block.get("quality_gate"))
 
 
 _LEGACY_DSTREAM_PREFIX = "spark.streaming."
@@ -380,6 +393,29 @@ def _check_unknown_node_keys(
         )
 
 
+def _warn_if_filepath_moves_output(
+    report: PreflightReport,
+    node_name: str,
+    key: str,
+    declared: str,
+    parsed: Dict[str, str],
+) -> None:
+    """An output's ``filepath`` used to be ignored; now it is honoured.
+
+    A project that declared one pointing somewhere other than the conventional
+    path would silently start writing to a new location — and its downstream
+    inputs, still pointing at the old one, would read stale data. Say so.
+    """
+    tail = "/".join([parsed["schema"], parsed["sub_folder"], parsed["table_name"]])
+    if not declared.replace("\\", "/").rstrip("/").endswith(tail):
+        report.warn(
+            f"Node '{node_name}': output '{key}' writes to its declared filepath "
+            f"'{declared}'. Before Ducta 0.2 that filepath was ignored and the output went "
+            f"to the conventional '<output_path>/<env>/{tail}'. Check that the inputs "
+            "reading this dataset point to the same place."
+        )
+
+
 def _check_merge_outputs(
     report: PreflightReport,
     node_name: str,
@@ -433,6 +469,21 @@ def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
             )
 
 
+def _check_deprecated_pipeline_keys(report: PreflightReport, context: Any, name: str) -> None:
+    """Pipeline-level ``inputs``/``outputs`` are declared but never read.
+
+    They restate what the nodes already declare and have to be kept in sync by
+    hand; nothing consumes them, so a stale list misleads without failing.
+    """
+    raw = (getattr(context, "pipelines_config", None) or {}).get(name) or {}
+    stale = [k for k in ("inputs", "outputs") if raw.get(k)]
+    if stale:
+        report.warn(
+            f"Pipeline '{name}': {stale} are deprecated and ignored — a pipeline's "
+            "inputs and outputs are those of its nodes. Remove them."
+        )
+
+
 def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     """Validate a single pipeline's configuration without executing it."""
     report = PreflightReport(pipeline_name=pipeline_name)
@@ -443,6 +494,8 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         available = ", ".join(sorted(pipelines)) or "(none)"
         report.error(f"Pipeline '{pipeline_name}' not found. Available: {available}")
         return report
+
+    _check_deprecated_pipeline_keys(report, context, pipeline_name)
 
     try:
         PipelineValidator.validate_pipeline_config(pipeline)

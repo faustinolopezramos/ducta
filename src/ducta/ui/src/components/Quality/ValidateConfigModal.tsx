@@ -5,11 +5,10 @@ import { StatusBadge } from "../ui/StatusBadge";
 import { Field } from "../ui/Field";
 import "../ui/Input.css"; // .input-field
 import { colors } from "../../theme/tokens";
-import { useNodes, useWorkspaceConfigs } from "../../api/queries";
+import { useNodes } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
 import { useValidateQualityConfig } from "../../api/qualityApi";
-import { FilePickerField } from "./FilePickerField";
-import { IconShieldCheck, IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { IconShieldCheck } from "@tabler/icons-react";
 
 // Section headings for lists (Errors/Warnings), not form-field labels — kept
 // distinct from `Field` on purpose.
@@ -24,42 +23,24 @@ const label: CSSProperties = {
 };
 
 /**
- * Validate a node's quality config by picking the node from the workspace —
- * the nodes/global config paths are resolved from the environment's config
- * set automatically. Manual path overrides stay available under "Advanced".
+ * Validate a node's quality config by picking the node from the workspace.
+ * The server reads the node's project as the active environment sees it, so
+ * profiles resolve against that environment's settings.
  */
 export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
   const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
   const { data: nodesData, isLoading: nodesLoading } = useNodes();
-  const { data: configs } = useWorkspaceConfigs(activeEnv);
   const validate = useValidateQualityConfig();
 
   const [nodeName, setNodeName] = useState("");
-  const [advanced, setAdvanced] = useState(false);
-  const [manualConfigPath, setManualConfigPath] = useState("");
-  const [manualGlobalPath, setManualGlobalPath] = useState("");
 
   const nodeNames = useMemo(
     () => Object.keys(nodesData?.nodes ?? {}).sort(),
     [nodesData]
   );
 
-  const resolvedConfigPath: string =
-    (configs?.nodes?.path as string | undefined) ?? "";
-  const resolvedGlobalPath: string =
-    (configs?.global_config?.path as string | undefined) ??
-    (configs?.global?.path as string | undefined) ??
-    "";
-
-  const configPath = advanced && manualConfigPath ? manualConfigPath : resolvedConfigPath;
-  const globalPath = advanced && manualGlobalPath ? manualGlobalPath : resolvedGlobalPath;
-
   const submit = () => {
-    validate.mutate({
-      node_name: nodeName,
-      config_path: configPath,
-      global_config_path: globalPath || undefined,
-    });
+    validate.mutate({ node_name: nodeName, env: activeEnv });
   };
 
   return (
@@ -82,54 +63,8 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
         </Field>
 
         <div style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
-          {configPath
-            ? `Using ${configPath} (${activeEnv})`
-            : "No nodes config found for this environment — set the path under Advanced."}
+          {`Checks the node as the ${activeEnv} environment configures it`}
         </div>
-
-        <button
-          type="button"
-          onClick={() => setAdvanced((a) => !a)}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            background: "none",
-            border: "none",
-            padding: 0,
-            cursor: "pointer",
-            fontSize: 11,
-            color: colors.textMuted,
-          }}
-        >
-          {advanced ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
-          Advanced (manual paths)
-        </button>
-
-        {advanced && (
-          <div style={{ display: "grid", gap: 10 }}>
-            <div>
-              <label style={label} htmlFor="validate-config-nodes-path">Nodes config file</label>
-              <FilePickerField
-                id="validate-config-nodes-path"
-                value={manualConfigPath}
-                onChange={setManualConfigPath}
-                placeholder={resolvedConfigPath || "config/nodes.yaml"}
-                extensions={[".toml", ".yaml", ".yml", ".json", ".py"]}
-              />
-            </div>
-            <div>
-              <label style={label} htmlFor="validate-config-global-path">Global settings file (profile resolution)</label>
-              <FilePickerField
-                id="validate-config-global-path"
-                value={manualGlobalPath}
-                onChange={setManualGlobalPath}
-                placeholder={resolvedGlobalPath || "config/global.toml"}
-                extensions={[".toml", ".yaml", ".yml", ".json", ".py"]}
-              />
-            </div>
-          </div>
-        )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Button variant="ghost" size="sm" onClick={onClose}>
@@ -139,7 +74,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
             variant="primary"
             size="sm"
             onClick={submit}
-            disabled={validate.isPending || !nodeName || !configPath}
+            disabled={validate.isPending || !nodeName}
             leftIcon={<IconShieldCheck size={15} />}
           >
             {validate.isPending ? "Validating…" : "Validate"}

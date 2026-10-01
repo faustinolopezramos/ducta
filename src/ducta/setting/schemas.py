@@ -353,6 +353,47 @@ class GlobalConfigSchema(BaseModel):
     node_timeout_seconds: Optional[int] = Field(
         default=None, description="Per-node time limit in seconds (default 1800, max 86400)."
     )
+    checkpoints_base: Optional[str] = Field(
+        default=None,
+        description="Base directory for stream checkpoints of nodes without their own "
+        "checkpoint_location (default: <output_path>/<environment>/streaming_checkpoints).",
+    )
+    streaming_node_start_retries: Optional[int] = Field(
+        default=None, description="Attempts to start a stream node's query (default 45)."
+    )
+    streaming_node_start_retry_delay_seconds: Optional[float] = Field(
+        default=None, description="Seconds between those attempts (default 2)."
+    )
+    streaming_node_start_parallelism: Optional[int] = Field(
+        default=None, description="Stream nodes of one wave started concurrently (default 8)."
+    )
+    streaming_status_cache_ttl_seconds: Optional[float] = Field(
+        default=None, description="How long a streaming status snapshot is reused (default 2)."
+    )
+    streaming_disable_backpressure_defaults: Optional[bool] = Field(
+        default=None,
+        description="Do not add Ducta's default rate limits (maxFilesPerTrigger, "
+        "maxOffsetsPerTrigger) to stream sources that set none (default false).",
+    )
+    streaming_adaptive_base_interval: Optional[str] = Field(
+        default=None,
+        description="Starting interval of an 'adaptive' trigger with no history yet (default '5 seconds').",
+    )
+    streaming_adaptive_max_interval_seconds: Optional[float] = Field(
+        default=None, description="Ceiling of an 'adaptive' trigger's interval (default 60)."
+    )
+    streaming_shuffle_partitions: Optional[int] = Field(
+        default=None, description="spark.sql.shuffle.partitions applied to streaming queries."
+    )
+    mlops_path: Optional[str] = Field(
+        default=None, description="Where MLOps experiments and models are stored."
+    )
+    mlops_storage_path: Optional[str] = Field(
+        default=None, description="Fallback MLOps storage path for the CLI commands."
+    )
+    model_registry_path: Optional[str] = Field(
+        default=None, description="Local directory where model artifacts are copied on write."
+    )
     max_streaming_pipelines: Optional[int] = Field(
         default=None, description="Maximum concurrent streaming pipelines (default 5)."
     )
@@ -663,6 +704,14 @@ GlobalConfigSchema.model_rebuild()
 class SanityChecksSchema(BaseModel):
     """Schema for node-level ``sanity_checks`` configuration block."""
 
+    inputs: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Per-dataset contracts: {dataset: {checks, gate, fail_fast, ...}}. Each "
+            "input the node reads is validated against its own block (format 2 "
+            "compiles catalog 'checks' and node 'input_checks' to this)."
+        ),
+    )
     enabled: bool = Field(
         default=True, description="Whether sanity checks are active for this node"
     )
@@ -973,8 +1022,12 @@ class OutputSchema(BaseModel):
     filepath: Optional[str] = Field(
         default=None, description="Path to output data (supports ${VAR} interpolation)"
     )
-    write_mode: WriteMode = Field(
-        default=WriteMode.APPEND, description="Write mode: overwrite, append, ignore, error, merge"
+    # No default here: an unset mode is left out of the validated document so
+    # the writer's own default (overwrite) applies — injecting a value made
+    # every dataset without an explicit mode append on each run.
+    write_mode: Optional[WriteMode] = Field(
+        default=None,
+        description="Write mode: overwrite (default), append, ignore, error, merge",
     )
     options: Optional[Dict[str, Any]] = Field(default=None, description="Format-specific options")
     schema_def: Optional[str] = Field(

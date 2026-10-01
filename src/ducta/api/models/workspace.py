@@ -94,7 +94,7 @@ class StructureInfo(BaseModel):
         ),
     )
     root: str = Field(description="Absolute path analysed")
-    has_environment_yaml: bool = Field(default=False)
+    has_project: bool = Field(default=False)
     has_config_dir: bool = Field(default=False)
     has_git: bool = Field(default=False)
     environments: List[str] = Field(default_factory=list)

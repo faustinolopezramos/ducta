@@ -32,6 +32,7 @@ try:
 except ImportError:
     StreamingQuery = Any  # type: ignore
 
+from ducta.setting.dependency_inference import get_node_dependencies
 from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import (
     StreamingError,
@@ -574,7 +575,9 @@ class StreamingPipelineManager:
             deferred: List[Tuple[str, Dict[str, Any]]] = []
 
             for node_name, cfg in remaining:
-                depends_on = [d for d in (cfg.get("depends_on", []) or []) if d not in satisfied]
+                # Both spellings, like the batch engine: a streaming node that
+                # declared `dependencies:` used to have its ordering dropped.
+                depends_on = [d for d in get_node_dependencies(cfg) if d not in satisfied]
                 # Dependencies that exist in this pipeline but haven't resolved yet
                 # belong to a later wave — defer rather than skip.
                 pending_deps = [d for d in depends_on if d in all_names and d not in node_outcomes]
@@ -601,12 +604,24 @@ class StreamingPipelineManager:
                     node_outcomes[node_name] = "skipped"
                 break
 
+            started_now: List[str] = []
             for node_name, outcome in self._start_node_wave(
                 execution_id, pipeline_name, ready
             ).items():
                 node_outcomes[node_name] = outcome
                 if outcome == "started":
                     processed_nodes.append(node_name)
+                    started_now.append(node_name)
+
+            # A node with a terminating trigger (once / available_now) processes
+            # what exists and stops; a node reading its output must start after
+            # it finishes, or it reads an empty source and stops too.
+            needed = {d for _, cfg in deferred for d in get_node_dependencies(cfg)}
+            self._await_terminating_upstreams(
+                execution_id,
+                [(n, cfg) for n, cfg in ready if n in started_now and n in needed],
+                stop_event,
+            )
 
             remaining = deferred
 
@@ -623,6 +638,42 @@ class StreamingPipelineManager:
                 )
 
         return processed_nodes
+
+    _TERMINATING_TRIGGERS = frozenset({"once", "available_now"})
+
+    def _await_terminating_upstreams(
+        self,
+        execution_id: str,
+        nodes: List[Tuple[str, Dict[str, Any]]],
+        stop_event: Optional[Event],
+    ) -> None:
+        """Wait for the queries of ``nodes`` whose trigger terminates on its own."""
+        for node_name, cfg in nodes:
+            trigger = ((cfg.get("streaming") or {}).get("trigger") or {}).get("type")
+            if str(trigger).lower() not in self._TERMINATING_TRIGGERS:
+                continue
+            with self._lock:
+                info = self._running_pipelines.get(execution_id) or {}
+                query = (info.get("queries") or {}).get(node_name)
+            await_fn = getattr(query, "awaitTermination", None)
+            if not callable(await_fn):
+                continue
+            logger.info(
+                "Waiting for '{}' ({} trigger) to finish before starting its dependants",
+                node_name,
+                trigger,
+            )
+            while True:
+                if self._shutdown_event.is_set() or (
+                    stop_event is not None and stop_event.is_set()
+                ):
+                    return
+                try:
+                    if await_fn(1.0):
+                        break
+                except Exception as e:  # a failed query is reported by its monitor
+                    logger.warning("Query '{}' ended with an error: {}", node_name, e)
+                    break
 
     def _start_node_wave(
         self,

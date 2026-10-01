@@ -62,7 +62,7 @@ Mlrun is driven by `MLOpsConfig` (constructed directly, `from_env`, or `from_con
 *   **`enable_retry`, `max_retries`, `retry_delay`, `enable_circuit_breaker`**: resilience.
 *   **`model_retention_days`, `max_versions_per_model`**: registry retention.
 
-From a pipeline `Context`, storage location is resolved with a 4-tier fallback (`base_path` → `global_config.mlops_path` → `output_path/<env>/<pipeline>` → `output_path/<env>`); if none resolve safely, MLOps stays uninitialized rather than writing to the wrong place.
+From a pipeline `Context`, storage location is resolved with a 4-tier fallback (`base_path` → the `mlops_path` setting → `output_path/<env>/<pipeline>` → `output_path/<env>`); if none resolve safely, MLOps stays uninitialized rather than writing to the wrong place.
 
 ### Relevant environment variables
 `Ducta_MLOPS_BACKEND`, `Ducta_MLOPS_PATH`, `DATABRICKS_CATALOG`, `DATABRICKS_SCHEMA`, `DATABRICKS_VOLUME`, `Ducta_MLOPS_MAX_ACTIVE_RUNS`, `Ducta_MLFLOW_ENABLED`, and the rest of the `Ducta_MLOPS_*` family.
@@ -72,18 +72,31 @@ From a pipeline `Context`, storage location is resolved with a 4-tier fallback (
 ## 3. Configuration Examples
 
 ```yaml
-# global_config.yaml — mlrun-relevant keys
-mlops_enabled: true
-mlops_required: false        # true = abort the run if MLOps init fails
-project_name: "sales_forecast"
-default_model_version: "v1"
+# ducta.yaml — mlrun-relevant settings
+version: 2
+project: sales_forecast
+paths: {input: data, output: data}
+settings:
+  mlops_enabled: true
+  mlops_required: false        # true = abort the run if MLOps init fails
+  default_model_version: "v1"
+  mlops: {backend_type: local, storage_path: ./mlops_data}
+```
 
-# pipelines.yaml — an ML pipeline with a declarative split
-train_model:
-  type: ml
-  nodes: ["build_features", "train"]
-  split: {method: "temporal", time_col: "event_date", test_size: 0.2}
-  hyperparams: {learning_rate: 0.05, n_estimators: 300}
+```yaml
+# pipelines/train_model.yaml — an ML pipeline with a declarative split
+type: ml
+requires_dates: false
+split: {method: temporal, time_col: event_date, test_size: 0.2}
+hyperparams: {learning_rate: 0.05, n_estimators: 300}
+nodes:
+  build_features:
+    run: forecast.features:build
+    inputs: {sales: silver.sales.orders}
+    outputs: [gold.sales.features]
+  train:
+    run: forecast.model:train
+    inputs: {features: gold.sales.features}
 ```
 
 ```bash

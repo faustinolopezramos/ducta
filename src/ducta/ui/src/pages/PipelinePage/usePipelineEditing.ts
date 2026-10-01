@@ -80,7 +80,8 @@ export function usePipelineEditing({
     updateNode(
       // `function` is what makes the node addressable; the old payload sent
       // `type: "batch"`, which is a pipeline field a node has no use for.
-      { name, spec: { module: mod, function: "run", input: [], output: [] } },
+      // `pipeline`: in a format-2 project a node is created inside its pipeline.
+      { name, spec: { module: mod, function: "run", input: [], output: [] }, pipeline: pipelineId },
       {
         onSuccess: () => {
           const currentNodes: string[] = Array.isArray(rawPipelineSpec?.nodes) ? rawPipelineSpec.nodes : [];

@@ -38,12 +38,10 @@ from ducta.api.utils.git_utils import (
 )
 from ducta.api.utils.platform_utils import posix_relative
 from ducta.api.utils.validators import validate_identifier
-from ducta.api.workspace.loaders import load_config_file, load_environment_yaml
-from ducta.api.workspace.utils import (
-    find_base_global_config,
-    find_config_files,
-    has_config_file,
-)
+
+
+class FileTooLargeError(ValueError):
+    """The requested file exceeds ``WorkspaceManager.MAX_READ_BYTES``."""
 
 
 class WorkspaceManager:
@@ -68,12 +66,28 @@ class WorkspaceManager:
             strict=strict,
         )
 
-    def get_env_config(self, env: str) -> Dict[str, Path]:
-        return find_config_files(self.root, env)
+    def _project_root(self) -> Optional[Path]:
+        from ducta.setting.project_loader import find_project_root
+
+        for candidate in (self._project_path, self.root):
+            if candidate is not None:
+                found = find_project_root(candidate)
+                if found is not None:
+                    return found
+        return None
 
     def list_environments(self) -> List[str]:
-        env_settings = load_environment_yaml(self.root)
-        return list(env_settings.get("env_config", {}).keys())
+        """The canonical environments, plus any other the project declares overrides for."""
+        import yaml  # type: ignore[import-untyped]
+
+        from ducta.setting.environments import DEFAULT_ENVIRONMENTS
+
+        envs = list(DEFAULT_ENVIRONMENTS)
+        root = self._project_root()
+        if root is not None:
+            data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
+            envs += [e for e in (data.get("environments") or {}) if e not in envs]
+        return envs
 
     def for_project(self, project_id: Optional[str]) -> "WorkspaceManager":
         """Return a manager scoped to *project_id* within this same workspace
@@ -91,36 +105,24 @@ class WorkspaceManager:
             return self
         return WorkspaceManager(candidate)
 
-    _CONTEXT_KEY_MAP: Dict[str, str] = {
-        "global_config": "global_config_path",
-        "pipelines": "pipelines_config_path",
-        "nodes": "nodes_config_path",
-        "input": "input_config_path",
-        "output": "output_config_path",
-    }
-
     def load_context(self, env: str) -> Any:
-        from ducta.setting.context_loader import ContextLoader
+        """The Context of this workspace's project for ``env`` (API runs never
+        import Python from configuration: ``allow_python_config=False``)."""
+        from ducta.setting.project_loader import load_project_v2
 
-        config_root = self.root
-        if self._project_path is not None:
-            if has_config_file(self._project_path, "environment"):
-                config_root = self._project_path
+        root = self._project_root()
+        if root is None:
+            from ducta.console.config import FORMAT1_MESSAGE, format1_markers
 
-        config_paths = find_config_files(config_root, env)
-        path_dict: Dict[str, str] = {}
-        for name, path in config_paths.items():
-            original_key = self._CONTEXT_KEY_MAP.get(name, f"{name}_path")
-            path_dict[original_key] = str(path)
+            target = self._project_path or self.root
+            if format1_markers(target):
+                raise ValidationError(FORMAT1_MESSAGE.format(root=target))
+            raise ValidationError(f"No Ducta project (ducta.yaml, version 2) in {target}")
+        ctx = load_project_v2(root, env, allow_python_config=False)
+        self._stamp_context(ctx, env)
+        return ctx
 
-        # Deep-merge the environment's global config over the base one, exactly
-        # as the CLI does — see `find_base_global_config`.
-        base_global = find_base_global_config(config_root, env)
-        if base_global is not None:
-            path_dict["base_global_config_path"] = str(base_global)
-
-        ctx = ContextLoader(allow_python_config=False).load_from_paths(path_dict, env)
-
+    def _stamp_context(self, ctx: Any, env: str) -> None:
         env_dir = self.root / env if (self.root / env).is_dir() else self.root
         for attr, value in (
             ("workspace_root", self.root),
@@ -133,9 +135,10 @@ class WorkspaceManager:
             except Exception:
                 pass
 
-        return ctx
-
     # ── Workspace file browser ──────────────────────────────────────────────
+
+    #: Largest file ``read_file`` will load into memory (matches the write cap).
+    MAX_READ_BYTES = 10 * 1024 * 1024
 
     _SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", "dist"})
 
@@ -164,6 +167,12 @@ class WorkspaceManager:
         target = safe_path(self.root, rel_path)
         if not target.is_file():
             raise ValueError(f"'{rel_path}' is not a file in this workspace")
+        size = target.stat().st_size
+        if size > self.MAX_READ_BYTES:
+            raise FileTooLargeError(
+                f"'{rel_path}' is {size} bytes; the file reader serves at most "
+                f"{self.MAX_READ_BYTES} bytes"
+            )
         return target.read_text(encoding="utf-8", errors="replace")
 
     def write_file(self, rel_path: str, content: str) -> None:
@@ -279,7 +288,7 @@ class WorkspaceManager:
             return []
         try:
             repo = get_repo(self.root)
-            blame = repo.blame("HEAD", path)
+            blame: Any = repo.blame("HEAD", path) or []
             result: List[Dict[str, Any]] = []
             line_number = 1
             for blame_commit, lines in blame:
@@ -322,14 +331,16 @@ class WorkspaceManager:
             git_remote = sanitize_git_remote_url(git_remote)
 
         active_env: Optional[str] = None
-        try:
-            base_paths = find_config_files(self.root, "base")
-            gs_path = base_paths.get("global_config")
-            if gs_path and gs_path.exists():
-                gs = load_config_file(gs_path)
-                active_env = gs.get("environment") or gs.get("env")
-        except Exception:
-            pass
+        root = self._project_root()
+        if root is not None:
+            try:
+                import yaml  # type: ignore[import-untyped]
+
+                data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
+                settings = data.get("settings") or {}
+                active_env = settings.get("environment") or settings.get("env")
+            except Exception:
+                pass
 
         return {
             "name": self.root.name,

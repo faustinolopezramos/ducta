@@ -101,7 +101,7 @@ class UserStore:
             dummy_hash=self._dummy_hash,
             verify_fn=self._svc.verify_password,
         )
-        if not password_valid or not stored.user.is_active:
+        if not password_valid or stored is None or not stored.user.is_active:
             return None
         return stored.user
 

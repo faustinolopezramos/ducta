@@ -26,7 +26,7 @@ host, cross-origin, and no CORS header can stop it. Whatever protects an HTTP
 route therefore protects nothing on ``/ws``.
 
 That matters most for the endpoints that are deliberately reachable without a
-token. The web terminal grants a shell and, with auth disabled, admits any
+token. The log stream exposes pipeline output and, with auth disabled, admits any
 loopback peer — which a page in the user's own browser is. The project already
 reached this conclusion once, for CORS: *"binding to loopback is no defence
 here: the browser is on the loopback host."* The reasoning holds identically

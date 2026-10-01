@@ -96,6 +96,7 @@ def create_app() -> FastAPI:
         _db_engine = None
         if is_db_enabled():
             _db_engine = get_engine()
+            assert _db_engine is not None  # is_db_enabled() guarantees an engine
             from ducta.api.db.migrate import run_migrations
 
             await run_migrations(_db_engine)
@@ -114,7 +115,7 @@ def create_app() -> FastAPI:
 
             logger.info(
                 "Persistence enabled — driver={driver}",
-                driver=_db_engine.url.drivername,
+                driver=_db_engine.url.drivername if _db_engine is not None else "unknown",
             )
         else:
             logger.info("Persistence disabled — running in in-memory mode")

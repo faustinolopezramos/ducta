@@ -98,7 +98,7 @@ Get running in three commands:
    pip install ducta
 
    # 2. Scaffold a project (Medallion layout: bronze → silver → gold)
-   ducta template --template medallion_basic --project-name my_pipeline --format yaml
+   ducta template --template medallion_basic --project-name my_pipeline
    cd my_pipeline
 
    # 3. Run the example pipeline

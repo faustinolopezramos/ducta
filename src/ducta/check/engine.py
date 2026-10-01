@@ -599,6 +599,8 @@ class SanityPhaseRunner:
         pipeline_config: dict,
         context: Any,
         pipeline_name: str = DEFAULT_PIPELINE_NAME,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> Dict[str, QualityReport]:
         """Run sanity checks on all nodes before pipeline execution.
 
@@ -646,7 +648,9 @@ class SanityPhaseRunner:
                 continue
 
             try:
-                dfs = loader.load_inputs(node_config, node_name)
+                # The run's window: an incremental input is checked on what the
+                # run will read, not on the whole table.
+                dfs = loader.load_inputs(node_config, node_name, start_date, end_date)
             except MissingDependencyError as e:
                 logger.info(
                     f"Skipping preflight for node '{node_name}': input not yet available ({e})"

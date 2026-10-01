@@ -309,17 +309,19 @@ async def get_score(
 async def validate_config(
     body: ValidateConfigRequest, manager: WorkspaceManagerDep
 ) -> ValidateConfigResponse:
-    with http_error_on(400):
-        config_abs = safe_path(manager.root, body.config_path)
-        gs_abs = (
-            str(safe_path(manager.root, body.global_config_path))
-            if body.global_config_path
-            else None
-        )
+    from ducta.api.repositories.v2_store import workspace_stores
+    from ducta.setting.project_loader import ProjectConfigError
 
-    result = QualityService.validate_node_config(
-        node_name=body.node_name,
-        config_path=str(config_abs),
-        global_config_path=gs_abs,
-    )
+    try:
+        store = next(
+            (s for s in workspace_stores(manager.root) if body.node_name in s.nodes()), None
+        )
+        if store is None:
+            raise HTTPException(status_code=404, detail=f"Node '{body.node_name}' not found")
+        result = QualityService.validate_node_config(
+            node_name=body.node_name, project_root=store.root, env=body.env, load_extensions=False
+        )
+    except ProjectConfigError as exc:
+        # The project itself does not validate: those problems are the answer.
+        result = {"valid": False, "errors": list(exc.problems), "warnings": []}
     return ValidateConfigResponse(**result)

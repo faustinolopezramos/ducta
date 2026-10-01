@@ -14,7 +14,7 @@ Core Capabilities
 Configuration
 -------------
 
-Configure MLOps under the ``mlops`` key of ``config/global_config.{ext}``.
+Configure MLOps under ``settings.mlops`` in ``ducta.yaml``.
 Ducta turns tracking on automatically for ``ml``-type pipelines — you don't call
 any setup function in your code.
 
@@ -50,45 +50,22 @@ any setup function in your code.
      - ``false``
      - Protect the system during backend outages.
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/global_config.toml
-         [mlops]
-         backend_type = "local"
-         storage_path = "./mlops_data"
-         model_retention_days = 90
-         metric_buffer_size = 200
-         auto_flush_metrics = true
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/global_config.yaml
-         mlops:
-           backend_type: local
-           storage_path: "./mlops_data"
-           model_retention_days: 90
-           metric_buffer_size: 200
-           auto_flush_metrics: true
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "mlops": {
-             "backend_type": "local",
-             "storage_path": "./mlops_data",
-             "model_retention_days": 90,
-             "metric_buffer_size": 200,
-             "auto_flush_metrics": true
-           }
-         }
+   # ducta.yaml
+   version: 2
+   project: churn
+   paths: {input: data, output: data}
+   settings:
+     mlops:
+       backend_type: local
+       storage_path: ./mlops_data
+       model_retention_days: 90
+       metric_buffer_size: 200
+       auto_flush_metrics: true
+   environments:
+     prod:
+       settings.mlops.backend_type: databricks
 
 Tracking Inside a Node
 ----------------------
@@ -128,9 +105,8 @@ log — no ``init``/``get_context`` calls:
 .. note::
    The run is opened before your node runs and closed after it returns
    (``COMPLETED`` on success, ``FAILED`` on exception) — you never manage its
-   lifecycle. The ``ml_ready`` template
-   (``ducta template --template ml_ready``) generates a complete, runnable
-   version of this node.
+   lifecycle. :doc:`tutorials/mlops` builds a complete pipeline around a node
+   like this one.
 
 Model Registry
 --------------
@@ -170,9 +146,11 @@ Lineage & Reproducibility
 Ducta MLOps captures essential metadata automatically to ensure reproducibility:
 
 - **Data Fingerprinting:** Generates content digests for input/output datasets.
-  ``fingerprint_mode`` selects how much is covered: ``exact`` (default —
-  order-independent digest over every row), ``sample`` (schema plus the first
-  ``fingerprint_sample_rows`` rows) or ``schema`` (schema and row count only).
+  ``fingerprint_mode`` selects how much is covered: ``auto`` (default — the
+  Delta table version, the run's incremental window, or every row of a small
+  dataset), ``exact`` (order-independent digest over every row), ``sample``
+  (schema plus the first ``fingerprint_sample_rows`` rows) or ``schema``
+  (schema and row count only).
   Each fingerprint records the engine and algorithm that produced it, so
   fingerprints measured differently are reported as *not comparable* rather
   than as changed data.

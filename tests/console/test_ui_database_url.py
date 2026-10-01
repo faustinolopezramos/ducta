@@ -24,7 +24,11 @@ class TestLaunchUiRespectsExplicitDatabaseUrlOptOut:
         assert os.environ["DATABASE_URL"] == ""
 
     def test_unset_gets_the_default_sqlite_path(self, monkeypatch, tmp_path):
-        monkeypatch.delenv("DATABASE_URL", raising=False)
+        # setenv first so teardown restores the original state: delenv of an
+        # absent variable records nothing, and launch_ui then sets it for good,
+        # leaking a table-less database into every later test that builds the app.
+        monkeypatch.setenv("DATABASE_URL", "placeholder")
+        monkeypatch.delenv("DATABASE_URL")
         db_path = tmp_path / "db.sqlite"
         with patch("uvicorn.run", MagicMock()):
             launch_ui(open_browser=False, db_path=str(db_path))

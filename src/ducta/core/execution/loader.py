@@ -143,15 +143,6 @@ class FunctionLoader:
                 sig = inspect.signature(func)
                 params = list(sig.parameters.keys())
 
-                required_params = {"start_date", "end_date"}
-                if not required_params.issubset(params):
-                    logger.warning(
-                        "Function '{}' may not accept required parameters: "
-                        "start_date and end_date. Parameters found: {}",
-                        function_name,
-                        params,
-                    )
-
                 if self.is_ml_layer and "ml_context" not in params:
                     accepts_kwargs = any(
                         p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()

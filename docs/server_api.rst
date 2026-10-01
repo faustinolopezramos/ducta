@@ -25,7 +25,7 @@ You can start the server directly from the CLI:
    # Launch the full UI (Dashboard + API)
    ducta ui --port 8000
 
-**Common Options** (``ducta server start`` and ``ducta ui`` accept the same core options; ``ducta ui`` additionally has ``--enable-terminal``):
+**Common Options** (``ducta server start`` and ``ducta ui`` accept the same options):
 
 - ``--port``: Port to bind (default: 8000). No short flag.
 - ``--host``: Host to bind (default: 127.0.0.1).
@@ -42,17 +42,70 @@ All domain routes are mounted under the ``/api`` prefix (there is no ``/v1`` ver
 
 Key API resources:
 
-- ``/health``, ``/health/ready``, ``/health/platform``: Liveness/readiness probes and platform info (no auth, no ``/api`` prefix).
-- ``/api/auth``: Login, logout, token refresh, and current-user info (JWT-based).
-- ``/api/workspace``: Resolve a workspace source (local path or Git URL), auto-detect it, browse directories.
-- ``/api/projects``: Manage projects and their pipelines, including triggering pipeline execution.
-- ``/api/nodes``: Manage workspace-scoped node definitions.
-- ``/api/configs``, ``/api/environments``: Read/update workspace config files and environments.
-- ``/api/executions``: List, inspect, cancel executions and stream logs (also exposes streaming-pipeline status/metrics/checkpoints sub-resources); live log tailing is available over WebSocket at ``/api/ws/logs/{execution_id}``.
-- ``/api/git``, ``/api/repository``: Git history and remote repository adapters.
-- ``/api/workspace/files``: Browse workspace files.
+.. list-table::
+   :widths: 34 66
+   :header-rows: 1
 
-There is currently no ``/api/quality`` or ``/api/mlops`` REST resource — data quality and MLOps registry/experiment data are accessed via the ``ducta quality`` and ``ducta experiment``/``ducta model`` CLI commands (see :doc:`cli_usage`), not the HTTP API.
+   * - Resource
+     - What it does
+   * - ``/health``, ``/health/ready``, ``/health/platform``
+     - Liveness/readiness probes and platform info (no auth, no ``/api`` prefix).
+   * - ``/api/auth``
+     - Login, logout, token refresh and the current user (JWT).
+   * - ``/api/workspace``
+     - Connect a workspace (local path or Git URL), auto-detect, browse
+       directories; ``/api/workspace/files`` lists its files.
+   * - ``/api/projects``
+     - Projects and their pipelines: create, import, update, delete; execute,
+       preflight and sweep a pipeline; its datasets, dependencies and node
+       schemas.
+   * - ``/api/nodes``
+     - Nodes of the workspace, their Python code, and their execution history.
+   * - ``/api/configs``, ``/api/environments``
+     - A project's settings and catalog per environment, and the environments
+       it declares.
+   * - ``/api/executions``
+     - List, inspect, cancel, retry and bulk-cancel executions; their logs and
+       errors. Live logs over WebSocket at ``/api/ws/logs/{execution_id}``.
+   * - ``/api/projects/{id}/certificates``, ``/api/certificates/verify``
+     - Run Certificates: list, show, verify, diff and reproduce; verify an
+       uploaded certificate.
+   * - ``/api/quality``
+     - Checks, reports, trends and scores; run checks; validate a node's
+       quality configuration.
+   * - ``/api/mlops``
+     - Experiments and runs, the model registry, promotion and garbage
+       collection.
+   * - ``/api/schedules``
+     - Cron schedules for pipelines.
+   * - ``/api/ingestion``
+     - Database connections for ``kind: ingest`` nodes.
+   * - ``/api/templates``
+     - List templates and generate a project into ``projects/``.
+   * - ``/api/git``
+     - The workspace repository: status, history, diffs, blame, commit, pull/push, revert.
+
+Projects and configuration
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The API reads and writes the same files the CLI runs (:doc:`configuration`). A
+workspace is either one project (``ducta.yaml`` at its root) or a directory
+whose ``projects/<id>/`` sub-directories are projects. A project's description,
+variables and timestamps live in its ``ducta.yaml`` (``description`` and
+``metadata``).
+
+Every write — a node, a pipeline, settings or a catalog entry — edits the YAML
+in place, keeping comments and key order, and is validated against every
+environment before it is kept: an edit that would make any environment invalid
+is refused with the problems, and the files are left untouched. Edits are
+committed to git when the workspace is a repository, and the commit SHA is the
+optimistic-concurrency token: send back the ``commit_sha`` you read —
+``expected_commit_sha`` for nodes and configs, ``expected_sha`` for pipelines —
+and a change someone else committed in between answers ``409`` instead of
+being overwritten.
+
+A workspace still in Ducta 0.2's layout is reported with the command that
+converts it (``ducta config migrate``); the API does not read that layout.
 
 Integration
 -----------
@@ -100,7 +153,7 @@ Secure Startup Checklist
 ------------------------
 
 The API ships with **safe local-first defaults**: it binds to ``127.0.0.1``,
-authentication is disabled, the terminal is disabled, and persistence is
+authentication is disabled, and persistence is
 in-memory. These defaults make local development frictionless but are **not**
 appropriate once the service is reachable by anyone else.
 
@@ -131,10 +184,6 @@ warnings — and work through this checklist:
      - explicit allow-list
      - Avoid ``*``. Wildcard origins with credentials are rejected outside
        development.
-   * - ``TERMINAL_ENABLED``
-     - ``false``
-     - Grants arbitrary shell execution on the host. Keep off unless every
-       authenticated user is fully trusted.
    * - ``RATE_LIMIT_ENABLED``
      - ``true``
      - Enables the in-process sliding-window limiter. Also put a WAF / proxy

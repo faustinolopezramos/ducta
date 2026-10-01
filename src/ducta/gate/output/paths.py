@@ -96,7 +96,23 @@ class _PathManager(BaseIO):
     def resolve_output_path(
         self, dataset_config: Dict[str, Any], out_key: str, env: Optional[str] = None
     ) -> str:
-        """Resolve complete output path."""
+        """Resolve complete output path.
+
+        A declared ``filepath`` is used as-is (it is interpolated with
+        ``${output_path}``/``${environment}`` at load time). It used to be
+        documented and then ignored: every output went to the conventional
+        ``<output_path>/<env>/<schema>/<sub_folder>/<table>`` path derived
+        from its key — which is also why keys had to have exactly three parts.
+        """
+        declared = dataset_config.get("filepath")
+        if declared and str(declared).strip():
+            return str(declared).strip()
+        return self.conventional_output_path(dataset_config, out_key, env)
+
+    def conventional_output_path(
+        self, dataset_config: Dict[str, Any], out_key: str, env: Optional[str] = None
+    ) -> str:
+        """The path derived from a ``schema.sub_folder.table`` key (no ``filepath``)."""
         parsed_key = self.config_validator.validate_output_key(out_key)
 
         components = _PathComponents(

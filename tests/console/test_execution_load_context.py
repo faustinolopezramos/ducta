@@ -1,42 +1,60 @@
-"""Regression: `console.execution.load_context` always constructed its
-`Context` with `validate=False` unconditionally — silently skipping schema
-validation for every caller, regardless of whether they wanted that.
+"""`console.execution.load_context`: the Context of the project containing a path.
+
+It accepts the project directory, any directory inside it, or a file in it
+(``--config ducta.yaml``), and always goes through the format-2 validator —
+there is no path that builds a Context from unvalidated configuration.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
+from ducta.console.core import ConfigurationError
 from ducta.console.execution import load_context
 
-_CONFIG_DATA = {
-    "global_config": {"input_path": "/in", "output_path": "/out", "mode": "local"},
-    "pipelines_config": {},
-    "nodes_config": {},
-    "input_config": {},
-    "output_config": {},
-}
+
+def _project(root: Path) -> Path:
+    (root / "pipelines").mkdir(parents=True)
+    (root / "ducta.yaml").write_text(
+        "version: 2\nproject: demo\npaths: {input: data, output: data}\n"
+    )
+    return root
 
 
-class TestLoadContextValidateDefault:
-    @patch("ducta.console.execution.Context")
-    @patch("ducta.setting.loaders.ConfigLoaderFactory")
-    def test_defaults_to_validating(self, mock_factory_cls, mock_context_cls):
-        mock_factory_cls.return_value.load_config.return_value = _CONFIG_DATA
-        mock_context_cls.return_value = MagicMock()
+@pytest.fixture
+def loader():
+    with patch("ducta.console.execution.load_project_v2") as fake:
+        fake.return_value = MagicMock()
+        yield fake
 
-        load_context("config.yaml")
 
-        _, kwargs = mock_context_cls.call_args
-        assert kwargs["validate"] is True
+class TestLoadContext:
+    def test_a_file_in_the_project_resolves_to_its_root(self, tmp_path, loader):
+        project = _project(tmp_path / "p")
+        load_context(project / "ducta.yaml", "dev")
+        loader.assert_called_once_with(project.resolve(), "dev")
 
-    @patch("ducta.console.execution.Context")
-    @patch("ducta.setting.loaders.ConfigLoaderFactory")
-    def test_caller_can_still_opt_out(self, mock_factory_cls, mock_context_cls):
-        mock_factory_cls.return_value.load_config.return_value = _CONFIG_DATA
-        mock_context_cls.return_value = MagicMock()
+    def test_a_nested_directory_resolves_to_the_enclosing_project(self, tmp_path, loader):
+        project = _project(tmp_path / "p")
+        load_context(project / "pipelines", "prod")
+        loader.assert_called_once_with(project.resolve(), "prod")
 
-        load_context("config.yaml", validate=False)
+    def test_the_environment_defaults_to_base(self, tmp_path, loader):
+        project = _project(tmp_path / "p")
+        load_context(project)
+        loader.assert_called_once_with(project.resolve(), "base")
 
-        _, kwargs = mock_context_cls.call_args
-        assert kwargs["validate"] is False
+    def test_a_format_1_project_is_refused_with_the_migrate_command(self, tmp_path, loader):
+        (tmp_path / "environment.yaml").write_text("env_config: {}\n")
+        with pytest.raises(ConfigurationError, match="ducta config migrate"):
+            load_context(tmp_path)
+        loader.assert_not_called()
+
+    def test_an_invalid_project_surfaces_the_validation_error(self, tmp_path):
+        project = _project(tmp_path / "p")
+        (project / "pipelines" / "etl.yaml").write_text("nodes:\n  a: {run: m:f, typo: 1}\n")
+        with pytest.raises(ConfigurationError, match="etl.yaml"):
+            load_context(project, "dev")

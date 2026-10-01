@@ -31,13 +31,9 @@ class TestReuseUpstreamRerunAllConflict:
 
         assert result == ExitCode.VALIDATION_ERROR.value
 
-    def test_only_reuse_upstream_is_fine(self, monkeypatch):
+    def test_only_reuse_upstream_is_fine(self):
         cmd = ExecutionCommands()
         parsed_args = SimpleNamespace(reuse_upstream=True, rerun_all=False)
-        monkeypatch.setattr(
-            "ducta.setting.detect_and_prepare_layered_execution",
-            lambda _: (False, None, None),
-        )
         # Past the conflict check it will fail later (missing config attrs,
         # no discoverable configuration, ...) — that's fine, we only care
         # that the conflict check itself didn't short-circuit it.

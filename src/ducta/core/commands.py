@@ -53,6 +53,35 @@ def _accepts_ml_context(func: Callable) -> bool:
     return accepts
 
 
+_date_params_cache: "WeakKeyDictionary[Callable, frozenset]" = WeakKeyDictionary()
+
+
+def _date_kwargs(func: Callable, start_date: str, end_date: str) -> Dict[str, str]:
+    """``start_date``/``end_date`` for the parameters ``func`` declares (or ``**kwargs``).
+
+    A node function that has no use for the run window need not declare it: it
+    is passed only to functions that accept it.
+    """
+    try:
+        accepted = _date_params_cache.get(func)
+    except TypeError:
+        accepted = None
+    if accepted is None:
+        try:
+            params = signature(func).parameters
+        except (TypeError, ValueError):  # no introspectable signature: keep the old contract
+            accepted = frozenset({"start_date", "end_date"})
+        else:
+            var_kw = any(p.kind == Parameter.VAR_KEYWORD for p in params.values())
+            accepted = frozenset(n for n in ("start_date", "end_date") if var_kw or n in params)
+        try:
+            _date_params_cache[func] = accepted
+        except TypeError:
+            pass
+    window = {"start_date": start_date, "end_date": end_date}
+    return {k: v for k, v in window.items() if k in accepted}
+
+
 DEFAULT_VECTORIZED_MAX_ROWS = 5_000_000
 
 
@@ -172,7 +201,9 @@ class NodeCommand(Command):
 
             args, input_kwargs = self._bind_inputs(inputs)
             result = self.function(
-                *args, **input_kwargs, start_date=self.start_date, end_date=self.end_date
+                *args,
+                **input_kwargs,
+                **_date_kwargs(self.function, self.start_date, self.end_date),
             )
 
             result = _maybe_convert_vectorized_result(
@@ -358,8 +389,7 @@ class MLNodeCommand(NodeCommand):
             result = self.function(
                 *args,
                 **input_kwargs,
-                start_date=self.start_date,
-                end_date=self.end_date,
+                **_date_kwargs(self.function, self.start_date, self.end_date),
                 ml_context=ml_context,
             )
         else:
@@ -367,8 +397,7 @@ class MLNodeCommand(NodeCommand):
             result = self.function(
                 *args,
                 **input_kwargs,
-                start_date=self.start_date,
-                end_date=self.end_date,
+                **_date_kwargs(self.function, self.start_date, self.end_date),
             )
 
         if isinstance(result, dict):

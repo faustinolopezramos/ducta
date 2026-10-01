@@ -227,16 +227,15 @@ class QualityCommands:
     @staticmethod
     def _validate_config(parsed_args) -> int:
         from ducta.check.service import QualityService
+        from ducta.console.config import ConfigManager
 
         node_name = parsed_args.node
-        config_path = parsed_args.config
-        global_config_path = getattr(parsed_args, "global_config", None)
-
         try:
+            project = ConfigManager(getattr(parsed_args, "base_path", None)).project_root
             result = QualityService.validate_node_config(
                 node_name=node_name,
-                config_path=config_path,
-                global_config_path=global_config_path,
+                project_root=str(project),
+                env=getattr(parsed_args, "env", None),
             )
         except Exception as e:
             logger.error("Validation failed: {}", e)

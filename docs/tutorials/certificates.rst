@@ -138,15 +138,24 @@ against someone who edited it on purpose.
 Configuring certification
 ---------------------------
 
-In ``config/global_config.{yaml,toml}``:
+In ``ducta.yaml``:
 
 .. code-block:: yaml
 
-   enable_run_certificate: true          # on by default
-   run_certificate_dir: ".ducta/runs"    # default
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings:
+     evidence_level: record              # off | record (default) | required | signed
+     enable_data_fingerprinting: true
+     fingerprint_mode: auto              # auto (default) | exact | exact_crypto | sample | schema
+   environments:
+     prod:
+       settings: {evidence_level: signed}
 
-   enable_data_fingerprinting: true
-   fingerprint_mode: "exact"             # exact | sample | schema
+Certificates are written to ``<paths.output>/<env>/.ducta/runs/<run_id>/``
+(``run_certificate_dir`` overrides it).
 
 Signing key, as an environment variable (preferred over a config value —
 see below):
@@ -158,7 +167,7 @@ see below):
 The code also accepts the historical mixed-case name
 ``Ducta_CERTIFICATE_KEY``; use the all-caps form above for anything you
 write yourself. A key can also live at
-``global_config.certificate_signing_key``, but Ducta logs a warning if you
+``settings.certificate_signing_key``, but Ducta logs a warning if you
 do — a key in a config file is usually committed to version control, and a
 short, human-chosen value is brute-forceable from the certificate's public
 ``key_id``. Prefer the environment variable.

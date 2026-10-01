@@ -62,3 +62,47 @@ class TestGetReportPicksMostRecentByTime:
         assert entry["latest_run_id"] == "aaa11111"
         assert entry["latest_score"] == 2
         assert entry["run_count"] == 2
+
+
+class TestRunChecksOnAFile:
+    """`ducta quality run --input FILE --config CHECKS`: a standalone checks file.
+
+    It read the checks file through a format-1 console helper that was removed
+    with that format, so every call failed with an ImportError.
+    """
+
+    @pytest.mark.parametrize(
+        "name,body",
+        [
+            (
+                "checks.yaml",
+                "checks:\n  row_count: {min: 2}\n  null_rate: {columns: [id], threshold: 0}\n",
+            ),
+            ("checks.json", '{"checks": {"row_count": {"min": 2}}}'),
+            ("checks.toml", "[checks.row_count]\nmin = 2\n"),
+        ],
+    )
+    def test_runs_the_checks_in_the_file(self, tmp_path, name, body):
+        data = tmp_path / "people.csv"
+        data.write_text("id,name\n1,a\n2,b\n3,c\n")
+        checks = tmp_path / name
+        checks.write_text(body)
+
+        report = QualityService.run_checks(
+            input_path=str(data), format="csv", config_path=str(checks), workspace=str(tmp_path)
+        )
+
+        names = {r["check_name"] for r in report["results"]}
+        assert "row_count" in names
+        assert report["passed"] is True
+
+    def test_a_python_checks_file_is_not_executed(self, tmp_path):
+        data = tmp_path / "people.csv"
+        data.write_text("id\n1\n")
+        checks = tmp_path / "checks.py"
+        checks.write_text("raise SystemExit('executed')\n")
+        with pytest.raises(Exception) as exc:
+            QualityService.run_checks(
+                input_path=str(data), format="csv", config_path=str(checks), workspace=str(tmp_path)
+            )
+        assert "executed" not in str(exc.value)

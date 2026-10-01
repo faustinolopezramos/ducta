@@ -31,7 +31,6 @@ from loguru import logger
 from ducta.console import execution, template
 from ducta.console.commands import ExecutionCommands, QualityCommands, handle_config
 from ducta.console.core import (
-    ConfigCache,
     ExitCode,
     LoggerManager,
     ValidationError,
@@ -47,9 +46,6 @@ from ducta.console.validation import (
 from ducta.core.errors import DuctaError as EngineError
 
 HELP_BASE_PATH = "Base path for config discovery"
-HELP_LAYER_NAME = "Layer name for config discovery"
-HELP_USE_CASE = "Use case name"
-HELP_CONFIG_TYPE = "Preferred configuration type"
 HELP_PIPELINE_NAME = "Pipeline name"
 HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
 HELP_TIMEOUT_SECONDS = "Timeout in seconds"
@@ -105,8 +101,6 @@ def validate_template_arguments(args: argparse.Namespace) -> None:
         raise ValidationError(
             "Project name must contain only alphanumeric characters, underscores, or hyphens"
         )
-    if getattr(args, "format", None) not in ["yaml", "json", "toml"]:
-        raise ValidationError(f"Invalid format '{args.format}'. Use 'yaml', 'json', or 'toml'")
     if getattr(args, "output_path", None):
         output = Path(args.output_path)
         if output.exists() and any(output.iterdir()):
@@ -116,7 +110,7 @@ def validate_template_arguments(args: argparse.Namespace) -> None:
 def validate_config_arguments(args: argparse.Namespace) -> None:
     if not getattr(args, "config_command", None):
         raise ValidationError(
-            "A config subcommand is required (e.g., list-configs, list-pipelines)"
+            "A config subcommand is required (e.g., list-pipelines, validate, migrate)"
         )
 
 
@@ -205,7 +199,6 @@ class UnifiedCLI:
                 os.chdir(original_cwd)
             except OSError:
                 pass
-            ConfigCache.invalidate_all()
 
     def _parse_and_setup_logging(self, args: Optional[List[str]]) -> argparse.Namespace:
         from ducta.console.parser import UnifiedArgumentParser

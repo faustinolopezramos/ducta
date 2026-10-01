@@ -38,8 +38,7 @@ export interface RunChecksVars {
 
 export interface ValidateConfigVars {
   node_name: string;
-  config_path: string;
-  global_config_path?: string;
+  env?: string;
 }
 
 export interface ValidateConfigResult {

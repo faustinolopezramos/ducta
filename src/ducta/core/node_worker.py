@@ -105,9 +105,6 @@ def build_node_payload(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     base_path: Optional[str] = None,
-    layer_name: Optional[str] = None,
-    use_case_name: Optional[str] = None,
-    config_type: Optional[str] = None,
     output_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Build the picklable payload for one node run."""
@@ -135,9 +132,6 @@ def build_node_payload(
         "start_date": start_date,
         "end_date": end_date,
         "base_path": base_path,
-        "layer_name": layer_name,
-        "use_case_name": use_case_name,
-        "config_type": config_type,
         "output_path": output_path,
         "quiet": True,
     }

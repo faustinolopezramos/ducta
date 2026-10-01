@@ -88,7 +88,7 @@ export function UseInPipelineModal({
         spec.query = query.trim();
       }
 
-      await updateNode({ name: nodeName, spec });
+      await updateNode({ name: nodeName, spec, pipeline: pipelineName });
       const currentNodes: string[] = Array.isArray(pipelineSpec?.nodes) ? pipelineSpec.nodes : [];
       if (!currentNodes.includes(nodeName)) {
         await updatePipeline({

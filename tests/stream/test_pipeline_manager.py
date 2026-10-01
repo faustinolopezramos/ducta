@@ -70,7 +70,10 @@ class TestExecutePipelineOrchestration:
         assert set(info["queries"].keys()) == {"a", "b"}
         assert info["status"] == "running"
 
-    def test_dependent_node_starts_after_dependency(self, manager, mock_streaming_query):
+    @pytest.mark.parametrize("key", ["depends_on", "dependencies"])
+    def test_dependent_node_starts_after_dependency(self, manager, mock_streaming_query, key):
+        """Both spellings order streaming nodes. `dependencies` — the key batch
+        nodes use — used to be ignored here, so `b` could start before `a`."""
         start_order = []
 
         def fake_create(node_config, execution_id, pipeline_name):
@@ -79,7 +82,9 @@ class TestExecutePipelineOrchestration:
             return mock_streaming_query(name=name, query_id=name)
 
         manager.query_manager.create_and_start_query = MagicMock(side_effect=fake_create)
-        pipeline_config = {"nodes": [_node("b", depends_on=["a"]), _node("a")]}
+        b = _node("b")
+        b[key] = ["a"]
+        pipeline_config = {"nodes": [b, _node("a")]}
         execution_id = "exec2"
         manager._running_pipelines[execution_id] = {
             "pipeline_name": "p1",

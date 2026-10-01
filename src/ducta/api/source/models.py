@@ -33,7 +33,9 @@ class ResolvedSource(BaseModel):
     source_type: str = Field(description="'local' or 'git'")
     original_source: str = Field(description="The original path or URL provided by the user")
     has_git: bool = Field(default=False, description="Whether the directory has a .git folder")
-    has_environment_yaml: bool = Field(default=False, description="Whether environment.yaml exists")
+    has_project: bool = Field(
+        default=False, description="Whether this is a Ducta project (ducta.yaml)"
+    )
     pull_failed: bool = Field(
         default=False,
         description="If source_type='git', whether the latest git pull failed (using cached clone)",
@@ -50,7 +52,7 @@ class SourceInfo(BaseModel):
     source_type: str = Field(description="'local' or 'git'")
     has_git: bool = Field(default=False)
     git_remote: Optional[str] = Field(default=None)
-    has_environment_yaml: bool = Field(default=False)
+    has_project: bool = Field(default=False)
     environments: List[str] = Field(default_factory=list)
     config_files: List[str] = Field(default_factory=list)
     projects: List[str] = Field(

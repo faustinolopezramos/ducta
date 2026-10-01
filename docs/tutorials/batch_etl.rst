@@ -1,618 +1,264 @@
 Batch ETL Tutorial
 ==================
 
-This tutorial teaches you to build a complete batch ETL pipeline using the Medallion architecture.
+Build a daily pipeline that turns a shop's order export into revenue per day
+and category, across bronze, silver and gold layers — and make it safe to run
+every day, re-run and backfill.
 
-What You'll Build
------------------
+You will use:
 
-A production-ready ETL pipeline that:
+- **incremental reads** — each run reads only its day;
+- **contracts** on the source and **quality gates** on what you write;
+- **MERGE** writes, so running a day twice never duplicates it;
+- **Run Certificates** to prove what each run did.
 
-- Ingests raw sales data (Bronze layer)
-- Cleans and validates data (Silver layer)
-- Calculates business metrics (Gold layer)
-- Can be scheduled to run daily via an external orchestrator (e.g. Airflow or cron)
+Prerequisites: ``pip install "ducta[spark,delta]"`` and Java 17+ for Spark.
 
-Prerequisites
--------------
-
-- Ducta installed: ``pip install ducta[spark]``
-- Sample data (provided)
-- 30 minutes
-
-Step 1: Project Setup
-----------------------
-
-Create a new project using the recommended medallion template:
-
-.. code-block:: bash
-
-   ducta template --template medallion_basic --project-name sales_etl
-   cd sales_etl
-
-This creates the following structure:
+Step 1: The project
+-------------------
 
 .. code-block:: text
 
-   sales_etl/
-   ├── environment.toml       # Maps environments to config files
-   ├── config/                # Shared (base) configuration
-   │   ├── global_config.toml
-   │   ├── pipelines.toml
-   │   ├── nodes.toml
-   │   ├── input.toml
-   │   ├── output.toml
-   │   └── dev/               # Environment-specific overrides
-   ├── pipelines/             # Python logic
-   │   └── etl.py
-   ├── data/
-   └── requirements.txt
-
-Step 2: Configure Data Sources
--------------------------------
-
-Define where your raw data is coming from in ``config/input.toml``. Ducta supports multiple formats.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/input.toml
-         [source_data]
-         format = "csv"
-         filepath = "data/raw/sales/*.csv"
-         options = { header = true, inferSchema = true, dateFormat = "yyyy-MM-dd" }
-
-         [[source_data.schema]]
-         name = "transaction_id"
-         type = "string"
-
-         [[source_data.schema]]
-         name = "date"
-         type = "date"
-
-         [[source_data.schema]]
-         name = "amount"
-         type = "decimal(10,2)"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/input.yaml
-         source_data:
-           format: csv
-           filepath: "data/raw/sales/*.csv"
-           options:
-             header: true
-             inferSchema: true
-             dateFormat: "yyyy-MM-dd"
-           schema:
-             - name: transaction_id
-               type: string
-             - name: date
-               type: date
-             - name: amount
-               type: "decimal(10,2)"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "source_data": {
-             "format": "csv",
-             "filepath": "data/raw/sales/*.csv",
-             "options": {
-               "header": true,
-               "inferSchema": true,
-               "dateFormat": "yyyy-MM-dd"
-             },
-             "schema": [
-               { "name": "transaction_id", "type": "string" },
-               { "name": "date", "type": "date" },
-               { "name": "amount", "type": "decimal(10,2)" }
-             ]
-           }
-         }
-
-Step 3: Configure Output
--------------------------
-
-Define your output targets in ``config/output.toml``. We'll use the Medallion architecture (Bronze → Silver → Gold).
-
-.. note::
-
-   Output partitioning is passed through the format-specific ``options`` dict
-   (e.g. Spark's ``partitionBy``), not a dedicated ``partition_by`` key.
-   Merge logic for upserts should be implemented in your transformation
-   code (e.g. a Delta ``MERGE`` statement), not declared as a config key —
-   Ducta's output schema does not have a ``merge_condition`` field.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/output.toml
-
-         # Bronze layer - raw data as-is
-         [raw_data]
-         format = "parquet"
-         filepath = "data/bronze/sales"
-         write_mode = "append"
-         options = { partitionBy = ["year", "month", "day"] }
-
-         # Silver layer - cleaned data
-         [silver_sales]
-         format = "delta"
-         filepath = "data/silver/sales"
-         write_mode = "append"
-
-         # Gold layer - business metrics
-         [final_output]
-         format = "delta"
-         filepath = "data/gold/daily_sales"
-         write_mode = "overwrite"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/output.yaml
-
-         # Bronze layer
-         raw_data:
-           format: parquet
-           filepath: data/bronze/sales
-           write_mode: append
-           options:
-             partitionBy: [year, month, day]
-
-         # Silver layer
-         silver_sales:
-           format: delta
-           filepath: data/silver/sales
-           write_mode: append
-
-         # Gold layer
-         final_output:
-           format: delta
-           filepath: data/gold/daily_sales
-           write_mode: overwrite
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "raw_data": {
-             "format": "parquet",
-             "filepath": "data/bronze/sales",
-             "write_mode": "append",
-             "options": { "partitionBy": ["year", "month", "day"] }
-           },
-           "silver_sales": {
-             "format": "delta",
-             "filepath": "data/silver/sales",
-             "write_mode": "append"
-           },
-           "final_output": {
-             "format": "delta",
-             "filepath": "data/gold/daily_sales",
-             "write_mode": "overwrite"
-           }
-         }
-
-Step 4: Define Pipeline Nodes
-------------------------------
-
-Define your process nodes in ``config/nodes.toml``. Each node maps a name to a Python function:
-
-.. tab-set::
-
-   .. tab-item:: TOML (Recommended)
-
-      .. code-block:: toml
-
-         # config/nodes.toml — the key IS the node name (flat, no wrapper)
-
-         # Bronze: Load raw data
-         [load_raw_sales]
-         function = "src.pipelines.bronze.load_raw_sales"
-         description = "Ingest raw sales CSV files into the Bronze layer"
-         timeout = 600
-         retry = 2
-
-         # Silver: Clean and validate
-         [clean_sales]
-         function = "transformations.clean_sales_data"
-         description = "Remove nulls, duplicates, and invalid amounts"
-         timeout = 1200
-         retry = 3
-
-         # Silver: Enrich with customer data
-         [enrich_sales]
-         function = "transformations.enrich_with_customers"
-         description = "Join sales data with customer master"
-         timeout = 1200
-
-         # Gold: Calculate daily business metrics
-         [calculate_daily_metrics]
-         function = "transformations.calculate_daily_metrics"
-         description = "Aggregate sales by day, region, and segment"
-         timeout = 1800
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         load_raw_sales:
-           function: "src.pipelines.bronze.load_raw_sales"
-           description: "Ingest raw sales CSV files into the Bronze layer"
-           timeout: 600
-           retry: 2
-
-         clean_sales:
-           function: "transformations.clean_sales_data"
-           description: "Remove nulls, duplicates, and invalid amounts"
-           timeout: 1200
-           retry: 3
-
-         enrich_sales:
-           function: "transformations.enrich_with_customers"
-           description: "Join sales data with customer master"
-           timeout: 1200
-
-         calculate_daily_metrics:
-           function: "transformations.calculate_daily_metrics"
-           description: "Aggregate sales by day, region, and segment"
-           timeout: 1800
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "load_raw_sales": {
-             "function": "src.pipelines.bronze.load_raw_sales",
-             "description": "Ingest raw sales CSV files into the Bronze layer",
-             "timeout": 600,
-             "retry": 2
-           },
-           "clean_sales": {
-             "function": "transformations.clean_sales_data",
-             "description": "Remove nulls, duplicates, and invalid amounts",
-             "timeout": 1200,
-             "retry": 3
-           },
-           "enrich_sales": {
-             "function": "transformations.enrich_with_customers",
-             "description": "Join sales data with customer master",
-             "timeout": 1200
-           },
-           "calculate_daily_metrics": {
-             "function": "transformations.calculate_daily_metrics",
-             "description": "Aggregate sales by day, region, and segment",
-             "timeout": 1800
-           }
-         }
-
-The ``function`` field uses Python import paths (→ see :doc:`/best_practices` for resolution rules).
-
-Step 5: Create Pipeline Definitions
-------------------------------------
-
-Define your pipelines in ``config/pipelines.toml``. Ducta has no built-in
-scheduler — the ``nodes`` list determines node execution order within a
-pipeline (via each node's own ``dependencies``), and cross-pipeline ordering
-(Bronze → Silver → Gold) plus scheduling is handled by an external orchestrator
-such as Airflow or cron (see :doc:`airflow_integration`):
-
-.. tab-set::
-
-   .. tab-item:: TOML (Recommended)
-
-      .. code-block:: toml
-
-         # config/pipelines.toml — the key IS the pipeline name (flat, no wrapper)
-
-         # Bronze layer pipeline
-         [bronze_ingestion]
-         description = "Ingest raw sales data"
-         type = "batch"
-         nodes = ["load_raw_sales"]
-
-         # Silver layer pipeline
-         [silver_cleansing]
-         description = "Clean and enrich sales data"
-         type = "batch"
-         nodes = ["clean_sales", "enrich_sales"]
-
-         # Gold layer pipeline
-         [gold_aggregation]
-         description = "Calculate business metrics"
-         type = "batch"
-         nodes = ["calculate_daily_metrics"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml
-         # Bronze layer pipeline
-         bronze_ingestion:
-           description: "Ingest raw sales data"
-           type: batch
-           nodes:
-             - load_raw_sales
-
-         # Silver layer pipeline
-         silver_cleansing:
-           description: "Clean and enrich sales data"
-           type: batch
-           nodes:
-             - clean_sales
-             - enrich_sales
-
-         # Gold layer pipeline
-         gold_aggregation:
-           description: "Calculate business metrics"
-           type: batch
-           nodes:
-             - calculate_daily_metrics
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "bronze_ingestion": {
-             "description": "Ingest raw sales data",
-             "type": "batch",
-             "nodes": ["load_raw_sales"]
-           },
-           "silver_cleansing": {
-             "description": "Clean and enrich sales data",
-             "type": "batch",
-             "nodes": ["clean_sales", "enrich_sales"]
-           },
-           "gold_aggregation": {
-             "description": "Calculate business metrics",
-             "type": "batch",
-             "nodes": ["calculate_daily_metrics"]
-           }
-         }
-
-Step 6: Implement Transformation Logic
----------------------------------------
-
-Create ``transformations.py``:
+   sales/
+   ├── ducta.yaml
+   ├── catalog.yaml
+   ├── data/orders.csv
+   └── pipelines/
+       ├── __init__.py
+       ├── daily.yaml
+       └── daily.py
+
+``ducta.yaml`` names the project, where data lives, and what changes in
+production:
+
+.. code-block:: yaml
+
+   # ducta.yaml
+   version: 2
+   project: sales
+   description: Daily revenue per category, from the shop's order export
+   paths: {input: data, output: data}
+   settings:
+     evidence_level: record
+   environments:
+     dev:
+       settings: {max_parallel_nodes: 1}
+     prod:
+       paths: {input: s3://shop-exports, output: s3://lake/sales}
+       settings: {evidence_level: required, run_lock: {backend: storage}}
+
+The sample export has two days, and the kind of mess real exports have — a
+repeated order, one without an amount, one with a negative amount:
+
+.. code-block:: text
+
+   # data/orders.csv
+   order_id,category,amount,order_date
+   1,books,12.50,2026-03-01
+   2,books,30.00,2026-03-01
+   3,games,59.99,2026-03-01
+   3,games,59.99,2026-03-01
+   4,games,,2026-03-01
+   5,books,-8.00,2026-03-01
+   6,books,15.00,2026-03-02
+   7,games,20.00,2026-03-02
+
+Step 2: The datasets
+--------------------
+
+Every dataset is declared once in ``catalog.yaml``:
+
+.. code-block:: yaml
+
+   # catalog.yaml
+   orders_raw:
+     description: Orders as exported by the shop, one file with every day
+     format: csv
+     path: ${paths.input}/orders.csv
+     options: {header: true, inferSchema: true}
+     incremental: {column: order_date}
+     checks:
+       checks:
+         empty_dataset: true
+         schema: {expected_columns: [order_id, category, amount, order_date]}
+
+   bronze.sales.orders:
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [order_id]}
+
+   silver.sales.orders:
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [order_id]}
+
+   gold.sales.daily_revenue:
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [order_date, category]}
+
+- ``incremental: {column: order_date}`` — a run with ``--start-date`` and
+  ``--end-date`` reads only those days, filtered at the source.
+- ``checks`` is the source's **contract**: before any node reads it, the run's
+  slice must be non-empty and have the expected columns.
+- The three layers have no ``path``: their three-part names place them at
+  ``data/<env>/bronze/sales/orders`` and so on, separately for each environment.
+- ``write.mode: merge`` upserts on the keys: re-running a day replaces that
+  day's rows instead of adding them again.
+
+Step 3: The pipeline
+--------------------
+
+.. code-block:: yaml
+
+   # pipelines/daily.yaml
+   description: Orders to daily revenue per category
+   nodes:
+     land:
+       description: "Bronze: the day's orders as they arrived"
+       run: pipelines.daily:land
+       inputs: {orders: orders_raw}
+       outputs: [bronze.sales.orders]
+
+     clean:
+       description: "Silver: one row per order, no missing or negative amounts"
+       run: pipelines.daily:clean
+       inputs: {orders: bronze.sales.orders}
+       outputs: [silver.sales.orders]
+       quality:
+         checks:
+           duplicates: {columns: [order_id]}
+           null_rate: {columns: [amount], threshold: 0}
+           range: {column: amount, min: 0}
+         gate: {on_fail: stop_all}
+
+     daily_revenue:
+       description: "Gold: revenue and order count per day and category"
+       run: pipelines.daily:daily_revenue
+       inputs: {orders: silver.sales.orders}
+       outputs: [gold.sales.daily_revenue]
+       quality:
+         checks:
+           row_count: {min: 1}
+
+There is no ordering to declare: ``clean`` reads what ``land`` writes, and
+``daily_revenue`` reads what ``clean`` writes. The ``clean`` gate stops the
+whole run if silver would contain a duplicate, a missing or a negative amount.
+
+The code is three plain functions — no Ducta imports:
 
 .. code-block:: python
 
-   import pyspark.sql.functions as F
-   from pyspark.sql import DataFrame
+   # pipelines/daily.py
+   from pyspark.sql import DataFrame, functions as F
 
-   def clean_sales_data(df: DataFrame) -> DataFrame:
-       """Clean and validate sales data."""
 
-       # Remove nulls
-       df_clean = df.filter(
-           F.col("transaction_id").isNotNull() &
-           F.col("amount").isNotNull() &
-           F.col("quantity").isNotNull()
+   def land(orders: DataFrame) -> DataFrame:
+       """Keep the source as it arrived, stamped with when it was landed."""
+       return orders.dropDuplicates(["order_id"]).withColumn("landed_at", F.current_timestamp())
+
+
+   def clean(orders: DataFrame) -> DataFrame:
+       """Drop orders without an amount or with a negative one."""
+       return orders.filter(F.col("amount").isNotNull() & (F.col("amount") >= 0))
+
+
+   def daily_revenue(orders: DataFrame) -> DataFrame:
+       return orders.groupBy("order_date", "category").agg(
+           F.round(F.sum("amount"), 2).alias("revenue"),
+           F.count("*").alias("orders"),
        )
 
-       # Remove invalid amounts
-       df_clean = df_clean.filter(F.col("amount") > 0)
-       df_clean = df_clean.filter(F.col("quantity") > 0)
-
-       # Remove duplicates
-       df_clean = df_clean.dropDuplicates(["transaction_id"])
-
-       # Add audit columns
-       df_clean = df_clean.withColumn(
-           "ingestion_timestamp",
-           F.current_timestamp()
-       )
-
-       return df_clean
-
-Step 7: Run the Pipeline (CLI)
--------------------------------
-
-.. code-block:: bash
-
-   # Validate configuration
-   ducta start --env dev --pipeline bronze_ingestion --validate-only
-
-   # Run bronze layer
-   ducta start --env dev --pipeline bronze_ingestion
-
-   # Run silver layer
-   ducta start --env dev --pipeline silver_cleansing
-
-   # Run gold layer
-   ducta start --env dev --pipeline gold_aggregation
-
-   # Run with specific date range
-   ducta start --env dev --pipeline bronze_ingestion \
-     --start-date 2024-01-01 \
-     --end-date 2024-01-31
-
-Step 8: Run Programmatically
+Step 4: Check it, then run it
 -----------------------------
 
-Create ``run_pipeline.py``:
+.. code-block:: bash
 
-.. code-block:: python
+   cd sales
+   ducta config validate --env dev
+   ducta config validate --env prod     # the production overrides are valid too
 
-   from ducta import PipelineExecutor, ContextLoader
-   import logging
+   ducta start --env dev --pipeline daily --start-date 2026-03-01 --end-date 2026-03-01
+   ducta start --env dev --pipeline daily --start-date 2026-03-02 --end-date 2026-03-02
 
-   logging.basicConfig(level=logging.INFO)
-   logger = logging.getLogger(__name__)
+Each run reads one day. After both, ``data/dev/`` holds seven orders in bronze
+(the repeated one landed once), five in silver (the missing and the negative
+amount dropped), and four rows in gold:
 
-   CONFIG_PATHS = {
-       "global_config": "config/global_config.toml",
-       "pipelines": "config/pipelines.toml",
-       "nodes": "config/nodes.toml",
-       "input": "config/input.toml",
-       "output": "config/output.toml",
-   }
+.. code-block:: text
 
-   def run_complete_etl():
-       """Run complete ETL pipeline."""
+   order_date  category  revenue  orders
+   2026-03-01  books        42.5       2
+   2026-03-01  games       59.99       1
+   2026-03-02  books        15.0       1
+   2026-03-02  games        20.0       1
 
-       # Load context for the "dev" environment
-       context = ContextLoader().load_from_paths(CONFIG_PATHS, env="dev")
-       executor = PipelineExecutor(context)
+Run 2026-03-01 again: the counts do not change. That is what makes retries and
+backfills safe — a backfill is the same command over past days.
 
-       # Bronze layer
-       logger.info("Starting Bronze layer...")
-       executor.run_pipeline("bronze_ingestion")
-       logger.info("Bronze completed")
+Step 5: When the data is wrong
+------------------------------
 
-       # Silver layer
-       logger.info("Starting Silver layer...")
-       executor.run_pipeline("silver_cleansing")
-       logger.info("Silver completed")
+Break ``clean`` on purpose — make it ``return orders`` — and run the first day
+again. The contract on the source passes, but the ``clean`` gate finds the
+missing and negative amounts, the run stops before gold, and ``ducta start``
+exits with code ``4``. The terminal shows which checks failed; restore the
+function and the next run succeeds.
 
-       # Gold layer
-       logger.info("Starting Gold layer...")
-       executor.run_pipeline("gold_aggregation")
-       logger.info("Gold completed")
+Step 6: The evidence
+--------------------
 
-       print("\n✅ ETL completed successfully!")
-
-   if __name__ == "__main__":
-       run_complete_etl()
-
-.. note::
-
-   ``run_pipeline`` raises an exception on failure (it does not return a
-   result object with a ``.success`` flag). Wrap each call in a
-   ``try/except`` block if you need to handle failures without aborting the
-   whole script.
-
-Run it:
+Every run leaves a certificate under ``data/dev/.ducta/runs/``: the
+configuration it ran with, fingerprints of what it read and wrote, and each
+gate's outcome.
 
 .. code-block:: bash
 
-   python run_pipeline.py
+   ducta certify list --env dev
+   ducta certify verify --run-id <id> --env dev     # a unique prefix is enough
+   ducta certify diff <id-a> <id-b>                 # what changed between two runs
 
-Step 9: Monitor Results
-------------------------
+See :doc:`certificates`.
 
-Check output data:
+Step 7: From Python
+-------------------
+
+The same run, from a script or a notebook started in the project directory:
+
+.. code-block:: python
+
+   import ducta
+
+   context = ducta.load_project(env="dev")
+   result = ducta.PipelineExecutor(context).run_pipeline(
+       "daily", start_date="2026-03-02", end_date="2026-03-02"
+   )
+   print(result.status, result.run_id, result.certificate_path)
+
+``run_pipeline`` returns a ``PipelineRunResult`` (``status``, ``ok``,
+``run_id``, per-node outcomes, the certificate path) and raises when the
+pipeline fails.
+
+Step 8: Schedule it
+-------------------
+
+Any scheduler that runs a command works. Run yesterday, every morning:
 
 .. code-block:: bash
 
-   # List bronze data
-   ls data/bronze/sales/
+   ducta start --env prod --pipeline daily \
+     --start-date "$(date -d yesterday +%F)" --end-date "$(date -d yesterday +%F)"
 
-   # List silver data
-   ls data/silver/sales/
+Treat exit code ``7`` as "another run is writing these tables — retry later",
+and any other non-zero code as a failure. For Airflow, see
+:doc:`airflow_integration`.
 
-   # List gold data
-   ls data/gold/daily_sales/
-
-Query results with Spark:
-
-.. code-block:: python
-
-   from pyspark.sql import SparkSession
-
-   spark = SparkSession.builder.appName("Check Results").getOrCreate()
-
-   # Read gold data
-   gold_df = spark.read.format("delta").load("data/gold/daily_sales")
-
-   # Show sample
-   gold_df.show()
-
-   # Check metrics
-   gold_df.groupBy("region").agg({
-       "total_sales": "sum",
-       "transaction_count": "sum"
-   }).show()
-
-Step 10: Schedule with Airflow
--------------------------------
-
-Create ``airflow_dag.py``:
-
-.. code-block:: python
-
-   from airflow import DAG
-   from airflow.operators.python import PythonOperator
-   from datetime import datetime, timedelta
-   from ducta import PipelineExecutor, ContextLoader
-
-   default_args = {
-       'owner': 'data-team',
-       'depends_on_past': False,
-       'start_date': datetime(2024, 1, 1),
-       'email_on_failure': True,
-       'email_on_retry': False,
-       'retries': 3,
-       'retry_delay': timedelta(minutes=5),
-   }
-
-   CONFIG_PATHS = {
-       "global_config": "config/global_config.toml",
-       "pipelines": "config/pipelines.toml",
-       "nodes": "config/nodes.toml",
-       "input": "config/input.toml",
-       "output": "config/output.toml",
-   }
-
-   def run_ducta_pipeline(pipeline_name, **kwargs):
-       context = ContextLoader().load_from_paths(CONFIG_PATHS, env="production")
-       executor = PipelineExecutor(context)
-       # run_pipeline raises on failure, which correctly fails the Airflow task
-       executor.run_pipeline(pipeline_name, start_date=kwargs['ds'], end_date=kwargs['ds'])
-
-   with DAG(
-       'sales_etl',
-       default_args=default_args,
-       schedule_interval='0 2 * * *',  # Daily at 2 AM
-       catchup=False
-   ) as dag:
-
-       bronze = PythonOperator(
-           task_id='bronze_ingestion',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'bronze_ingestion'}
-       )
-
-       silver = PythonOperator(
-           task_id='silver_cleansing',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'silver_cleansing'}
-       )
-
-       gold = PythonOperator(
-           task_id='gold_aggregation',
-           python_callable=run_ducta_pipeline,
-           op_kwargs={'pipeline_name': 'gold_aggregation'}
-       )
-
-       bronze >> silver >> gold
-
-Next Steps
+Next steps
 ----------
 
-- Add monitoring and best practices: :doc:`/best_practices`
-- Explore more :doc:`/tutorials/index`
-
-Complete Code
--------------
-
-All code from this tutorial is available at:
-https://github.com/faustinolopezramos/ducta/tree/main/examples/batch_etl
+- :doc:`../quality` — every check, gates and profiles
+- :doc:`../configuration` — every key of every file
+- :doc:`../best_practices` — running pipelines in production

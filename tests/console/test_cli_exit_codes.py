@@ -129,3 +129,33 @@ class TestTheWrapperPropagatesTheExitCode:
         monkeypatch.setattr(cli_module, "main", _boom)
 
         assert wrapper.main() == ExitCode.GENERAL_ERROR.value
+
+
+class TestProjectProblemsAreConfigurationErrors:
+    """Against real directories: what a script sees when there is no usable project."""
+
+    @pytest.fixture
+    def run_in(self, monkeypatch):
+        def _run(directory, *argv):
+            monkeypatch.chdir(directory)
+            return UnifiedCLI().run(list(argv))
+
+        return _run
+
+    def test_no_project(self, tmp_path, run_in):
+        assert run_in(tmp_path, "start", "--pipeline", "etl") == ExitCode.CONFIGURATION_ERROR.value
+
+    def test_a_project_that_still_needs_migrating(self, tmp_path, run_in):
+        (tmp_path / "environment.yaml").write_text("env_config: {}\n")
+        assert run_in(tmp_path, "start", "--pipeline", "etl") == ExitCode.CONFIGURATION_ERROR.value
+
+    @pytest.mark.parametrize(
+        "argv", [["start", "--pipeline", "etl"], ["config", "validate"]], ids=["start", "validate"]
+    )
+    def test_an_invalid_configuration(self, tmp_path, run_in, argv):
+        (tmp_path / "pipelines").mkdir()
+        (tmp_path / "ducta.yaml").write_text(
+            "version: 2\nproject: p\npaths: {input: data, output: data}\n"
+        )
+        (tmp_path / "pipelines" / "etl.yaml").write_text("nodes:\n  a: {run: 'm:f', timout: 1}\n")
+        assert run_in(tmp_path, *argv) == ExitCode.CONFIGURATION_ERROR.value

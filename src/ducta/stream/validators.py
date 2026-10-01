@@ -24,6 +24,7 @@ from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
+from ducta.setting.dependency_inference import get_node_dependencies
 from ducta.stream.constants import (
     STREAMING_FORMAT_CONFIGS,
     STREAMING_VALIDATIONS,
@@ -743,7 +744,7 @@ class StreamingValidator:
         names_set = set(node_names)
 
         for node_name, node in node_by_name.items():
-            depends_on = node.get("depends_on", [])
+            depends_on = node.get("depends_on", node.get("dependencies", []))
             if depends_on is None:
                 continue
 
@@ -792,7 +793,7 @@ class StreamingValidator:
         graph: Dict[str, List[str]] = {name: [] for name in node_names}
 
         for name, node in node_by_name.items():
-            for dep in node.get("depends_on", []) or []:
+            for dep in get_node_dependencies(node):
                 if dep in satisfied:
                     continue
                 if dep not in node_by_name:

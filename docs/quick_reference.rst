@@ -13,11 +13,17 @@ Core CLI Commands
    * - Command
      - Description
    * - ``ducta start``
-     - Executes the project. Requires ``--env <env>`` and ``--pipeline <name>``.
+     - Runs a pipeline: ``--pipeline <name>``, plus ``--env <env>`` (default ``base``).
    * - ``ducta template``
      - Scaffolds a new project from a professional template.
    * - ``ducta config list-pipelines``
      - Shows all available pipelines in your current directory.
+   * - ``ducta config validate``
+     - Checks every file against the schema and every reference, reporting all problems.
+   * - ``ducta config migrate [--write | --out DIR | --check]``
+     - Upgrades a project from Ducta 0.2's layout, verified equivalent per environment.
+   * - ``ducta config schema [--out DIR]``
+     - Prints (or writes) the JSON Schemas used for editor autocompletion.
    * - ``ducta start --validate-only``
      - Checks DAG integrity and configuration without running code.
    * - ``ducta quality run``
@@ -41,146 +47,74 @@ Common Runtime Flags
 Project Layout
 --------------
 
-A standard Ducta project follows this structure:
-
 .. code-block:: text
 
-   .
-   ├── environment.toml            # Maps each environment to its config files
-   ├── config/                     # YAML/TOML/JSON configuration
-   │   ├── pipelines.toml          # Workflows: nodes and their order
-   │   ├── nodes.toml              # Step definitions
-   │   ├── global_config.toml    # Project-wide settings
-   │   ├── input.toml              # Input sources catalog
-   │   ├── output.toml             # Output destinations catalog
-   │   ├── dev/                    # Per-environment overrides
-   │   └── prod/
-   ├── pipelines/                  # Pure Python source (node functions)
-   ├── .env                        # Local variables & secrets
-   └── requirements.txt            # Dependencies
+   my_project/
+   ├── ducta.yaml             # version: 2, project, paths, settings, environments
+   ├── catalog.yaml           # every dataset once
+   ├── pipelines/
+   │   ├── etl.yaml           # one pipeline per file, with its nodes
+   │   └── etl.py             # your functions
+   └── .ducta/schema/         # JSON Schemas (editor autocompletion)
 
-Node Configuration Template
----------------------------
+Node Template
+-------------
 
-Define your nodes in your configuration file:
+.. code-block:: yaml
 
-.. tab-set::
+   # pipelines/sales.yaml
+   nodes:
+     clean_sales:
+       run: myproject.nodes:clean_sales      # module:function
+       inputs: {sales: raw_sales}            # parameter → dataset
+       outputs: [core.analytics.sales_clean]
+       retry: 2
+       timeout_seconds: 600
+       quality:
+         checks:
+           row_count: {min: 1000}
+           null_rate: {columns: [id], threshold: 0.0}
+           duplicates: {columns: [id]}
+         gate: {max_errors: 0, on_fail: skip_downstream}
 
-   .. tab-item:: TOML
+Other kinds: ``kind: ingest`` (``ingest: {source, table | query, columns, where}``)
+and ``kind: stream`` (``stream: {transform, input, output, checkpoint_location, trigger}``).
 
-      .. code-block:: toml
+Dataset Template
+----------------
 
-         # config/nodes.toml — top-level key IS the node name (flat, no wrapper)
-         [transform_data]
-         module = "pipelines.transform"           # module holding the function
-         function = "clean"                       # function name
-         input = ["bronze.raw"]
-         output = ["silver.clean"]
-         timeout = 3600                           # seconds
-         description = "Removes nulls from df"
+.. code-block:: yaml
 
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml — top-level key IS the node name (flat, no wrapper)
-         transform_data:
-           module: pipelines.transform
-           function: clean
-           input: [bronze.raw]
-           output: [silver.clean]
-           timeout: 3600
-           description: "Removes nulls from df"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "transform_data": {
-             "module": "pipelines.transform",
-             "function": "clean",
-             "input": ["bronze.raw"],
-             "output": ["silver.clean"],
-             "timeout": 3600,
-             "description": "Removes nulls from df"
-           }
-         }
-
-Pipeline Configuration Template
--------------------------------
-
-Define your workflows in ``config/pipelines.toml`` (YAML and JSON also supported):
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/pipelines.toml — top-level key IS the pipeline name (flat, no wrapper)
-         [daily_etl]
-         description = "Main data ingestion path"
-         type = "batch"
-         nodes = ["extract", "transform", "load"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml — top-level key IS the pipeline name (flat, no wrapper)
-         daily_etl:
-           description: "Main data ingestion path"
-           type: batch
-           nodes:
-             - extract
-             - transform
-             - load
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "daily_etl": {
-             "description": "Main data ingestion path",
-             "type": "batch",
-             "nodes": ["extract", "transform", "load"]
-           }
-         }
+   # catalog.yaml
+   raw_sales:
+     format: csv
+     path: ${paths.input}/sales.csv
+     options: {header: true}
+     incremental: {column: sale_date}
+     checks:
+       checks: {empty_dataset: true}
+   core.analytics.sales_clean:
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [id]}
 
 Environment Overrides
 ---------------------
 
-To override a setting for production, create an override file (e.g., ``config/prod/global_config.yaml``):
+Only what differs, in ``ducta.yaml``:
 
-.. tab-set::
+.. code-block:: yaml
 
-   .. tab-item:: TOML
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings: {max_parallel_nodes: 4}
+   environments:
+     prod:
+       settings: {max_parallel_nodes: 16, evidence_level: signed}
+       paths: {output: s3://lake/prod}
+       catalog.raw_sales.path: s3://landing/sales.csv
 
-      .. code-block:: toml
-
-         [database]
-         host = "prod-db.internal"
-         port = 5432
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         database:
-           host: "prod-db.internal"
-           port: 5432
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "database": {
-             "host": "prod-db.internal",
-             "port": 5432
-           }
-         }
-
-Then run: ``ducta start --pipeline etl --env prod``
+Then run: ``ducta start --pipeline sales --env prod``

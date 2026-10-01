@@ -128,7 +128,9 @@ class TestNameValidators:
 
 def test_deleting_a_missing_pipeline_is_not_found(tmp_path):
     repo = ProjectRepository(tmp_path)
-    (tmp_path / "projects" / "p1" / "config").mkdir(parents=True)
-    (tmp_path / "projects" / "p1" / "config" / "pipelines.yaml").write_text("a: {nodes: []}\n")
+    (tmp_path / "projects" / "p1" / "pipelines").mkdir(parents=True)
+    (tmp_path / "projects" / "p1" / "ducta.yaml").write_text(
+        "version: 2\nproject: p1\npaths: {input: data, output: data}\n"
+    )
     with pytest.raises(PipelineNotFoundError):
         repo.delete_pipeline("p1", "missing")

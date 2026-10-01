@@ -140,7 +140,12 @@ class TestAsyncCronSchedulerScoping:
 def app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     import ducta.api.execution.scheduler as scheduler_module
 
-    monkeypatch.setattr(scheduler_module, "_scheduler", None)
+    # A fresh scheduler persisting under tmp_path: the default one reads and
+    # writes ~/.ducta/schedules.json, so entries left by earlier runs (or by the
+    # developer's real schedules) leaked into these assertions.
+    monkeypatch.setattr(
+        scheduler_module, "_scheduler", scheduler_module.AsyncCronScheduler(tmp_path / ".ducta")
+    )
 
     fastapi_app = FastAPI()
     fastapi_app.include_router(schedules_route.router, prefix="/api")

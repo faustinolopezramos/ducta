@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
 import { colors, styles } from "../theme/tokens";
 import { Button } from "../components/ui/Button";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -60,7 +59,6 @@ function formatCommitTime(iso?: string): string {
 }
 
 export function GitPage() {
-  const navigate = useNavigate();
   const sourceType = useSourceStore((s) => s.sourceType);
   const [commitMsg, setCommitMsg] = useState("");
   const [browsePath, setBrowsePath] = useState<string>("");

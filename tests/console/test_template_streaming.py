@@ -102,10 +102,11 @@ class TestShapesTheEngineActuallyReads:
         assert all(locations), "every streaming node needs a checkpoint_location"
         assert len(set(locations)) == len(locations), "checkpoints must not be shared"
 
-    def test_ordering_uses_depends_on(self, template):
+    def test_ordering_uses_dependencies_like_batch_nodes(self, template):
         clean = template.generate_nodes_config()["clean_events"]
 
-        assert clean["depends_on"] == ["ingest_events"]
+        assert clean["dependencies"] == ["ingest_events"]
+        assert "depends_on" not in clean
 
     def test_transforms_module_is_auto_registered(self, template):
         """Without this the user must pass --transforms-modules on every run."""
@@ -131,7 +132,7 @@ class TestGeneratedArtefacts:
         assert any('"amount": null' in event for event in template.SAMPLE_EVENTS)
 
     def test_it_has_its_own_readme(self, template):
-        readme = template.generate_readme(".yaml")
+        readme = template.generate_readme_v2()
 
         assert "ducta stream run" in readme
         assert "checkpoint" in readme.lower()

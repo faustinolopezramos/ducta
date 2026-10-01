@@ -25,6 +25,7 @@ from fastapi import APIRouter, Depends, Query
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
 from ducta.api.exceptions import http_error_on
 from ducta.api.models.workspace import FileContentResponse, FilesListResponse, WriteFileRequest
+from ducta.api.workspace.manager import FileTooLargeError
 
 router = APIRouter(prefix="/workspace/files", tags=["Files"])
 
@@ -54,7 +55,7 @@ async def read_file(
     path: str = Query(description="File path relative to workspace root"),
 ) -> FileContentResponse:
     """Read a text file from the workspace."""
-    with http_error_on(404):
+    with http_error_on(404), http_error_on(413, FileTooLargeError):
         content = manager.read_file(path)
     return FileContentResponse(path=path, content=content, size_bytes=len(content.encode()))
 

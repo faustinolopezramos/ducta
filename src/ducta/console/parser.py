@@ -20,14 +20,16 @@ SPDX-License-Identifier: Apache-2.0
 
 import argparse
 
-HELP_BASE_PATH = "Base path for config discovery"
-HELP_LAYER_NAME = "Layer name for config discovery"
-HELP_USE_CASE = "Use case name"
-HELP_CONFIG_TYPE = "Preferred configuration type"
+HELP_BASE_PATH = (
+    "Project directory (default: the current directory or its nearest parent holding ducta.yaml)"
+)
 HELP_PIPELINE_NAME = "Pipeline name"
 HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
 HELP_TIMEOUT_SECONDS = "Timeout in seconds"
-HELP_CONFIG_FILE = "Path to configuration file"
+HELP_CONFIG_FILE = (
+    "ducta.yaml, or any file or directory inside the project "
+    "(default: the project containing the current directory)"
+)
 
 
 class UnifiedArgumentParser:
@@ -43,18 +45,19 @@ class UnifiedArgumentParser:
             Unified CLI with subcommands for all Ducta operations.
 
             Examples:
-            # Direct pipeline execution
-            ducta start --env dev --pipeline data_processing
-
-            # Streaming pipelines
-            ducta stream run --config config/streaming.py --pipeline real_time_processing
-            ducta stream status --config config/streaming.py
-
-            # Template generation
+            # A new project
             ducta template --template medallion_basic --project-name my_project
 
-            # Configuration management
-            ducta config list-pipelines --env dev
+            # Inside the project: check it, then run a pipeline
+            ducta config validate --env dev
+            ducta start --env dev --pipeline etl --start-date 2026-01-01 --end-date 2026-01-31
+
+            # Streaming pipelines
+            ducta stream run --pipeline events --env dev
+            ducta stream status
+
+            # Upgrading a project from Ducta 0.2
+            ducta config migrate --write
 
             Note: Orchestration management (schedules, runs) is now exclusively available
             through the API REST interface. Use the API endpoints to manage pipeline
@@ -85,18 +88,9 @@ class UnifiedArgumentParser:
 
     @staticmethod
     def _add_discovery_args(parser: argparse.ArgumentParser) -> None:
-        """``--base-path``/``--layer-name``/``--use-case``/``--config-type``/
-        ``--interactive``: the config-discovery group shared by ``start`` and
-        ``config``."""
+        """``--base-path``: where to look for the project (default: the current
+        directory, then its parents)."""
         parser.add_argument("--base-path", help=HELP_BASE_PATH)
-        parser.add_argument("--layer-name", help=HELP_LAYER_NAME)
-        parser.add_argument("--use-case", dest="use_case_name", help=HELP_USE_CASE)
-        parser.add_argument(
-            "--config-type", choices=["yaml", "json", "toml"], help=HELP_CONFIG_TYPE
-        )
-        parser.add_argument(
-            "--interactive", action="store_true", help="Interactive config selection"
-        )
 
     @staticmethod
     def _add_output_format_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -255,13 +249,13 @@ class UnifiedArgumentParser:
         )
 
         run_parser = stream_subparsers.add_parser("run", help="Run streaming pipeline")
-        run_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
+        run_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
         run_parser.add_argument("--pipeline", "-p", required=True, help="Pipeline name to execute")
         run_parser.add_argument(
             "--env",
             "-e",
             default="base",
-            help="Execution environment (base, dev, prod, …). Requires environment.toml in the project root.",
+            help="Execution environment (base, dev, prod, …)",
         )
         run_parser.add_argument(
             "--mode",
@@ -284,7 +278,7 @@ class UnifiedArgumentParser:
         status_parser = stream_subparsers.add_parser(
             "status", help="Check streaming pipeline status"
         )
-        status_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
+        status_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
         status_parser.add_argument("--env", default="base", help="Execution environment")
         status_parser.add_argument("--execution-id", "-e", help="Specific execution ID to check")
         status_parser.add_argument(
@@ -292,7 +286,7 @@ class UnifiedArgumentParser:
         )
 
         stop_parser = stream_subparsers.add_parser("stop", help="Stop streaming pipeline")
-        stop_parser.add_argument("--config", "-c", required=True, help=HELP_CONFIG_FILE)
+        stop_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
         stop_parser.add_argument("--env", default="base", help="Execution environment")
         stop_parser.add_argument("--execution-id", "-e", required=True, help="Execution ID to stop")
         stop_parser.add_argument("--timeout", "-t", type=int, default=60, help=HELP_TIMEOUT_SECONDS)
@@ -307,12 +301,6 @@ class UnifiedArgumentParser:
         template_parser.add_argument("--template", help="Template type to generate")
         template_parser.add_argument("--project-name", help="Project name for template")
         template_parser.add_argument("--output-path", help="Output path for generated files")
-        template_parser.add_argument(
-            "--format",
-            choices=["yaml", "json", "toml"],
-            default="yaml",
-            help="Config format for generated template",
-        )
         template_parser.add_argument(
             "--sandbox-developers",
             nargs="*",
@@ -348,8 +336,6 @@ class UnifiedArgumentParser:
         config_subparsers = config_parser.add_subparsers(
             dest="config_command", help="Configuration commands", required=True
         )
-
-        config_subparsers.add_parser("list-configs", help="List discovered configs")
 
         list_pipelines_parser = config_subparsers.add_parser(
             "list-pipelines", help="List available pipelines"
@@ -390,7 +376,37 @@ class UnifiedArgumentParser:
         )
         validate_parser.add_argument("--env", help="Environment to use")
 
-        config_subparsers.add_parser("clear-cache", help="Clear configuration cache")
+        migrate_parser = config_subparsers.add_parser(
+            "migrate",
+            help="Convert a format-1 project to format 2 (ducta.yaml + catalog.yaml + pipelines/)",
+            description=(
+                "Reads every environment of a format-1 project, converts it to format 2 "
+                "and verifies, environment by environment, that the result compiles to "
+                "the same engine configuration. Without --write or --out it only reports."
+            ),
+        )
+        migrate_parser.add_argument(
+            "--path", default=None, help="Project directory (default: current directory)"
+        )
+        mode = migrate_parser.add_mutually_exclusive_group()
+        mode.add_argument(
+            "--write",
+            action="store_true",
+            help="Write format 2 in place; format-1 files move to .ducta/format1-backup/",
+        )
+        mode.add_argument("--out", default=None, help="Write the format-2 files to this directory")
+        mode.add_argument(
+            "--check",
+            action="store_true",
+            help="Exit 1 if the project still uses format 1 (for CI)",
+        )
+
+        schema_parser = config_subparsers.add_parser(
+            "schema", help="Print (or write) the JSON Schema of the format-2 configuration files"
+        )
+        schema_parser.add_argument(
+            "--out", default=None, help="Directory to write project/catalog/pipeline.json into"
+        )
 
         UnifiedArgumentParser._add_discovery_args(config_parser)
 
@@ -641,11 +657,9 @@ class UnifiedArgumentParser:
             "--node", "-n", required=True, help="Node name whose quality config to validate"
         )
         validate_qp.add_argument(
-            "--config", "-c", required=True, help="Path to nodes config file (TOML/YAML)"
+            "--env", "-e", default="base", help="Environment whose configuration to check"
         )
-        validate_qp.add_argument(
-            "--global-config", "-g", help="Path to global_config file (for profile resolution)"
-        )
+        validate_qp.add_argument("--base-path", help=HELP_BASE_PATH)
 
     @staticmethod
     def _add_experiment_subcommand(subparsers):

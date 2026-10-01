@@ -44,6 +44,23 @@ class TestRunPreflightChecks:
         assert reports["strict_node"].passed is False
         assert reports["other_node"].passed is False
 
+    def test_inputs_are_loaded_for_the_run_window(self):
+        """Regression: preflight contracts loaded inputs without the run's dates,
+        so an incremental input was read (and fingerprinted) whole before every
+        run — a three-year table scanned to check a one-day run."""
+        pipeline_config = {"nodes": {"n": {"sanity_checks": {"checks": {"empty_dataset": {}}}}}}
+        runner = SanityPhaseRunner(fail_fast=False)
+
+        with patch("ducta.gate.input.InputLoader") as mock_loader_cls:
+            mock_loader_cls.return_value.load_inputs.return_value = [pd.DataFrame({"a": [1]})]
+            runner.run_preflight_checks(
+                pipeline_config, context=object(), start_date="2026-03-01", end_date="2026-03-02"
+            )
+
+        mock_loader_cls.return_value.load_inputs.assert_called_once_with(
+            pipeline_config["nodes"]["n"], "n", "2026-03-01", "2026-03-02"
+        )
+
     def test_unknown_check_type_fails_the_report_instead_of_being_skipped(self):
         """Regression: a check referenced by a name/type not in
         QUALITY_CHECKS_REGISTRY (typo, or a quality extension that failed to

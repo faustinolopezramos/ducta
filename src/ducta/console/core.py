@@ -22,13 +22,11 @@ import os
 import re
 import stat
 import sys
-import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -63,7 +61,7 @@ class ConfigFormat(Enum):
 
     YAML = "yaml"
     JSON = "json"
-    TOML = "toml"  # Supported by AppConfigManager, ConfigDiscovery, and template generation
+    TOML = "toml"
     DSL = "dsl"  # Domain-specific language format
 
 
@@ -134,14 +132,8 @@ class CLIConfig:
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     base_path: Optional[Path] = None
-    layer_name: Optional[str] = None
-    use_case_name: Optional[str] = None
-    config_type: Optional[str] = None
-    interactive: bool = False
-    list_configs: bool = False
     list_pipelines: bool = False
     pipeline_info: Optional[str] = None
-    clear_cache: bool = False
     log_level: str = "INFO"
     log_file: Optional[Path] = None
     validate_only: bool = False
@@ -269,56 +261,6 @@ class SecurityValidator:
             raise SecurityError(f"World-writable file detected: {resolved_target}")
         if not permissive and hasattr(os, "getuid") and stat_info.st_uid != os.getuid():
             raise SecurityError(f"File not owned by current user: {resolved_target}")
-
-
-class ConfigCache:
-    _EXPIRATION_SECONDS = 300
-    _cache: Dict[str, Dict[str, Any]] = {}
-    _lock: threading.RLock = threading.RLock()
-
-    @classmethod
-    def get(cls, key: str) -> Optional[List[Tuple[Path, str]]]:
-        with cls._lock:
-            entry = cls._cache.get(key)
-            if entry is None:
-                return None
-            if time.time() - entry["timestamp"] >= cls._EXPIRATION_SECONDS:
-                del cls._cache[key]
-                return None
-            return entry["configs"]
-
-    @classmethod
-    def set(cls, key: str, configs: List[Tuple[Path, str]]) -> None:
-        with cls._lock:
-            cls._cache[key] = {"configs": configs, "timestamp": time.time()}
-
-    @classmethod
-    def invalidate(cls, key: str) -> None:
-        with cls._lock:
-            cls._cache.pop(key, None)
-
-    @classmethod
-    def invalidate_all(cls, pattern: Optional[str] = None) -> None:
-        with cls._lock:
-            if pattern is None:
-                cls._cache.clear()
-            else:
-                for key in [k for k in cls._cache if re.search(pattern, k)]:
-                    del cls._cache[key]
-
-    @classmethod
-    def get_cache_stats(cls) -> Dict[str, Any]:
-        with cls._lock:
-            now = time.time()
-            entries = list(cls._cache.keys())
-            ages = [now - cls._cache[k]["timestamp"] for k in entries]
-            return {
-                "total_entries": len(entries),
-                "entries": entries,
-                "oldest_age_seconds": max(ages) if ages else 0,
-                "newest_age_seconds": min(ages) if ages else 0,
-                "expiration_seconds": cls._EXPIRATION_SECONDS,
-            }
 
 
 class LoggerManager:

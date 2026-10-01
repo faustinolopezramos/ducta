@@ -262,7 +262,7 @@ async def authenticate_websocket(
     Closes the socket with the appropriate code/reason and returns ``None`` on
     any failure; callers must ``return`` immediately when this returns ``None``.
     Shared by every WebSocket route that needs authenticated, rate-limited,
-    origin-checked connections (execution log streaming, the web terminal).
+    origin-checked connections (execution log streaming).
     """
     from ducta.api.middleware.origin import websocket_origin_allowed
 

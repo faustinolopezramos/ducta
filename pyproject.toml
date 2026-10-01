@@ -7,7 +7,7 @@ build-backend = "poetry.core.masonry.api"
 # ==============================================================================
 [tool.poetry]
 name = "ducta"
-version = "0.1.1"
+version = "0.3.0"
 description = "A unified data-pipeline framework for batch, streaming, ML, and hybrid workflows."
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
@@ -124,6 +124,9 @@ psycopg2-binary = { version = "^2.9.0", optional = true }
 GitPython = { version = "^3.1.0", optional = true }
 watchdog = { version = "^4.0.0", optional = true }
 redis = { version = "^5.0.0", optional = true }
+# Round-trip YAML for API edits of format-2 projects: keeps the comments and
+# key order of files people also edit by hand.
+"ruamel.yaml" = { version = ">=0.18,<0.19", optional = true }
 
 # --- MLOps (extra: mlops) ---
 mlflow = { version = "^2.10.0", optional = true }
@@ -149,7 +152,7 @@ spark = ["pyspark", "pyarrow", "setuptools"]
 api = [
     "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "watchdog", "redis",
+    "GitPython", "watchdog", "redis", "ruamel.yaml",
 ]
 database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
 mlops = ["mlflow", "scikit-learn", "numpy", "scipy", "optuna"]
@@ -160,7 +163,7 @@ all = [
     "pyspark", "pyarrow", "setuptools", "delta-spark",
     "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "watchdog", "redis",
+    "GitPython", "watchdog", "redis", "ruamel.yaml",
     "mlflow", "scikit-learn", "numpy", "scipy", "optuna",
     "prometheus-client",
 ]

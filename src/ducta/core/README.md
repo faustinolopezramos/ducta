@@ -53,12 +53,12 @@ Ducta Core is the orchestration layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Core does not define its own config files — it consumes the `Context` produced by `ducta.setting`. Its behavior is driven by keys within `global_config` and per-node/per-pipeline blocks:
+Core does not read project files — it consumes the `Context` that `ducta.setting.project_loader` compiles from `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml`. Its behavior is driven by the engine settings (`settings:` in `ducta.yaml`, compiled into `global_config`) and per-node/per-pipeline blocks:
 
 *   **`max_parallel_nodes`**: Thread-pool width for parallel node execution.
 *   **`execution_timeout_seconds` / `node_timeout_seconds`**: Whole-pipeline and per-node time limits (capped at 24h).
 *   **`preflight_enabled`** (*bool*, default `true`): Run configuration preflight before execution.
-*   **`enable_run_certificate`** (*bool*, default `true`) + **`run_certificate_dir`**: Emit a signed Run Certificate per batch/ml/hybrid run. See "Ducta storage convention" below for where it's written by default.
+*   **`run_certificate_dir`**: Where Run Certificates are written. See "Ducta storage convention" below for the default.
 *   **`evidence_level`** (`off` | `record` | `required` | `signed`, default `record`): How much evidence each run must leave — the project's choice. `off` writes no certificate; `record` writes one and only warns if it cannot; `required` fails a run that cannot write its certificate; `signed` also requires an HMAC signature, and preflight fails without a key. Recorded inside the certificate, so `certify verify` holds a `signed` certificate to that policy. The legacy `enable_run_certificate` / `require_run_certificate` keys still work; one that contradicts an explicit `evidence_level` is a preflight error.
 *   **`certificate_signing_key`** / `DUCTA_CERTIFICATE_KEY` env: Optional HMAC key for certificate attribution (prefer the env var; the legacy `Ducta_CERTIFICATE_KEY` spelling is still read).
 *   **`mlops_enabled` / `mlops_required`**: Toggle experiment tracking and whether its failure aborts the run.
@@ -67,7 +67,7 @@ Core does not define its own config files — it consumes the `Context` produced
 *   **`chain.on_gate_blocked`** (`stop` | `continue`, default `stop`): What a blocked quality gate in an *upstream* chain step does to the rest of the chain. `stop` aborts it; `continue` runs on, which means the downstream pipelines read whatever an earlier run left on disk.
 *   **`chain.state_dir`**: Where chain-state markers (the date range a batch pipeline last ran, for `reuse_materialized`) are written. See "Ducta storage convention" below.
 
-Per-node quality is configured through the `sanity_checks` (pre-execution) and `data_quality` (post-execution) blocks; ML behavior through the pipeline `split` and `hyperparams` blocks (all validated in `ducta.setting.schemas`).
+Per-node quality comes from dataset contracts and a node's `input_checks` (compiled into `sanity_checks`, pre-execution) and its `quality` block (compiled into `data_quality`, post-execution); ML behavior from the pipeline `split` and `hyperparams` blocks. A node function receives `start_date`/`end_date` only if it declares them (or `**kwargs`).
 
 ### Ducta storage convention
 
@@ -143,32 +143,38 @@ available to force one strategy.
 ## 3. Configuration Examples
 
 ```yaml
-# global_config.yaml — core-relevant keys
-max_parallel_nodes: 4
-node_timeout_seconds: 1800
-preflight_enabled: true
-enable_run_certificate: true
-run_certificate_dir: "${output_path}/${environment}/.ducta/runs"  # default — usually left unset
-random_seed: 42
-chain:
-  reuse_materialized: true      # skip up-to-date upstream pipelines
-  staleness_check: true         # also require outputs newer than inputs (default)
-  on_gate_blocked: stop         # a blocked gate upstream aborts the chain (default)
-  state_dir: "${output_path}/${environment}/.ducta/chain_state"  # default — usually left unset
+# ducta.yaml — core-relevant settings
+version: 2
+project: sales
+paths: {input: data, output: data}
+settings:
+  max_parallel_nodes: 4
+  node_timeout_seconds: 1800
+  preflight_enabled: true
+  evidence_level: record
+  run_certificate_dir: "${paths.output}/${env}/.ducta/runs"   # default — usually left unset
+  random_seed: 42
+  chain:
+    reuse_materialized: true      # skip up-to-date upstream pipelines
+    staleness_check: true         # also require outputs newer than inputs (default)
+    on_gate_blocked: stop         # a blocked gate upstream aborts the chain (default)
+    state_dir: "${paths.output}/${env}/.ducta/chain_state"   # default — usually left unset
+```
 
-# nodes.yaml — a node with quality gates
-clean_sales:
-  module: "myproject.nodes"
-  function: "clean_sales"
-  input: ["raw_sales"]
-  output: ["core.analytics.sales_clean"]
-  retry: 2
-  sanity_checks:
-    enabled: true
-    checks: {empty_dataset: {}}
-  data_quality:
-    fail_fast: false
-    checks: {null_rate: {columns: ["id"], threshold: 0.0}}
+```yaml
+# pipelines/sales.yaml — a node with checks on its input and its output
+nodes:
+  clean_sales:
+    run: myproject.nodes:clean_sales
+    inputs: {raw: raw_sales}
+    outputs: [core.analytics.sales_clean]
+    retry: 2
+    input_checks:
+      raw_sales:
+        checks: {empty_dataset: true}
+    quality:
+      fail_fast: false
+      checks: {null_rate: {columns: [id], threshold: 0.0}}
 ```
 
 ```bash
@@ -182,20 +188,10 @@ export DUCTA_CERTIFICATE_KEY="a-long-random-secret"
 
 ### Step 1: Build an executor from a Context
 ```python
-from pathlib import Path
-from ducta.setting import Context
-from ducta.core import PipelineExecutor
+import ducta
 
-context = Context(
-    global_config=Path("config/global.yaml"),
-    pipelines_config=Path("config/pipelines.yaml"),
-    nodes_config=Path("config/nodes.yaml"),
-    input_config=Path("config/input.yaml"),
-    output_config=Path("config/output.yaml"),
-    env="dev",
-)
-
-executor = PipelineExecutor(context)
+context = ducta.load_project("path/to/project", env="dev")
+executor = ducta.PipelineExecutor(context)
 ```
 
 ### Step 2: Run a pipeline

@@ -24,7 +24,7 @@ import ast
 import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
@@ -137,11 +137,19 @@ async def update_node(
     name: str,
     body: NodeUpdateRequest,
     node_svc: NodeServiceDep,
+    pipeline: Optional[str] = Query(
+        default=None,
+        description="Pipeline to create the node in. Required to create a node in a "
+        "format-2 project (ducta.yaml), where every node lives in a pipeline; ignored "
+        "by format 1.",
+    ),
 ) -> NodeResponse:
     """Update or create a node spec and commit to git."""
     _validate_node_name(name, body.spec)
     try:
-        commit_sha = node_svc.save_node(name, body.spec, expected_sha=body.expected_commit_sha)
+        commit_sha = node_svc.save_node(
+            name, body.spec, expected_sha=body.expected_commit_sha, pipeline=pipeline
+        )
     except (ConfigFileNotFoundError, ConfigValidationError) as exc:
         raise HTTPException(status_code=400, detail=exc.message)
     return NodeResponse(name=name, spec=body.spec, commit_sha=commit_sha)

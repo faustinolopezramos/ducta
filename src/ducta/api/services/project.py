@@ -38,81 +38,10 @@ from ducta.api.repositories.project_repository import ProjectRepository
 from ducta.api.utils.git_utils import commit_files
 from ducta.api.utils.pagination import paginate
 from ducta.api.utils.validators import validate_project_name
-from ducta.api.workspace.loaders import load_config_file, write_config_file
 
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _merge_legacy_config(legacy_path: Path, target_path: Path, *, label: str) -> None:
-    if not legacy_path.exists():
-        return
-    try:
-        new_data = load_config_file(legacy_path) or {}
-        existing: Dict[str, Any] = load_config_file(target_path) if target_path.exists() else {}
-        write_config_file(target_path, {**existing, **new_data})
-        logger.info("Merged {label} into {target}", label=label, target=target_path)
-    except Exception as exc:
-        logger.warning("Could not merge {label}: {exc}", label=label, exc=exc)
-
-
-def _migrate_config_file(workspace_config_dir: Path, target_name: str, candidates: list) -> None:
-    target = workspace_config_dir / target_name
-    if target.exists():
-        return
-    for candidate in candidates:
-        if candidate.exists():
-            try:
-                write_config_file(target, load_config_file(candidate) or {})
-                logger.info(
-                    "Migrated {name} from {src} to {tgt}",
-                    name=target_name,
-                    src=candidate,
-                    tgt=target,
-                )
-            except Exception as exc:
-                logger.warning("Could not migrate {name}: {exc}", name=target_name, exc=exc)
-            return
-
-
-def _migrate_global_config(source: Path, workspace_config_dir: Path) -> None:
-    _migrate_config_file(
-        workspace_config_dir,
-        "global_config.yaml",
-        [
-            source / "base" / "global_config.yml",
-            source / "config" / "global_config.yaml",
-        ],
-    )
-    _migrate_config_file(
-        workspace_config_dir,
-        "pipelines.yaml",
-        [
-            source / "base" / "pipeline" / "pipelines.yml",
-            source / "config" / "pipelines.yaml",
-        ],
-    )
-
-
-def _migrate_workspace_configs(source: Path, project_id: str, workspace_config_dir: Path) -> None:
-    workspace_config_dir.mkdir(parents=True, exist_ok=True)
-    _merge_legacy_config(
-        source / "base" / "node" / "nodes.yml",
-        workspace_config_dir / "nodes.yaml",
-        label=f"nodes for '{project_id}'",
-    )
-    _merge_legacy_config(
-        source / "base" / "catalog" / "input.yml",
-        workspace_config_dir / "input.yaml",
-        label=f"input catalog for '{project_id}'",
-    )
-    _merge_legacy_config(
-        source / "base" / "catalog" / "output.yml",
-        workspace_config_dir / "output.yaml",
-        label=f"output catalog for '{project_id}'",
-    )
-    _migrate_global_config(source, workspace_config_dir)
 
 
 def _build_response(
@@ -200,17 +129,10 @@ class ProjectService:
             "updated_at": now,
         }
 
-        self._repo.create(project_id, settings)
+        created = self._repo.create(project_id, settings)
 
         if auto_commit:
-            _git_commit_files(
-                self._workspace_path,
-                f"feat: create project '{project_id}'",
-                [
-                    self._repo.settings_path(project_id),
-                    self._repo.pipelines_path(project_id),
-                ],
-            )
+            _git_commit_files(self._workspace_path, f"feat: create project '{project_id}'", created)
 
         return _build_response(self._workspace_path, project_id, settings, self._repo)
 
@@ -225,15 +147,11 @@ class ProjectService:
                 settings[field] = value
         settings["updated_at"] = _now_iso()
 
-        self._repo.update_settings(project_id, settings)
+        manifest = self._repo.update_settings(project_id, settings)
 
         if auto_commit:
             _git_commit_files(
-                self._workspace_path,
-                f"chore: update project '{project_id}' settings",
-                [
-                    self._repo.settings_path(project_id),
-                ],
+                self._workspace_path, f"chore: update project '{project_id}' settings", [manifest]
             )
 
         return _build_response(self._workspace_path, project_id, settings, self._repo)
@@ -310,58 +228,17 @@ class ProjectService:
                 detail={"expected": str(expected_location), "actual": str(source)},
             )
 
-        config_dir = source / "config"
-        config_dir.mkdir(parents=True, exist_ok=True)
-
-        settings_file = self._repo.settings_path(project_id)
-        if settings_file.exists():
-            _migrate_workspace_configs(source, project_id, self._workspace_path / "config")
-            settings = load_config_file(settings_file)
-            return _build_response(self._workspace_path, project_id, settings, self._repo)
-
-        now = _now_iso()
-        settings: Dict[str, Any] = {
-            "name": project_id,
-            "description": body.description or f"Imported from {source.name}",
-            "variables": {},
-            "metadata": {"imported_from": str(source)},
-            "created_at": now,
-            "updated_at": now,
-        }
-
-        write_config_file(settings_file, settings)
-
-        pipelines_file = self._repo.pipelines_path(project_id)
-        if not pipelines_file.exists():
-            legacy_pipelines = source / "base" / "pipeline" / "pipelines.yml"
-            if legacy_pipelines.exists():
-                try:
-                    write_config_file(pipelines_file, load_config_file(legacy_pipelines) or {})
-                    logger.info(
-                        "Migrated pipelines from legacy layout for project '{id}'", id=project_id
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Could not migrate legacy pipelines for '{id}': {exc}",
-                        id=project_id,
-                        exc=exc,
-                    )
-                    write_config_file(pipelines_file, {})
-            else:
-                write_config_file(pipelines_file, {})
-
-        _migrate_workspace_configs(source, project_id, self._workspace_path / "config")
-
+        # Importing registers a project that is already in place; it must be a
+        # format-2 project (a format-1 one is reported with how to migrate it).
+        self._repo.store(project_id)
         logger.info("Project '{id}' imported from {path}", id=project_id, path=source)
-
-        if auto_commit:
-            _git_commit_files(
-                self._workspace_path,
-                f"feat: import project '{project_id}'",
-                [settings_file, pipelines_file],
-            )
-
+        settings = self._repo.get_settings(project_id)
         return _build_response(self._workspace_path, project_id, settings, self._repo)
+
+    def project_dir(self, project_id: str) -> Path:
+        """The project's directory (raises ``ProjectNotFoundError`` if unknown)."""
+        self.get_project(project_id)
+        return self._repo.project_dir(project_id)
 
     def list_project_pipelines(self, project_id: str) -> Dict[str, Any]:
         self._repo.get_settings(project_id)

@@ -1,70 +1,26 @@
-def test_re_exports():
-    from ducta.setting import (
-        FALLBACK_CHAINS,
-        ActiveConfigNotFound,
-        BaseFormatLoader,
-        CanonicalEnvironment,
-        ChainReuseConfig,
-        ConfigLoader,
-        ConfigLoaderFactory,
-        ConfigLoadError,
-        ConfigRepositoryError,
-        ConfigSchema,
-        ConfigurationError,
-        ConfigValidationError,
-        ConfigValidator,
-        Context,
-        ContextLoader,
-        CrossValidator,
-        DataQualitySchema,
-        ExecutionMode,
-        FlexibleConfigResolver,
-        FormatPolicy,
-        GlobalConfigSchema,
-        InputFormat,
-        InputSchema,
-        JsonConfigLoader,
-        LayerConfig,
-        LayerContextBuilder,
-        LayeredProjectDetector,
-        LogLevel,
-        MLConfigMixin,
-        MLStage,
-        NodeSchema,
-        OutputFormat,
-        OutputSchema,
-        PipelineManager,
-        PipelineSchema,
-        PipelineType,
-        PipelineValidationError,
-        PipelineValidator,
-        ProjectSchema,
-        QualityCheckEntrySchema,
-        QualityGateSchema,
-        QualityGlobalConfig,
-        QualityOutputSchema,
-        QualityProfileSchema,
-        SanityChecksSchema,
-        SparkSessionFactory,
-        SparkSessionManager,
-        SpecializedValidator,
-        SplitConfig,
-        TomlConfigLoader,
-        VariableInterpolator,
-        WriteMode,
-        YamlConfigLoader,
-        allowed_environments,
-        detect_and_prepare_layered_execution,
-        get_base_environment,
-        get_fallback_chain,
-        get_sandbox_developer,
-        is_allowed_environment,
-        is_sandbox_environment,
-        is_valid_environment,
-        normalize_environment,
-    )
+import importlib
 
-    assert FlexibleConfigResolver is not None
-    assert ContextLoader is not None
-    assert Context is not None
-    assert CanonicalEnvironment is not None
+import pytest
+
+import ducta.setting as setting
+
+
+@pytest.mark.parametrize("name", setting.__all__)
+def test_every_public_name_is_importable(name):
+    assert getattr(importlib.import_module("ducta.setting"), name) is not None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "ContextLoader",
+        "FlexibleConfigResolver",
+        "LayeredProjectDetector",
+        "LayerConfig",
+        "LayerContextBuilder",
+        "detect_and_prepare_layered_execution",
+    ],
+)
+def test_the_format_1_loaders_are_gone(name):
+    """Configuration format 1 is only read by `ducta config migrate`."""
+    assert not hasattr(setting, name)

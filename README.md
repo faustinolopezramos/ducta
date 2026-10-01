@@ -154,7 +154,7 @@ A normal Python function. Ducta passes the input DataFrame and the run's date
 range; you return the result.
 
 ```python
-# nodes.py
+# pipelines/sales.py
 def clean_sales(sales, start_date, end_date):
     return sales.dropna()
 ```
@@ -162,42 +162,34 @@ def clean_sales(sales, start_date, end_date):
 ### 3. Wire it up
 
 ```yaml
-# config/input.yaml — where data comes from
+# catalog.yaml — every dataset, once: where it lives, how it is written
 raw_sales:
-  format: "csv"
-  filepath: "${input_path}/sales.csv"
-  options: { header: "true", inferSchema: "true" }
-```
-
-```yaml
-# config/output.yaml — where it goes
+  format: csv
+  path: ${paths.input}/sales.csv
+  options: {header: true, inferSchema: true}
 core.analytics.sales_clean:
-  format: "parquet"
-  write_mode: "overwrite"
+  format: parquet
+  write: {mode: overwrite}
 ```
 
 ```yaml
-# config/nodes.yaml — one entry per transformation, with its checks
-clean_sales:
-  module: "nodes"
-  function: "clean_sales"
-  input: ["raw_sales"]
-  output: ["core.analytics.sales_clean"]
-  data_quality:
-    checks:
-      row_count: { min: 1000 }                        # expect at least 1,000 rows
-      null_rate: { columns: ["id"], threshold: 0.0 }  # no missing ids
-      duplicates: { columns: ["id"] }                 # ids must be unique
-    quality_gate:
-      max_errors: 0                          # any error blocks downstream steps
+# pipelines/sales_daily.yaml — the pipeline (file name) and its nodes
+nodes:
+  clean_sales:
+    run: pipelines.sales:clean_sales
+    inputs: {sales: raw_sales}
+    outputs: [core.analytics.sales_clean]
+    quality:
+      checks:
+        row_count: {min: 1000}                      # expect at least 1,000 rows
+        null_rate: {columns: [id], threshold: 0.0}  # no missing ids
+        duplicates: {columns: [id]}                 # ids must be unique
+      gate: {max_errors: 0}                         # any error blocks downstream steps
 ```
 
-```yaml
-# config/pipelines.yaml — order the steps
-sales_daily:
-  type: batch
-  nodes: ["clean_sales"]
-```
+A misspelled key or a dataset name missing from the catalog is reported with
+its file and line; a wrong check parameter (`thresold`) is caught by the
+preflight — either way, before anything runs.
 
 ### 4. Run it
 
@@ -208,6 +200,9 @@ ducta start --env dev --pipeline sales_daily \
 
 Ducta reads `raw_sales`, runs `clean_sales`, validates the output, writes
 `sales_clean`, and records a run certificate — all from that configuration.
+A project from Ducta 0.2 (`environment.yaml` + `config/*`) is converted with
+`ducta config migrate`, which proves the result equivalent in every environment
+before it writes anything.
 
 ### 5. Prefer a visual workspace?
 
@@ -221,17 +216,17 @@ Browse pipelines, edit configuration, launch runs, and watch logs stream live.
 
 ## See it in action
 
-**What you declared** — four config files and one Python function:
+**What you declared** — a catalog, a pipeline file and one Python function:
 
 ```mermaid
 flowchart LR
-    A["raw_sales<br/><i>csv</i>"] --> B["clean_sales<br/><i>nodes.clean_sales</i>"]
+    A["raw_sales<br/><i>csv</i>"] --> B["clean_sales<br/><i>pipelines.sales:clean_sales</i>"]
     B --> C{"quality gate<br/>row_count · null_rate · duplicates"}
     C -->|pass| D["sales_clean<br/><i>parquet</i>"]
     C -->|fail| E["run halted<br/>downstream skipped"]
 ```
 
-**What Ducta produced** — `.ducta/runs/<env>/<run-id>/certificate.json`:
+**What Ducta produced** — `<output>/<env>/.ducta/runs/<run-id>/certificate.json`:
 
 ```jsonc
 {
@@ -243,7 +238,7 @@ flowchart LR
   "started_at": "2026-01-01T09:00:00+00:00",
   "ended_at": "2026-01-01T09:01:12+00:00",
   "duration_seconds": 72.418,
-  "ducta_version": "0.1.1",
+  "ducta_version": "0.3.0",
   "config_fingerprint": "sha256:6c1f…",     // the config this ran with
   "environment": {                           // where it ran
     "python_version": "3.12.4", "os_info": "Linux 6.8.0",
@@ -274,7 +269,7 @@ flowchart LR
     { "node": "clean_sales", "phase": "data_quality", "passed": true,
       "score": 1.0, "errors": 0, "warnings": 0, "checks": 3 }
   ],
-  "code": { "nodes": { "nodes.clean_sales": {   // the logic each node ran
+  "code": { "nodes": { "pipelines.sales.clean_sales": {   // the logic each node ran
     "scope": "function", "source_hash": "sha256:52aa…" } } },
   "evidence_complete": true,                 // did the run record everything it was asked to?
   "evidence_gaps": [],                       // and if not, what it could not record
@@ -348,7 +343,7 @@ it ran correctly.** An honest comparison:
 | **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
 | **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
 | **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
-| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.1.1`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.3.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
 
 **Where Ducta is genuinely different:** the run certificate. Most tools can
 tell you a job succeeded. Ducta gives you a portable, self-hashed and
@@ -460,7 +455,7 @@ and stays usable on a bare `pip install ducta` with no Spark present.
 Direction, not commitments — Ducta is alpha and priorities move. The
 [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) is the record of what actually shipped.
 
-**Now (in flight toward `0.2.0`)**
+**Now (in flight toward `0.4.0`)**
 
 - Hyperparameter search driven by the engine — random and Bayesian strategies,
   `n_trials`, per-trial process isolation so every trial is tracked as its own run.

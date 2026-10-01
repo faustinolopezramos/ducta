@@ -49,14 +49,7 @@ def bootstrap_worker_context(
     from ducta.console.config import ConfigManager
     from ducta.console.execution import ContextInitializer
 
-    config_manager = ConfigManager(
-        base_path=payload.get("base_path"),
-        layer_name=payload.get("layer_name"),
-        use_case=payload.get("use_case_name"),
-        config_type=payload.get("config_type"),
-        interactive=False,
-        require_config=False,
-    )
+    config_manager = ConfigManager(base_path=payload.get("base_path"))
     config_manager.change_to_config_directory()
     context = ContextInitializer(config_manager).initialize(payload["env"])
 

@@ -38,11 +38,12 @@ Ducta API is the **backend brain** behind the web app and any automation. It let
 ### For Technical Users
 Ducta API is the service layer, implementing:
 *   **App factory & lifespan**: `create_app()` wires middleware, routes, exception handlers, optional DB persistence + migrations, the execution manager, and a config cache; it warns when bound to a non-local address without auth (`main.py`).
-*   **Routers under `/api`**: auth, execution (+ WebSocket log streaming), configs, environments, git, repository, projects, nodes, mlops, quality, ingestion, templates, workspace, certificates, connect, plus a `/ws` terminal and unauthenticated health probes (`routes/`).
+*   **Routers under `/api`**: auth, workspace (+ files), projects, nodes, configs, environments, executions (+ WebSocket log streaming), certificates, schedules, git, mlops, quality, ingestion and templates, plus unauthenticated health probes (`routes/`).
 *   **Optional JWT auth**: `AuthService` (bcrypt password hashing, jose-signed HS256 tokens with type/expiry checks); production settings refuse the default secret and require `auth_enabled` (`auth/`, `config.py`).
 *   **Execution engine**: an in-memory `ExecutionManager` with a bounded queue, concurrent-run limits, log buffering, and optional DB-backed persistence layered transparently (`execution/`).
 *   **Source resolution with SSRF defense**: per-request local paths are security-validated; Git clones are host-allow-listed and reject internal/non-routable targets (loopback, private, link-local metadata endpoint) (`source/resolver.py`).
 *   **Persistence & repositories**: optional SQLAlchemy-async engine, Alembic-style migrations, and repository/store abstractions for projects, nodes, and execution history (`db/`, `repositories/`, `repository/`).
+*   **Project files**: `repositories/v2_store.py` (`V2ProjectStore`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and commits it; the commit SHA is the optimistic-concurrency token. A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`). A Ducta 0.2 project is reported with the `ducta config migrate` command.
 *   **Middleware**: request-ID tagging, CORS, and configurable per-IP rate limiting (in-memory or Redis) (`middleware/`).
 
 ---

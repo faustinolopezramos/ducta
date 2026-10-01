@@ -22,6 +22,10 @@ interface UpdateNodePayload {
   name: string;
   spec: Record<string, unknown>;
   expected_commit_sha?: string;
+  /** Pipeline to create the node in. Required to create a node in a format-2
+   *  project (ducta.yaml), where every node lives in a pipeline; format 1
+   *  ignores it. */
+  pipeline?: string;
 }
 
 interface UpdateNodeCodePayload {
@@ -38,8 +42,10 @@ interface UpdateNodeCodePayload {
 export const useUpdateNode = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ name, spec, expected_commit_sha }: UpdateNodePayload) =>
-      client.put(`/nodes/${name}`, { spec, expected_commit_sha }).then((r) => r.data),
+    mutationFn: ({ name, spec, expected_commit_sha, pipeline }: UpdateNodePayload) =>
+      client
+        .put(`/nodes/${name}`, { spec, expected_commit_sha }, pipeline ? { params: { pipeline } } : undefined)
+        .then((r) => r.data),
     onSuccess: () => invalidateNodeConsumers(queryClient),
     onError: defaultOnError,
   });

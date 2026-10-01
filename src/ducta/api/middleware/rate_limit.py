@@ -254,8 +254,8 @@ def get_websocket_connection_limiter(
     """Return the rate limiter guarding WebSocket handshakes, building it once per *settings*.
 
     `RateLimitMiddleware` extends `BaseHTTPMiddleware`, which only intercepts
-    the ASGI ``http`` scope — WebSocket connections (``/ws/logs/{execution_id}``,
-    ``/ws/terminal``) bypass it entirely, so their handshakes had zero rate
+    the ASGI ``http`` scope — WebSocket connections (``/ws/logs/{execution_id}``)
+    bypass it entirely, so their handshakes had zero rate
     limiting even with ``rate_limit_enabled=True``. Callers should check this
     once per connection attempt, before ``websocket.accept()``. Reuses the
     same in-memory/Redis backend selection as the HTTP middleware.

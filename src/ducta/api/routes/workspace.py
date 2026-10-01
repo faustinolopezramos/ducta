@@ -41,7 +41,7 @@ def _source_summary(resolved: ResolvedSource) -> dict:
         "name": resolved.path.name,
         "source_type": resolved.source_type,
         "has_git": resolved.has_git,
-        "has_environment_yaml": resolved.has_environment_yaml,
+        "has_project": resolved.has_project,
     }
 
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from ducta.console.core import (
-    ConfigCache,
     DuctaError,
     ExitCode,
     ValidationError,
@@ -68,10 +67,3 @@ class TestDuctaError:
         from ducta.core.errors import DuctaError as EngineError
 
         assert isinstance(ValidationError("x"), EngineError)
-
-
-class TestConfigCache:
-    def test_invalidate_all_is_safe(self):
-        # idempotent, must never raise (called in CLI's finally block)
-        ConfigCache.invalidate_all()
-        ConfigCache.invalidate_all()

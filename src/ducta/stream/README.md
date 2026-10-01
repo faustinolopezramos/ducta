@@ -51,47 +51,57 @@ Ducta Stream is the Structured Streaming layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Streaming nodes declare their I/O **inline** (rather than referencing the input/output catalog). Behavior is driven by the node's `input`, `output`, `streaming`, and `depends_on` blocks plus a few `global_config` keys:
+A streaming pipeline is a pipeline file with `type: streaming` whose nodes are
+`kind: stream`. Stream nodes declare their I/O **inline** under `stream:`
+rather than through `catalog.yaml`; the loader compiles each into the node
+document this module reads (`input`, `output`, `streaming`, `function`,
+`dependencies`):
 
-*   **`input.format`**: `kafka` | `kinesis` | `delta_stream` | `file_stream` | `socket` | `rate` | `memory`, with format-specific `options`.
-*   **`output.format`**: `kafka` | `delta` | `parquet` | `json` | `csv` | `console` | `memory`, with `path` and `options`.
-*   **`streaming.checkpoint_location` / `streaming.trigger` / `output_mode`**: checkpoint dir, trigger (`processingTime`, `once`, `available_now`, `continuous`), and output mode (`append`/`update`/`complete`).
-*   **`depends_on`**: intra-pipeline ordering; independent nodes in the same wave start concurrently.
-*   **`global_config`**: `max_streaming_pipelines`, `checkpoints_base`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`.
+*   **`stream.input.format`**: `kafka` | `kinesis` | `delta_stream` | `file_stream` (with `file_format`) | `socket` | `rate` | `memory`, with format-specific `options`.
+*   **`stream.output.format`**: `kafka` | `delta` | `parquet` | `json` | `csv` | `console` | `memory`, with `path` and `options`.
+*   **`stream.streaming`**: `checkpoint_location`, `trigger` (`processing_time`, `once`, `available_now`, `continuous`, `adaptive`), `output_mode` (`append`/`update`/`complete`), `watermark`, `shuffle_partitions`.
+*   **`stream.transform`**: `{key, module, params}` — a transform from the registry; `module` is imported so its `register_transforms(registry)` runs first.
+*   **`after`**: intra-pipeline ordering; independent nodes in the same wave start concurrently. When an upstream has a terminating trigger (`once`/`available_now`), its dependants start after it finishes.
+*   **Settings** (`settings:` in `ducta.yaml`): `max_streaming_pipelines`, `checkpoints_base`, `streaming_transform_modules`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`, `streaming_shuffle_partitions`, `streaming_adaptive_base_interval`, `streaming_adaptive_max_interval_seconds`, `streaming_disable_backpressure_defaults`.
 
-Checkpoint base resolution order: node `streaming.checkpoint` → `global_config.checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed). The latter two are resolved by `CheckpointManager.determine_checkpoint_base`, which applies the Ducta storage convention (see `ducta.core.README`): scoped by `${output_path}/${environment}`, and still env-scoped even when `checkpoints_base` doesn't reference `${environment}` itself — otherwise every environment's checkpoints would collide in one directory. A node's own `streaming.checkpoint_location` is unaffected by this — set it explicitly (as below) and it's used verbatim, already resolved by the general config interpolator.
+Checkpoint base resolution order: node `streaming.checkpoint` → `checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed). The latter two are resolved by `CheckpointManager.determine_checkpoint_base`, which applies the Ducta storage convention (see `ducta.core.README`): scoped by `${output_path}/${environment}`, and still env-scoped even when `checkpoints_base` doesn't reference the environment itself — otherwise every environment's checkpoints would collide in one directory. A node's own `streaming.checkpoint_location` is used verbatim — build it from `${paths.output}/${env}` as below.
 
 ---
 
 ## 3. Configuration Examples
 
 ```yaml
-# nodes.yaml — a Kafka → Delta streaming node
-enrich_events:
-  function: {name: "enrich"}          # registered transform
-  input:
-    format: "kafka"
-    options:
-      kafka.bootstrap.servers: "localhost:9092"
-      subscribe: "events"
-      startingOffsets: "latest"
-  output:
-    format: "delta"
-    path: "${output_path}/silver/events"
-  streaming:
-    checkpoint_location: "${output_path}/_ckpt/enrich_events"
-    trigger: {processingTime: "10 seconds"}
-    output_mode: "append"
+# pipelines/events.yaml — a Kafka → Delta stream node
+type: streaming
+requires_dates: false
+nodes:
+  enrich_events:
+    kind: stream
+    stream:
+      transform: {key: enrich, module: pipelines.transforms}
+      input:
+        format: kafka
+        options:
+          kafka.bootstrap.servers: localhost:9092
+          subscribe: events
+          startingOffsets: latest
+      output:
+        format: delta
+        path: ${paths.output}/${env}/silver/events
+      streaming:
+        checkpoint_location: ${paths.output}/${env}/_ckpt/enrich_events
+        trigger: {type: processing_time, interval: 10 seconds}
+        output_mode: append
+```
 
-# pipelines.yaml
-events_stream:
-  type: streaming
-  nodes: ["enrich_events"]
-
-# global_config.yaml
-max_streaming_pipelines: 5
-checkpoints_base: "${output_path}/${environment}/_checkpoints"  # default already does this if unset
-streaming_node_start_parallelism: 8
+```yaml
+# ducta.yaml
+version: 2
+project: events
+paths: {input: data, output: data}
+settings:
+  max_streaming_pipelines: 5
+  streaming_node_start_parallelism: 8
 ```
 
 ---
@@ -100,15 +110,17 @@ streaming_node_start_parallelism: 8
 
 ### Step 1: Register transforms and start a pipeline
 ```python
+import ducta
 from ducta.stream import StreamingPipelineManager
 
+context = ducta.load_project("path/to/project", env="dev")
 manager = StreamingPipelineManager(context, max_concurrent_pipelines=5)
 
 # Register a transform used by node functions
 registry = manager.query_manager.transformation_registry
 registry.register("enrich", lambda df: df.withColumn("ingested", df["ts"]))
 
-execution_id = manager.start_pipeline("events_stream", {"nodes": ["enrich_events"]})
+execution_id = manager.start_pipeline("events", context.pipelines_config["events"])
 ```
 
 ### Step 2: Monitor health and metrics
@@ -135,7 +147,7 @@ manager.stop_pipeline(execution_id, graceful=True)
 ### Step 4: Clear checkpoints (offline maintenance)
 ```python
 # Refuses to run while the pipeline has active executions; traversal-safe.
-result = manager.clear_pipeline_checkpoints("events_stream")
+result = manager.clear_pipeline_checkpoints("events")
 print(result["status"], result.get("path"))
 ```
 

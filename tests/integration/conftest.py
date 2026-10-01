@@ -70,10 +70,22 @@ def project_dir(tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def ducta_cli() -> list:
-    """Argv prefix that invokes the Ducta CLI in this interpreter."""
+    """Argv prefix that invokes the Ducta CLI in this interpreter.
+
+    The subprocess puts the ``ducta`` package under test first on its path: its
+    working directory is a scratch project, so a plain import would pick up
+    whatever copy is installed in site-packages instead of this checkout.
+    """
     import sys
 
-    return [sys.executable, "-c", "from ducta.console.wrapper import main; main()"]
+    import ducta
+
+    package_parent = str(Path(ducta.__file__).resolve().parents[1])
+    code = (
+        f"import sys; sys.path.insert(0, {package_parent!r}); "
+        "from ducta.console.wrapper import main; sys.exit(main())"
+    )
+    return [sys.executable, "-c", code]
 
 
 def find_written_files(root: Path, suffix: str) -> list:

@@ -63,6 +63,7 @@ _PUBLIC_API: dict[str, str] = {
     "PipelineExecutor": "ducta.core.executors",
     # Configuration
     "Context": "ducta.setting.contexts",
+    "load_project": "ducta.setting.project_loader",
     # Run certificates
     "RunCertificate": "ducta.core.certificate",
     "build_certificate": "ducta.core.certificate",
@@ -121,6 +122,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
     from ducta.core.executors import PipelineExecutor
     from ducta.gate import ReaderFactory, WriterFactory
     from ducta.setting.contexts import Context
+    from ducta.setting.project_loader import load_project
 
 
 def __getattr__(name: str) -> Any:
@@ -147,6 +149,7 @@ __all__ = [
     "PipelineExecutor",
     # Configuration
     "Context",
+    "load_project",
     # Run certificates
     "RunCertificate",
     "build_certificate",

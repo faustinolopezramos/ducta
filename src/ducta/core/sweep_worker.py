@@ -102,9 +102,6 @@ def build_payloads(
     search_id: str,
     base_output_path: Optional[str],
     base_path: Optional[str] = None,
-    layer_name: Optional[str] = None,
-    use_case_name: Optional[str] = None,
-    config_type: Optional[str] = None,
     node: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -127,9 +124,6 @@ def build_payloads(
                 "end_date": end_date,
                 "model_version": model_version,
                 "base_path": base_path,
-                "layer_name": layer_name,
-                "use_case_name": use_case_name,
-                "config_type": config_type,
                 "output_path": (
                     trial_output_path(base_output_path, search_id, index)
                     if base_output_path

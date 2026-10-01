@@ -72,7 +72,9 @@ class QualityCheckExecutor:
         """Whether global config allow the default ML sanity checks (on by default)."""
         return self.settings.ml_default_sanity_checks
 
-    def _deposit_quality_summary(self, node_name: str, phase: str, report: Any) -> None:
+    def _deposit_quality_summary(
+        self, node_name: str, phase: str, report: Any, dataset: Optional[str] = None
+    ) -> None:
         """Record a compact quality summary on the context so it reaches the certificate.
 
         Deposited for every node whose checks ran and did not abort (pass or
@@ -90,6 +92,8 @@ class QualityCheckExecutor:
                 "warnings": int(getattr(report, "warnings_count", 0)),
                 "checks": int(getattr(report, "checks_count", 0)),
             }
+            if dataset is not None:
+                entry["dataset"] = dataset
             self._ledger.record_quality(entry)
         except Exception as e:  # noqa: BLE001
             logger.debug("Could not deposit quality summary for '{}': {}", node_name, e)
@@ -124,7 +128,97 @@ class QualityCheckExecutor:
         pipeline_type: Optional[str] = None,
         pipeline_name: Optional[str] = None,
     ) -> Optional[QualityReport]:
-        """Run sanity checks on node input DataFrames if configured."""
+        """Run sanity checks on node input DataFrames if configured.
+
+        ``sanity_checks.inputs: {dataset: {checks, gate, ...}}`` validates each
+        named input (dataset contracts, see :meth:`_run_input_contracts`) and
+        returns one report per contract; the single-input form
+        (``checks`` + ``input_index``) returns one report.
+        """
+        sanity_config = node_config.get("sanity_checks")
+        if isinstance(sanity_config, dict) and sanity_config.get("inputs"):
+            return self._run_input_contracts(  # type: ignore[return-value]
+                dfs, node_config, node_name, sanity_config["inputs"], pipeline_name
+            )
+        return self._run_single_sanity(dfs, node_config, node_name, pipeline_type, pipeline_name)
+
+    def _run_input_contracts(
+        self,
+        dfs: List[Any],
+        node_config: Dict[str, Any],
+        node_name: str,
+        contracts: Dict[str, Any],
+        pipeline_name: Optional[str],
+    ) -> Optional[List[QualityReport]]:
+        """Validate each input dataset against its contract.
+
+        A contract belongs to a dataset, not a node: when three nodes read the
+        same dataset in one run it is checked once, and every consumer gets the
+        same verdict — a failed contract blocks each of them, not only the first.
+        """
+        keys = _input_dataset_keys(node_config)
+        cache = self._contract_cache()
+        reports: List[QualityReport] = []
+        for dataset, block in contracts.items():
+            if not isinstance(block, dict) or block.get("enabled", True) is False:
+                continue
+            if dataset not in keys:
+                logger.warning(
+                    "Node '{}': contract for '{}' ignored — the node does not read it",
+                    node_name,
+                    dataset,
+                )
+                continue
+            if dataset in cache:
+                outcome = cache[dataset]
+                if isinstance(outcome, BaseException):
+                    raise outcome
+                reports.append(outcome)
+                continue
+            single = {k: v for k, v in block.items() if k != "gate"}
+            if "gate" in block:
+                single["sanity_gate"] = block["gate"]
+            single["input_index"] = keys.index(dataset)
+            try:
+                report = self._run_single_sanity(
+                    dfs,
+                    {**node_config, "sanity_checks": single},
+                    node_name,
+                    None,
+                    pipeline_name,
+                    phase="contract",
+                    dataset=dataset,
+                )
+            except Exception as e:
+                cache[dataset] = e
+                raise
+            cache[dataset] = report
+            if report is not None:
+                reports.append(report)
+        return reports or None
+
+    def _contract_cache(self) -> Dict[str, Any]:
+        """Per-run verdicts of dataset contracts, keyed by dataset."""
+        run_id = getattr(self._ledger, "run_id", None) or "no-run"
+        store = getattr(self.context, "_ducta_contract_results", None)
+        if not isinstance(store, dict) or store.get("run_id") != run_id:
+            store = {"run_id": run_id, "results": {}}
+            try:
+                self.context._ducta_contract_results = store
+            except (AttributeError, TypeError):
+                pass
+        return store["results"]
+
+    def _run_single_sanity(
+        self,
+        dfs: List[Any],
+        node_config: Dict[str, Any],
+        node_name: str,
+        pipeline_type: Optional[str] = None,
+        pipeline_name: Optional[str] = None,
+        phase: str = "sanity",
+        dataset: Optional[str] = None,
+    ) -> Optional[QualityReport]:
         sanity_config = node_config.get("sanity_checks")
         if sanity_config is None and pipeline_type == "ml" and self._ml_default_sanity_enabled():
             sanity_config = self.DEFAULT_ML_SANITY_CONFIG
@@ -148,7 +242,7 @@ class QualityCheckExecutor:
 
         QualityReporter().render_report(report)
 
-        self._deposit_quality_summary(node_name, "sanity", report)
+        self._deposit_quality_summary(node_name, phase, report, dataset)
 
         # A node that declared a sanity_gate has already been judged by it inside
         # the runner: a blocking verdict raised QualityGateBlocked and never got
@@ -275,6 +369,19 @@ class QualityCheckExecutor:
         pipeline_name: Optional[str] = None,
     ) -> None:
         """Persist quality report and register output path."""
+        if isinstance(report, list):
+            # One report per dataset contract.
+            for single in report:
+                self.persist_report(
+                    single,
+                    report_type,
+                    config_key,
+                    node_name,
+                    node_config,
+                    ml_info,
+                    pipeline_name=pipeline_name,
+                )
+            return
         if not report or not self.quality_output_manager:
             return
         try:
@@ -301,3 +408,13 @@ class QualityCheckExecutor:
                 self.context.add_quality_output_path(output_path)
         except Exception as e:
             logger.error(f"Failed to persist {report_type} report for node {node_name}: {e}")
+
+
+def _input_dataset_keys(node_config: Dict[str, Any]) -> List[str]:
+    """The node's input datasets in the order its DataFrames are loaded."""
+    raw = node_config.get("input") or []
+    if isinstance(raw, dict):
+        return [str(v) for v in raw.values()]
+    if isinstance(raw, str):
+        return [raw]
+    return [str(v) for v in raw]

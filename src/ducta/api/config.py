@@ -120,6 +120,15 @@ class Settings(BaseSettings):
         ),
     )
 
+    revocation_redis_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Redis URL for the logout/refresh token-revocation list, shared across "
+            "workers and surviving restarts. Falls back to RATE_LIMIT_REDIS_URL, then "
+            "to a per-process in-memory list."
+        ),
+    )
+
     max_executions_in_memory: int = Field(
         default=500,
         ge=50,

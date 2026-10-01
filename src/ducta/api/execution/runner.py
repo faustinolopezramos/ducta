@@ -31,7 +31,6 @@ from typing import Any, Dict, Iterable, Iterator, Optional
 from loguru import logger  # type: ignore
 
 from ducta.api.execution.output_capture import ProcessOutputCapture
-from ducta.api.workspace.utils import CONFIG_EXTENSIONS, find_config_file, has_config_file
 from ducta.core.errors import DuctaError
 
 _stdout_capture_lock = threading.Lock()
@@ -86,44 +85,16 @@ _URI_PREFIXES: tuple[str, ...] = (
 
 
 def _project_owns_pipeline(project_dir: Path, pipeline_name: str) -> bool:
-    """Return True if *project_dir* contains the named pipeline."""
-    from ducta.api.workspace.loaders import load_config_file
+    """Whether the Ducta project in *project_dir* defines *pipeline_name*."""
+    from ducta.setting.project_loader import find_project_root, read_project
 
-    def _pipeline_in_file(path: Path) -> bool:
-        try:
-            data = load_config_file(path) or {}
-            return pipeline_name in data
-        except Exception:
-            return False
-
-    # Standard project: config/pipelines.* (including nested config dirs)
-    config_dir = project_dir / "config"
-    if config_dir.is_dir():
-        for ext in CONFIG_EXTENSIONS:
-            for candidate in config_dir.rglob(f"pipelines{ext}"):
-                if _pipeline_in_file(candidate):
-                    return True
-
-    # Legacy layout: base/pipeline/pipelines.*
-    legacy = find_config_file(project_dir / "base" / "pipeline", "pipelines")
-    if legacy is not None and _pipeline_in_file(legacy):
-        return True
-
-    # Layered project: scan layers declared in ducta.yaml
-    ducta_file = find_config_file(project_dir, "ducta")
-    if ducta_file is not None:
-        try:
-            ducta_cfg = load_config_file(ducta_file) or {}
-            for _layer, layer_cfg in ducta_cfg.get("layers", {}).items():
-                pipe_rel = layer_cfg.get("pipelines")
-                if pipe_rel:
-                    pipe_path = project_dir / pipe_rel
-                    if pipe_path.exists() and _pipeline_in_file(pipe_path):
-                        return True
-        except Exception:
-            pass
-
-    return False
+    root = find_project_root(project_dir)
+    if root is None:
+        return False
+    try:
+        return pipeline_name in read_project(root).pipelines
+    except Exception:
+        return False
 
 
 def resolve_project_source(source_path: Path, pipeline_name: str) -> Path:
@@ -137,8 +108,10 @@ def resolve_project_source(source_path: Path, pipeline_name: str) -> Path:
     Falls back to *source_path* unchanged when no match is found or when
     *source_path* is already a single-project directory.
     """
-    # Single-project: has its own environment file or ducta.yaml — no lookup needed
-    if has_config_file(source_path, "environment") or has_config_file(source_path, "ducta"):
+    from ducta.setting.project_loader import find_project_root
+
+    # A single project: no lookup needed.
+    if find_project_root(source_path) is not None:
         return source_path
 
     projects_dir = source_path / "projects"
@@ -338,89 +311,19 @@ def _resolve_execution_context(
     env: str,
     pipeline_name: str,
     timeout_handler: Any,
-) -> "tuple[Any, Path, Optional[str]]":
-    """Build the pipeline execution ``Context``.
-
-    Handles both a layered project (``ducta.yaml``, bypassing
-    ``WorkspaceManager.load_context`` which only understands
-    ``environment.yaml``-based layouts) and a standard project.
-
-    Returns ``(ctx, env_dir, added_layer_root_to_sys_path)`` — the last
-    element is the sys.path entry the caller must remove on cleanup, or
-    ``None`` when nothing was added.
-    """
+) -> "tuple[Any, Path]":
+    """Build the pipeline execution ``Context`` and the directory it runs in."""
     from ducta.api.workspace.manager import WorkspaceManager  # avoid circular at module level
 
     env_dir = source_path / env if (source_path / env).is_dir() else source_path
-
-    # Detect layered project (ducta.yaml) — bypass WorkspaceManager.load_context
-    # which only understands environment.yaml-based layouts.
-    ducta_file = find_config_file(source_path, "ducta")
-    added_layer_root_to_sys_path: Optional[str] = None
-    if ducta_file is not None:
-        from ducta.setting import LayerContextBuilder, LayeredProjectDetector
-        from ducta.setting.contexts import Context as _Context
-
-        detector = LayeredProjectDetector(source_path)
-        matching_layers = detector.find_layers_for_pipeline(pipeline_name)
-        if not matching_layers:
-            raise RuntimeError(
-                f"Pipeline '{pipeline_name}' not found in any layer "
-                f"of layered project at '{source_path}'"
-            )
-        if len(matching_layers) > 1:
-            raise RuntimeError(
-                f"Pipeline '{pipeline_name}' is ambiguous: found in layers "
-                f"{matching_layers}. Use a unique pipeline name per layer."
-            )
-        layer_name = matching_layers[0]
-        context_args = LayerContextBuilder.build_context_args(detector, layer_name, env)
-        if context_args is None:
-            raise RuntimeError(
-                f"Cannot build context for layer '{layer_name}': "
-                "one or more config files are missing (input.yaml / output.yaml?)"
-            )
-        # Both import roots (the layer root, then its src/) now come
-        # from one place. The layer root has to be ahead of the
-        # workspace root so `import src.foo` resolves via this
-        # layer's src package before Python can cache the workspace's
-        # src as a namespace package and poison sys.modules['src'].
-        _roots = LayerContextBuilder.layer_import_roots(detector, layer_name)
-        LayerContextBuilder.inject_sys_path(detector, layer_name)
-        if _roots:
-            added_layer_root_to_sys_path = _roots[0]
-        # The environment travels in the args dict, so this and every
-        # other layered entry point resolve it in one place.
-        layer_env = context_args.get("env") or env
-        ctx = _Context(
-            global_config=context_args["global_config"],
-            pipelines_config=context_args["pipelines_config"],
-            nodes_config=context_args["nodes_config"],
-            input_config=context_args["input_config"],
-            output_config=context_args["output_config"],
-            env=layer_env,
-        )
-        # _config_file_path drives the node executor's module search-path
-        # derivation: parent dir (= layer root) + parent/src are added as
-        # fallback import paths. Use a sentinel path whose .parent IS the
-        # layer root rather than a config subdirectory inside it.
-        if added_layer_root_to_sys_path:
-            ctx._config_file_path = str(Path(added_layer_root_to_sys_path) / "config.yaml")
-        else:
-            ctx._config_file_path = context_args["global_config"]
-        ctx.env = env
-        if timeout_handler:
-            timeout_handler.verify()
-    else:
-        workspace = WorkspaceManager(source_path)
-        if timeout_handler:
-            timeout_handler.verify()
-        try:
-            ctx = workspace.load_context(env)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to load context for env '{env}': {exc}") from exc
-
-    return ctx, env_dir, added_layer_root_to_sys_path
+    workspace = WorkspaceManager(source_path)
+    if timeout_handler:
+        timeout_handler.verify()
+    try:
+        ctx = workspace.load_context(env)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to load context for env '{env}': {exc}") from exc
+    return ctx, env_dir
 
 
 def _dispatch_pipeline_type(
@@ -545,7 +448,6 @@ def run_pipeline_sync(
     source_path = resolve_project_source(spec.source_path, pipeline_name)
     ws_root_str = str(source_path)
     added_to_sys_path = False
-    added_layer_root_to_sys_path: Optional[str] = None
 
     # NOTE: this lock serialises the *entire* pipeline body, not just the dup2
     # call, because os.dup2(1/2), os.chdir() and sys.path mutation below are all
@@ -581,7 +483,7 @@ def run_pipeline_sync(
 
                 original_cwd = os.getcwd()
                 try:
-                    ctx, env_dir, added_layer_root_to_sys_path = _resolve_execution_context(
+                    ctx, env_dir = _resolve_execution_context(
                         source_path, env, pipeline_name, timeout_handler
                     )
 
@@ -657,11 +559,6 @@ def run_pipeline_sync(
                     if added_to_sys_path:
                         try:
                             sys.path.remove(ws_root_str)
-                        except ValueError:
-                            pass
-                    if added_layer_root_to_sys_path:
-                        try:
-                            sys.path.remove(added_layer_root_to_sys_path)
                         except ValueError:
                             pass
                     manager.set_active_execution(None)

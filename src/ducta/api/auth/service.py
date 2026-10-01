@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Any, Optional
 from uuid import uuid4
 
 import bcrypt as _bcrypt  # type: ignore
@@ -43,6 +43,7 @@ class AuthService:
         secret_key: str,
         algorithm: str = "HS256",
         access_token_expires_hours: int = 24,
+        redis_url: Optional[str] = None,
     ) -> None:
         self._secret = secret_key
         self._algorithm = algorithm
@@ -52,8 +53,37 @@ class AuthService:
         # token on another. Bounded by each entry's own token expiry, not by
         # size — a revoked jti only needs remembering until it would have
         # expired anyway; _prune_expired_revocations sweeps stale entries.
+        # When *redis_url* is given, revocations are also written to Redis
+        # (key TTL = remaining token lifetime) so every worker/replica and a
+        # restart honour them; the in-memory dict stays as a local fallback.
         self._revoked: dict[str, datetime] = {}
         self._revoked_lock = threading.Lock()
+        self._redis = self._connect_redis(redis_url)
+
+    @staticmethod
+    def _connect_redis(redis_url: Optional[str]) -> Any:
+        if not redis_url:
+            return None
+        try:
+            import redis  # type: ignore[import-untyped]
+
+            client = redis.Redis.from_url(redis_url, socket_timeout=2, socket_connect_timeout=2)
+            client.ping()
+            return client
+        except Exception as exc:  # noqa: BLE001 - missing package, connection/auth errors
+            from loguru import logger
+
+            logger.warning(
+                "Token revocation: could not use Redis at the configured URL ({exc}); "
+                "falling back to per-process revocation (logout will not propagate "
+                "across workers or survive restarts).",
+                exc=exc,
+            )
+            return None
+
+    @staticmethod
+    def _revocation_key(jti: str) -> str:
+        return f"ducta:revoked:{jti}"
 
     @staticmethod
     def _bcrypt_bytes(plain: str) -> bytes:
@@ -121,12 +151,27 @@ class AuthService:
         with self._revoked_lock:
             self._prune_expired_revocations_locked()
             self._revoked[jti] = expires_at
+        if self._redis is not None:
+            ttl = max(1, int((expires_at - datetime.now(tz=timezone.utc)).total_seconds()))
+            try:
+                self._redis.setex(self._revocation_key(jti), ttl, "1")
+            except Exception as exc:  # noqa: BLE001
+                from loguru import logger
+
+                logger.warning("Token revocation: Redis write failed ({exc})", exc=exc)
 
     def is_revoked(self, jti: str) -> bool:
         if not jti:
             return False
         with self._revoked_lock:
-            return jti in self._revoked
+            if jti in self._revoked:
+                return True
+        if self._redis is not None:
+            try:
+                return bool(self._redis.exists(self._revocation_key(jti)))
+            except Exception:  # noqa: BLE001 - Redis down: local list is all we have
+                return False
+        return False
 
     def _prune_expired_revocations_locked(self) -> None:
         now = datetime.now(tz=timezone.utc)
@@ -152,5 +197,6 @@ def get_auth_service() -> AuthService:
                     secret_key=s.jwt_secret_key,
                     algorithm=s.jwt_algorithm,
                     access_token_expires_hours=s.jwt_expiration_hours,
+                    redis_url=s.revocation_redis_url or s.rate_limit_redis_url,
                 )
     return _auth_service

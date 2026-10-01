@@ -45,8 +45,6 @@ def scaffolded(tmp_path_factory, ducta_cli):
         "medallion_basic",
         "--project-name",
         "demo",
-        "--format",
-        "yaml",
         cwd=root,
     )
     assert result.returncode == 0, f"template failed:\n{result.stdout}\n{result.stderr}"
@@ -58,10 +56,9 @@ def scaffolded(tmp_path_factory, ducta_cli):
 class TestScaffold:
     def test_template_creates_a_runnable_project(self, scaffolded):
         for relative in (
-            "config/pipelines.yaml",
-            "config/nodes.yaml",
-            "config/input.yaml",
-            "config/output.yaml",
+            "ducta.yaml",
+            "catalog.yaml",
+            "pipelines/etl.yaml",
             "pipelines/etl.py",
             "data/input.csv",
         ):

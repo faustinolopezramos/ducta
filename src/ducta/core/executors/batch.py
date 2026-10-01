@@ -162,7 +162,7 @@ class BatchExecutor(BaseExecutor):
         PipelineValidator.validate_node_configs(pipeline_nodes, node_configs)
         PipelineValidator.validate_no_dag_cycles(pipeline_nodes, node_configs)
 
-        sanity_reports = self._run_preflight_sanity_checks(node_configs)
+        sanity_reports = self._run_preflight_sanity_checks(node_configs, start_date, end_date)
         if sanity_reports:
             self._sanity_reports = sanity_reports
 

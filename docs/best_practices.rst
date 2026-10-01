@@ -1,1198 +1,242 @@
 Best Practices
 ==============
 
-Learn how to use Ducta effectively and build reliable data pipelines.
-
-Project Organization
----------------------
-
-**Keep your project clean and organized.** A good structure makes collaboration easier and reduces errors:
-
-.. code-block:: text
-
-   my_project/
-   ├── config/              # Configuration files
-   │   ├── global_config.yaml
-   │   ├── pipelines.yaml
-   │   ├── nodes.yaml
-   │   ├── inputs.yaml
-   │   ├── outputs.yaml
-   │   ├── dev/             # Dev overrides
-   │   ├── staging/         # Staging overrides
-   │   └── prod/            # Production overrides
-   │
-   ├── src/                 # Your Python code
-   │   └── nodes/
-   │       ├── __init__.py
-   │       ├── extract.py
-   │       ├── transform.py
-   │       └── load.py
-   │
-   ├── tests/               # Unit tests
-   │   ├── test_extract.py
-   │   ├── test_transform.py
-   │   └── test_load.py
-   │
-   ├── data/                # Local test data (add to .gitignore)
-   │   ├── input/
-   │   └── output/
-   │
-   ├── logs/                # Execution logs (add to .gitignore)
-   │
-   ├── .env                 # Secrets (add to .gitignore!)
-   ├── .gitignore
-   ├── requirements.txt
-   ├── README.md
-   └── Makefile             # Optional: helpful shortcuts
-
-Writing Good Node Functions
------------------------------
-
-**Specifying Node Function Paths**
-
-Each node needs **two separate keys**: ``module`` (the dotted Python module
-path) and ``function`` (the bare function name inside that module). At
-execution time Ducta imports ``module`` and looks up ``function`` on it — a
-single dotted string is not split apart automatically, so both keys are
-required:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         [extract_sales]
-         module = "src.nodes.extract"
-         function = "get_sales"
-
-         [extract_customers]
-         module = "src.nodes.extract"
-         function = "get_customers"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         extract_sales:
-           module: "src.nodes.extract"
-           function: "get_sales"
-         extract_customers:
-           module: "src.nodes.extract"
-           function: "get_customers"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "extract_sales": { "module": "src.nodes.extract", "function": "get_sales" },
-           "extract_customers": { "module": "src.nodes.extract", "function": "get_customers" }
-         }
-
-**What happens if ``module`` is omitted:** config validation only does a
-syntactic check — it requires ``function`` to contain a dot (e.g.
-``"src.nodes.extract.get_sales"``) if ``module`` is absent, to catch obvious
-typos early. That dotted string is **not** parsed into a module+function pair
-at execution time, however: the executor will raise
-``"Node configuration ... must include 'module' and 'function'"`` if
-``module`` is missing. Always set ``module`` explicitly.
-
-**Best practice:** Keep ``module`` and ``function`` both explicit for every
-node — this is required, not optional, and makes node wiring unambiguous in
-shared projects:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         [extract_sales]
-         module = "src.nodes.extract"
-         function = "get_sales"
-
-         [clean_data]
-         module = "src.nodes.transform"
-         function = "clean"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         extract_sales:
-           module: "src.nodes.extract"
-           function: "get_sales"
-         clean_data:
-           module: "src.nodes.transform"
-           function: "clean"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "extract_sales": { "module": "src.nodes.extract", "function": "get_sales" },
-           "clean_data": { "module": "src.nodes.transform", "function": "clean" }
-         }
-
-**Simple and Clear**
-
-Each node function should do one thing well:
-
-.. code-block:: python
-
-   # ✓ Good: Simple, clear purpose
-   def extract_sales_data(df):
-       """Load sales data from database."""
-       return df.dropna()
-
-   # ✗ Bad: Does too much
-   def do_everything(df):
-       """Process all data."""
-       df = df.dropna()
-       df = df.groupby(...).sum()
-       df = df[df['amount'] > 0]
-       return df
-
-**Always Include Docstrings**
-
-Write a one-line description of what the function does:
-
-.. code-block:: python
-
-   def clean_customer_data(df):
-       """Remove duplicate customers and invalid emails."""
-       df = df.drop_duplicates(subset=['customer_id'])
-       df = df[df['email'].str.contains('@')]
-       return df
-
-**Handle Errors Gracefully**
-
-Don't let silent failures happen:
-
-.. code-block:: python
-
-   # ✗ Bad: Ignores errors
-   def transform_data(df):
-       try:
-           return df['amount'].apply(float)
-       except:
-           pass  # Oops, lost data
-
-   # ✓ Good: Handles errors properly
-   def transform_data(df):
-       """Convert amounts to numbers."""
-       try:
-           return df['amount'].astype(float)
-       except ValueError as e:
-           raise ValueError(f"Could not convert amounts: {e}")
-
-**Validate Your Input**
-
-Don't assume data is correct:
-
-.. code-block:: python
-
-   # ✓ Good: Validates data
-   def process_sales(df):
-       """Process sales data."""
-       if df is None or df.empty:
-           raise ValueError("No data provided")
-
-       required_cols = ['id', 'amount', 'date']
-       missing = [c for c in required_cols if c not in df.columns]
-       if missing:
-           raise ValueError(f"Missing columns: {missing}")
-
-       return df[df['amount'] > 0]
-
-Configuration Best Practices
-------------------------------
-
-**Use Environment Variables, Never Hardcode Secrets**
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # ✓ Always do this
-         [database]
-         password = "${DB_PASSWORD}"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # ✓ Always do this
-         database:
-           password: ${DB_PASSWORD}
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "database": {
-             "password": "${DB_PASSWORD}"
-           }
-         }
-
-Then set the variable:
-
-.. code-block:: bash
-
-   export DB_PASSWORD="my_secret_password"
-   ducta start --env prod --pipeline my_pipeline
-
-Or use a ``.env`` file:
-
-.. code-block:: bash
-
-   # .env (add to .gitignore)
-   DB_PASSWORD=my_secret_password
-   API_KEY=abc123
-
-**Use Relative Paths or Cloud Storage**
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # ✓ Use relative paths
-         input_path = "data/input"
-
-         # ✓ Or use cloud storage
-         s3_path = "s3://my-bucket/data/input"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # ✓ Use relative paths
-         input_path: data/input
-
-         # ✓ Or use cloud storage
-         s3_path: s3://my-bucket/data/input
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "input_path": "data/input",
-           "s3_path": "s3://my-bucket/data/input"
-         }
-
-**Name Nodes Clearly**
-
-Use short, descriptive names:
-
-.. code-block:: toml
-
-   # ✗ Unclear
-   [n1]
-   module = "src.nodes.a"
-   function = "run"
-
-   [n2]
-   module = "src.nodes.b"
-   function = "run"
-
-   # ✓ Clear
-   [extract_customers]
-   module = "src.nodes.extract"
-   function = "get_customers"
-
-   [clean_emails]
-   module = "src.nodes.clean"
-   function = "normalize_emails"
-
-**Organize Pipelines by Layer**
-
-Follow medallion architecture:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         [bronze_load_raw_sales]
-         nodes = ["ingest_sales"]
-
-         [silver_clean_sales]
-         nodes = ["deduplicate", "validate"]
-
-         [gold_sales_metrics]
-         nodes = ["aggregate", "calculate_kpis"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         bronze_load_raw_sales:
-           nodes: [ingest_sales]
-         silver_clean_sales:
-           nodes: [deduplicate, validate]
-         gold_sales_metrics:
-           nodes: [aggregate, calculate_kpis]
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "bronze_load_raw_sales": { "nodes": ["ingest_sales"] },
-           "silver_clean_sales": { "nodes": ["deduplicate", "validate"] },
-           "gold_sales_metrics": { "nodes": ["aggregate", "calculate_kpis"] }
-         }
-
-Deployment Checklist
----------------------
-
-Before running in production, verify:
-
-✅ **Configuration**
-
-.. code-block:: bash
-
-   # Validate config before running
-   ducta start --env prod --pipeline my_pipeline --validate-only
-
-✅ **Test the Pipeline Locally First**
-
-.. code-block:: bash
-
-   # Run on dev with small data
-   ducta start --env dev --pipeline my_pipeline
-
-✅ **Check for Secrets**
-
-.. code-block:: bash
-
-   # Make sure no passwords in code
-   grep -r "password" config/
-   grep -r "api_key" src/
-
-   # Should return nothing!
-
-✅ **Add Logging**
-
-.. code-block:: bash
-
-   # Run with debug logging
-   ducta start --env prod --pipeline my_pipeline --log-level DEBUG
-
-✅ **Set Up Monitoring**
-
-Plan for what to do if something fails:
-
-.. code-block:: bash
-
-   # Save logs for debugging
-   ducta start --env prod --pipeline my_pipeline 2>&1 | tee logs/pipeline.log
-
-✅ **Document Your Pipeline**
-
-Add a README explaining:
-   - What the pipeline does
-   - When it runs
-   - What data it needs
-   - What it produces
-
-.. code-block:: markdown
-
-   # Sales ETL Pipeline
-
-   ## Purpose
-   Daily sales data transformation
-
-   ## Schedule
-   Runs at 9 AM every weekday
-
-   ## Inputs
-   - Raw sales database
-   - Customer master data
-
-   ## Outputs
-   - Processed sales data in S3
-
-   ## Troubleshooting
-   If the pipeline fails:
-   1. Check database connection
-   2. Verify S3 permissions
-   3. See logs/ directory
-
-Error Handling Strategy
------------------------
-
-**Plan for Failures**
-
-Data pipelines fail. Plan for it:
-
-.. code-block:: toml
-
-   [critical_transform]
-   module = "src.nodes.transform"
-   function = "run"
-   timeout = 600
-   retry = 3  # Number of retry attempts (0-10)
-
-   [non_critical]
-   module = "src.nodes.aggregate"
-   function = "run"
-   timeout = 300
-   retry = 0
-
-**Log Everything**
-
-.. code-block:: python
-
-   import logging
-
-   logger = logging.getLogger(__name__)
-
-   def extract_data():
-       """Extract with logging."""
-       logger.info("Starting extraction...")
-
-       df = read_data()
-       logger.info(f"Extracted {len(df)} records")
-
-       return df
-
-**Monitor Results**
-
-Check that output looks right:
-
-.. code-block:: python
-
-   def load_data(df):
-       """Load with validation."""
-       if df.empty:
-           raise ValueError("No data to load")
-
-       # Log some statistics
-       logger.info(f"Saving {len(df)} records")
-       logger.info(f"Columns: {', '.join(df.columns)}")
-
-       df.to_parquet('output.parquet')
-
-Testing Strategy
------------------
-
-**Write Unit Tests**
-
-Test each node function:
-
-.. code-block:: python
-
-   # test_extract.py
-   import pandas as pd
-   from src.nodes.extract import extract_data
-
-   def test_extract_data():
-       """Test extraction."""
-       df = extract_data()
-
-       assert not df.empty
-       assert 'id' in df.columns
-       assert len(df) > 0
-
-   def test_handles_missing_file():
-       """Test error handling."""
-       with pytest.raises(FileNotFoundError):
-           extract_data(path="nonexistent.csv")
-
-**Run Tests Before Deploying**
-
-.. code-block:: bash
-
-   # Run all tests
-   pytest tests/
-
-   # Run with coverage
-   pytest --cov=src tests/
-
-Feature Store Best Practices
-----------------------------
-
-1. **Point-in-Time Correctness**: When creating features for machine learning, always include a timestamp column (e.g., ``event_timestamp``). This allows Ducta to perform temporal joins, preventing data leakage by ensuring that only features available at the record's event time are used for training.
-
-2. **Decouple Computation from Storage**: Register your feature groups using the ``write_features`` method rather than writing files directly to storage. This allows you to switch between storage backends (Delta, SQL, Parquet) via configuration without changing your Python code.
-
-3. **Tiered Serving**: Use an online store for low-latency serving and Parquet/Delta for offline training. Ducta's ``FeatureStoreConfig(sync_to_online=True, ...)`` keeps both stores in sync (configured where the feature store is constructed, not via a global TOML key).
-
-**Test with Real Data (Locally)**
-
-.. code-block:: bash
-
-   # Test with actual data structure
-   ducta start --env dev --pipeline my_pipeline
-
-Common Mistakes to Avoid
-------------------------
-
-❌ **Mistake: Assuming data is clean**
-
-.. code-block:: python
-
-   # ✗ Don't assume
-   def bad_transform(df):
-       return df['amount'].apply(float)  # Crashes if invalid values
-
-   # ✓ Validate first
-   def good_transform(df):
-       df = df[df['amount'].notna()]
-       return df['amount'].astype(float)
-
-❌ **Mistake: Hardcoding values**
-
-.. code-block:: python
-
-   # ✗ Don't hardcode
-   def bad_extract():
-       return pd.read_csv("/home/john/data.csv")
-
-   # ✓ Use configuration
-   def good_extract(input_data):
-       return pd.read_csv(input_data['path'])
-
-❌ **Mistake: Ignoring errors**
-
-.. code-block:: python
-
-   # ✗ Don't ignore
-   try:
-       process_data()
-   except:
-       pass
-
-   # ✓ Handle properly
-   try:
-       process_data()
-   except ValueError as e:
-       logger.error(f"Processing failed: {e}")
-       raise
-
-❌ **Mistake: Large data in memory**
-
-.. code-block:: python
-
-   # ✗ Don't load everything
-   df = pd.read_csv("huge_file.csv")  # Crashes on large files
-
-   # ✓ Process in chunks
-   for chunk in pd.read_csv("huge_file.csv", chunksize=10000):
-       process_chunk(chunk)
-
-Performance Tips
------------------
-
-**Use Parquet for Large Files**
-
-.. code-block:: toml
-
-   # ✗ CSV is slow
-   format = "csv"
-
-   # ✓ Parquet is fast
-   format = "parquet"
-
-**Partition Your Data**
-
-.. code-block:: toml
-
-   # config/outputs.toml
-   [results]
-   filepath = "data/output/results"
-   format = "parquet"
-   partition_columns = ["date"]  # Stores by date folder
-
-**Run Nodes in Parallel**
-
-.. code-block:: toml
-
-   # config/global_config.toml
-   # Ducta automatically runs independent nodes in parallel
-   # Configure how many:
-   max_parallel_nodes = 8  # Default is 4 (range 1-128)
-
-**Use Date Ranges Wisely**
-
-.. code-block:: bash
-
-   # Process only what changed
-   ducta start --env prod --pipeline daily_etl \
-     --start-date 2024-01-15 \
-     --end-date 2024-01-15
-
-Operationalizing Pipelines
-----------------------------
-
-**Schedule with Cron (Linux/Mac)**
-
-.. code-block:: bash
-
-   # Run at 9 AM every weekday
-   0 9 * * 1-5 cd /home/user/project && ducta start --env prod --pipeline daily_etl
-
-**Schedule with Windows Task Scheduler**
-
-Create a batch file:
-
-.. code-block:: batch
-
-   REM run_pipeline.bat
-   cd C:\Users\user\project
-   ducta start --env prod --pipeline daily_etl
-
-Then schedule it in Task Scheduler.
-
-**Monitor Execution**
-
-Save logs and monitor them:
-
-.. code-block:: bash
-
-   # Run with logging
-   ducta start --env prod --pipeline my_pipeline \
-     >> logs/execution.log 2>&1
-
-   # Check for errors
-   grep ERROR logs/execution.log
-
-**Set Alerts**
-
-Get notified if pipeline fails:
-
-.. code-block:: bash
-
-   # Example with email
-   ducta start --env prod --pipeline my_pipeline || \
-     mail -s "Pipeline failed" admin@company.com
-
-Security Best Practices
-------------------------
-
-**Never Commit Secrets**
-
-.. code-block:: bash
-
-   # .gitignore
-   .env
-   logs/
-   data/
-   *.log
-
-**Use Principle of Least Privilege**
-
-Give users/services only the permissions they need:
-
-.. code-block:: bash
-
-   # Don't give admin access
-   # Only give read/write to specific paths and tables
-
-**Validate All Inputs**
-
-.. code-block:: python
-
-   # Validate file paths
-   import os
-   path = user_input
-   if not os.path.exists(path):
-       raise ValueError(f"File not found: {path}")
-
-**Rotate Credentials Regularly**
-
-Change passwords and API keys monthly.
-
-Conclusion
-----------
-
-Remember:
-
-✅ Keep things simple
-✅ Test everything
-✅ Handle errors gracefully
-✅ Never hardcode secrets
-✅ Document your work
-✅ Monitor in production
-✅ Learn from failures
-
-Next Steps
-----------
-
-* :doc:`tutorials/batch_etl` - Build a complete example
-* :doc:`configuration` - Deep dive into configuration
-
-Optimize Spark Configuration
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: toml
-
-   # config/global_config.toml
-   [spark_config]
-   "spark.sql.adaptive.enabled" = true
-   "spark.sql.adaptive.coalescePartitions.enabled" = true
-
-   # Optimize shuffle
-   "spark.sql.shuffle.partitions" = 200
-   "spark.sql.autoBroadcastJoinThreshold" = 10485760  # 10MB
-
-   # Memory tuning
-   "spark.memory.fraction" = 0.8
-   "spark.memory.storageFraction" = 0.3
-
-Partition Data Effectively
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: toml
-
-   # config/outputs.toml
-   [results]
-   partition_columns = ["year", "month", "day"]
-   # Creates: /data/year=2024/month=01/day=15/
-
-   # ✅ Good: 1000-10000 partitions
-   # ❌ Bad: Too many (>50000) or too few (<10)
-
-Development
------------
-
-Use Version Control
-~~~~~~~~~~~~~~~~~~~
-
-Track all code and configuration:
-
-.. code-block:: bash
-
-   git add config/ pipelines/ notebooks/
-   git commit -m "Update pipeline configuration"
-   git push
-
-Separate Environments
-~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: text
-
-   ├── config/
-   │   ├── base/     # Shared configuration
-   │   ├── dev/      # Development overrides
-   │   ├── staging/  # Staging overrides
-   │   └── prod/     # Production overrides
-
-Always Test in Dev First
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # 1. Test in dev
-   ducta start --env dev --pipeline new_pipeline --validate-only
-   ducta start --env dev --pipeline new_pipeline
-
-   # 2. Test in staging
-   ducta start --env staging --pipeline new_pipeline
-
-   # 3. Deploy to production
-   ducta start --env prod --pipeline new_pipeline
-
-Write Unit Tests
-~~~~~~~~~~~~~~~~
-
-``ContextLoader.load_from_paths`` takes a dict of explicit config file paths
-(not an environment name alone), and ``PipelineExecutor.run_pipeline``
-returns ``None`` on success / raises on failure — there is no
-``result.success`` or ``result.nodes_executed``. Assert behavior either by
-expecting no exception, or by inspecting the actual output your nodes wrote:
-
-.. code-block:: python
-
-   import pytest
-   from ducta import PipelineExecutor, ContextLoader
-
-   CONFIG_PATHS = {
-       "global_config_path": "config/global_config.yaml",
-       "pipelines_config_path": "config/pipelines.yaml",
-       "nodes_config_path": "config/nodes.yaml",
-       "input_config_path": "config/inputs.yaml",
-       "output_config_path": "config/outputs.yaml",
-   }
-
-   @pytest.fixture
-   def test_executor():
-       context = ContextLoader().load_from_paths(CONFIG_PATHS, env="test")
-       return PipelineExecutor(context)
-
-   def test_bronze_ingestion(test_executor):
-       # Raises on failure; reaching this line means the pipeline succeeded
-       test_executor.run_pipeline(
-           "bronze_ingestion", start_date="2024-01-01", end_date="2024-01-01"
-       )
-
-   def test_data_quality(test_executor):
-       with pytest.raises(Exception):
-           # e.g. a node with data_quality.fail_fast = true on bad input data
-           test_executor.run_pipeline(
-               "quality_checks", start_date="2024-01-01", end_date="2024-01-01"
-           )
-
-Use Linting and Formatting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: bash
-
-   # Install pre-commit hooks
-   pip install pre-commit
-   pre-commit install
-
-   # Format code
-   black src/
-   isort src/
-
-   # Lint code
-   flake8 src/
-   pylint src/
-
-Production
-----------
-
-Enable Monitoring
-~~~~~~~~~~~~~~~~~
-
-Ducta does not ship a built-in monitoring/alerting config block. Set the log
-level through ``global_config`` and wire metrics/log shipping with your own
-infrastructure (the ``monitoring`` extra installs ``prometheus-client``, but
-you instrument it yourself):
-
-.. code-block:: toml
-
-   # config/global_config.toml
-   log_level = "WARNING"
-
-.. code-block:: bash
-
-   # Ship logs to a file/syslog with standard shell redirection or your
-   # process manager (systemd, supervisord, etc.) — not a Ducta feature
-   ducta start --env prod --pipeline my_pipeline --log-file /var/log/ducta/pipeline.log
-
-Set Up Alerts
-~~~~~~~~~~~~~
-
-There is no built-in alerting system. Check the process exit code and notify
-externally, the same pattern shown earlier in this guide:
-
-.. code-block:: bash
-
-   ducta start --env prod --pipeline my_pipeline || \
-     mail -s "Pipeline failed" admin@company.com
-
-Configure Retry Policies
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Retries are configured per node with a simple integer count (0-10); Ducta
-applies exponential backoff internally:
-
-.. code-block:: toml
-
-   # config/nodes.toml
-   [extract]
-   module = "src.nodes.extract"
-   function = "run"
-   retry = 3
-
-   [transform]
-   module = "src.nodes.transform"
-   function = "run"
-   retry = 3
-
-   [load]
-   module = "src.nodes.load"
-   function = "run"
-   retry = 3
-
-Set Resource Limits
-~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: toml
-
-   # config/global_config.toml
-   max_parallel_nodes = 16        # 1-128, default 4
-   execution_timeout_seconds = 7200  # 60-86400, default 3600
-
-Logging
--------
-
-Structured Logging
-~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   import logging
-   import json
-
-   logger = logging.getLogger(__name__)
-
-   # Structured log entry
-   logger.info(json.dumps({
-       "event": "pipeline_started",
-       "pipeline": "sales_etl",
-       "environment": "production",
-       "start_date": "2024-01-01",
-       "end_date": "2024-01-31"
-   }))
-
-Log Levels
-~~~~~~~~~~
-
-Use appropriate log levels:
-
-.. code-block:: python
-
-   # DEBUG: Detailed diagnostic information
-   logger.debug(f"Processing record: {record_id}")
-
-   # INFO: General informational messages
-   logger.info(f"Pipeline started: {pipeline_name}")
-
-   # WARNING: Warning messages
-   logger.warning(f"Skipping invalid record: {record_id}")
-
-   # ERROR: Error messages
-   logger.error(f"Failed to load data: {error}")
-
-   # CRITICAL: Critical errors
-   logger.critical(f"Database connection lost")
-
-Include Context
-~~~~~~~~~~~~~~~
-
-``run_pipeline`` does not return a results object with execution metrics —
-batch/ML pipelines return ``None`` on success and raise on failure. Log
-context from inside your own node functions instead:
-
-.. code-block:: python
-
-   import time
-
-   def load_data(df):
-       """Load with contextual logging."""
-       start = time.time()
-       df.to_parquet("output.parquet")
-       logger.info(
-           f"Node completed: load_data",
-           extra={
-               "records_processed": len(df),
-               "execution_time": time.time() - start,
-           }
-       )
-
-Error Handling
+How to lay out a Ducta project, write nodes that are easy to test, and run
+pipelines in production safely. Every configuration key mentioned here is
+described in :doc:`configuration`.
+
+Project layout
 --------------
 
-Graceful Degradation
-~~~~~~~~~~~~~~~~~~~~
+.. code-block:: text
 
-``PipelineExecutor.run_pipeline`` returns ``None`` for batch/ML pipelines on
-success and raises an exception on failure — there is no ``result.success``
-flag to check. Catch the exception instead:
+   sales/
+   ├── ducta.yaml              # settings and per-environment differences
+   ├── catalog.yaml            # every dataset, once
+   ├── pipelines/
+   │   ├── __init__.py
+   │   ├── daily.yaml          # one file per pipeline
+   │   ├── daily.py            # its transformations
+   │   └── quality_checks.py   # custom checks, if any
+   ├── tests/
+   │   └── test_daily.py
+   ├── .env                    # machine-local credentials — never committed
+   └── .gitignore              # .env, data/, logs/
 
-.. code-block:: python
+- Keep a pipeline's YAML and its Python side by side: ``run: pipelines.daily:clean``
+  points at ``pipelines/daily.py``.
+- Commit ``.ducta/schema/`` so every editor completes and checks the YAML.
+- Keep data out of the repository: ``data/`` locally, cloud paths in the
+  ``prod`` overrides.
 
-   from ducta import PipelineExecutor, ContextLoader
+Datasets
+--------
 
-   context = ContextLoader().load_from_paths(config_paths, env="prod")
-   executor = PipelineExecutor(context)
+**Name datasets ``layer.domain.table``** — ``silver.sales.orders``. The name
+says what the dataset is and, without a ``path``, where it lives in each
+environment (``<paths.output>/<env>/silver/sales/orders``), so environments can
+never overwrite each other's data.
 
-   try:
-       executor.run_pipeline("pipeline", start_date="2024-01-01", end_date="2024-01-01")
-   except Exception as primary_error:
-       logger.warning(f"Primary pipeline failed: {primary_error}, trying backup")
-       try:
-           executor.run_pipeline("backup_pipeline", start_date="2024-01-01", end_date="2024-01-01")
-       except Exception as backup_error:
-           logger.error(f"Both pipelines failed: {backup_error}")
-           # Notify ops team
-           send_alert("Pipeline failure", str(backup_error))
+**Declare every dataset once.** Readers and writers share one catalog entry:
+changing a format or a location is one edit, and the reader can never disagree
+with the writer.
 
-Detailed Error Messages
-~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. code-block:: python
-
-   import traceback
-
-   try:
-       executor.run_pipeline("pipeline", start_date="2024-01-01", end_date="2024-01-01")
-   except Exception as e:
-       logger.error(
-           f"Pipeline failed: {e}\n"
-           f"Traceback: {traceback.format_exc()}"
-       )
-       raise
-
-Recovery Mechanisms
-~~~~~~~~~~~~~~~~~~~
-
-There is no generic pipeline-level checkpointing parameter. For
-**streaming** pipelines, set ``checkpoint_location`` on the node's streaming
-config so the query can resume from its last committed offset on restart:
+**Put contracts on data you do not control.** ``checks`` on a catalog entry run
+before every node that reads it:
 
 .. code-block:: yaml
 
-   # config/nodes.yaml
-   stream_ingest:
-     streaming:
-       checkpoint_location: "/tmp/checkpoints/stream_ingest"
+   # catalog.yaml
+   orders_raw:
+     format: csv
+     path: ${paths.input}/orders.csv
+     options: {header: true}
+     checks:
+       checks:
+         empty_dataset: true
+         schema: {expected_columns: [order_id, amount, order_date]}
 
-For batch pipelines, make nodes idempotent (e.g. ``write_mode: overwrite``
-partitioned by date) so a re-run for the same ``--start-date``/``--end-date``
-safely replaces partial output.
+**Make large inputs incremental.** ``incremental: {column: …}`` reads — and
+fingerprints — only the run's ``--start-date``/``--end-date`` window, so a daily
+run costs a day of data, not the whole table.
 
-Data Quality
-------------
+**Make re-runs safe.** Writing the same window twice must not duplicate it:
+use ``write.mode: merge`` with ``keys`` for Delta tables, or
+``overwrite_strategy: replaceWhere`` to replace exactly the window a run
+produces. Plain ``append`` duplicates on every retry.
 
-Ducta's quality framework is configured per-node (``sanity_checks`` for
-pre-execution structural checks, ``data_quality`` for post-execution
-statistical checks) — there is no standalone ``DataQualityChecker`` class or
-``[[validation.schema]]``/``data_contract`` TOML block. See
-:doc:`quality` for the full reference.
+Nodes
+-----
 
-Validate Schemas (Sanity Phase)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Pre-execution structural checks on node inputs; with ``fail_fast = true`` the
-node function is never called if a check fails:
-
-.. code-block:: toml
-
-   # config/nodes.toml
-   [load_data.sanity_checks]
-   enabled = true
-   fail_fast = true
-   checks.schema = { expected_columns = ["customer_id", "amount"] }
-   checks.empty_dataset = {}
-
-Check Data Quality (Validation Phase)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Post-execution statistical checks on node outputs:
-
-.. code-block:: toml
-
-   # config/nodes.toml
-   [transform_data.data_quality]
-   enabled = true
-   checks.null_rate = { columns = ["customer_id", "amount"], threshold = 0.01 }
-   checks.duplicates = { columns = ["transaction_id"] }
-   checks.range = { column = "amount", min = 0, max = 1000000 }
-
-Quality Gates
-~~~~~~~~~~~~~
-
-Use weighted check scoring to automatically block a pipeline when data
-quality drops below a threshold — see :doc:`quality` for the
-``QualityGateEvaluator`` configuration and the full list of 16 built-in
-checks (schema, null rate, duplicates, drift detection, schema drift, and
-more).
-
-Documentation
--------------
-
-Document Pipelines
-~~~~~~~~~~~~~~~~~~
-
-.. code-block:: toml
-
-   # config/pipelines.toml
-   [customer_360]
-   description = """
-   Creates a 360-degree view of customers by combining:
-   - Transaction data from sales system
-   - Profile data from CRM
-   - Interaction data from support tickets
-   """
-   nodes = ["merge_sales", "merge_crm", "merge_support"]
-
-   # Ownership/SLA/schedule are not interpreted by Ducta (no built-in
-   # scheduler or alerting). Track them in your own governance doc/ticket
-   # system, and trigger runs with an external scheduler such as cron
-   # or Airflow (see "Operationalizing Pipelines" above).
-
-Document Nodes
-~~~~~~~~~~~~~~
+**Write plain functions.** A node receives DataFrames and returns one; Ducta
+reads and writes the data. No Ducta imports are needed, which keeps the code
+testable and portable:
 
 .. code-block:: python
 
-   def transform_sales_data(df):
-       """
-       Transform raw sales data for analysis.
+   # pipelines/daily.py
+   from pyspark.sql import DataFrame, functions as F
 
-       Args:
-           df: Raw sales DataFrame with columns:
-               - transaction_id (str)
-               - customer_id (str)
-               - amount (decimal)
-               - date (date)
 
-       Returns:
-           Transformed DataFrame with additional columns:
-               - year (int)
-               - month (int)
-               - quarter (int)
+   def clean(orders: DataFrame) -> DataFrame:
+       """Drop duplicate and non-positive orders."""
+       return orders.dropDuplicates(["order_id"]).filter(F.col("amount") > 0)
 
-       Raises:
-           ValueError: If required columns are missing
-       """
-       # Implementation
-       pass
+**Map inputs by name.** ``inputs: {orders: orders_raw}`` passes the dataset to
+the parameter ``orders``. Reordering the inputs can then never swap two
+DataFrames silently, as positional lists can.
 
-Maintain Changelog
-~~~~~~~~~~~~~~~~~~
+**One job per node.** Small nodes give smaller failures, reusable outputs, and
+checks placed exactly where a guarantee is made.
 
-.. code-block:: text
+**Fail loudly.** Raise with a message that says what was wrong; never swallow
+an exception to "keep going" — a failed node is recorded, retried if
+configured, and reported; a silently wrong output is not.
 
-   ## [1.2.0] - 2024-01-15
+Quality
+-------
 
-   ### Added
-   - New customer_360 pipeline
-   - Data quality checks for bronze layer
+- Put **contracts** on inputs, **quality** checks on outputs, and a **gate** on
+  every node whose output others depend on.
+- Choose ``on_fail`` on purpose: ``skip_downstream`` (default) protects
+  dependants while the rest of the pipeline runs; ``stop_all`` for outputs that
+  must never be partial.
+- Reuse check sets with **profiles** in ``settings.quality.profiles``.
+- Start a contract from the data itself: ``ducta profile --input sample.parquet``
+  proposes the checks it already satisfies.
 
-   ### Changed
-   - Improved performance of silver transformation
-   - Updated Spark configuration for production
+See :doc:`quality`.
 
-   ### Fixed
-   - Fixed null handling in gold aggregation
+Environments
+------------
 
-Checklist
----------
+Keep ``environments`` blocks to what really differs — paths, parallelism,
+strictness:
 
-Before Production Deployment
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+.. code-block:: yaml
 
-- [ ] All tests passing
-- [ ] Configuration validated
-- [ ] Documentation updated
-- [ ] Monitoring configured
-- [ ] Alerts set up
-- [ ] Resource limits defined
-- [ ] Retry policies configured
-- [ ] Data quality checks in place
-- [ ] Security review completed
-- [ ] Performance tested
-- [ ] Backup strategy defined
-- [ ] Rollback plan documented
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings: {max_parallel_nodes: 4, evidence_level: record}
+   environments:
+     dev:
+       settings: {max_parallel_nodes: 1, log_level: DEBUG}
+     prod:
+       paths: {input: s3://lake/raw, output: s3://lake/curated}
+       settings:
+         max_parallel_nodes: 16
+         evidence_level: signed
+         run_lock: {backend: storage, on_conflict: fail}
 
-Next Steps
+- ``sandbox_<name>`` gives each developer their own data and checkpoints,
+  falling back to ``sandbox``'s settings.
+- ``staging`` does not inherit from ``prod``: if staging must mirror production,
+  repeat the keys or share them with a YAML anchor.
+- Validate every environment in CI: ``ducta config validate --env prod``.
+
+Testing
+-------
+
+Nodes are plain functions, so test them with a local Spark session and small
+DataFrames:
+
+.. code-block:: python
+
+   # tests/test_daily.py
+   import pytest
+   from pyspark.sql import SparkSession
+
+   from pipelines.daily import clean
+
+
+   @pytest.fixture(scope="session")
+   def spark():
+       return SparkSession.builder.master("local[1]").getOrCreate()
+
+
+   def test_clean_drops_duplicates_and_refunds(spark):
+       orders = spark.createDataFrame(
+           [(1, 10.0), (1, 10.0), (2, -5.0)], ["order_id", "amount"]
+       )
+       assert [r.order_id for r in clean(orders).collect()] == [1]
+
+Then, in CI, check the configuration and the wiring without running anything:
+
+.. code-block:: bash
+
+   ducta config validate --env dev
+   ducta config validate --env prod
+   ducta start --env dev --pipeline daily --validate-only
+
+Running in production
+---------------------
+
+**Let the orchestrator read the exit code.** ``ducta start`` exits ``0`` on
+success, ``2`` for configuration problems, ``4`` when the pipeline fails and
+``7`` when another run holds the lock on an output — nothing ran, retry later.
+See :doc:`cli_usage`.
+
+**Keep the run lock on.** ``settings.run_lock`` (on by default, ``local``
+backend) stops two runs — an overlapping retry, two people — from writing the
+same output at once. With runs starting on more than one host, use
+``backend: storage`` so the lock lives next to the data.
+
+**Set time limits.** ``node_timeout_seconds`` and ``execution_timeout_seconds``
+(or ``timeout_seconds`` on a node) cancel the node's Spark jobs and stop it
+writing. Pure-Python work that never calls Spark can only be stopped in its own
+process: set ``run_in_process: true`` on such nodes.
+
+**Retry what is transient.** ``retry: 2`` on nodes that talk to flaky systems
+(a database, an API); not on nodes whose failure means bad data.
+
+**Keep the evidence.** With ``evidence_level: required`` a run without its
+certificate fails; ``signed`` adds an HMAC signature (``DUCTA_CERTIFICATE_KEY``).
+``ducta certify verify --run-id …`` proves later what ran, on which data and
+configuration, and with what quality outcome.
+
+**Process windows, not everything.** Schedule daily runs with
+``--start-date``/``--end-date`` of the day; backfill by running the same
+command over past windows — with idempotent writes the result is the same
+however many times a window runs.
+
+.. code-block:: bash
+
+   # A daily job in any scheduler
+   ducta start --env prod --pipeline daily \
+     --start-date "$(date -d yesterday +%F)" --end-date "$(date -d yesterday +%F)"
+
+See :doc:`tutorials/airflow_integration` for Airflow.
+
+Security
+--------
+
+- **Credentials never go in YAML.** ``${VAR}`` refuses names containing
+  ``PASSWORD``, ``SECRET``, ``TOKEN`` or ``KEY``; database connections read
+  ``<SOURCE>_USER``/``<SOURCE>_PASSWORD`` from the environment or ``.env``,
+  cloud storage uses the platform's credentials.
+- Keep ``settings.strict_module_import`` on (the default) so only your
+  project's modules can be named in ``run:``.
+- Exposing the web app beyond ``localhost``: work through the
+  :ref:`secure startup checklist <secure-startup-checklist>`.
+
+Checklist before the first production run
+-----------------------------------------
+
+- ☐ ``ducta config validate --env prod`` passes in CI.
+- ☐ Unit tests cover every node function.
+- ☐ Inputs you do not own have contracts; shared outputs have gates.
+- ☐ Large inputs are ``incremental``; outputs re-runnable (``merge`` /
+  ``replaceWhere``).
+- ☐ ``run_lock`` backend fits where runs start; time limits are set.
+- ☐ ``evidence_level`` is ``required`` or ``signed`` in prod.
+- ☐ No credentials in the repository; ``.env`` is ignored.
+- ☐ The scheduler alerts on non-zero exit codes and retries on ``7``.
+
+Next steps
 ----------
 
-* :doc:`getting_started`
-* :doc:`installation`
-* :doc:`configuration`
+- :doc:`tutorials/batch_etl` — a complete pipeline
+- :doc:`quality` — checks, gates and contracts
+- :doc:`tutorials/certificates` — what a Run Certificate proves

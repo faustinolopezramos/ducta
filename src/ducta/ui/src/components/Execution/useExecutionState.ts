@@ -87,20 +87,28 @@ export function useExecutionState(
   const isDone = execution?.status === "success" || execution?.status === "failed" || execution?.status === "cancelled" || execution?.status === "skipped";
   const isFailed = execution?.status === "failed";
 
+  // Parents often pass inline callbacks. Reading them through a ref keeps the
+  // effects below keyed on the values they react to, without going stale and
+  // without re-firing (or looping) every time the parent re-renders.
+  const callbacksRef = useRef({ onExecutionStatesChange, onStatusChange });
   useEffect(() => {
-    if (onExecutionStatesChange) onExecutionStatesChange(executionStates);
+    callbacksRef.current = { onExecutionStatesChange, onStatusChange };
+  });
+
+  useEffect(() => {
+    callbacksRef.current.onExecutionStatesChange?.(executionStates);
   }, [executionStates]);
 
   useEffect(() => {
-    if (onStatusChange) onStatusChange(execution?.status ?? null);
+    callbacksRef.current.onStatusChange?.(execution?.status ?? null);
   }, [execution?.status]);
 
   useEffect(() => {
     if (!activeId) {
       setExecutionStates({});
-      if (onExecutionStatesChange) onExecutionStatesChange({});
+      callbacksRef.current.onExecutionStatesChange?.({});
     }
-  }, [activeId]);
+  }, [activeId, setExecutionStates]);
 
   useEffect(() => {
     if (onActiveIdChange) onActiveIdChange(activeId);

@@ -101,7 +101,7 @@ async def update_config(
     _validate_env(env)
     try:
         return config_svc.save_config(
-            name, body.content, env, expected_commit_sha=body.expected_commit_sha
+            name, body.content, env, expected_sha=body.expected_commit_sha
         )
     except ConfigFileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)

@@ -130,7 +130,6 @@ _PUBLIC_API: dict[str, str] = {
     # Repositories
     "ConfigRepository": "ducta.api.repositories",
     "NodeRepository": "ducta.api.repositories",
-    "PipelineRepository": "ducta.api.repositories",
     "ProjectRepository": "ducta.api.repositories",
     # Routes
     "register_routes": "ducta.api.routes",
@@ -213,7 +212,6 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
     from ducta.api.repositories import (
         ConfigRepository,
         NodeRepository,
-        PipelineRepository,
         ProjectRepository,
     )
     from ducta.api.routes import register_routes
@@ -316,7 +314,6 @@ __all__ = [
     "User",
     "ConfigRepository",
     "NodeRepository",
-    "PipelineRepository",
     "ProjectRepository",
     "register_routes",
     "ConfigService",

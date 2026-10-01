@@ -16,295 +16,99 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
+
+Locating the project a CLI command works on.
+
+A project is a directory holding ``ducta.yaml`` with ``version: 2`` (at its
+root or under ``config/``). Commands find the nearest one from ``--base-path``
+(default: the current directory) upwards, the way git finds a repository.
 """
 
-import json
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional
 
 from loguru import logger  # type: ignore
 
-from ducta.console.core import (
-    ConfigCache,
-    ConfigFormat,
-    ConfigurationError,
-    SecurityError,
-    SecurityValidator,
-    get_base_environment,
-    is_allowed_environment,
-    is_sandbox_environment,
-    normalize_environment,
+from ducta.console.core import ConfigurationError, SecurityError, SecurityValidator
+from ducta.setting.project_loader import PROJECT_FILE, find_project_root
+
+#: Files that mark a project still in configuration format 1.
+_FORMAT1_MARKERS = (
+    "environment.yaml",
+    "environment.yml",
+    "environment.toml",
+    "environment.json",
+    "settings.json",
+    "config/global_config.yaml",
+    "config/global_config.yml",
+    "config/global_config.toml",
+    "config/global_config.json",
+)
+
+FORMAT1_MESSAGE = (
+    "{root} uses configuration format 1 (environment.yaml + config/*), which Ducta no "
+    "longer reads. Convert it — the result is verified equivalent in every environment "
+    "before anything is written:\n    ducta config migrate --path {root} --write"
 )
 
 
-def load_config_file(file_path: str) -> Dict[str, Any]:
-    """Load configuration from file, auto-detecting format by extension.
-
-    Supports .yaml, .yml (YAML), .json (JSON), .toml (TOML).
-    """
-    if not Path(file_path).exists():
-        raise ConfigurationError(f"File not found: {file_path}")
-
-    suffix = Path(file_path).suffix.lower()
-
-    if suffix in (".yaml", ".yml"):
-        try:
-            import yaml  # type: ignore
-        except ImportError:
-            raise ConfigurationError("PyYAML not installed. Run: pip install PyYAML")
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-                return config or {}
-        except Exception as e:
-            raise ConfigurationError(f"Invalid YAML in {file_path}: {e}")
-
-    elif suffix == ".json":
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError as e:
-            raise ConfigurationError(f"Invalid JSON in {file_path}: {e}")
-
-    elif suffix == ".toml":
-        try:
-            import tomllib  # type: ignore  # Python >= 3.11
-        except ImportError:
-            try:
-                import tomli as tomllib  # type: ignore  # Python < 3.11
-            except ImportError:
-                raise ConfigurationError(
-                    "TOML support requires 'tomli' for Python < 3.11. "
-                    "Install with: pip install tomli"
-                )
-        try:
-            with open(file_path, "rb") as f:
-                return tomllib.load(f) or {}
-        except Exception as e:
-            raise ConfigurationError(f"Invalid TOML in {file_path}: {e}")
-
-    else:
-        raise ConfigurationError(f"Unsupported format: {suffix}. Use .yaml, .yml, .json, or .toml")
+def format1_markers(directory: Path) -> List[Path]:
+    """Format-1 files present in ``directory`` (empty for a format-2 project)."""
+    found = [directory / m for m in _FORMAT1_MARKERS if (directory / m).is_file()]
+    manifest = directory / PROJECT_FILE
+    if manifest.is_file() and find_project_root(directory) is None:
+        found.append(manifest)  # a layered manifest or bundle named ducta.yaml
+    return found
 
 
-class ConfigDiscovery:
-    CONFIG_PATTERNS = [
-        "environment.yml",
-        "environment.yaml",
-        "environment.toml",
-        "environment.json",
-        "settings.yaml",
-        "settings.yml",
-        "settings.toml",
-        "settings.json",
-        "settings_yaml.json",
-        "settings_json.json",
-        "settings_toml.json",
-        "config.json",
-    ]
-    _SCORE_LAYER_MATCH = 30
-    _SCORE_USE_CASE_MATCH = 40
-    _SCORE_CONFIG_TYPE_MATCH = 20
-    _SCORE_DEPTH_MAX_BONUS = 10
-
-    def __init__(self, base_path: Optional[str] = None):
-        self.base_path = Path(base_path) if base_path else Path.cwd()
-        self.discovered_configs: List[Tuple[Path, str]] = []
-
-    def discover(self, max_depth: int = 3) -> List[Tuple[Path, str]]:
-        cache_key = f"{self.base_path}:{max_depth}"
-        cached = ConfigCache.get(cache_key)
-        if cached:
-            self.discovered_configs = cached
-            return cached
-        self.discovered_configs = []
-        try:
-            self._search_recursive(self.base_path, 0, max_depth)
-        except Exception as e:
-            logger.warning("Error during config discovery: {}", e)
-        ConfigCache.set(cache_key, self.discovered_configs)
-        return self.discovered_configs
-
-    def _search_recursive(self, path: Path, depth: int, max_depth: int) -> None:
-        if depth > max_depth or not path.is_dir():
-            return
-        try:
-            for pattern in self.CONFIG_PATTERNS:
-                if (path / pattern).is_file():
-                    self.discovered_configs.append((path, pattern))
-                    break
-            for item in path.iterdir():
-                if item.is_dir() and not item.name.startswith("."):
-                    self._search_recursive(item, depth + 1, max_depth)
-        except OSError:
-            pass
-
-    def _ensure_discovered(self) -> bool:
-        """Run discovery if it hasn't happened yet; return whether any
-        configuration was found."""
-        if not self.discovered_configs:
-            self.discover()
-        return bool(self.discovered_configs)
-
-    def find_best_match(
-        self,
-        layer_name: Optional[str] = None,
-        use_case: Optional[str] = None,
-        config_type: Optional[str] = None,
-    ) -> Optional[Tuple[Path, str]]:
-        if not self._ensure_discovered():
-            return None
-        scored = []
-        for config_dir, config_file in self.discovered_configs:
-            score = 0
-            if layer_name and layer_name.lower() in config_dir.as_posix().lower():
-                score += self._SCORE_LAYER_MATCH
-            if use_case and use_case.lower() in config_dir.as_posix().lower():
-                score += self._SCORE_USE_CASE_MATCH
-            if config_type:
-                config_type_lower = config_type.lower().lstrip(".")
-                if config_file.endswith(f".{config_type_lower}"):
-                    score += self._SCORE_CONFIG_TYPE_MATCH
-                elif config_file == f"settings_{config_type_lower}.json":
-                    score += self._SCORE_CONFIG_TYPE_MATCH
-            score += max(0, self._SCORE_DEPTH_MAX_BONUS - len(config_dir.parts))
-            scored.append((score, config_dir, config_file))
-        scored.sort(key=lambda x: x[0], reverse=True)
-        best = scored[0]
-        return (best[1], best[2])
-
-    def list_all(self) -> None:
-        if not self._ensure_discovered():
-            logger.warning("No configurations found")
-            return
-        for i, (config_dir, config_file) in enumerate(self.discovered_configs, 1):
-            logger.info("  {}. {}", i, config_dir / config_file)
-
-    def select_interactive(self) -> Optional[Tuple[Path, str]]:
-        if not self._ensure_discovered():
-            return None
-        if len(self.discovered_configs) == 1:
-            return self.discovered_configs[0]
-        self.list_all()
-        try:
-            while True:
-                choice = input(f"Select configuration (1-{len(self.discovered_configs)}): ").strip()
-                if choice.isdigit():
-                    index = int(choice) - 1
-                    if 0 <= index < len(self.discovered_configs):
-                        return self.discovered_configs[index]
-                print("Invalid selection. Try again.")
-        except (KeyboardInterrupt, EOFError):
-            return None
+def find_nearest_project(start: Path) -> Optional[Path]:
+    """The format-2 project at ``start`` or in its nearest ancestor."""
+    start = start.resolve()
+    for directory in (start, *start.parents):
+        root = find_project_root(directory)
+        if root is not None:
+            return root
+    return None
 
 
 class ConfigManager:
-    CONFIG_FILES = {
-        ConfigFormat.YAML: "environment.yaml",
-        ConfigFormat.JSON: "settings.json",
-    }
+    """The project a command operates on, and the working directory it runs in."""
 
-    def __init__(
-        self,
-        base_path: Optional[str] = None,
-        layer_name: Optional[str] = None,
-        use_case: Optional[str] = None,
-        config_type: Optional[str] = None,
-        interactive: bool = False,
-        require_config: bool = True,
-    ):
+    def __init__(self, base_path: Optional[str] = None, require_config: bool = True) -> None:
         self.original_cwd = Path.cwd()
         self.base_path = Path(base_path) if base_path else Path.cwd()
-        self.discovery = ConfigDiscovery(str(self.base_path))
-        self.active_config_dir: Optional[Path] = None
-        self.active_config_file: Optional[str] = None
-        self.active_format: Optional[ConfigFormat] = None
-        # When False, a missing canonical root is tolerated (active_* stay None)
-        # so callers can fall back to flexible config-form resolution instead of
-        # erroring. Defaults to True to preserve strict behavior for all other
-        # call sites.
         self.require_config = require_config
-        self._initialize_config(layer_name, use_case, config_type, interactive)
-
-    def _initialize_config(self, layer_name, use_case, config_type, interactive) -> None:
-        try:
-            self._discover_config(layer_name, use_case, config_type, interactive)
-        except ConfigurationError:
-            try:
-                self._fallback_config_detection()
-            except ConfigurationError:
-                if self.require_config:
-                    raise
-                logger.debug(
-                    "No canonical config root found under {}; deferring to "
-                    "flexible config-form resolution",
-                    self.base_path,
+        self.project_root: Optional[Path] = find_nearest_project(self.base_path)
+        if self.project_root is None:
+            legacy = format1_markers(self.base_path.resolve())
+            if legacy:
+                raise ConfigurationError(FORMAT1_MESSAGE.format(root=self.base_path.resolve()))
+            if require_config:
+                raise ConfigurationError(
+                    f"No Ducta project found in {self.base_path.resolve()} or above it "
+                    f"(looked for {PROJECT_FILE} with `version: 2`). Create one with "
+                    "`ducta template`."
                 )
-
-    def _discover_config(self, layer_name, use_case, config_type, interactive) -> None:
-        config_location = (
-            self.discovery.select_interactive()
-            if interactive
-            else self.discovery.find_best_match(layer_name, use_case, config_type)
-        )
-        if not config_location:
-            discovered = self.discovery.discover()
-            if discovered:
-                config_location = discovered[0]
-        if not config_location:
-            raise ConfigurationError("No configuration files found")
-        self.active_config_dir, self.active_config_file = config_location
-        self.active_config_dir = self.active_config_dir.resolve()
-        self._detect_format_from_filename(self.active_config_file)
-
-    def _fallback_config_detection(self) -> None:
-        available = [
-            (fmt, fn) for fmt, fn in self.CONFIG_FILES.items() if (self.base_path / fn).exists()
-        ]
-        if not available:
-            raise ConfigurationError(
-                f"No config found. Expected one of: {list(self.CONFIG_FILES.values())}"
-            )
-        if len(available) > 1:
-            raise ConfigurationError(f"Multiple configs found: {[f[1] for f in available]}")
-        self.active_format, self.active_config_file = available[0]
-        self.active_config_dir = self.base_path
-
-    def _detect_format_from_filename(self, filename: str) -> None:
-        _map = {
-            "yml": ConfigFormat.YAML,
-            "yaml": ConfigFormat.YAML,
-            "json": ConfigFormat.JSON,
-            "toml": ConfigFormat.TOML,
-        }
-        suffix = filename.lower().rsplit(".", 1)[-1]
-        self.active_format = _map.get(suffix, ConfigFormat.YAML)
-
-    def get_active_format(self) -> ConfigFormat:
-        if not self.active_format:
-            raise ConfigurationError("No active configuration format")
-        return self.active_format
+            logger.debug("No project found under {}", self.base_path)
 
     def get_config_file_path(self) -> str:
-        if not self.active_config_dir or not self.active_config_file:
-            raise ConfigurationError("No active configuration file")
-        return str((self.active_config_dir / self.active_config_file).resolve())
+        if self.project_root is None:
+            raise ConfigurationError("No active project")
+        return str((self.project_root / PROJECT_FILE).resolve())
 
     def get_config_directory(self) -> Path:
-        if not self.active_config_dir:
+        if self.project_root is None:
             if not self.require_config:
                 return self.base_path
-            raise ConfigurationError("No active configuration directory")
-        return self.active_config_dir
-
-    def load_config(self) -> Dict[str, Any]:
-        return load_config_file(self.get_config_file_path())
+            raise ConfigurationError("No active project")
+        return self.project_root
 
     def change_to_config_directory(self) -> None:
-        if self.active_config_dir and self.active_config_dir != self.original_cwd:
+        """Run from the project root: relative data paths and module imports resolve there."""
+        if self.project_root and self.project_root != self.original_cwd:
             try:
-                os.chdir(SecurityValidator.validate_path(self.base_path, self.active_config_dir))
+                os.chdir(SecurityValidator.validate_path(self.project_root, self.project_root))
             except SecurityError as e:
                 raise ConfigurationError(f"Failed to change directory: {e}")
 
@@ -313,130 +117,3 @@ class ConfigManager:
             os.chdir(self.original_cwd)
         except OSError:
             pass
-
-    @classmethod
-    def from_layer_config(cls, layer_context: Dict[str, str]) -> "ConfigManager":
-        """Create ConfigManager from layered project configuration."""
-        instance = cls.__new__(cls)
-        instance.original_cwd = Path.cwd()
-        instance.base_path = Path(layer_context.get("layer_path", "."))
-
-        config_dir = Path(layer_context.get("global_config", ".")).parent
-        instance.active_config_dir = config_dir.resolve()
-        instance.active_config_file = Path(layer_context.get("global_config", "global.yaml")).name
-
-        instance.active_format = None
-        instance._detect_format_from_filename(instance.active_config_file)
-
-        instance.discovery = ConfigDiscovery(str(instance.base_path))
-
-        logger.debug(f"Initialized ConfigManager from layer config: {config_dir}")
-        return instance
-
-
-class AppConfigManager:
-    """Manages application-level configuration settings."""
-
-    def __init__(self, config_file_path: str):
-        self.config_file_path = config_file_path
-        self.settings = self._load_settings()
-        settings_base_path = self.settings.get("base_path")
-        if settings_base_path:
-            self.base_path = Path(settings_base_path)
-        else:
-            self.base_path = Path(config_file_path).parent.resolve()
-
-    def _load_settings(self) -> Dict[str, Any]:
-        config_path = Path(self.config_file_path)
-        if not config_path.exists():
-            raise ConfigurationError(f"Settings file not found: {self.config_file_path}")
-        settings = load_config_file(self.config_file_path)
-        if not isinstance(settings.get("env_config"), dict):
-            raise ConfigurationError("Missing or invalid 'env_config' section")
-        return settings
-
-    def get_env_config(self, env: str) -> Dict[str, str]:
-        norm_env = self._normalize_env(env)
-        env_configs = self.settings["env_config"]
-        resolved_env = self._resolve_env_fallback(norm_env, env_configs)
-        merged = self._merge_base_and_env(env_configs, resolved_env)
-        result = self._validate_and_build_paths(merged)
-        logger.info("Loaded config for environment '{}'", env)
-        return result
-
-    def _normalize_env(self, env: str) -> str:
-        norm_env = normalize_environment(env)
-        available = list(self.settings.get("env_config", {}).keys())
-        if not norm_env:
-            raise ConfigurationError(
-                f"Environment '{env}' is invalid or empty. Available: {available}"
-            )
-        if not is_allowed_environment(norm_env):
-            raise ConfigurationError(
-                f"Environment '{env}' not found or not allowed. Available: {available}"
-            )
-        return norm_env
-
-    def _resolve_env_fallback(self, env: str, env_configs: Dict[str, Any]) -> str:
-        if env in env_configs:
-            return env
-        if is_sandbox_environment(env):
-            base_env = get_base_environment(env)
-            if base_env in env_configs:
-                return base_env
-        if "base" in env_configs:
-            return "base"
-        raise ConfigurationError(
-            f"Environment '{env}' not found. Available: {list(env_configs.keys())}"
-        )
-
-    def _merge_base_and_env(self, env_configs: Dict[str, Any], env: str) -> Dict[str, str]:
-        base = env_configs.get("base", {})
-        env_specific = env_configs.get(env, {})
-        merged = {**base, **env_specific}
-        base_gs = base.get("global_config_path")
-        env_gs = env_specific.get("global_config_path")
-        if env != "base" and base_gs and env_gs and base_gs != env_gs:
-            merged["base_global_config_path"] = base_gs
-
-        # Only global_config is deep-merged over base (see
-        # ContextLoader.load_from_paths); every other document the environment
-        # supplies *replaces* its base counterpart wholesale. That asymmetry is
-        # invisible in the config files, and the scaffolds ship a full copy of
-        # the catalog per environment — so adding a dataset to the base
-        # input.yaml silently does nothing for any env that has its own. Say
-        # which file actually wins.
-        if env != "base":
-            for key, label in (
-                ("input_config_path", "input"),
-                ("output_config_path", "output"),
-                ("nodes_config_path", "nodes"),
-                ("pipelines_config_path", "pipelines"),
-            ):
-                base_path_value = base.get(key)
-                env_path_value = env_specific.get(key)
-                if base_path_value and env_path_value and base_path_value != env_path_value:
-                    logger.info(
-                        "Environment '{}' supplies its own {} config: '{}' replaces "
-                        "'{}' entirely (only global_config is merged with base).",
-                        env,
-                        label,
-                        env_path_value,
-                        base_path_value,
-                    )
-        return merged
-
-    def _validate_and_build_paths(self, merged: Dict[str, str]) -> Dict[str, str]:
-        result: Dict[str, str] = {}
-        for key, path in merged.items():
-            if not path:
-                continue
-            full_path = self.base_path / path
-            try:
-                validated = SecurityValidator.validate_path(self.base_path, full_path)
-                result[key] = str(validated)
-                if not validated.exists():
-                    logger.warning("Config path missing: {}", validated)
-            except SecurityError as e:
-                logger.error("Skipping invalid config path '{}': {}", key, e)
-        return result

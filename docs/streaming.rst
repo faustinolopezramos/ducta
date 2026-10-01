@@ -1,211 +1,177 @@
 Streaming Engine
 ================
 
-Ducta's Streaming Module provides a high-level abstraction for building real-time data pipelines. Powered by Apache Spark Structured Streaming, it allows you to process infinite data streams with the same simplicity as batch pipelines.
+Ducta runs Spark Structured Streaming pipelines from the same project files as
+batch ones: a pipeline with ``type: streaming`` whose nodes are
+``kind: stream``. You declare the source, the sink, the trigger and the
+checkpoint; your Python is a transform function.
 
-Core Principles
----------------
+- **Sources**: Kafka, Kinesis, Delta (change data feed) and file streams on
+  local or cloud storage.
+- **Checkpoints** per node, reserved atomically so two queries can never share
+  one.
+- **Terminating triggers** turn a streaming pipeline into a self-contained
+  batch job for backfills and CI.
 
-*   **Declarative Streaming**: Define sources and sinks in TOML/YAML, logic in Python.
-*   **Checkpoint Management**: Automatic state tracking for fault-tolerant executions.
-*   **Native Connectors**: Built-in support for Kafka, Cloud Folders, and Delta Tables.
-*   **Operational Visibility**: Integrated health checks and query monitoring.
-
-Configuration
+A stream node
 -------------
 
-Trigger, output mode, watermark, and checkpoint location are configured **per streaming node**, under the node's ``streaming`` key (not in a global ``[streaming]`` table). Concurrency across pipelines is controlled by the ``max_concurrent_pipelines`` argument passed to ``StreamingPipelineManager`` in Python.
+.. code-block:: yaml
 
-.. tab-set::
+   # pipelines/events.yaml
+   type: streaming
+   requires_dates: false
+   nodes:
+     clean_events:
+       kind: stream
+       stream:
+         input:
+           format: kafka
+           options:
+             kafka.bootstrap.servers: broker:9092
+             subscribe: events
+         transform:
+           key: clean_events                 # a registered transform
+           module: pipelines.transforms      # imported so it can register itself
+           params: {min_amount: 0.0}
+         output:
+           format: delta
+           path: ${paths.output}/${env}/silver/events
+         streaming:
+           checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+           output_mode: append               # append | update | complete
+           trigger: {type: processing_time, interval: 10 seconds}
+           watermark: {column: event_time, delay: 10 minutes}
 
-   .. tab-item:: TOML
+.. list-table::
+   :widths: 26 74
+   :header-rows: 1
 
-      .. code-block:: toml
+   * - Key (under ``stream``)
+     - Meaning
+   * - ``input``
+     - The source: ``format`` (``kafka``, ``kinesis``, ``delta_stream``,
+       ``file_stream`` with ``file_format``), ``options`` passed to Spark, and
+       for file streams a ``schema``.
+   * - ``transform``
+     - The registered transform to apply: ``key``, optional ``module`` to
+       import first and ``params`` passed to it. Omit it to copy the stream
+       as-is.
+   * - ``output``
+     - The sink: ``format``, ``path`` and ``options``.
+   * - ``streaming``
+     - ``checkpoint_location``, ``output_mode``, ``trigger`` and
+       ``watermark``. Omitted keys default to a ``processing_time`` trigger
+       every 10 seconds and ``append``.
 
-         # config/nodes.toml — top-level key IS the node name (flat, no wrapper)
-         [my_stream_node.streaming]
-         output_mode = "append"
-         checkpoint_location = "/checkpoints/my_stream_node"
+Triggers: ``processing_time`` (with ``interval``), ``once``,
+``available_now`` and ``continuous``.
 
-         [my_stream_node.streaming.trigger]
-         type = "processing_time"            # processing_time, once, continuous, available_now
-         interval = "10 seconds"
-
-         [my_stream_node.streaming.watermark]
-         column = "event_time"
-         delay = "10 seconds"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         my_stream_node:
-           streaming:
-             output_mode: append
-             checkpoint_location: /checkpoints/my_stream_node
-             trigger:
-               type: processing_time
-               interval: "10 seconds"
-             watermark:
-               column: event_time
-               delay: "10 seconds"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "my_stream_node": {
-             "streaming": {
-               "output_mode": "append",
-               "checkpoint_location": "/checkpoints/my_stream_node",
-               "trigger": {
-                 "type": "processing_time",
-                 "interval": "10 seconds"
-               },
-               "watermark": {
-                 "column": "event_time",
-                 "delay": "10 seconds"
-               }
-             }
-           }
-         }
-
-Any key omitted in the node config falls back to Ducta's defaults (``processing_time`` trigger with a 10 second interval, ``append`` output mode). Concurrency limit and per-query health-check stall timeout are not read from configuration files; set ``max_concurrent_pipelines`` when constructing ``StreamingPipelineManager`` and pass ``timeout_seconds`` where health monitoring is configured in your own orchestration code.
+Node-level keys (``description``, ``after``, ``quality``, ``metadata``…) work
+as on any node. Stream nodes that depend on each other run in order: order them
+with ``after`` when one reads the other's output path.
 
 .. important::
-   **Isolate data and checkpoints per environment.** A streaming node's ``path``
-   (its inline ``input``/``output`` location) and ``checkpoint_location`` support
-   ``${input_path}``, ``${output_path}``, and ``${environment}`` interpolation,
-   same as the input/output catalog's ``filepath``::
+   **Keep data and checkpoints apart per environment.** Build ``path`` and
+   ``checkpoint_location`` from ``${paths.output}`` and ``${env}`` as above.
+   Two environments sharing a checkpoint share streaming state: a sandbox run
+   would corrupt dev's progress.
 
-      [my_stream_node.output]
-      path = "${output_path}/${environment}/bronze/my_stream_node"
+Transforms
+----------
 
-      [my_stream_node.streaming]
-      checkpoint_location = "${output_path}/${environment}/checkpoints/my_stream_node"
+A transform takes the streaming DataFrame and the node's ``params`` and returns
+a DataFrame. It is looked up by name in a registry, so only functions you
+register can run:
 
-   Without this, every ``--env`` (``dev``, ``sandbox``, ``prod``, ...) reads and
-   writes the **same** physical path and shares the **same** checkpoint —
-   a sandbox validation run would corrupt a dev run's streaming state. See
-   :ref:`project-layouts` and *Environments & Overrides* in
-   :doc:`configuration` for the full per-environment model.
+.. code-block:: python
 
-Terminating runs (backfills and testing)
------------------------------------------
+   # pipelines/transforms.py
+   from pyspark.sql import DataFrame, functions as F
 
-With a terminating trigger (``once`` or ``available_now``) the queries process
-whatever data is currently available and then stop on their own. Combined with
-``--mode sync`` the CLI blocks until they finish and then exits, which makes a
-streaming pipeline behave like a self-contained batch job — ideal for backfills,
-local runs, and CI:
+
+   def clean_events(df: DataFrame, params: dict) -> DataFrame:
+       return df.filter(F.col("amount") >= params.get("min_amount", 0)).withColumn(
+           "ingested_at", F.current_timestamp()
+       )
+
+
+   def register_transforms(registry) -> None:
+       registry.register("clean_events", clean_events)
+
+Ducta calls ``register_transforms(registry)`` of every module named in the
+transform's ``module``, in ``settings.streaming_transform_modules``, or passed
+with ``ducta stream run --transforms-module``.
+
+Running
+-------
 
 .. code-block:: bash
 
-   ducta stream run --config config/global_config.yaml -p ingest_stream --mode sync
+   ducta stream run --pipeline events --env dev              # start and return (async)
+   ducta stream run --pipeline events --env dev --mode sync  # wait for the queries
+   ducta stream status
+   ducta stream stop --execution-id <ID>
 
-The ``streaming_core`` starter template (``ducta template --template streaming_core``)
-is exactly this: a file-stream source with an ``available_now`` trigger that runs
-to completion out of the box, with a commented pointer for switching to Kafka.
+``ducta start --pipeline events`` runs a streaming pipeline too, and a
+``hybrid`` pipeline mixes batch and stream nodes.
 
-Managing Pipelines Programmatically
+Terminating runs (backfills and CI)
 -----------------------------------
 
-The ``StreamingPipelineManager`` is the primary orchestrator for real-time workflows.
+With a terminating trigger (``once`` or ``available_now``) the queries process
+whatever is available and stop. Combined with ``--mode sync`` the command
+returns when they finish — a streaming pipeline behaves like a batch job, which
+suits backfills, local runs and CI. Switch the trigger for one environment only:
 
-.. code-block:: python
+.. code-block:: yaml
 
-   from ducta.stream import StreamingPipelineManager
+   # ducta.yaml
+   version: 2
+   project: events
+   paths: {input: data, output: data}
+   environments:
+     sandbox:
+       pipelines.events.nodes.clean_events.stream.streaming.trigger:
+         type: available_now
 
-   # 1. Initialize manager
-   manager = StreamingPipelineManager(context)
+The ``streaming_basic`` template (``ducta template --template streaming_basic``)
+reads a file stream, applies a registered transform and writes Parquet, with
+per-node checkpoints; it runs out of the box on local files.
 
-   # 2. Register your business logic
-   def my_transform(df, params):
-       return df.withColumn("processed", lit(True))
-
-   manager.query_manager.transformation_registry.register("enrich", my_transform)
-
-   # 3. Start a pipeline defined in config
-   exec_id = manager.start_pipeline("realtime_ingestion", pipeline_cfg)
-
-   # 4. Monitor health
-   status = manager.get_pipeline_status(exec_id)
-   print(f"Health Score: {status['health_score']}")
-
-Native Connectors
------------------
-
-Ducta supports high-performance streaming for:
-
-- **Kafka**: Full support for SSL/SASL and offset management.
-- **Delta Lake (CDF)**: Stream changes from Delta tables using Change Data Feed.
-- **Kinesis**: AWS-native streaming integration.
-- **File Streams**: Monitor cloud directories (S3/ADLS) for new files.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/input.toml — top-level key IS the dataset name (flat, no wrapper)
-         [kafka_source]
-         format = "kafka"
-         streaming = true
-         options = { "kafka.bootstrap.servers" = "localhost:9092", "subscribe" = "events" }
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/input.yaml
-         kafka_source:
-           format: kafka
-           streaming: true
-           options:
-             kafka.bootstrap.servers: "localhost:9092"
-             subscribe: events
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "kafka_source": {
-             "format": "kafka",
-             "streaming": true,
-             "options": {
-               "kafka.bootstrap.servers": "localhost:9092",
-               "subscribe": "events"
-             }
-           }
-         }
-
-Transformation Registry
------------------------
-
-To ensure security and thread-safety, Ducta uses an isolated ``TransformationRegistry``. You must register your Python functions before they can be referenced in the configuration.
-
-.. code-block:: python
-
-   # Reference in config/nodes.toml (flat — the key IS the node name):
-   # [my_stream_node]
-   # function = { key = "my_registered_func", params = { "mode" = "strict" } }
-
-   manager.query_manager.transformation_registry.register("my_registered_func", my_func)
-
-Fault Tolerance
+Fault tolerance
 ---------------
 
-Ducta implements **Atomic Checkpoint Reservation**. If two queries attempt to share the same checkpoint location, the second one is rejected to prevent state corruption.
+- **Checkpoint reservation**: a query whose checkpoint another query already
+  uses is rejected, instead of both corrupting it.
+- **Exactly-once** end to end with idempotent sinks such as Delta Lake.
+- **Retries** of transient Delta start-up errors (e.g. schema not yet
+  initialised).
 
-- **Exactly-once**: Guaranteed when using idempotent sinks like Delta Lake.
-- **Automatic Retries**: Resilience against transient Delta Lake startup errors (e.g., waiting for schema initialization).
+From Python
+-----------
 
-Next Steps
+``StreamingPipelineManager`` is the engine behind the CLI, for embedding in
+your own service:
+
+.. code-block:: python
+
+   from ducta.console.execution import load_context
+   from ducta.stream import StreamingPipelineManager
+
+   context = load_context("path/to/project", env="dev")
+   manager = StreamingPipelineManager(context)
+   manager.query_manager.transformation_registry.register("clean_events", clean_events)
+
+   exec_id = manager.start_pipeline("events", context.pipelines_config["events"])
+   status = manager.get_pipeline_status(exec_id)
+   metrics = manager.get_pipeline_metrics(exec_id)  # rates and a health_score
+
+``max_concurrent_pipelines`` (constructor argument) caps how many streaming
+pipelines one manager runs at once.
+
+Next steps
 ----------
 
-- :doc:`tutorials/streaming` - Build your first real-time pipeline.
-- :doc:`quality` - Add data quality gates to your streaming outputs.
+- :doc:`tutorials/streaming` — build a streaming pipeline step by step
+- :doc:`quality` — checks and gates on stream outputs

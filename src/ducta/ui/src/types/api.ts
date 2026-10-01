@@ -8,7 +8,7 @@ export interface WorkspaceInfo {
   active_env?: string;
   available_envs?: string[];
   has_git: boolean;
-  has_environment_yaml: boolean;
+  has_project: boolean;
   environments: string[];
 }
 

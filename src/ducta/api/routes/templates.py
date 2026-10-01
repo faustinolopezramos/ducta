@@ -58,7 +58,6 @@ async def list_templates() -> List[TemplateInfo]:
 async def generate_from_template(
     body: GenerateFromTemplateRequest, manager: WorkspaceManagerDep
 ) -> GenerateFromTemplateResponse:
-    from ducta.console.core import ConfigFormat
     from ducta.console.template import TemplateGenerator, TemplateType
 
     with http_error_on(422):
@@ -69,11 +68,6 @@ async def generate_from_template(
     except ValueError:
         raise HTTPException(status_code=422, detail=f"Unknown template '{body.template}'")
 
-    try:
-        config_format = ConfigFormat(body.config_format)
-    except ValueError:
-        raise HTTPException(status_code=422, detail=f"Unknown config format '{body.config_format}'")
-
     target = manager.root / "projects" / body.project_name
     if target.exists() and any(target.iterdir()):
         raise HTTPException(
@@ -81,7 +75,7 @@ async def generate_from_template(
         )
 
     try:
-        generator = TemplateGenerator(target, config_format)
+        generator = TemplateGenerator(target)
         generator.generate_project(
             template_type,
             body.project_name,

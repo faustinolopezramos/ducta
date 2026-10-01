@@ -25,84 +25,52 @@ def _write(path, body: str) -> None:
 
 @pytest.fixture
 def workspace(tmp_path):
-    """A workspace whose registries declare different formats per side.
-
-    ``bronze.raw_results`` is landed as csv and written as parquet — a real
-    distinction the old code could not express, since it invented one format
-    for both sides.
-    """
+    """A workspace whose ``demo`` project wires datasets across two pipelines."""
+    project = tmp_path / "projects" / "demo"
     _write(
-        tmp_path / "environment.yaml",
-        """
-        base_path: "."
-        env_config:
-          base:
-            global_config_path: "config/global.yaml"
-            pipelines_config_path: "config/pipelines.yaml"
-            nodes_config_path: "config/nodes.yaml"
-            input_config_path: "config/input.yaml"
-            output_config_path: "config/output.yaml"
-        """,
-    )
-    for name in ("global", "pipelines", "nodes"):
-        _write(tmp_path / "config" / f"{name}.yaml", "{}\n")
-    _write(
-        tmp_path / "config" / "input.yaml",
-        """
-        bronze.raw_results:
-          format: csv
-          filepath: "${DATA_ROOT}/landing/results.csv"
-        silver.clean_results:
-          format: delta
-          filepath: "${DATA_ROOT}/silver/clean"
-          schema: "id BIGINT, name STRING"
-        """,
+        project / "ducta.yaml", "version: 2\nproject: demo\npaths: {input: data, output: data}\n"
     )
     _write(
-        tmp_path / "config" / "output.yaml",
+        project / "catalog.yaml",
         """
         bronze.raw_results:
           format: parquet
-          filepath: "${DATA_ROOT}/bronze/results"
-          write_mode: overwrite
+          path: "${DATA_ROOT}/bronze/results"
+          write: {mode: overwrite}
         silver.clean_results:
           format: delta
-          filepath: "${DATA_ROOT}/silver/clean"
-          write_mode: merge
+          path: "${DATA_ROOT}/silver/clean"
+          schema: "id BIGINT, name STRING"
+          write:
+            mode: merge
+            merge: {keys: [id]}
         gold.standings:
           format: parquet
-          filepath: "${DATA_ROOT}/gold/standings"
-          write_mode: overwrite
+          path: "${DATA_ROOT}/gold/standings"
+          write: {mode: overwrite}
         """,
     )
     _write(
-        tmp_path / "projects" / "demo" / "config" / "nodes.yaml",
+        project / "pipelines" / "etl_results.yaml",
         """
-        ingest_results:
-          module: src.ingest
-          function: run
-          output: ["bronze.raw_results"]
-        clean_results:
-          module: src.clean
-          function: run
-          input: ["bronze.raw_results"]
-          output: ["silver.clean_results"]
-        build_standings:
-          module: src.standings
-          function: run
-          input: ["silver.clean_results"]
-          output: ["gold.standings", "gold.never_declared"]
+        nodes:
+          ingest_results:
+            run: src.ingest:run
+            outputs: [bronze.raw_results]
+          clean_results:
+            run: src.clean:run
+            inputs: [bronze.raw_results]
+            outputs: [silver.clean_results]
         """,
     )
     _write(
-        tmp_path / "projects" / "demo" / "config" / "pipelines.yaml",
+        project / "pipelines" / "etl_reporting.yaml",
         """
-        etl_results:
-          type: batch
-          nodes: [ingest_results, clean_results]
-        etl_reporting:
-          type: batch
-          nodes: [build_standings]
+        nodes:
+          build_standings:
+            run: src.standings:run
+            inputs: [silver.clean_results]
+            outputs: [gold.standings]
         """,
     )
     return tmp_path
@@ -152,11 +120,11 @@ class TestResolveRef:
         assert ref.write_mode == "overwrite"
         assert ref.path == "${DATA_ROOT}/bronze/results"
 
-    def test_the_input_side_resolves_independently(self, service):
-        """The same name is landed as csv and written as parquet."""
+    def test_both_sides_read_the_one_catalog_entry(self, service):
+        """A dataset is declared once; readers and writers see the same format and path."""
         ref = service.resolve_ref("bronze.raw_results", "input")
-        assert ref.format == "csv"
-        assert ref.path == "${DATA_ROOT}/landing/results.csv"
+        assert ref.format == "parquet"
+        assert ref.path == "${DATA_ROOT}/bronze/results"
 
     def test_a_declared_schema_is_carried(self, service):
         assert service.resolve_ref("silver.clean_results", "input").schema_ == (
@@ -188,7 +156,6 @@ class TestProjectRegistry:
         names = [d.name for d in service.list_for_project("demo").datasets]
         assert names == [
             "bronze.raw_results",
-            "gold.never_declared",
             "gold.standings",
             "silver.clean_results",
         ]
@@ -211,7 +178,6 @@ class TestProjectRegistry:
         by_name = {d.name: d for d in service.list_for_project("demo").datasets}
         assert by_name["bronze.raw_results"].declared_in == ["input", "output"]
         assert by_name["gold.standings"].declared_in == ["output"]
-        assert by_name["gold.never_declared"].declared_in == []
 
     def test_a_produced_dataset_reports_the_output_declaration(self, service):
         """write_mode only exists on the output side, so that side must win."""

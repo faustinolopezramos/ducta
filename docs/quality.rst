@@ -1,246 +1,253 @@
 Data Quality
 ============
 
-Ducta Quality is a unified framework for validating data reliability at every stage of your pipeline. It bridges the gap between pre-execution structural checks (**Sanity**) and post-execution statistical validation (**Quality Gates**).
+Ducta checks data at the two moments that matter: **before** a node runs, on
+what it reads, and **after**, on what it wrote. A failing check can stop the
+run, skip what depends on it, or only warn — and every outcome is recorded in
+the run's certificate.
 
-Key Features
-------------
+- **16 built-in checks** — schema, nulls, duplicates, ranges, freshness,
+  drift, cross-table integrity, SQL business rules — plus your own.
+- **Contracts** on datasets, checked wherever they are read.
+- **Gates** that turn check results into a decision.
+- The same checks run on **Spark** and **pandas**.
 
-- **Dual-Phase Validation**: Fail-fast before processing (Sanity) and validate results after (DQ).
-- **Engine Agnostic**: The same checks work on **Spark** and **Pandas**.
-- **16 Built-in Checks**: Schema, null rates, duplicates, drift detection, schema drift, and more.
-- **Quality Gates**: Weighted scoring to automatically block pipelines with "bad" data.
-- **Statistical Baselines**: Automatic drift detection based on historical data.
+Where checks go
+---------------
 
-Phases of Validation
---------------------
-
-1. Sanity Phase (Pre-execution)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Structural checks run on node inputs. If a sanity check fails with ``fail_fast = true``, the node function is never executed.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — top-level key IS the node name (flat, no wrapper)
-         [load_data.sanity_checks]
-         enabled = true
-         fail_fast = true
-         checks.schema = { expected_columns = ["id", "amount", "ts"] }
-         checks.empty_dataset = {}
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         load_data:
-           sanity_checks:
-             enabled: true
-             fail_fast: true
-             checks:
-               schema:
-                 expected_columns: ["id", "amount", "ts"]
-               empty_dataset: {}
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "load_data": {
-             "sanity_checks": {
-               "enabled": true,
-               "fail_fast": true,
-               "checks": {
-                 "schema": { "expected_columns": ["id", "amount", "ts"] },
-                 "empty_dataset": {}
-               }
-             }
-           }
-         }
-
-2. Validation Phase (Post-execution)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-Statistical and business rule checks run on node outputs.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — flat: [<node_name>.data_quality]
-         [transform_data.data_quality]
-         enabled = true
-         checks.null_rate = { columns = ["id"], threshold = 0.01 }
-         checks.duplicates = { columns = ["id"] }
-         checks.range = { column = "amount", min = 0, max = 1000000 }
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         transform_data:
-           data_quality:
-             enabled: true
-             checks:
-               null_rate:
-                 columns: ["id"]
-                 threshold: 0.01
-               duplicates:
-                 columns: ["id"]
-               range:
-                 column: amount
-                 min: 0
-                 max: 1000000
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "transform_data": {
-             "data_quality": {
-               "enabled": true,
-               "checks": {
-                 "null_rate": { "columns": ["id"], "threshold": 0.01 },
-                 "duplicates": { "columns": ["id"] },
-                 "range": { "column": "amount", "min": 0, "max": 1000000 }
-               }
-             }
-           }
-         }
-
-Quality Gates
--------------
-
-Quality gates aggregate multiple checks into a single score (0-1). You can configure thresholds to **Warn** or **Block** the pipeline.
-
-When a gate blocks, its ``behavior`` decides what happens to the run:
-
-- ``skip_downstream`` *(default)* — skip the blocked node's descendants, but let
-  independent branches keep running. The run does not fail; the blocked node and
-  its skipped descendants are recorded in the Run Certificate.
-- ``stop_all`` — abort the whole pipeline.
-- ``warn_only`` — log the gate failure and let the node proceed as if it passed.
-
-The gate outcome for every node (score, pass/fail, errors/warnings) is recorded in
-the Run Certificate's ``quality`` section automatically — no output persistence
-needed — so a certificate proves which gates the run actually passed.
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         [transform_data.data_quality.quality_gate]
-         behavior = "stop_all"               # stop_all, skip_downstream, warn_only
-         min_pass_rate = 0.95                # Require 95% of checks to pass
-
-         [transform_data.data_quality.quality_gate.score_weights]
-         schema = 0.5
-         null_rate = 0.3
-         duplicates = 0.2
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         transform_data:
-           data_quality:
-             quality_gate:
-               behavior: stop_all
-               min_pass_rate: 0.95
-               score_weights:
-                 schema: 0.5
-                 null_rate: 0.3
-                 duplicates: 0.2
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "transform_data": {
-             "data_quality": {
-               "quality_gate": {
-                 "behavior": "stop_all",
-                 "min_pass_rate": 0.95,
-                 "score_weights": {
-                   "schema": 0.5,
-                   "null_rate": 0.3,
-                   "duplicates": 0.2
-                 }
-               }
-             }
-           }
-         }
-
-Available Checks
-----------------
+The same block — ``checks``, plus an optional ``gate`` — goes in three places:
 
 .. list-table::
-   :widths: 25 75
+   :widths: 30 70
+   :header-rows: 1
+
+   * - Place
+     - Runs
+   * - A dataset's ``checks`` in ``catalog.yaml``
+     - Before every node that reads the dataset: its **contract**.
+   * - A node's ``input_checks``
+     - Before that node only, on one input. Replaces the dataset's contract for
+       that node.
+   * - A node's ``quality``
+     - After the node, on what it wrote.
+
+Input checks: before a node runs
+--------------------------------
+
+A contract belongs to the dataset, so it protects every consumer — the right
+place for data another team or system produces:
+
+.. code-block:: yaml
+
+   # catalog.yaml
+   orders_raw:
+     format: csv
+     path: ${paths.input}/orders.csv
+     options: {header: true}
+     checks:
+       fail_fast: true               # stop checking at the first failure
+       checks:
+         empty_dataset: true
+         schema: {expected_columns: [order_id, amount, order_date]}
+         row_count: {min: 1000}
+
+When a contract fails, the node does not run. What happens to the rest of the
+pipeline is the gate's decision (below; by default the node's dependants are
+skipped).
+
+Output checks: after a node runs
+--------------------------------
+
+.. code-block:: yaml
+
+   # pipelines/etl.yaml
+   nodes:
+     clean:
+       run: pipelines.etl:clean
+       inputs: {raw: orders_raw}
+       outputs: [silver.sales.orders]
+       quality:
+         checks:
+           null_rate: {columns: [order_id], threshold: 0}
+           duplicates: {columns: [order_id]}
+           range: {column: amount, min: 0, max: 1000000}
+         gate:
+           max_errors: 0
+           on_fail: stop_all
+
+``check_name: true`` enables a check with its defaults; ``false`` disables it
+(useful to switch off one check of a profile). With several outputs,
+``dataset_name`` picks the one the checks apply to (default: the first).
+
+Gates
+-----
+
+A gate turns the checks' results into a pass or a block:
+
+.. list-table::
+   :widths: 28 72
+   :header-rows: 1
+
+   * - Key
+     - Effect
+   * - ``max_errors``
+     - Blocks when more error-severity checks fail. Default ``0``: without a
+       gate, any failing check blocks.
+   * - ``max_warnings``
+     - Logs a warning when more warning-severity checks fail (never blocks).
+   * - ``min_pass_rate``
+     - Blocks when the share of passing checks is lower (``0.95`` = 95 %).
+   * - ``required_checks``
+     - Blocks when any of these checks fails — or is missing.
+   * - ``score_threshold`` + ``score_weights``
+     - Blocks when the weighted score (0–1) is lower, e.g.
+       ``score_weights: {schema: 0.5, null_rate: 0.3, duplicates: 0.2}``.
+
+When a gate blocks, ``on_fail`` decides what happens:
+
+- ``skip_downstream`` *(default)* — the node's dependants are skipped;
+  independent branches keep running and the run does not fail.
+- ``stop_all`` — the whole run stops and fails.
+- ``warn_only`` — the failure is logged and the pipeline continues.
+
+Every node's gate outcome — score, pass/fail, errors and warnings — is recorded
+in the Run Certificate's ``quality`` section, so the certificate proves which
+gates a run passed.
+
+Gates can be stricter in production only:
+
+.. code-block:: yaml
+
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   environments:
+     prod:
+       pipelines.etl.nodes.clean.quality.gate.on_fail: stop_all
+       pipelines.etl.nodes.clean.quality.gate.max_errors: 0
+
+Profiles
+--------
+
+A profile is a named set of checks, defined once in ``ducta.yaml`` and used by
+any block with ``profile:``. The block's own ``checks`` are merged on top, and
+a profile name that does not exist is an error, not a silent no-op:
+
+.. code-block:: yaml
+
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings:
+     quality:
+       profiles:
+         keyed:
+           checks:
+             empty_dataset: {enabled: true}
+             duplicates: {columns: [id]}
+
+.. code-block:: yaml
+
+   # pipelines/customers.yaml
+   nodes:
+     dedupe:
+       run: pipelines.customers:dedupe
+       inputs: {raw: customers_raw}
+       outputs: [silver.crm.customers]
+       quality:
+         profile: keyed
+         checks:
+           null_rate: {columns: [email], threshold: 0.05}
+
+Available checks
+----------------
+
+``ducta quality list`` prints every registered check, including yours.
+
+.. list-table::
+   :widths: 24 76
    :header-rows: 1
 
    * - Category
      - Checks
-   * - **Structural** (8)
-     - ``schema``, ``row_count``, ``null_rate``, ``empty_dataset``, ``duplicates``, ``range``, ``referential_integrity``, ``schema_drift``
-   * - **Temporal** (3)
+   * - Structural
+     - ``schema`` (``expected_columns``, ``strict``), ``row_count`` (``min``,
+       ``max``), ``null_rate`` (``columns``, ``threshold``), ``empty_dataset``,
+       ``duplicates`` (``columns``, ``max_duplicate_rate``), ``range``
+       (``column``, ``min``, ``max``), ``referential_integrity``,
+       ``schema_drift``
+   * - Temporal
      - ``freshness``, ``incremental_volume``, ``anomaly_detection``
-   * - **Distribution** (2)
-     - ``drift_detection`` (compares against historical baseline), ``statistical``
-   * - **Cross-table** (2)
+   * - Distribution
+     - ``drift_detection`` (against the dataset's stored baseline),
+       ``statistical``
+   * - Cross-table
      - ``cross_table_referential``, ``dataset_completeness``
-   * - **Business** (1)
-     - ``business_rules`` (SQL or Python lambdas)
+   * - Business
+     - ``business_rules`` — SQL predicates each row must satisfy
 
-Custom Checks
+A check that names a column the dataset does not have **fails**; it does not
+silently check nothing. ``ducta quality validate-config --node NAME`` checks a
+node's checks and profiles without reading data, and
+``ducta profile --input FILE`` proposes the checks a dataset already satisfies.
+
+Custom checks
 -------------
-
-You can register your own validation logic using the Ducta Quality API:
 
 .. code-block:: python
 
-   from ducta.quality import BaseQualityCheck, register_check
+   # pipelines/quality_checks.py
+   from ducta.check import BaseQualityCheck, register_check
 
-   @register_check("my_custom_check")
-   class MyCheck(BaseQualityCheck):
-       def run(self, df, config, adapter, context_datasets=None):
-           # Logic here
-           return self._create_result(passed=True, message="Success!")
 
-Reporting & Visibility
-----------------------
+   @register_check("positive_amounts")
+   class PositiveAmounts(BaseQualityCheck):
+       def __init__(self):
+           super().__init__("positive_amounts")
 
-Ducta automatically generates reports in the ``.quality/`` directory:
+       def _run_impl(self, df, config, adapter, context_datasets=None):
+           # The adapter runs the same SQL condition on Spark and pandas.
+           negatives = adapter.filter_where("amount < 0")
+           return self._create_result(
+               passed=negatives == 0,
+               message=f"{negatives} row(s) with a negative amount",
+               details={"negative_rows": negatives},
+           )
 
-- **Terminal Reports**: Rich, colored tables summarizing check results.
-- **JSON/Parquet artifacts**: Persistent history for auditing and trend analysis.
-- **Drift Baselines**: Statistical profiles stored as ``baseline.json``.
+Register the module in ``ducta.yaml`` and use the check like a built-in one:
 
-Reports, baselines, and history are scoped **per pipeline**, not shared globally, so two
-pipelines that happen to have a node with the same name never mix or overwrite each other's
-quality data::
+.. code-block:: yaml
 
-   .quality/
-     <pipeline_name>/
-       <dataset_name>/
-         reports/<run_id>.json
-         baseline.json
-         history.json
-     _adhoc/
-       <dataset_name>/...   # runs with no real pipeline (e.g. `ducta quality run` on a bare file)
+   # ducta.yaml
+   version: 2
+   project: sales
+   paths: {input: data, output: data}
+   settings:
+     quality:
+       extensions: [pipelines.quality_checks]
 
-The same scoping applies to the optional structured output (``data_quality.output`` /
-``global_config.quality.output``, when ``enabled: true``), which persists under
-``<base_path>/<report_type>/<pipeline_name>/<node_name>/<run_id>``.
+An exception inside ``_run_impl`` becomes a failed result, not a crashed run.
+The API server does not import extension modules (it never runs code from a
+workspace's configuration); the CLI does.
+
+Reports
+-------
+
+Each run writes its reports next to the environment's data:
+
+.. code-block:: text
+
+   <paths.output>/<env>/.quality/
+     <pipeline>/
+       <node>/
+         reports/<run_id>.json        # every check's result
+         gate_results/<run_id>.json   # the gate's decision
+         history.json                 # scores over time (trends)
+         baseline.json                # statistics drift_detection compares against
+     _adhoc/                          # `ducta quality run` on a bare file
+
+Reports are scoped per pipeline, so two pipelines with a node of the same name
+never mix. Read them with ``ducta quality report``, ``trend`` and ``score``, or
+in the web app.

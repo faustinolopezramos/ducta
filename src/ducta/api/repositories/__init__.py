@@ -23,13 +23,11 @@ from __future__ import annotations
 from ducta.api.repositories.config_repository import ConfigRepository
 from ducta.api.repositories.dataset_repository import DatasetRepository
 from ducta.api.repositories.node_repository import NodeRepository
-from ducta.api.repositories.pipeline_repository import PipelineRepository
 from ducta.api.repositories.project_repository import ProjectRepository
 
 __all__ = [
     "ConfigRepository",
     "DatasetRepository",
     "NodeRepository",
-    "PipelineRepository",
     "ProjectRepository",
 ]

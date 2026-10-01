@@ -74,9 +74,8 @@ class ValidateConfigRequest(BaseModel):
     """Validate the quality config of a node without executing any checks."""
 
     node_name: str = Field(description="Node whose quality config to validate")
-    config_path: str = Field(description="Nodes config file path relative to the workspace root")
-    global_config_path: Optional[str] = Field(
-        default=None, description="global_config file (relative) for profile resolution"
+    env: Optional[str] = Field(
+        default=None, description="Environment whose configuration to check (default: base)"
     )
 
 

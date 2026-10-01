@@ -45,6 +45,8 @@ class TestStoragePrunerStudyName:
         assert cfg.study_name is None
 
     def test_from_dict_reads_all_three(self):
+        # algorithm "bayesian" needs optuna (the `mlops` extra)
+        pytest.importorskip("optuna")
         cfg = HyperparamConfig.from_dict(
             {
                 "algorithm": "bayesian",

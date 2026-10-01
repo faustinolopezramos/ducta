@@ -24,8 +24,8 @@ from typing import Optional, Union
 
 from loguru import logger  # type: ignore
 
-from ducta.console.config import AppConfigManager, ConfigManager
-from ducta.console.core import ConfigurationError, ExitCode, ValidationError
+from ducta.console.config import ConfigManager
+from ducta.console.core import ConfigurationError, ExitCode
 from ducta.console.ux.error_analyzer import try_format_error
 
 try:
@@ -36,8 +36,9 @@ except ImportError:
     _RICH_AVAILABLE = False
 from ducta.core import PipelineExecutor
 from ducta.core.results import PipelineRunResult
-from ducta.setting.context_loader import ContextLoader
 from ducta.setting.contexts import Context
+from ducta.setting.exceptions import ConfigurationError as SettingConfigurationError
+from ducta.setting.project_loader import load_project_v2
 
 
 def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = None) -> int:
@@ -103,7 +104,6 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
 class ContextInitializer:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
-        self.context_loader = ContextLoader()
 
     def initialize(self, env: str) -> Context:
         try:
@@ -118,152 +118,34 @@ class ContextInitializer:
             pass
 
         try:
-            context = self._resolve_context(env)
-            if context is None:
+            root = self.config_manager.project_root
+            if root is None:
                 raise ConfigurationError(
-                    "No configuration found. Provide an 'environment.*' root with "
-                    "an env_config block, a single-file bundle, a config/ directory "
-                    "with the 5 standard files, or a global.* + pipeline.* quickstart."
+                    f"No Ducta project found in {Path(self.config_manager.base_path).resolve()}"
                 )
-            return context
+            return load_project_v2(root, env)
         except ConfigurationError:
             raise
+        except SettingConfigurationError as e:
+            # Invalid format-2 files: the message already names file and line.
+            raise ConfigurationError(str(e))
         except Exception as e:
             try_format_error(e, f"INIT:{env}")
             raise ConfigurationError(f"Context initialization failed: {e}")
 
-    def _resolve_context(self, env: str) -> Optional[Context]:
-        """Resolve a Context from whichever configuration form is present."""
-        from ducta.console.config import load_config_file
-        from ducta.setting.config_forms import FlexibleConfigResolver
 
-        # A canonical root was discovered.
-        config_file_path: Optional[str] = None
-        try:
-            config_file_path = self.config_manager.get_config_file_path()
-        except ConfigurationError:
-            config_file_path = None
-
-        if config_file_path is not None:
-            data = load_config_file(config_file_path)
-            if isinstance(data, dict) and "env_config" in data:
-                app_config = AppConfigManager(config_file_path)
-                return self.context_loader.load_from_paths(app_config.get_env_config(env), env)
-            # Discovered file is not an env_config root (e.g. a bundle or a bare
-            # global config file): resolve it as a flexible form.
-            flexible = FlexibleConfigResolver.resolve_file(Path(config_file_path), data, env)
-            if flexible is not None:
-                return flexible
-
-        # No usable root discovered: resolve flexibly from the base directory.
-        return FlexibleConfigResolver.resolve_dir(self.config_manager.base_path, env)
-
-
-def load_context(
-    config_path: Optional[Union[str, Path]],
-    validate: bool = True,
-    env: Optional[str] = None,
-) -> Context:
-    """Load a Context from *config_path*.
-
-    Validates the resolved config against its pydantic schema by default —
-    this used to always pass ``validate=False`` unconditionally, silently
-    skipping schema validation for every caller regardless of whether they
-    actually wanted that. Pass ``validate=False`` explicitly for a caller
-    that has its own reason to defer/skip it (e.g. a preflight command that
-    wants to collect every validation error into one report instead of
-    aborting on the first schema violation).
-
-    ``env`` selects the ``environments:`` override block. It used not to be
-    accepted at all, so the streaming fallback that reaches this function
-    dropped whatever ``--env`` the user asked for.
-    """
-    if config_path is None:
-        raise ValidationError("Configuration path must be provided")
-
-    config_path_str = str(config_path)
-    from ducta.setting.loaders import ConfigLoaderFactory
-
-    config_data = ConfigLoaderFactory().load_config(config_path_str)
-
-    if all(
-        k in config_data
-        for k in (
-            "global_config",
-            "pipelines_config",
-            "nodes_config",
-            "input_config",
-            "output_config",
-        )
-    ):
-        context = Context(
-            global_config=config_data["global_config"],
-            pipelines_config=config_data["pipelines_config"],
-            nodes_config=config_data["nodes_config"],
-            input_config=config_data["input_config"],
-            output_config=config_data["output_config"],
-            validate=validate,
-            env=env,
-        )
-    else:
-        base = Path(config_path_str).parent
-        ext = Path(config_path_str).suffix
-        context = Context(
-            global_config=str(base / f"global_config{ext}"),
-            pipelines_config=str(base / f"pipelines{ext}"),
-            nodes_config=str(base / f"nodes{ext}"),
-            input_config=str(base / f"input{ext}"),
-            output_config=str(base / f"output{ext}"),
-            validate=validate,
-            env=env,
-        )
-
-    context._config_file_path = str(Path(config_path_str).resolve())
-    return context
-
-
-def _config_or_empty(config: Optional[Union[str, Path]]) -> str:
-    return str(config) if config is not None else ""
-
-
-def _find_environment_file(config: Optional[Union[str, Path]]) -> Optional[Path]:
-    """Walk from the --config file's directory up to CWD looking for environment.toml/yml."""
-    names = ["environment.toml", "environment.yml", "environment.yaml"]
-    candidates: list[Path] = []
-    if config:
-        config_path = Path(config).resolve()
-        # Check config's own dir, then each parent up to the filesystem root
-        current = config_path.parent
-        cwd = Path.cwd().resolve()
-        while True:
-            candidates.append(current)
-            if current == cwd or current == current.parent:
-                break
-            current = current.parent
-    candidates.append(Path.cwd().resolve())
-    for directory in candidates:
-        for name in names:
-            candidate = directory / name
-            if candidate.is_file():
-                return candidate
-    return None
+def load_context(path: Optional[Union[str, Path]] = None, env: Optional[str] = None) -> Context:
+    """The Context of the project containing ``path`` (a file or directory; default: cwd)."""
+    start = Path(path) if path else Path.cwd()
+    if start.is_file():
+        start = start.parent
+    return ContextInitializer(ConfigManager(str(start))).initialize(env or "base")
 
 
 def _load_streaming_context(config: Optional[Union[str, Path]], env: str = "base") -> Context:
-    """Load context using environment overlay when environment.toml exists, otherwise direct load."""
-    env_file = _find_environment_file(config)
-    if env_file is not None:
-        try:
-            from ducta.console.config import AppConfigManager
-
-            app_config = AppConfigManager(str(env_file))
-            context_loader = ContextLoader()
-            return context_loader.load_from_paths(app_config.get_env_config(env), env)
-        except Exception as e:
-            logger.warning(
-                "Environment overlay failed ({}); falling back to direct config load: {}", env, e
-            )
-    return load_context(_config_or_empty(config), env=env)
+    """The project for a streaming command: --config names ducta.yaml (or any file in
+    the project), or is omitted inside the project."""
+    return load_context(config, env)
 
 
 def run_streaming_pipeline_cli(

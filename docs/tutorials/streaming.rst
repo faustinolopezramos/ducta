@@ -1,539 +1,215 @@
-Streaming Pipelines Tutorial (Basic to Advanced)
-=================================================
+Streaming Pipelines Tutorial
+============================
 
-This guide walks you through practical streaming pipeline examples in Ducta,
-from local file ingestion to dependency-aware multi-node Kafka + Delta flows.
+Build a streaming pipeline that lands raw events (bronze) and cleans them
+(silver), run it continuously, run it as a finite backfill, then point it at
+Kafka and Delta. The reference for every key is :doc:`/streaming`.
 
-**Execution model in this tutorial**: CLI using ``ducta stream``
+Prerequisites: ``pip install "ducta[spark]"`` and Java 17+. Kafka and Delta are
+only needed for step 5.
 
-.. note::
-
-    Commands and configuration blocks in this tutorial are aligned with the
-    current streaming module behavior documented in :doc:`/streaming`.
-
-Prerequisites
--------------
-
-Before running the examples, make sure you have:
-
-- Python environment with Ducta installed.
-- Spark available (local mode is enough for basic examples).
-- Kafka and Delta Lake connectors available for intermediate/advanced examples.
-- A writable location for checkpoints.
-
-Example package baseline:
+Step 1: Generate the project
+----------------------------
 
 .. code-block:: bash
 
-    pip install pyspark>=3.2.0 loguru>=0.6.0 pyyaml>=6.0
+   ducta template --template streaming_basic --project-name events
+   cd events
 
-CLI Quick Reference
--------------------
+.. code-block:: text
 
-Run a streaming pipeline:
+   events/
+   ├── ducta.yaml
+   ├── catalog.yaml                  # empty: stream nodes declare their own I/O
+   ├── pipelines/
+   │   ├── events_stream.yaml        # two stream nodes: bronze, then silver
+   │   └── transforms.py             # the transform silver applies
+   └── data/events/                  # five seed events, two without an amount
 
-.. code-block:: bash
+Step 2: Read the pipeline
+-------------------------
 
-    ducta stream run --config config/pipelines.toml --pipeline <pipeline_name> --mode async
+.. code-block:: yaml
 
-Check status:
-
-.. code-block:: bash
-
-    ducta stream status --config config/pipelines.toml --format table
-
-Stop pipeline:
-
-.. code-block:: bash
-
-    ducta stream stop --config config/pipelines.toml --execution-id <execution_id>
-
-Common Streaming Node Shape
----------------------------
-
-Streaming nodes define their behavior in ``config/nodes.toml``:
-
-.. code-block:: toml
-
-    # config/nodes.toml — the key IS the node name (flat, no wrapper)
-    [my_streaming_node]
-    description = "Real-time transformation"
-
-    [my_streaming_node.streaming]
-    trigger = { type = "processing_time", interval = "10 seconds" }
-    output_mode = "append"
-    checkpoint_location = "./checkpoints/my_node"
-
-Level 1: Basic (file_stream -> console)
-----------------------------------------
-
-Goal: validate end-to-end streaming with a local file source.
-
-**Configuration** (``config/pipelines.toml``):
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/pipelines.toml — the key IS the pipeline name (flat, no wrapper)
-         [file_to_console]
-         type = "streaming"
-         nodes = ["local_events"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml
-         file_to_console:
-           type: streaming
-           nodes:
-             - local_events
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "file_to_console": {
-             "type": "streaming",
-             "nodes": ["local_events"]
-           }
-         }
-
-**Node Configuration** (``config/nodes.toml``):
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — the key IS the node name (flat, no wrapper)
-         [local_events]
-         description = "Stream from local files to console"
-
-         [local_events.streaming]
-         trigger = { type = "processing_time", interval = "5 seconds" }
-         output_mode = "append"
-         checkpoint_location = "./checkpoints/local_events"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         local_events:
-           description: "Stream from local files to console"
-           streaming:
-             trigger:
-               type: processing_time
-               interval: "5 seconds"
-             output_mode: append
-             checkpoint_location: "./checkpoints/local_events"
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "local_events": {
-             "description": "Stream from local files to console",
-             "streaming": {
-               "trigger": { "type": "processing_time", "interval": "5 seconds" },
-               "output_mode": "append",
-               "checkpoint_location": "./checkpoints/local_events"
-             }
-           }
-         }
-
-**Input/Output Configuration** (``config/input.toml`` and ``output.toml``):
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # input.toml
-         [local_events_input]
-         format = "file_stream"
-         path = "./data/stream_input"
-
-         # output.toml
-         [local_events_output]
-         format = "console"
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # input.yaml
-         local_events_input:
+   # pipelines/events_stream.yaml
+   description: Ingest a file stream, clean it, and land it as Parquet
+   type: streaming
+   requires_dates: false
+   nodes:
+     ingest_events:
+       description: "Bronze: land the raw event stream exactly as it arrives"
+       kind: stream
+       stream:
+         input:
            format: file_stream
-           path: "./data/stream_input"
+           file_format: json
+           options: {path: "${paths.input}/events", maxFilesPerTrigger: 1}
+           schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+         output:
+           format: parquet
+           path: ${paths.output}/${env}/bronze/events
+         streaming:
+           checkpoint_location: ${paths.output}/${env}/_ckpt/ingest_events
+           output_mode: append
+           trigger: {type: processing_time, interval: 5 seconds}
 
-         # output.yaml
-         local_events_output:
-           format: console
+     clean_events:
+       description: "Silver: drop incomplete events and stamp an ingest time"
+       kind: stream
+       after: [ingest_events]
+       stream:
+         input:
+           format: file_stream
+           file_format: parquet
+           options: {path: "${paths.output}/${env}/bronze/events"}
+           schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+         transform:
+           key: clean_events
+           module: pipelines.transforms
+           params: {min_amount: 0.0}
+         output:
+           format: parquet
+           path: ${paths.output}/${env}/silver/events
+         streaming:
+           checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+           output_mode: append
+           trigger: {type: processing_time, interval: 5 seconds}
 
-   .. tab-item:: JSON
+- Each node reads a stream, optionally transforms it, and writes a stream.
+- ``after`` orders the nodes: stream inputs and outputs are paths, not catalog
+  datasets, so Ducta cannot infer the order from the data.
+- Every node has its own checkpoint, under the environment's directory — the
+  checkpoint is what lets a restarted query continue where it stopped.
 
-      .. code-block:: json
-
-         // config/input.json
-         {
-           "local_events_input": {
-             "format": "file_stream",
-             "path": "./data/stream_input"
-           }
-         }
-
-         // config/output.json
-         {
-           "local_events_output": {
-             "format": "console"
-           }
-         }
-
-Run:
-
-.. code-block:: bash
-
-    mkdir -p data/stream_input checkpoints/local_events
-    ducta stream run --config config/pipelines.toml --pipeline file_to_console --mode async
-
-Inspect status:
-
-.. code-block:: bash
-
-    ducta stream status --config config/pipelines.toml --format table
-
-Success criteria:
-
-- Pipeline appears as ``running``.
-- Console sink prints rows as new files arrive.
-- No checkpoint conflict errors.
-
-Level 2: Intermediate (Kafka -> Delta)
---------------------------------------
-
-Goal: process real-time Kafka events into Delta with durable checkpointing.
-
-**Pipeline snippet**:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/pipelines.toml — the key IS the pipeline name (flat, no wrapper)
-         [kafka_to_delta]
-         type = "streaming"
-         nodes = ["kafka_bronze"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml
-         kafka_to_delta:
-           type: streaming
-           nodes:
-             - kafka_bronze
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "kafka_to_delta": {
-             "type": "streaming",
-             "nodes": ["kafka_bronze"]
-           }
-         }
-
-**Node snippet**:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — the key IS the node name (flat, no wrapper)
-         [kafka_bronze]
-         input = { format = "kafka", options = { "kafka.bootstrap.servers" = "localhost:9092", subscribe = "events_raw" } }
-         function = { key = "enrich_events", params = { source = "kafka", quality_tier = "bronze" } }
-         output = { format = "delta", path = "./data/delta/bronze/events" }
-         streaming = { trigger = { type = "processing_time", interval = "10 seconds" }, checkpoint_location = "./checkpoints/kafka_bronze" }
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         kafka_bronze:
-           input:
-             format: kafka
-             options:
-               kafka.bootstrap.servers: localhost:9092
-               subscribe: events_raw
-           function:
-             key: enrich_events
-             params:
-               source: kafka
-               quality_tier: bronze
-           output:
-             format: delta
-             path: ./data/delta/bronze/events
-           streaming:
-             trigger:
-               type: processing_time
-               interval: "10 seconds"
-             checkpoint_location: ./checkpoints/kafka_bronze
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "kafka_bronze": {
-             "input": {
-               "format": "kafka",
-               "options": { "kafka.bootstrap.servers": "localhost:9092", "subscribe": "events_raw" }
-             },
-             "function": {
-               "key": "enrich_events",
-               "params": { "source": "kafka", "quality_tier": "bronze" }
-             },
-             "output": {
-               "format": "delta",
-               "path": "./data/delta/bronze/events"
-             },
-             "streaming": {
-               "trigger": { "type": "processing_time", "interval": "10 seconds" },
-               "checkpoint_location": "./checkpoints/kafka_bronze"
-             }
-           }
-         }
-
-Optional transformation function:
+The transform is a function registered under a key:
 
 .. code-block:: python
 
-    # Signature with params is supported
-    def enrich_events(df, params):
-      from pyspark.sql.functions import lit, current_timestamp
-      return (
-         df.withColumn("ingest_source", lit(params.get("source", "unknown")))
-         .withColumn("quality_tier", lit(params.get("quality_tier", "bronze")))
-         .withColumn("processed_at", current_timestamp())
-      )
+   # pipelines/transforms.py
+   from pyspark.sql import functions as F
 
-.. note::
 
-    Backward-compatible transformations with ``fn(df)`` are also supported.
-    If ``params`` are provided but the function only accepts ``df``, params are ignored.
+   def clean_events(df, params=None):
+       min_amount = float((params or {}).get("min_amount", 0.0))
+       return (
+           df.filter(F.col("amount").isNotNull())
+           .filter(F.col("amount") >= F.lit(min_amount))
+           .withColumn("ingested_at", F.current_timestamp())
+       )
 
-Run:
 
-.. code-block:: bash
+   def register_transforms(registry):
+       registry.register("clean_events", clean_events)
 
-    mkdir -p data/delta/bronze/events checkpoints/kafka_to_delta_intermediate
-    ducta stream run --config config/pipelines.toml --pipeline kafka_to_delta_intermediate --mode async
-
-Check detailed status:
+Step 3: Run it continuously
+---------------------------
 
 .. code-block:: bash
 
-    ducta stream status --config config/pipelines.toml --format json
+   ducta config validate --env dev
+   ducta stream run --pipeline events_stream --env dev
 
-Success criteria:
-
-- Kafka node starts without validation errors.
-- Delta files are produced under the configured path.
-- Query remains active and reports progress.
-
-Level 3: Advanced (DAG + depends_on + health visibility)
---------------------------------------------------------
-
-Goal: run a dependency-aware DAG with bronze/silver/audit branches.
-
-**Pipeline snippet**:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/pipelines.toml — the key IS the pipeline name (flat, no wrapper)
-         [streaming_advanced]
-         type = "streaming"
-         nodes = ["bronze_ingest", "silver_enriched", "audit_console"]
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/pipelines.yaml
-         streaming_advanced:
-           type: streaming
-           nodes:
-             - bronze_ingest
-             - silver_enriched
-             - audit_console
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "streaming_advanced": {
-             "type": "streaming",
-             "nodes": ["bronze_ingest", "silver_enriched", "audit_console"]
-           }
-         }
-
-**Node snippets**:
-
-.. tab-set::
-
-   .. tab-item:: TOML
-
-      .. code-block:: toml
-
-         # config/nodes.toml — the key IS the node name (flat, no wrapper)
-         [bronze_ingest]
-         input = { format = "kafka", options = { "kafka.bootstrap.servers" = "localhost:9092", subscribe = "events_raw" } }
-         output = { format = "delta", path = "./data/delta/bronze/events" }
-         streaming = { trigger = { type = "processing_time", interval = "10 seconds" }, checkpoint_location = "./checkpoints/bronze" }
-
-         [silver_enriched]
-         depends_on = ["bronze_ingest"]
-         input = { format = "delta_stream", path = "./data/delta/bronze/events", options = { readChangeFeed = "true" } }
-         output = { format = "delta", path = "./data/delta/silver/events" }
-         streaming = { trigger = { type = "processing_time", interval = "15 seconds" }, checkpoint_location = "./checkpoints/silver" }
-
-   .. tab-item:: YAML
-
-      .. code-block:: yaml
-
-         # config/nodes.yaml
-         bronze_ingest:
-           input:
-             format: kafka
-             options:
-               kafka.bootstrap.servers: localhost:9092
-               subscribe: events_raw
-           output:
-             format: delta
-             path: ./data/delta/bronze/events
-           streaming:
-             trigger:
-               type: processing_time
-               interval: "10 seconds"
-             checkpoint_location: ./checkpoints/bronze
-
-         silver_enriched:
-           depends_on: [bronze_ingest]
-           input:
-             format: delta_stream
-             path: ./data/delta/bronze/events
-             options:
-               readChangeFeed: "true"
-           output:
-             format: delta
-             path: ./data/delta/silver/events
-           streaming:
-             trigger:
-               type: processing_time
-               interval: "15 seconds"
-             checkpoint_location: ./checkpoints/silver
-
-   .. tab-item:: JSON
-
-      .. code-block:: json
-
-         {
-           "bronze_ingest": {
-             "input": {
-               "format": "kafka",
-               "options": { "kafka.bootstrap.servers": "localhost:9092", "subscribe": "events_raw" }
-             },
-             "output": { "format": "delta", "path": "./data/delta/bronze/events" },
-             "streaming": {
-               "trigger": { "type": "processing_time", "interval": "10 seconds" },
-               "checkpoint_location": "./checkpoints/bronze"
-             }
-           },
-           "silver_enriched": {
-             "depends_on": ["bronze_ingest"],
-             "input": {
-               "format": "delta_stream",
-               "path": "./data/delta/bronze/events",
-               "options": { "readChangeFeed": "true" }
-             },
-             "output": { "format": "delta", "path": "./data/delta/silver/events" },
-             "streaming": {
-               "trigger": { "type": "processing_time", "interval": "15 seconds" },
-               "checkpoint_location": "./checkpoints/silver"
-             }
-           }
-         }
-
-Run:
+The command starts both queries and returns. They keep running: copy another
+``.json`` event into ``data/events/`` and it appears in
+``data/dev/bronze/events`` and, if it has an amount, in
+``data/dev/silver/events``.
 
 .. code-block:: bash
 
-    mkdir -p data/delta/bronze/events data/delta/silver/events checkpoints/advanced
-    ducta stream run --config config/pipelines.toml --pipeline streaming_advanced --mode async
+   ducta stream status --env dev                         # queries, rates, health
+   ducta stream stop --env dev --execution-id <id>
 
-Inspect runtime state:
+Step 4: Run it as a finite job
+------------------------------
 
-.. code-block:: bash
+For a backfill, a test or CI, you want a run that processes what exists and
+ends. Give the nodes a terminating trigger in one environment only:
 
-    ducta stream status --config config/pipelines.toml --format json
+.. code-block:: yaml
 
-What to expect:
-
-- Nodes are started according to dependency order (topological order).
-- If an upstream node fails, dependent nodes may be marked as skipped.
-- Pipeline can move to ``partial_failure`` while independent branches continue.
-- Health details are included in status output.
-
-Operational Playbook
---------------------
-
-1. Start in ``async`` mode for long-running pipelines.
-2. Always use unique ``checkpoint_location`` per node.
-3. Use ``--format json`` in status for machine-readable diagnostics.
-4. Stop gracefully:
+   # ducta.yaml
+   version: 2
+   project: events
+   paths: {input: data, output: data}
+   environments:
+     sandbox:
+       pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger: {type: available_now}
+       pipelines.events_stream.nodes.clean_events.stream.streaming.trigger: {type: available_now}
 
 .. code-block:: bash
 
-    ducta stream stop --config config/pipelines.toml --execution-id <execution_id> --timeout 60
+   ducta stream run --pipeline events_stream --env sandbox --mode sync
 
-Troubleshooting Checklist
--------------------------
+``--mode sync`` waits for the queries, and a node waits for the node it reads
+from to finish before it starts. The command returns when both are done:
+``data/sandbox/bronze/events`` holds the five seed events, and
+``data/sandbox/silver/events`` the three that have an amount.
 
-- ``StreamingValidationError`` on Kafka input:
-   Ensure exactly one of ``subscribe``, ``subscribePattern``, or ``assign`` is set.
-- ``StreamingValidationError`` on dependencies:
-   Verify all ``depends_on`` nodes exist and there are no cycles.
-- Checkpoint conflict errors:
-   Ensure every node has its own checkpoint directory.
-- File stream path warning:
-   Prefer ``input.options.path`` over root-level ``input.path``.
+Step 5: Kafka in, Delta out
+---------------------------
 
-Next Steps
+Production streams usually come from Kafka and land in Delta. Only the node's
+``input``, ``output`` and transform change:
+
+.. code-block:: yaml
+
+   # pipelines/orders_stream.yaml
+   type: streaming
+   requires_dates: false
+   nodes:
+     orders_to_bronze:
+       kind: stream
+       stream:
+         input:
+           format: kafka
+           options:
+             kafka.bootstrap.servers: broker:9092
+             subscribe: orders
+             startingOffsets: latest
+         transform: {key: parse_orders, module: pipelines.transforms}
+         output:
+           format: delta
+           path: ${paths.output}/${env}/bronze/orders
+         streaming:
+           checkpoint_location: ${paths.output}/${env}/_ckpt/orders_to_bronze
+           trigger: {type: processing_time, interval: 30 seconds}
+           watermark: {column: event_time, delay: 10 minutes}
+
+Kafka delivers ``key`` and ``value`` as bytes, so the transform parses them:
+
+.. code-block:: python
+
+   # pipelines/transforms.py (added)
+   from pyspark.sql import functions as F
+
+   ORDER = "order_id STRING, amount DOUBLE, event_time TIMESTAMP"
+
+
+   def parse_orders(df, params=None):
+       return (
+           df.select(F.from_json(F.col("value").cast("string"), ORDER).alias("o"))
+           .select("o.*")
+       )
+
+
+   def register_transforms(registry):
+       registry.register("clean_events", clean_events)
+       registry.register("parse_orders", parse_orders)
+
+Operating streams
+-----------------
+
+- **Restarting** a pipeline resumes each query from its checkpoint. Deleting a
+  node's checkpoint replays its source from the beginning.
+- **Changing a query's logic** (a new transform, a new output) usually needs a
+  new checkpoint location; Spark refuses incompatible changes to a checkpoint.
+- **Two queries never share a checkpoint**: Ducta rejects the second one
+  instead of letting both corrupt it.
+- ``stream status`` reports input and processing rates per query; a query that
+  stops making progress shows up there first.
+
+Next steps
 ----------
 
-- Add watermarking and window aggregations per node.
-- Add domain-specific transformation functions and register them at startup.
-- Extend the advanced DAG with quality gates and alerting sinks.
-- Review :doc:`/streaming` for full API, validation, and error model details.
+- :doc:`/streaming` — every key of a stream node, and the Python API
+- :doc:`/quality` — checks on what your pipelines write
