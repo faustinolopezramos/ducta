@@ -27,7 +27,7 @@ GLOBAL_CONFIG = {
     "output_path": "data",
     "mode": "local",
     "preflight_enabled": False,
-    "enable_run_certificate": False,
+    "evidence_level": "off",
 }
 
 NODES_CONFIG = {

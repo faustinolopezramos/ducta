@@ -14,8 +14,11 @@ Core CLI Commands
      - Description
    * - ``ducta start``
      - Runs a pipeline: ``--pipeline <name>``, plus ``--env <env>`` (default ``base``).
+   * - ``ducta init project --name NAME``
+     - Creates a project in the recommended layout (``--type batch|ml|streaming|hybrid``,
+       ``--format yaml|toml|json``).
    * - ``ducta template``
-     - Scaffolds a new project from a professional template.
+     - Scaffolds a new project from a professional template (one catalog file unless ``--layout split``).
    * - ``ducta config list-pipelines``
      - Shows all available pipelines in your current directory.
    * - ``ducta config validate``
@@ -97,8 +100,7 @@ Dataset Template
      path: ${paths.input}/sales.csv
      options: {header: true}
      incremental: {column: sale_date}
-     checks:
-       checks: {empty_dataset: true}
+     quality: {empty_dataset: true}
    core.analytics.sales_clean:
      format: delta
      write:

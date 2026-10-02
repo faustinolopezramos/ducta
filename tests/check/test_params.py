@@ -99,7 +99,7 @@ class TestConfigValidation:
 
     def test_dataset_contracts_are_validated(self, tmp_path):
         root = _project(
-            tmp_path, "{row_count: {min: 1}}", ", checks: {schema: {expected_colums: [a]}}"
+            tmp_path, "{row_count: {min: 1}}", ", quality: {schema: {expected_colums: [a]}}"
         )
         with pytest.raises(ProjectConfigError, match="did you mean 'expected_columns'"):
             validate_project(root)

@@ -352,50 +352,24 @@ class CoreSettings:
 
     @staticmethod
     def _resolve_evidence(gs: Mapping[str, Any]) -> Tuple[str, bool, bool, Tuple[str, ...]]:
-        """Resolve ``evidence_level`` and the legacy booleans into one policy."""
+        """Resolve ``evidence_level`` into the policy: (level, enabled, required, problems)."""
         problems: List[str] = []
-        raw_enable = gs.get("enable_run_certificate")
-        raw_require = gs.get("require_run_certificate")
-        enable = coerce_bool("enable_run_certificate", raw_enable, default=True)
-        require = coerce_bool("require_run_certificate", raw_require, default=False)
         raw_level = gs.get("evidence_level")
-
         if raw_level is None:
-            if require and not enable:
+            level = EVIDENCE_RECORD
+        else:
+            level = str(raw_level).strip().lower()
+            if level not in EVIDENCE_LEVELS:
                 problems.append(
-                    "require_run_certificate is true but enable_run_certificate is false "
-                    "— no certificate can be written"
+                    f"evidence_level {raw_level!r} is not one of {', '.join(EVIDENCE_LEVELS)}"
                 )
-            if not enable:
-                return EVIDENCE_OFF, enable, require, tuple(problems)
-            return (
-                (EVIDENCE_REQUIRED if require else EVIDENCE_RECORD),
-                True,
-                require,
-                tuple(problems),
-            )
-
-        level = str(raw_level).strip().lower()
-        if level not in EVIDENCE_LEVELS:
-            problems.append(
-                f"evidence_level {raw_level!r} is not one of {', '.join(EVIDENCE_LEVELS)}"
-            )
-
-            level = EVIDENCE_REQUIRED
-
-        derived_enable = level != EVIDENCE_OFF
-        derived_require = level in (EVIDENCE_REQUIRED, EVIDENCE_SIGNED)
-        if raw_enable is not None and enable != derived_enable:
-            problems.append(
-                f"enable_run_certificate={str(enable).lower()} contradicts "
-                f"evidence_level={level!r}; remove the legacy key"
-            )
-        if raw_require is not None and require != derived_require:
-            problems.append(
-                f"require_run_certificate={str(require).lower()} contradicts "
-                f"evidence_level={level!r}; remove the legacy key"
-            )
-        return level, derived_enable, derived_require, tuple(problems)
+                level = EVIDENCE_REQUIRED
+        return (
+            level,
+            level != EVIDENCE_OFF,
+            level in (EVIDENCE_REQUIRED, EVIDENCE_SIGNED),
+            tuple(problems),
+        )
 
     @staticmethod
     def _resolve_env(context: Any, gs: Mapping[str, Any]) -> Optional[str]:

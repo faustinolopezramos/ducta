@@ -167,6 +167,8 @@ class SourceResolver:
             for f in [
                 root / "ducta.yaml",
                 root / "catalog.yaml",
+                *sorted((root / "catalog").rglob("*.yaml")),
+                root / "quality" / "profiles.yaml",
                 *sorted((root / "pipelines").rglob("*.yaml")),
             ]:
                 if f.is_file():

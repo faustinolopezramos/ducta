@@ -199,22 +199,19 @@ class TestSignatureCannotBeStripped:
 
 class TestResolveSigningKey:
     def test_env_var_upper_case_is_accepted(self, monkeypatch):
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "upper-case-key")
         assert resolve_signing_key({}) == b"upper-case-key"
 
-    def test_mixed_case_env_var_still_works(self, monkeypatch):
+    def test_the_old_mixed_case_spelling_is_no_longer_read(self, monkeypatch):
         monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "mixed-case-key")
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        assert resolve_signing_key({}) == b"mixed-case-key"
+        assert resolve_signing_key({}) is None
 
     def test_no_key_returns_none(self, monkeypatch):
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         assert resolve_signing_key({}) is None
 
     def test_config_key_used_when_no_env_var(self, monkeypatch):
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         ctx = {"certificate_signing_key": "from-config"}
         assert resolve_signing_key(ctx) == b"from-config"
@@ -228,24 +225,22 @@ def _project_with_settings(root, settings: str) -> None:
 
 class TestResolveSigningKeyFromDir:
     def test_reads_key_from_the_project_settings(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         _project_with_settings(tmp_path, "  certificate_signing_key: dir-based-key\n")
         assert resolve_signing_key_from_dir(tmp_path) == b"dir-based-key"
 
     def test_falls_back_to_env_var_when_there_is_no_project(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "env-fallback-key")
+        monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "env-fallback-key")
         assert resolve_signing_key_from_dir(tmp_path) == b"env-fallback-key"
 
     def test_the_env_var_wins_over_the_project_settings(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "env-key")
+        monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "env-key")
         _project_with_settings(tmp_path, "  certificate_signing_key: file-key\n")
         assert resolve_signing_key_from_dir(tmp_path) == b"env-key"
 
     def test_finds_a_project_kept_under_a_config_subdir(self, tmp_path, monkeypatch):
         """A wrapper directory whose project lives in ``config/``: the project
         root is not the directory the command was started from."""
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         (tmp_path / "config").mkdir()
         _project_with_settings(
@@ -254,7 +249,6 @@ class TestResolveSigningKeyFromDir:
         assert resolve_signing_key_from_dir(tmp_path) == b"config-subdir-key"
 
     def test_a_broken_project_yields_no_key_instead_of_raising(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
         (tmp_path / "ducta.yaml").write_text("version: 2\nproject: [not, a, name]\n")
         assert resolve_signing_key_from_dir(tmp_path) is None

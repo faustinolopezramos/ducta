@@ -101,7 +101,7 @@ class TestTheTraceReachesTheResult:
         engine, _ = _engine(
             nodes,
             pipelines,
-            enable_run_certificate=True,
+            evidence_level="record",
             run_certificate_dir=str(tmp_path / "runs"),
         )
 

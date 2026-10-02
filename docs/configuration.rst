@@ -31,8 +31,11 @@ mistake with its file and line.
    * - ``pipelines/<name>.yaml``
      - One pipeline — the file name is the pipeline name — and its nodes.
 
-``ducta template`` generates a complete project; the sections below explain
-each file. Commands find the project the way git finds a repository: from the
+``ducta init project --name my_project`` (or ``ducta template``) generates a
+complete project; the sections below explain each file. A large project splits
+its catalog by layer (``catalog/bronze.yaml``, ``catalog/silver.yaml``, …) and
+keeps its quality profiles in ``quality/profiles.yaml`` — see
+:ref:`catalog-folder` and :ref:`profiles-file`. Commands find the project the way git finds a repository: from the
 current directory (or ``--base-path``) upwards, the first directory holding a
 ``ducta.yaml`` with ``version: 2``, at its root or under ``config/``.
 
@@ -163,10 +166,9 @@ a dataset by its name; the catalog says where it is and how to handle it.
      path: ${paths.input}/orders.csv
      options: {header: true}
      incremental: {column: order_date}      # read + fingerprint only the run's window
-     checks:                                # contract: checked wherever it is read
-       checks:
-         empty_dataset: true
-         schema: {expected_columns: [order_id, amount, order_date]}
+     quality:                               # contract: checked wherever it is read
+       empty_dataset: true
+       schema: {expected_columns: [order_id, amount, order_date]}
    silver.sales.orders:                     # no path: <output>/<env>/silver/sales/orders
      format: delta
      write:
@@ -205,7 +207,7 @@ a dataset by its name; the catalog says where it is and how to handle it.
      - Delta time travel: ``{version: 12}`` or ``{timestamp: "2026-01-31"}``.
    * - ``write``
      - How a node writes it — see below.
-   * - ``checks``
+   * - ``quality``
      - The dataset's contract: checks run on every read, by any node.
        Same shape as a node's ``quality`` block (:ref:`quality-config`).
 
@@ -245,6 +247,47 @@ a first run creates the table. For a Delta overwrite of one slice only, use
 ``overwrite_strategy: replaceWhere`` with ``partition_col`` or
 ``replace_predicate``. ``write.options`` holds writer options when they differ
 from the reader's ``options``.
+
+.. _catalog-folder:
+
+A catalog split by layer
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+Past a few dozen datasets one ``catalog.yaml`` is hard to scan. Replace it with a
+``catalog/`` folder: every file in it (any depth) is a mapping of dataset names to
+datasets, and together they are the catalog.
+
+.. code-block:: text
+
+   catalog/
+   ├── sources.yaml     # raw inputs and seeds (names with no layer prefix)
+   ├── bronze.yaml
+   ├── silver.yaml
+   └── gold.yaml
+
+.. code-block:: yaml
+
+   # catalog/silver.yaml
+   silver.sales.orders:
+     description: Orders, deduplicated and typed
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [order_id]}
+     quality:
+       null_rate: {columns: [order_id], threshold: 0.0}
+       duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
+       gate: {max_errors: 0}
+
+Two rules keep it unambiguous. A project keeps its datasets in **one place**:
+``catalog.yaml`` next to a ``catalog/`` folder is an error. And a dataset is
+declared **once**: the same name in two files is an error that names both files.
+Errors and ``ducta config explain`` cite the real file and line
+(``catalog/silver.yaml:4``). The files may be YAML, TOML or JSON, as everywhere.
+
+When the API edits a dataset it writes it back to the file that declares it; a new
+dataset goes to ``catalog/<layer>.yaml`` (``catalog/sources.yaml`` when its name has
+no layer).
 
 pipelines/<name>.yaml
 ---------------------
@@ -447,7 +490,9 @@ default gate does not turn every node into one with checks to run.
 **Templates.** A pipeline file can build on a template: a pipeline written once,
 with ``${params.name}`` placeholders, kept under ``templates/``. The template's
 keys sit *under* the file's own — mappings merge, lists and scalars replace — and
-a placeholder that is the whole value keeps its type.
+a placeholder that is the whole value keeps its type. A placeholder also works
+inside a **key**, which is how one template serves several pipelines: node names
+are unique across the project, so each copy has to name its nodes differently.
 
 .. code-block:: yaml
 
@@ -466,19 +511,27 @@ a placeholder that is the whole value keeps its type.
    requires_dates: false
    split: {method: "${params.method}", stratify_col: "${params.target}", seed: 42}
    nodes:
-     train:
+     train_${params.target}:              # a placeholder in a key names the node per copy
        description: "Train a model for ${params.target}"
        run: pipelines.ml:train
        ml_stage: training
        inputs: {features: silver.ml.features}
        outputs: [gold.ml.metrics]
 
-Anything else the file writes is merged over the template: a ``nodes: {train: {retry: 3}}``
-in ``ml.risk.yaml`` adds ``retry`` to the template's ``train`` node and keeps the rest.
+Anything else the file writes is merged over the template: a
+``nodes: {train_At_Risk: {retry: 3}}`` in ``ml.risk.yaml`` adds ``retry`` to the
+template's ``train_At_Risk`` node and keeps the rest.
 A template is not a pipeline: it is not discovered, it cannot extend another
 template, and a parameter it does not declare is an error. There is no
 conditional and no loop; if a template needs one, it is two templates. TOML has
 no null, so a required parameter is written ``"<required>"`` there.
+
+Two things to know about placeholders in keys. Only a plain value (text or a number)
+can be part of a name — a list or a mapping is an error that says so — and two keys
+that become the same name are an error, never a silent overwrite. And in YAML, write
+such a template in block style: ``{raw: ${params.t}_raw}`` is not valid inside a
+flow mapping (``{...}``) unless quoted, whereas ``raw: ${params.t}_raw`` on its own
+line is fine.
 
 .. _quality-config:
 
@@ -487,7 +540,7 @@ Quality checks and gates
 
 The same block — ``checks`` plus an optional ``gate`` — appears in three places:
 
-- a dataset's ``checks`` in the catalog: a contract checked whenever any node
+- a dataset's ``quality`` in the catalog: a contract checked whenever any node
   reads it;
 - a node's ``input_checks``: checks on one input for that node only — they
   replace the dataset's catalog contract for that node;
@@ -558,6 +611,32 @@ nothing is accepted as before.
 
 The checks available, their parameters and custom checks are in :doc:`quality`.
 
+.. _profiles-file:
+
+Profiles in their own file
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Quality profiles (named, reusable sets of checks) can live in
+``quality/profiles.yaml`` instead of ``settings.quality.profiles``, which keeps
+``ducta.yaml`` short:
+
+.. code-block:: yaml
+
+   # quality/profiles.yaml
+   customers_dimension:
+     checks:
+       null_rate: {columns: [customer_id, country], threshold: 0.0}
+       duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
+   strict:
+     checks:
+       empty_dataset: {enabled: true}
+
+The file is merged into ``settings.quality.profiles`` before environments apply,
+so an environment can still override one value
+(``settings.quality.profiles.strict.checks...``). A profile defined in both places is
+an error — there is no silent winner. Nodes and datasets use them exactly as before,
+with ``profile: customers_dimension``.
+
 .. _environments:
 
 Environments
@@ -594,6 +673,12 @@ pipelines:
 - An override can only address ``settings``, ``paths``, ``catalog``,
   ``pipelines`` and ``metadata``, and the merged result is validated like the
   base project — an override cannot introduce an unknown key either.
+- A dotted key must name something that exists. ``pipelines.etl.nodes.clena.retry``
+  is an error at the line in ``ducta.yaml`` — *there is no node 'clena' in pipeline
+  'etl' — did you mean 'clean'?* — and a typo in the last segment
+  (``…nodes.clean.retyr``) is reported at ``ducta.yaml`` too, not at the pipeline
+  file whose key it addressed. (A nested mapping can still add a whole new dataset or
+  node to one environment.)
 - ``sandbox_alice`` uses its own block if there is one, otherwise ``sandbox``'s.
   There is no other inheritance: ``staging`` does not pick up ``prod``'s block —
   repeat the keys, or share them with a YAML anchor.
@@ -677,11 +762,21 @@ Checking a project
 
 .. code-block:: bash
 
-   ducta config validate                 # schema + references, every problem at once
+   ducta config validate                 # schema, references, cycles, input names — every problem at once
    ducta config validate --env prod      # the project as prod sees it
    ducta config list-pipelines           # what can run
    ducta start --pipeline etl --validate-only   # plus preflight: modules, functions, paths
    ducta config schema --out .           # refresh .ducta/schema/ for editor autocompletion
+
+What it catches before anything runs, with the file and line: unknown keys and
+near-miss names; references to datasets, nodes and pipelines that do not exist;
+**dependency cycles** (through ``after``, through the data nodes read and write, and
+between pipelines); a dotted environment override that names a node, pipeline or
+dataset that is not there; and, in ``ducta config validate`` and ``ducta start
+--validate-only``, an ``inputs`` key that is **not a parameter of the node's
+function** — ``inputs: {raw_dat: …}`` for ``def clean(raw_data, …)`` — which would
+otherwise fail only when the node runs, after the nodes before it had already
+written their output.
 
 To see what a project resolves to, and why:
 
@@ -716,6 +811,101 @@ errors. With the VS Code YAML extension:
      }
    }
 
+Conventions
+-----------
+
+A project reads the same to everyone when the names follow one pattern.
+
+.. list-table::
+   :widths: 22 38 40
+   :header-rows: 1
+
+   * - What
+     - Convention
+     - Example
+   * - Dataset
+     - ``layer.domain.table``; layers ``seed``, ``bronze``, ``silver``, ``gold``,
+       ``ml``. The name places it on disk when it has no ``path``.
+     - ``silver.sales.orders``
+   * - Pipeline
+     - ``layer.domain`` — the file name is the pipeline name.
+     - ``pipelines/silver.sales.yaml``
+   * - Node
+     - ``verb_object`` in snake_case; a layer prefix only where the name would
+       be ambiguous across pipelines.
+     - ``clean_orders``, ``train_churn``
+   * - ``inputs`` keys
+     - The parameter name of the function the node runs, so the contract reads
+       without opening the code.
+     - ``inputs: {orders_raw: bronze.sales.orders}``
+   * - Environments
+     - ``dev``, ``sandbox``, ``staging``, ``prod``; ``sandbox_<developer>`` for
+       personal ones.
+     - ``environments: {prod: …}``
+
+**One format per project.** Files of different formats can live side by side, but a
+team that mixes three syntaxes pays for it in every review. Use YAML throughout (it
+keeps comments), or TOML for a small project whose settings are flat; keep JSON for
+files tools write (``ducta config show --format json``, the editor schemas).
+``ducta config convert`` moves a whole project from one to another.
+
+A project grows into this layout:
+
+.. code-block:: text
+
+   my_project/
+   ├── ducta.yaml                 # project, paths, settings, environments (aim for < 40 lines)
+   ├── catalog/                   # or one catalog.yaml while it is short
+   │   ├── sources.yaml
+   │   ├── bronze.yaml
+   │   ├── silver.yaml
+   │   └── gold.yaml
+   ├── quality/
+   │   └── profiles.yaml          # reusable quality profiles
+   ├── pipelines/
+   │   ├── bronze.sales.yaml      # <layer>.<domain>.yaml
+   │   ├── silver.sales.yaml
+   │   └── ml.churn_train.yaml
+   ├── templates/                 # pipelines written once, used with extends/params
+   ├── hyperparams/               # model hyperparameters, apart from the code
+   ├── src/my_project/            # the functions nodes run
+   └── .ducta/                    # generated: schemas, runs (keep out of git)
+
+``ducta init project`` writes this layout. Data engineers mostly edit
+``pipelines/`` and ``catalog/``; data scientists edit the ML pipeline's ``split``,
+``hyperparams`` and ``model_version`` without touching Python:
+
+.. code-block:: yaml
+
+   # pipelines/ml.churn_train.yaml
+   description: Churn model — features, training, evaluation
+   type: ml
+   requires_dates: false
+   model_version: "2026.10"
+   hyperparams: {n_estimators: 200, max_depth: 8}
+   split: {method: stratified, stratify_col: churned, test_size: 0.2, val_size: 0.2, seed: 42}
+   nodes:
+     build_features:
+       run: churn.features:build_features
+       ml_stage: feature_engineering
+       inputs: {orders: silver.sales.orders}
+       outputs: [ml.churn.features]
+     train_model:
+       run: churn.model:train_model
+       ml_stage: training
+       inputs: {features: ml.churn.features}
+       outputs: [ml.churn.metrics]
+       after: [build_features]
+
+A pipeline repeated for several sources is written once as a template and each
+copy states only its parameters (see *Say it once* above):
+
+.. code-block:: yaml
+
+   # pipelines/bronze.customers.yaml
+   extends: templates/ingest_csv
+   params: {table: customers, source: data/raw/customers.csv}
+
 Good practice
 -------------
 
@@ -723,7 +913,7 @@ Good practice
   documents the dataset and gives it a location in every environment for free.
 - Give functions named parameters and map them with ``inputs: {param: dataset}``
   — reordering inputs can then never swap two DataFrames.
-- Put a contract (``checks``) on datasets other teams produce; it guards every
+- Put a contract (``quality``) on datasets other teams produce; it guards every
   node that reads them.
 - Keep ``environments`` blocks short. If one grows as large as the base
   project, the environments are probably different projects.

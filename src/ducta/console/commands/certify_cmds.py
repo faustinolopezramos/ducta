@@ -479,7 +479,7 @@ def _handle_verify(parsed_args) -> int:
         return ExitCode.VALIDATION_ERROR.value
 
     # Integrity first: a tampered certificate can't be trusted to reproduce against.
-    # A signing key (env DUCTA_CERTIFICATE_KEY, legacy Ducta_CERTIFICATE_KEY, or
+    # A signing key (env DUCTA_CERTIFICATE_KEY, or
     # global_config.certificate_signing_key in the project's config) additionally
     # verifies the signature.
     signing_key = resolve_signing_key_from_dir(Path.cwd())

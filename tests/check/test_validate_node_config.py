@@ -93,7 +93,7 @@ class TestService:
         (root / "catalog.yaml").write_text(
             CATALOG.replace(
                 "silver.sales.orders: {format: parquet}",
-                "silver.sales.orders: {format: parquet, checks: {checks: {nope: {}}}}",
+                "silver.sales.orders: {format: parquet, quality: {checks: {nope: {}}}}",
             )
         )
         result = QualityService.validate_node_config("bare", root)

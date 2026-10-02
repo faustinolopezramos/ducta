@@ -26,7 +26,8 @@ ordinary, fully written-out pipelines and datasets:
   pipeline written once, with ``${params.name}`` placeholders). The template's
   keys sit *under* the file's own; mappings merge, lists and scalars replace.
   Substitution is plain: a placeholder is replaced by the parameter's value,
-  with no conditionals and no loops.
+  in values *and* in keys (so one template names its nodes and datasets per copy:
+  ``${params.layer}.clean_orders``), with no conditionals and no loops.
 * ``defaults`` — values datasets and nodes get unless they set their own.
   Precedence, lowest first: project ``defaults`` < pipeline ``defaults`` <
   the dataset or node itself < the active environment's overrides.
@@ -65,6 +66,26 @@ def _merge(base: Any, override: Any) -> Any:
 # ── pipeline templates ───────────────────────────────────────────────────────
 
 
+def _substitute_key(key: Any, params: Dict[str, Any]) -> Any:
+    """A key with its placeholders filled: ``${params.layer}.clean`` → ``silver.clean``.
+
+    Only plain values can be part of a name; a list or a mapping cannot.
+    """
+    if not isinstance(key, str):
+        return key
+
+    def fill(match: "re.Match[str]") -> str:
+        value = params[match.group(1)]
+        if isinstance(value, (dict, list)):
+            raise ValueError(
+                f"parameter '{match.group(1)}' is used inside the key '{key}', so it must be "
+                f"a plain value (text or a number), not a {type(value).__name__}"
+            )
+        return str(value)
+
+    return _PARAM.sub(fill, key)
+
+
 def _substitute(value: Any, params: Dict[str, Any]) -> Any:
     if isinstance(value, str):
         whole = _PARAM.fullmatch(value.strip())
@@ -72,7 +93,18 @@ def _substitute(value: Any, params: Dict[str, Any]) -> Any:
             return copy.deepcopy(params[whole.group(1)])
         return _PARAM.sub(lambda m: str(params[m.group(1)]), value)
     if isinstance(value, dict):
-        return {k: _substitute(v, params) for k, v in value.items()}
+        # Keys too: this is how one template writes nodes or datasets whose names
+        # differ per copy. Two keys that become the same name are an error, never a
+        # silent overwrite.
+        out: Dict[Any, Any] = {}
+        for key, inner in value.items():
+            name = _substitute_key(key, params)
+            if name in out:
+                raise ValueError(
+                    f"the keys '{key}' and another one both become '{name}' with these parameters"
+                )
+            out[name] = _substitute(inner, params)
+        return out
     if isinstance(value, list):
         return [_substitute(v, params) for v in value]
     return value
@@ -82,7 +114,9 @@ def _placeholders(value: Any) -> List[str]:
     if isinstance(value, str):
         return _PARAM.findall(value)
     if isinstance(value, dict):
-        return [name for v in value.values() for name in _placeholders(v)]
+        return [
+            name for key, v in value.items() for name in [*_placeholders(key), *_placeholders(v)]
+        ]
     if isinstance(value, list):
         return [name for v in value for name in _placeholders(v)]
     return []
@@ -153,7 +187,12 @@ def resolve_extends(
         if bad:
             continue
         own = {k: v for k, v in doc.items() if k not in _EXTENDS_KEYS}
-        out[name] = _merge(_substitute(body, values), own)
+        try:
+            expanded = _substitute(body, values)
+        except ValueError as e:
+            problems.append(f"{at}: template '{ref}': {e}")
+            continue
+        out[name] = _merge(expanded, own)
     return out, problems
 
 

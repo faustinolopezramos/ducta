@@ -1,10 +1,7 @@
 """`evidence_level`: the project chooses how much evidence a run must leave.
 
-off | record (default, historical behaviour) | required | signed. The legacy
-`enable_run_certificate` / `require_run_certificate` keys keep working; one
-that contradicts an explicit level is a preflight error, never a silent
-override. The level is recorded inside the certificate so `verify` can hold a
-`signed` certificate to its own policy.
+off | record (default) | required | signed. The level is recorded inside the
+certificate so `verify` can hold a `signed` certificate to its own policy.
 """
 
 from __future__ import annotations
@@ -47,23 +44,9 @@ class TestResolution:
         assert s.require_run_certificate is require
         assert s.evidence_problems == ()
 
-    def test_legacy_keys_alone_still_work(self):
-        assert _settings(require_run_certificate=True).evidence_level == "required"
-        assert _settings(enable_run_certificate=False).evidence_level == "off"
-
-    def test_legacy_key_contradicting_explicit_level_is_a_problem(self):
-        s = _settings(evidence_level="required", require_run_certificate=False)
-        assert any("contradicts" in p for p in s.evidence_problems)
-
-    def test_legacy_key_agreeing_with_level_is_fine(self):
-        assert (
-            _settings(evidence_level="required", require_run_certificate=True).evidence_problems
-            == ()
-        )
-
-    def test_legacy_self_contradiction_is_a_problem(self):
+    def test_the_old_boolean_keys_no_longer_decide_anything(self):
         s = _settings(enable_run_certificate=False, require_run_certificate=True)
-        assert s.evidence_problems
+        assert (s.evidence_level, s.evidence_problems) == ("record", ())
 
     def test_unknown_level_is_a_problem_and_never_weakens(self):
         s = _settings(evidence_level="signd")
@@ -78,7 +61,6 @@ class TestPreflight:
         from ducta.core import preflight
 
         monkeypatch.delenv("DUCTA_CERTIFICATE_KEY", raising=False)
-        monkeypatch.delenv("Ducta_CERTIFICATE_KEY", raising=False)
         report = preflight.PreflightReport(pipeline_name="p")
         preflight._check_evidence_policy(report, {**gs})
         return report
@@ -96,9 +78,8 @@ class TestPreflight:
         preflight._check_evidence_policy(report, {"evidence_level": "signed"})
         assert report.ok
 
-    def test_contradiction_fails_preflight(self, monkeypatch):
-        report = self._report(monkeypatch, evidence_level="off", require_run_certificate=True)
-        assert not report.ok
+    def test_an_unknown_level_fails_preflight(self, monkeypatch):
+        assert not self._report(monkeypatch, evidence_level="signd").ok
 
     def test_record_default_passes(self, monkeypatch):
         assert self._report(monkeypatch).ok
@@ -155,9 +136,9 @@ class TestVerifyHoldsTheCertificateToItsPolicy:
         assert result.policy_satisfied is True
 
 
-def test_canonical_env_var_wins_over_legacy(monkeypatch):
+def test_only_the_canonical_env_var_is_read(monkeypatch):
     from ducta.core.certificate import resolve_signing_key
 
     monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "canonical")
-    monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "legacy")
+    monkeypatch.setenv("Ducta_CERTIFICATE_KEY", "old-spelling")
     assert resolve_signing_key({}) == b"canonical"

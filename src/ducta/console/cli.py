@@ -156,12 +156,21 @@ def validate_profile_arguments(args: argparse.Namespace) -> None:
 
 def validate_init_arguments(args: argparse.Namespace) -> None:
     if not getattr(args, "init_command", None):
-        raise ValidationError("An init subcommand is required (e.g., ingestion)")
+        raise ValidationError("An init subcommand is required (e.g., project, ingestion)")
 
 
 #: Subcommands that do not run inside an existing project, and so must not
 #: create a `logs/` directory in whatever the current working directory is.
 _PROJECTLESS_SUBCOMMANDS = frozenset({"template"})
+
+
+def _is_projectless(parsed_args: argparse.Namespace) -> bool:
+    """``template`` and ``init project`` run before the project they create exists."""
+    if parsed_args.subcommand in _PROJECTLESS_SUBCOMMANDS:
+        return True
+    return (
+        parsed_args.subcommand == "init" and getattr(parsed_args, "init_command", None) == "project"
+    )
 
 
 class UnifiedCLI:
@@ -212,7 +221,7 @@ class UnifiedCLI:
             log_file=getattr(parsed_args, "log_file", None),
             verbose=bool(getattr(parsed_args, "verbose", False)),
             quiet=bool(getattr(parsed_args, "quiet", False)),
-            file_logging=parsed_args.subcommand not in _PROJECTLESS_SUBCOMMANDS,
+            file_logging=not _is_projectless(parsed_args),
         )
         return parsed_args
 

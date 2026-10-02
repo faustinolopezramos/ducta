@@ -93,7 +93,7 @@ class TestTheFacadeReportsItAsGateBlocked:
         context = FakeContext(
             nodes_config={"clean": {"module": "m", "function": "f"}},
             pipelines_config=pipelines,
-            global_config={"preflight_enabled": False, "enable_run_certificate": False},
+            global_config={"preflight_enabled": False, "evidence_level": "off"},
         )
         engine = PipelineExecutor(context)
 

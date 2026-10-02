@@ -38,6 +38,10 @@ class InitCommands:
     def handle(parsed_args) -> int:
         """Route ingestion commands."""
         init_cmd = getattr(parsed_args, "init_command", None)
+        if init_cmd == "project":
+            from ducta.console.commands.project_cmds import handle_init_project
+
+            return handle_init_project(parsed_args)
         if init_cmd == "ingestion":
             # Route to ingestion setup commands
             return IngestionSetupCommands.handle(parsed_args)

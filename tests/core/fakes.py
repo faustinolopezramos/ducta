@@ -60,7 +60,7 @@ class FakeContext:
         self.output_config = output_config or {}
         self.global_config = {
             "preflight_enabled": False,
-            "enable_run_certificate": False,
+            "evidence_level": "off",
             "mlops_enabled": False,
             "max_parallel_nodes": 4,
             **(global_config or {}),

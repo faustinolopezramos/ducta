@@ -444,27 +444,10 @@ class GlobalConfigSchema(BaseModel):
             "preflight fails without DUCTA_CERTIFICATE_KEY)"
         ),
     )
-    require_run_certificate: Optional[bool] = Field(
-        default=None,
-        description="Legacy: fail the run if its certificate cannot be written. "
-        "Prefer evidence_level.",
-    )
     certificate_signing_key: Optional[str] = Field(
         default=None,
         description="HMAC signing key. Prefer the DUCTA_CERTIFICATE_KEY environment "
         "variable: a key in a config file is usually committed.",
-    )
-    # `None`, not `True`: the validated config is dumped back into the Context,
-    # so a `True` default here reached CoreSettings as though the user had
-    # typed it and made `evidence_level: off` look like a contradiction.
-    # CoreSettings applies the real default (on).
-    enable_run_certificate: Optional[bool] = Field(
-        default=None,
-        description=(
-            "Legacy: emit a Run Certificate (config fingerprint, environment, "
-            "input/output fingerprints, quality outcomes, self-hash) per "
-            "batch/ml/hybrid run. Default on. Prefer evidence_level."
-        ),
     )
     run_certificate_dir: str = Field(
         default="${output_path}/${environment}/.ducta/runs",

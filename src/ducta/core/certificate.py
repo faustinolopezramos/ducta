@@ -41,24 +41,13 @@ LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
 _SIGNING_KEY_ENV = "DUCTA_CERTIFICATE_KEY"
-_LEGACY_SIGNING_KEY_ENV = "Ducta_CERTIFICATE_KEY"
 
 
 def resolve_signing_key(context: Any) -> Optional[bytes]:
-    """Optional HMAC signing key from ``DUCTA_CERTIFICATE_KEY`` (or the legacy
-    ``Ducta_CERTIFICATE_KEY``) or config; None if unset.
-    """
+    """Optional HMAC signing key from ``DUCTA_CERTIFICATE_KEY`` or config; None if unset."""
     from ducta.core.settings import CoreSettings
 
     key = os.environ.get(_SIGNING_KEY_ENV)
-    if not key:
-        key = os.environ.get(_LEGACY_SIGNING_KEY_ENV)
-        if key:
-            logger.debug(
-                "Signing key read from the legacy {} variable; rename it to {}.",
-                _LEGACY_SIGNING_KEY_ENV,
-                _SIGNING_KEY_ENV,
-            )
     if not key:
         key = CoreSettings.from_context(context).certificate_signing_key
         if key:
@@ -355,7 +344,7 @@ def find_certificate_dir(base_dir: Path, run_id: str, env: Optional[str] = None)
 
 
 def is_enabled(context: Any) -> bool:
-    """Run certificates are on by default; disable with ``enable_run_certificate: false``."""
+    """Run certificates are on by default; disable with ``evidence_level: off``."""
     from ducta.core.settings import CoreSettings
 
     return CoreSettings.from_context(context).enable_run_certificate

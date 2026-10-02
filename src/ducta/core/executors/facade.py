@@ -296,13 +296,6 @@ class PipelineExecutor:
             for problem in self.settings.evidence_problems:
                 logger.error("Evidence policy: {}", problem)
             if not cert_mod.is_enabled(self.context):
-                if self.settings.require_run_certificate:
-                    reason = "; ".join(self.settings.evidence_problems) or (
-                        "a certificate is required but certificates are disabled "
-                        "— no certificate can be written"
-                    )
-                    logger.error(reason)
-                    return None, reason
                 logger.warning(
                     "Run Certificate disabled by configuration (evidence_level=off); "
                     "run {} leaves no evidence behind.",

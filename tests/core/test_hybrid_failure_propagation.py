@@ -21,7 +21,7 @@ def _executor(pipeline_type="hybrid"):
     context = MagicMock()
     context.global_config = {
         "preflight_enabled": False,
-        "enable_run_certificate": False,
+        "evidence_level": "off",
         "start_date": "2024-01-01",
         "end_date": "2024-01-02",
     }

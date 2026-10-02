@@ -33,8 +33,7 @@ raw_orders:
   format: csv
   path: ${paths.input}/orders.csv
   options: {header: true}
-  checks:
-    checks: {not_empty: true}
+  quality: {not_empty: true}
 silver.etl.orders:
   format: delta
   write: {mode: overwrite}
@@ -228,9 +227,9 @@ def test_kind_defaults_to_transform_and_other_kinds_forbid_transform_keys():
         )
 
 
-def test_json_schema_covers_the_three_file_kinds():
+def test_json_schema_covers_every_file_kind():
     schema = json_schema()
-    assert set(schema["$defs"]) == {"project", "catalog", "pipeline"}
+    assert set(schema["$defs"]) == {"project", "catalog", "pipeline", "profiles"}
 
 
 class TestLoadProject:

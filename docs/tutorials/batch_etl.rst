@@ -77,10 +77,9 @@ Every dataset is declared once in ``catalog.yaml``:
      path: ${paths.input}/orders.csv
      options: {header: true, inferSchema: true}
      incremental: {column: order_date}
-     checks:
-       checks:
-         empty_dataset: true
-         schema: {expected_columns: [order_id, category, amount, order_date]}
+     quality:
+       empty_dataset: true
+       schema: {expected_columns: [order_id, category, amount, order_date]}
 
    bronze.sales.orders:
      format: delta
@@ -102,7 +101,7 @@ Every dataset is declared once in ``catalog.yaml``:
 
 - ``incremental: {column: order_date}`` — a run with ``--start-date`` and
   ``--end-date`` reads only those days, filtered at the source.
-- ``checks`` is the source's **contract**: before any node reads it, the run's
+- ``quality`` is the source's **contract**: before any node reads it, the run's
   slice must be non-empty and have the expected columns.
 - The three layers have no ``path``: their three-part names place them at
   ``data/<env>/bronze/sales/orders`` and so on, separately for each environment.

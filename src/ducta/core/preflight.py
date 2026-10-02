@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import difflib
 import inspect
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
@@ -118,6 +119,38 @@ def _positional_input_slots(sig: inspect.Signature) -> int:
     return count
 
 
+def _check_input_names(
+    report: PreflightReport,
+    node_name: str,
+    node_config: Dict[str, Any],
+    sig: inspect.Signature,
+    origin: str,
+) -> None:
+    """``inputs: {param: dataset}`` binds by keyword: each key must be a parameter.
+
+    Left unchecked, a misspelt key fails only when the node runs — after every node
+    before it has already written its output.
+    """
+    named = node_config.get("input")
+    if not isinstance(named, dict) or not named or _accepts_var_keyword(sig):
+        return
+    accepted = [
+        name
+        for name, p in sig.parameters.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        and name not in _INJECTED_KWARGS
+    ]
+    for key in named:
+        if str(key) in sig.parameters:
+            continue
+        close = difflib.get_close_matches(str(key), accepted, n=1, cutoff=0.5)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        report.error(
+            f"Node '{node_name}': inputs key '{key}' is not a parameter of {origin}"
+            f"({', '.join(accepted) or 'no inputs'}){hint}. The node would fail when it runs."
+        )
+
+
 def _check_node_function(
     report: PreflightReport,
     loader: Any,
@@ -141,12 +174,14 @@ def _check_node_function(
     except (TypeError, ValueError):
         return
 
-    if _accepts_var_keyword(sig):
-        return
-
     module = node_config.get("module")
     function = node_config.get("function")
     origin = f"{module}.{function}" if module and function else node_name
+
+    _check_input_names(report, node_name, node_config, sig, origin)
+
+    if _accepts_var_keyword(sig):
+        return
 
     # The run window (start_date/end_date) is passed only to functions that
     # declare it, so a function without it is fine even when dates are required.

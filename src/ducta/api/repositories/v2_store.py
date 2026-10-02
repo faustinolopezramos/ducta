@@ -48,12 +48,15 @@ from ducta.api.exceptions import (
 )
 from ducta.api.utils.git_utils import commit_files, file_commit_sha, validate_occ
 from ducta.setting.project_loader import (
+    CATALOG_DIR,
     CATALOG_FILE,
     PIPELINES_DIR,
     PROJECT_FILE,
     Project,
     ProjectConfigError,
     _checks,
+    catalog_dir_files,
+    catalog_location,
     compile_project,
     find_project_root,
     read_project,
@@ -144,6 +147,38 @@ def _sync(target: Any, desired: Dict[str, Any]) -> None:
             target[key] = copy.deepcopy(value)
 
 
+def _split_profiles(
+    tree: Dict[str, Any], project_doc: Any, has_profiles_file: bool
+) -> "tuple[Dict[str, Any], Dict[str, Any]]":
+    """Divide the quality profiles between ``ducta.yaml`` and ``quality/profiles.*``.
+
+    A profile stays where it was written; a new one goes to the profiles file when the
+    project has one. Returns the tree to sync into ``ducta.yaml`` and the profiles of
+    the profiles file.
+    """
+    if not has_profiles_file:
+        return tree, {}
+    quality = ((tree.get("settings") or {}).get("quality")) or {}
+    desired = dict(quality.get("profiles") or {})
+    settings_doc = project_doc.get("settings") if isinstance(project_doc, dict) else None
+    quality_doc = (settings_doc or {}).get("quality") if isinstance(settings_doc, dict) else None
+    owned = (
+        set((quality_doc or {}).get("profiles") or {}) if isinstance(quality_doc, dict) else set()
+    )
+    for_project = {n: v for n, v in desired.items() if n in owned}
+    for_file = {n: v for n, v in desired.items() if n not in owned}
+    stripped = copy.deepcopy(tree)
+    if "profiles" in quality:
+        q = stripped["settings"]["quality"]
+        if for_project:
+            q["profiles"] = for_project
+        else:
+            del q["profiles"]
+        if not q:
+            del stripped["settings"]["quality"]
+    return stripped, for_file
+
+
 def _reorder(mapping: Any, order: List[str]) -> None:
     """Reorder a CommentedMap's keys to ``order`` (others keep their relative order)."""
     items = [(k, mapping[k]) for k in order if k in mapping]
@@ -210,6 +245,8 @@ class V2ProjectStore:
             raise ConfigFileNotFoundError(
                 f"Config '{doc_name}' does not exist", detail={"name": doc_name}
             )
+        if DOC_FILES[doc_name] == CATALOG_FILE:
+            return catalog_location(self.root)
         return self.root / DOC_FILES[doc_name]
 
     def commit_sha(self, path: Path) -> str:
@@ -287,8 +324,8 @@ class V2ProjectStore:
             entry = project.catalog.get(ds)
             if (
                 entry is not None
-                and entry.checks is not None
-                and sent.get(ds) == _checks(entry.checks, "gate")
+                and entry.quality is not None
+                and sent.get(ds) == _checks(entry.quality, "gate")
             ):
                 node["input_checks"].pop(ds)
         if not node.get("input_checks"):
@@ -401,29 +438,36 @@ class V2ProjectStore:
                 detail={"problems": sorted(set(problems))},
             )
         project_path = self.root / PROJECT_FILE
-        catalog_path = self.root / CATALOG_FILE
         edits: Dict[Path, Callable[[Any], None]] = {}
         deletes: List[Path] = []
         validate_occ(self.repo_root, self.file_for(doc_name), expected_sha)
 
         if base_env:
+            located = read_project(self.root)
+            project_tree, file_profiles = _split_profiles(
+                tree, _load_rt(project_path), located.profiles_file is not None
+            )
 
             def edit_project(doc: Any) -> None:
                 for key in ("project", "paths", "settings", "metadata"):
-                    if key in tree:
-                        if isinstance(doc.get(key), dict) and isinstance(tree[key], dict):
-                            _sync(doc[key], tree[key])
+                    if key in project_tree:
+                        if isinstance(doc.get(key), dict) and isinstance(project_tree[key], dict):
+                            _sync(doc[key], project_tree[key])
                         else:
-                            doc[key] = tree[key]
+                            doc[key] = project_tree[key]
                     elif key in doc and key != "project":
                         del doc[key]
 
+            if located.profiles_file is not None:
+                edits[located.profiles_file] = lambda doc: _sync(doc, file_profiles)
             edits[project_path] = edit_project
-            edits[catalog_path] = lambda doc: _sync(doc, tree["catalog"])
+            catalog_edits, catalog_deletes = self._catalog_edits(tree["catalog"])
+            edits.update(catalog_edits)
             existing = set(project.pipelines)
             for pname, pdoc in tree["pipelines"].items():
                 edits[self.pipeline_path(pname)] = _pipeline_sync(pdoc)
             deletes = [self.pipeline_path(p) for p in existing - set(tree["pipelines"])]
+            deletes += catalog_deletes
         else:
             base_docs = compile_project(project)
             base_tree = decompile(base_docs, project.project.project, [], [])
@@ -470,6 +514,37 @@ class V2ProjectStore:
         return self._transaction(
             edits, f"chore: update {doc_name} config for env={env}", deletes=deletes, verify=verify
         )
+
+    def _catalog_edits(
+        self, desired: Dict[str, Any]
+    ) -> "tuple[Dict[Path, Callable[[Any], None]], List[Path]]":
+        """How to write ``desired`` back to the catalog, file by file.
+
+        A single ``catalog.*`` is synced as a whole. With a ``catalog/`` folder each
+        dataset stays in the file that declares it; a new one goes to
+        ``catalog/<layer>.yaml`` (the first part of its name, ``sources`` when it has
+        none); a file left without datasets is deleted.
+        """
+        located = read_project(self.root)
+        if not catalog_dir_files(self.root):
+            single = catalog_location(self.root)
+            return {single: lambda doc: _sync(doc, desired)}, []
+        target: Dict[str, Path] = {}
+        for name in desired:
+            layer = name.split(".", 1)[0] if "." in name else "sources"
+            target[name] = located.catalog_files.get(
+                name, self.root / CATALOG_DIR / f"{layer}.yaml"
+            )
+        files = set(target.values()) | set(located.catalog_files.values())
+        edits: Dict[Path, Callable[[Any], None]] = {}
+        deletes: List[Path] = []
+        for path in sorted(files):
+            subset = {n: desired[n] for n in desired if target[n] == path}
+            if subset:
+                edits[path] = lambda doc, subset=subset: _sync(doc, subset)
+            else:
+                deletes.append(path)
+        return edits, deletes
 
     # ── transaction ──────────────────────────────────────────────────────────
 

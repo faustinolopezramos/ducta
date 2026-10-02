@@ -330,7 +330,7 @@ class CatalogEntry(_Strict):
     incremental: Optional[Incremental] = None
     read: Optional[ReadSpec] = None
     write: Optional[WriteSpec] = None
-    checks: Optional[ChecksBlock] = Field(
+    quality: Optional[ChecksBlock] = Field(
         default=None,
         description="Contract: validated whenever a node reads this dataset",
     )
@@ -338,6 +338,11 @@ class CatalogEntry(_Strict):
     @model_validator(mode="after")
     def _extras_are_engine_keys(self) -> "CatalogEntry":
         extras = dict(self.model_extra or {})
+        if "checks" in extras:
+            raise ValueError(
+                "unknown dataset key 'checks' — a dataset's contract is now written under "
+                "'quality:' (the same name a node uses)"
+            )
         known = set(DATASET_ENGINE_KEYS)
         _reject_unknown(extras, known, "dataset", named=set(type(self).model_fields) | {"schema"})
         return self
@@ -372,7 +377,7 @@ class TransformNode(_NodeBase):
     )
     input_checks: Dict[str, ChecksBlock] = Field(
         default_factory=dict,
-        description="Checks on one input, for this node only (catalog 'checks' apply everywhere)",
+        description="Checks on one input, for this node only (a catalog dataset's 'quality' applies everywhere)",
     )
     run_in_process: bool = False
     execution_mode: Optional[str] = None
@@ -679,7 +684,9 @@ def _with_check_params(document: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def json_schema() -> Dict[str, Any]:
-    """JSON Schema for the three file kinds, for editor autocompletion."""
+    """JSON Schema for the file kinds, for editor autocompletion."""
+    from ducta.setting.schemas import QualityProfileSchema
+
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Ducta project configuration (format 2)",
@@ -690,5 +697,12 @@ def json_schema() -> Dict[str, Any]:
                 "additionalProperties": _with_check_params(CatalogEntry.model_json_schema()),
             },
             "pipeline": _with_check_params(PipelineFile.model_json_schema()),
+            "profiles": {
+                "type": "object",
+                "description": "quality/profiles.yaml: reusable named sets of checks",
+                "additionalProperties": _with_check_params(
+                    QualityProfileSchema.model_json_schema()
+                ),
+            },
         },
     }

@@ -1,7 +1,8 @@
 """Every project YAML example in the docs validates against the schema.
 
 A snippet takes part when its first line names the file it belongs to —
-``# ducta.yaml``, ``# catalog.yaml`` or ``# pipelines/<name>.yaml``. Docs and
+``# ducta.yaml``, ``# catalog.yaml`` (or ``# catalog/<layer>.yaml``),
+``# quality/profiles.yaml`` or ``# pipelines/<name>.yaml``. Docs and
 code drifted apart before (a README example used a module path the importer
 rejects); this keeps the examples honest.
 """
@@ -25,7 +26,10 @@ DOCS = [
     *sorted((ROOT / "docs" / "tutorials").glob("*.rst")),
     *sorted((ROOT / "src" / "ducta").glob("*/README.md")),
 ]
-_HEADER = re.compile(r"^#\s*(ducta\.yaml|catalog\.yaml|pipelines/[\w.-]+\.yaml)\b")
+_HEADER = re.compile(
+    r"^#\s*(ducta\.yaml|catalog\.yaml|catalog/[\w.-]+\.yaml|quality/profiles\.yaml"
+    r"|pipelines/[\w.-]+\.yaml)\b"
+)
 
 
 def _markdown_blocks(text: str) -> Iterator[str]:
@@ -63,7 +67,7 @@ SNIPPETS = list(_snippets())
 
 def test_the_docs_do_have_format_2_examples():
     kinds = {kind.split("/")[0] for _, kind, _ in SNIPPETS}
-    assert {"ducta.yaml", "catalog.yaml", "pipelines"} <= kinds
+    assert {"ducta.yaml", "catalog.yaml", "catalog", "quality", "pipelines"} <= kinds
 
 
 @pytest.mark.parametrize("where,kind,block", SNIPPETS, ids=[s[0] for s in SNIPPETS])
@@ -71,9 +75,14 @@ def test_snippet_validates(where, kind, block):
     data = yaml.safe_load(block)
     if kind == "ducta.yaml":
         ProjectFile.model_validate(data)
-    elif kind == "catalog.yaml":
+    elif kind == "catalog.yaml" or kind.startswith("catalog/"):
         for name, entry in data.items():
             CatalogEntry.model_validate(entry)
+    elif kind == "quality/profiles.yaml":
+        from ducta.setting.schemas import QualityProfileSchema
+
+        for name, profile in data.items():
+            QualityProfileSchema.model_validate(profile)
     else:
         PipelineFile.model_validate(data)
 

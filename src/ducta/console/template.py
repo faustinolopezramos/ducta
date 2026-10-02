@@ -286,7 +286,7 @@ source_data:
   path: data/input.csv
   options: {header: true, inferSchema: true}
   # A contract: checked every time a node reads this dataset, before it runs.
-  checks:
+  quality:
     fail_fast: true
     empty_dataset: true
     schema: {expected_columns: [order_id, category, amount, order_date]}
@@ -821,7 +821,7 @@ customers:
   path: data/customers.csv
   options: {header: true, inferSchema: true}
   # A contract: checked every time a node reads this dataset, before it runs.
-  checks:
+  quality:
     fail_fast: true
     empty_dataset: true
     schema:
@@ -1180,7 +1180,7 @@ products:
   format: csv
   path: data/products.csv
   options: {header: true, inferSchema: true}
-  checks:
+  quality:
     fail_fast: true
     empty_dataset: true
     schema: {expected_columns: [product_id, category, unit_price]}
@@ -1407,7 +1407,19 @@ class TemplateGenerator:
     #: The project files' formats a template can be written in.
     FORMATS = (ConfigFormat.YAML, ConfigFormat.TOML, ConfigFormat.JSON)
 
-    def __init__(self, output_path: Path, config_format: ConfigFormat = ConfigFormat.YAML):
+    #: ``single``: one catalog.<ext>, profiles inside ducta.<ext>. ``split``: one
+    #: catalog/<layer>.<ext> per layer and quality/profiles.<ext>.
+    LAYOUTS = ("single", "split")
+
+    def __init__(
+        self,
+        output_path: Path,
+        config_format: ConfigFormat = ConfigFormat.YAML,
+        layout: str = "single",
+    ):
+        if layout not in self.LAYOUTS:
+            raise TemplateError(f"Unknown layout '{layout}' (choose {' or '.join(self.LAYOUTS)})")
+        self.layout = layout
         if config_format not in self.FORMATS:
             raise TemplateError(
                 "Project configuration is YAML, TOML or JSON "
@@ -1448,14 +1460,17 @@ class TemplateGenerator:
 
         ext = self.config_format.value
         schemas = ".ducta/schema"
-        self._write_text_file(
-            self.output_path / f"ducta.{ext}",
-            self._as_format(template.project_yaml(), f"{schemas}/project.json"),
-        )
-        self._write_text_file(
-            self.output_path / f"catalog.{ext}",
-            self._as_format(template.catalog_yaml(), f"{schemas}/catalog.json"),
-        )
+        if self.layout == "split":
+            self._write_split_files(template, ext, schemas)
+        else:
+            self._write_text_file(
+                self.output_path / f"ducta.{ext}",
+                self._as_format(template.project_yaml(), f"{schemas}/project.json"),
+            )
+            self._write_text_file(
+                self.output_path / f"catalog.{ext}",
+                self._as_format(template.catalog_yaml(), f"{schemas}/catalog.json"),
+            )
         pipelines_dir = self.output_path / "pipelines"
         pipelines_dir.mkdir(parents=True, exist_ok=True)
         (pipelines_dir / "__init__.py").touch()
@@ -1465,6 +1480,42 @@ class TemplateGenerator:
                 self._as_format(text, f"../{schemas}/pipeline.json"),
             )
         write_schemas(self.output_path)
+
+    def _write_split_files(self, template: BaseTemplate, ext: str, schemas: str) -> None:
+        """``ducta.*`` without its profiles, ``quality/profiles.*`` and ``catalog/<layer>.*``."""
+        from ducta.console.template_layout import (
+            UNLAYERED,
+            extract_profiles,
+            split_catalog,
+            with_schema,
+        )
+
+        project_text, profiles_text = extract_profiles(template.project_yaml())
+        project_text = project_text.replace("catalog.yaml", "catalog/")
+        self._write_text_file(
+            self.output_path / f"ducta.{ext}",
+            self._as_format(project_text, f"{schemas}/project.json"),
+        )
+        if profiles_text is not None:
+            self._write_text_file(
+                self.output_path / "quality" / f"profiles.{ext}",
+                self._as_format(
+                    with_schema(profiles_text, f"../{schemas}/profiles.json"),
+                    f"../{schemas}/profiles.json",
+                ),
+            )
+        catalog_text = template.catalog_yaml()
+        schema = f"../{schemas}/catalog.json"
+        split = split_catalog(catalog_text)
+        if split is None:  # no dataset to file by layer: keep the template's own text
+            fixed = catalog_text.replace(f"$schema={schemas}/", f"$schema=../{schemas}/")
+            files = {UNLAYERED: fixed}
+        else:
+            files = {layer: with_schema(text, schema) for layer, text in split.items()}
+        for layer, body in files.items():
+            self._write_text_file(
+                self.output_path / "catalog" / f"{layer}.{ext}", self._as_format(body, schema)
+            )
 
     def _as_format(self, yaml_text: str, schema: str) -> str:
         """The template's YAML text, as the generator's format.
@@ -1876,6 +1927,10 @@ spark-warehouse/
 
     def _write_text_file(self, file_path: Path, content: str) -> None:
         """Write text file."""
+        if self.layout == "split" and file_path.suffix in (".py", ".md"):
+            import re
+
+            content = re.sub(r"\bcatalog\.yaml\b", "catalog/", content)
         if self.config_format != ConfigFormat.YAML and file_path.suffix in (".py", ".md"):
             content = self._localize(content)
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1899,6 +1954,7 @@ class TemplateCommand:
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
         config_format: str = "yaml",
+        layout: str = "single",
     ) -> int:
         """Handle template generation command."""
         try:
@@ -1921,6 +1977,7 @@ class TemplateCommand:
                 sandbox_developers,
                 evidence_level,
                 config_format,
+                layout,
             )
 
         except TemplateError as e:
@@ -2014,6 +2071,7 @@ class TemplateCommand:
         sandbox_developers: Optional[List[str]] = None,
         evidence_level: str = "record",
         config_format: str = "yaml",
+        layout: str = "single",
     ) -> int:
         """Generate template with specified parameters."""
         try:
@@ -2033,7 +2091,7 @@ class TemplateCommand:
                 logger.info(_TEMPLATE_CANCELLED_MSG)
                 return ExitCode.VALIDATION_ERROR.value
 
-            self.generator = TemplateGenerator(output_dir, ConfigFormat(config_format))
+            self.generator = TemplateGenerator(output_dir, ConfigFormat(config_format), layout)
             self.generator.generate_project(
                 template_enum,
                 project_name,
@@ -2063,7 +2121,10 @@ class TemplateCommand:
         logger.info("\n📋 Next steps:")
         logger.info("1️⃣  cd {}", output_dir)
         logger.info("2️⃣  pip install -r requirements.txt")
-        logger.info("3️⃣  Point catalog.{} at your data", ext)
+        if self.generator and self.generator.layout == "split":
+            logger.info("3️⃣  Point catalog/ at your data")
+        else:
+            logger.info("3️⃣  Point catalog.{} at your data", ext)
         logger.info(
             "4️⃣  Customize {} and pipelines/{}.{}",
             "/".join(template.SAMPLE_MODULE_PATH),
@@ -2078,7 +2139,11 @@ class TemplateCommand:
 
         logger.info("\n🗂  What was generated:")
         logger.info("   ducta.{}     project, paths, settings, per-environment overrides", ext)
-        logger.info("   catalog.{}   every dataset, once (format, path, contracts)", ext)
+        if self.generator and self.generator.layout == "split":
+            logger.info("   catalog/       every dataset, once, one file per layer")
+            logger.info("   quality/       reusable quality profiles (profiles.{})", ext)
+        else:
+            logger.info("   catalog.{}   every dataset, once (format, path, contracts)", ext)
         logger.info("   pipelines/     one file per pipeline, plus the Python it runs")
         logger.info("   .ducta/schema/ JSON Schemas: editor autocompletion and inline errors")
 
@@ -2098,6 +2163,7 @@ def handle_template_command(parsed_args) -> int:
         sandbox_developers=getattr(parsed_args, "sandbox_developers", None),
         evidence_level=getattr(parsed_args, "evidence_level", None) or "record",
         config_format=getattr(parsed_args, "config_format", None) or "yaml",
+        layout=getattr(parsed_args, "layout", None) or "single",
     )
 
 

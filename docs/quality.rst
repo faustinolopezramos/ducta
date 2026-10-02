@@ -23,7 +23,7 @@ The same block — ``checks``, plus an optional ``gate`` — goes in three place
 
    * - Place
      - Runs
-   * - A dataset's ``checks`` in ``catalog.yaml``
+   * - A dataset's ``quality`` in ``catalog.yaml``
      - Before every node that reads the dataset: its **contract**.
    * - A node's ``input_checks``
      - Before that node only, on one input. Replaces the dataset's contract for
@@ -44,12 +44,11 @@ place for data another team or system produces:
      format: csv
      path: ${paths.input}/orders.csv
      options: {header: true}
-     checks:
+     quality:
        fail_fast: true               # stop checking at the first failure
-       checks:
-         empty_dataset: true
-         schema: {expected_columns: [order_id, amount, order_date]}
-         row_count: {min: 1000}
+       empty_dataset: true
+       schema: {expected_columns: [order_id, amount, order_date]}
+       row_count: {min: 1000}
 
 When a contract fails, the node does not run. What happens to the rest of the
 pipeline is the gate's decision (below; by default the node's dependants are
@@ -130,8 +129,9 @@ Gates can be stricter in production only:
 Profiles
 --------
 
-A profile is a named set of checks, defined once in ``ducta.yaml`` and used by
-any block with ``profile:``. The block's own ``checks`` are merged on top, and
+A profile is a named set of checks, defined once in ``ducta.yaml`` (or in
+``quality/profiles.yaml``, which keeps ``ducta.yaml`` short — see
+:ref:`profiles-file`) and used by any block with ``profile:``. The block's own ``checks`` are merged on top, and
 a profile name that does not exist is an error, not a silent no-op:
 
 .. code-block:: yaml

@@ -458,7 +458,7 @@ def _promote_contracts(pipelines: Dict[str, Any], catalog: Dict[str, Any]) -> No
             and all(b is not None for b in blocks)
             and all(b == blocks[0] for b in blocks)
         ):
-            catalog[ds]["checks"] = blocks[0]
+            catalog[ds]["quality"] = blocks[0]
             for n in nodes:
                 n["input_checks"].pop(ds)
                 if not n["input_checks"]:

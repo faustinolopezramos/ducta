@@ -38,7 +38,10 @@ import yaml  # type: ignore[import-untyped]
 from ducta.setting import project_files as pf
 from ducta.setting.project_defaults import resolve_extends
 from ducta.setting.project_loader import (
+    CATALOG_DIR,
     PIPELINES_DIR,
+    PROFILES_STEM,
+    QUALITY_DIR,
     ProjectConfigError,
     apply_environment,
     environment_overrides,
@@ -254,7 +257,8 @@ def _override_position(
 def convert_project(root: Path, target: Path, fmt: str) -> List[Path]:
     """Write the project's configuration files to ``target`` as ``fmt``.
 
-    Only ``ducta.*``, ``catalog.*``, ``pipelines/`` and ``templates/`` are
+    Only ``ducta.*``, ``catalog.*``, ``catalog/``, ``quality/profiles.*``, ``pipelines/`` and
+    ``templates/`` are
     converted (their comments cannot be carried over); the Python and the data
     stay where they are. The editor schemas are written next to them.
     """
@@ -269,7 +273,13 @@ def convert_project(root: Path, target: Path, fmt: str) -> List[Path]:
     sources: List[Tuple[Path, str]] = []
     for stem, kind in (("ducta", "project"), ("catalog", "catalog")):
         sources += [(f, kind) for f in pf.find_files(root, stem)]
-    for folder, kind in ((PIPELINES_DIR, "pipeline"), ("templates", "pipeline")):
+    profiles = pf.find_files(root / QUALITY_DIR, PROFILES_STEM)
+    sources += [(f, "profiles") for f in profiles]
+    for folder, kind in (
+        (CATALOG_DIR, "catalog"),
+        (PIPELINES_DIR, "pipeline"),
+        ("templates", "pipeline"),
+    ):
         base = root / folder
         if base.is_dir():
             sources += [

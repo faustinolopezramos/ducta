@@ -68,7 +68,7 @@ class TestInlineChecks:
     def test_a_near_miss_of_a_block_key_is_a_typo_not_a_check(self, tmp_path):
         root = _project(
             tmp_path,
-            catalog=_CATALOG + "raw2: {format: parquet, path: p, checks: {fail_fas: true}}\n",
+            catalog=_CATALOG + "raw2: {format: parquet, path: p, quality: {fail_fas: true}}\n",
             pipelines__p=ETL,
         )
         with pytest.raises(ProjectConfigError, match="did you mean 'fail_fast'"):
@@ -79,7 +79,7 @@ class TestInlineChecks:
             tmp_path,
             catalog=_CATALOG.replace(
                 "raw: {format: parquet, path: data/raw}",
-                "raw: {format: parquet, path: p, checks: {empty_dataset: true}}",
+                "raw: {format: parquet, path: p, quality: {empty_dataset: true}}",
             ),
             pipelines__p=ETL,
         )

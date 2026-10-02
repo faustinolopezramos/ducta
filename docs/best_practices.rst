@@ -23,6 +23,10 @@ Project layout
    ├── .env                    # machine-local credentials — never committed
    └── .gitignore              # .env, data/, logs/
 
+- Past a few dozen datasets, split the catalog by layer (``catalog/bronze.yaml``,
+  ``catalog/silver.yaml``, …) and move reusable quality profiles to
+  ``quality/profiles.yaml``; ``ducta init project`` writes that layout. The naming
+  conventions are in :ref:`configuration <catalog-folder>` (*Conventions*).
 - Keep a pipeline's YAML and its Python side by side: ``run: pipelines.daily:clean``
   points at ``pipelines/daily.py``.
 - Commit ``.ducta/schema/`` so every editor completes and checks the YAML.
@@ -41,7 +45,7 @@ never overwrite each other's data.
 changing a format or a location is one edit, and the reader can never disagree
 with the writer.
 
-**Put contracts on data you do not control.** ``checks`` on a catalog entry run
+**Put contracts on data you do not control.** ``quality`` on a catalog entry runs
 before every node that reads it:
 
 .. code-block:: yaml
@@ -51,10 +55,9 @@ before every node that reads it:
      format: csv
      path: ${paths.input}/orders.csv
      options: {header: true}
-     checks:
-       checks:
-         empty_dataset: true
-         schema: {expected_columns: [order_id, amount, order_date]}
+     quality:
+       empty_dataset: true
+       schema: {expected_columns: [order_id, amount, order_date]}
 
 **Make large inputs incremental.** ``incremental: {column: …}`` reads — and
 fingerprints — only the run's ``--start-date``/``--end-date`` window, so a daily

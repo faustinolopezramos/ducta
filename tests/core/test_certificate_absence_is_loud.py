@@ -45,13 +45,13 @@ class TestSettings:
         )
 
     def test_requirement_reads_from_global_config(self):
-        ctx = MagicMock(global_config={"require_run_certificate": True})
+        ctx = MagicMock(global_config={"evidence_level": "required"})
         assert CoreSettings.from_context(ctx).require_run_certificate is True
 
 
 class TestEmissionReportsWhyItWroteNothing:
     def test_disabled_says_so_rather_than_returning_a_bare_none(self):
-        executor = _executor({"enable_run_certificate": False})
+        executor = _executor({"evidence_level": "off"})
 
         path, reason = executor._emit_run_certificate(
             pipeline_name="p",
@@ -83,25 +83,10 @@ class TestEmissionReportsWhyItWroteNothing:
         assert path is None
         assert "disk gone" in reason
 
-    def test_the_contradictory_configuration_is_named(self):
-        executor = _executor({"enable_run_certificate": False, "require_run_certificate": True})
-
-        path, reason = executor._emit_run_certificate(
-            pipeline_name="p",
-            run_id="r1",
-            started_at=None,
-            ended_at=None,
-            status="success",
-            error=None,
-        )
-
-        assert path is None
-        assert "require_run_certificate" in reason and "enable_run_certificate" in reason
-
 
 class TestEscalation:
     def test_a_successful_run_fails_when_a_required_certificate_is_missing(self):
-        executor = _executor({"require_run_certificate": True})
+        executor = _executor({"evidence_level": "required"})
         executor._emit_run_certificate = MagicMock(return_value=(None, "disk gone"))
 
         with pytest.raises(Exception) as excinfo:
@@ -110,7 +95,7 @@ class TestEscalation:
         assert "certificate" in str(excinfo.value).lower()
 
     def test_a_successful_run_is_untouched_when_the_certificate_is_written(self):
-        executor = _executor({"require_run_certificate": True})
+        executor = _executor({"evidence_level": "required"})
         executor._emit_run_certificate = MagicMock(return_value=("/tmp/cert.json", None))
 
         result = executor.run_pipeline("p")
@@ -131,7 +116,7 @@ class TestEscalation:
     def test_the_real_error_survives_when_the_run_itself_failed(self):
         """The escalation lives in a `finally`; it must not replace the error
         the user actually needs to see."""
-        executor = _executor({"require_run_certificate": True})
+        executor = _executor({"evidence_level": "required"})
         executor._emit_run_certificate = MagicMock(return_value=(None, "disk gone"))
         executor._batch_executor.execute.side_effect = ValueError("the real failure")
 

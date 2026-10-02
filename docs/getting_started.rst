@@ -15,6 +15,9 @@ Ducta provides production-ready templates to get you started immediately. Run th
    # Generate a project based on the Medallion Architecture pattern
    ducta template --template medallion_basic --project-name my_pipeline
 
+   # ...or, with the layout a larger project grows into (catalog/ by layer, quality/profiles)
+   ducta init project --name my_pipeline
+
    # Enter the project directory
    cd my_pipeline
 
@@ -101,6 +104,15 @@ Open ``pipelines/etl.yaml``:
 
 To add a step, add a node here and the datasets it writes to ``catalog.yaml``.
 ``ducta config validate`` checks the result without running anything.
+
+When a value is not what you expected, follow it instead of searching the files:
+
+.. code-block:: bash
+
+   ducta config validate                       # every problem, with file and line
+   ducta config show --env prod                # the project as prod resolves it
+   ducta config explain settings.max_parallel_nodes --env prod   # which file and line set it
+   ducta config diff dev prod                  # every value that differs between two environments
 
 .. tip::
    Four starter templates exist — ``ducta template --list-templates`` shows them:

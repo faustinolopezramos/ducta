@@ -780,6 +780,41 @@ class UnifiedArgumentParser:
             dest="init_command", help="Init commands", required=True
         )
 
+        project_parser = init_subparsers.add_parser(
+            "project",
+            help="Create a project with the recommended layout",
+            description=(
+                "Create a new Ducta project: ducta.<ext>, catalog/<layer>.<ext>, "
+                "quality/profiles.<ext>, pipelines/<layer>.<domain>.<ext>, the Python the "
+                "nodes run, and the editor schemas. `ducta template` writes the same "
+                "projects, with every dataset in one catalog file unless --layout split."
+            ),
+        )
+        project_parser.add_argument("--name", required=True, help="Project name")
+        project_parser.add_argument(
+            "--type",
+            dest="project_type",
+            choices=["batch", "ml", "streaming", "hybrid"],
+            default="batch",
+            help="What the project does (default: batch, a bronze/silver/gold ETL)",
+        )
+        project_parser.add_argument(
+            "--format",
+            dest="config_format",
+            choices=["yaml", "toml", "json"],
+            default="yaml",
+            help="Format of the configuration files (default: yaml, which keeps the comments)",
+        )
+        project_parser.add_argument(
+            "--path", help="Directory to create (default: ./<name>; it must be empty or new)"
+        )
+        project_parser.add_argument(
+            "--layout",
+            choices=["split", "single"],
+            default="split",
+            help="split: catalog/ by layer + quality/profiles (default); single: one catalog file",
+        )
+
         ing_parser = init_subparsers.add_parser(
             "ingestion",
             help="Manage database connections",

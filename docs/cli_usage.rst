@@ -109,12 +109,29 @@ Orchestrators can act on the exit code of ``ducta start``:
      - **Locked**: another run is writing one of this pipeline's outputs.
        Nothing ran; retry later (see ``settings.run_lock``).
 
+``ducta init project`` — create a project
+-----------------------------------------
+
+.. code-block:: bash
+
+   ducta init project --name sales                          # batch ETL, ./sales
+   ducta init project --name churn --type ml --format toml --path ~/work/churn
+
+Writes a project in the recommended layout: ``ducta.<ext>``, ``catalog/<layer>.<ext>``,
+``quality/profiles.<ext>``, ``pipelines/``, the Python the nodes run, and the editor
+schemas in ``.ducta/schema/``. ``--type`` is ``batch`` (default), ``ml``,
+``streaming`` or ``hybrid``; ``--format`` is ``yaml`` (default, keeps the comments),
+``toml`` or ``json``; ``--layout single`` keeps every dataset in one ``catalog.<ext>``.
+The directory must be new or empty. It is ``ducta template`` with this layout as the
+default, so everything below applies to it too.
+
 ``ducta template`` — create a project
 -------------------------------------
 
 .. code-block:: bash
 
    ducta template --template medallion_basic --project-name sales
+   ducta template --template medallion_basic --project-name sales --layout split
    ducta template --list-templates
 
 .. list-table::

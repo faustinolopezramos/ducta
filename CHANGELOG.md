@@ -10,8 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Ducta now has a single configuration version. The migration path from 0.2 is
 gone, and `ducta template` writes the current format directly.
 
+### Changed (breaking)
+
+- **A dataset's contract is `quality:`, not `checks:`.** The catalog now names the
+  block the way nodes do. `checks:` on a catalog entry is an error that says to use
+  `quality:`; rename the key (the block's contents are unchanged, and its checks can
+  be listed directly beside `gate`, without a `checks:` level).
+
+### Removed
+
+- **The legacy certificate switches.** `enable_run_certificate` and
+  `require_run_certificate` are gone from `settings`; `evidence_level`
+  (`off | record | required | signed`) is the only way to choose how much evidence a
+  run leaves. A project that still sets them gets the usual unknown-key error.
+  The `Ducta_CERTIFICATE_KEY` spelling of the signing-key variable is no longer read;
+  use `DUCTA_CERTIFICATE_KEY`.
+
 ### Added
 
+- **`ducta init project`**: creates a project in the recommended layout
+  (`--type batch|ml|streaming|hybrid`, `--format yaml|toml|json`, `--layout
+  split|single`). `ducta template --layout split` writes the same layout.
+- **A catalog split by layer**: `catalog/<layer>.yaml` (any depth, any format)
+  instead of one `catalog.yaml`. A dataset declared twice, or `catalog.yaml` next to
+  `catalog/`, is an error naming the files; errors and `config explain` cite the
+  real file and line. The API writes an edited dataset back to its own file.
+- **Quality profiles in `quality/profiles.yaml`**, merged into
+  `settings.quality.profiles` before environments apply; a profile defined in both
+  places is an error. `profiles.json` joins the editor schemas.
+- **Conventions** in the configuration guide: names for datasets, pipelines and
+  nodes, one format per project, and the recommended layout.
 - **TOML and JSON project files.** `ducta.toml` / `ducta.json`, `catalog.*`
   and `pipelines/*.*` are read as `ducta.yaml` is, and errors name the file and
   line in every format. `ducta template --format toml|json` writes a template in
@@ -37,6 +65,25 @@ gone, and `ducta template` writes the current format directly.
   `available_now` / `once`.
 
 ### Fixed
+
+- **Mistakes the validation let through, and errors that named the wrong place.**
+  - `ducta config validate` (and `start --validate-only`) now rejects an `inputs` key
+    that is not a parameter of the node's function, with the parameters listed and a
+    suggestion. It used to pass and fail only when the node ran, after the nodes
+    before it had written their output.
+  - A dependency cycle between nodes (through `after` or the data they read and
+    write) or between pipelines is an error when the project loads, not only in the
+    CLI's preflight, so the API and `ducta.load_project` catch it too.
+  - An error in an `environments.<env>` override is reported at its line in
+    `ducta.yaml`, not at the pipeline file whose key it addressed; a dotted override
+    naming a node, pipeline or dataset that does not exist says so and suggests the
+    nearest name.
+  - Loading a project for execution no longer shows the engine's raw schema dump: its
+    errors are mapped back to `file:line`, and a pipeline without nodes says so.
+- **Template placeholders work in keys**, so one template can name its nodes and
+  datasets per copy (`train_${params.target}`). Node names are unique across the
+  project, so a template whose nodes had fixed names could only be used once. Two keys
+  that become the same name, or a list used inside a name, are errors.
 
 - **Stream nodes ignored `checkpoint_location`, `trigger`, `output_mode` and
   `query_name` written beside `input`.** The engine reads them from the node's

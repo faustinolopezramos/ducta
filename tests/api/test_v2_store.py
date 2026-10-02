@@ -184,6 +184,48 @@ class TestDocumentWrites:
         assert catalog["source_data"]["path"] == "data/other.csv"
 
 
+@pytest.fixture
+def split_project(project) -> Path:
+    """The same project with its catalog split by layer into ``catalog/<layer>.yaml``."""
+    catalog = yaml.safe_load((project / "catalog.yaml").read_text())
+    (project / "catalog").mkdir()
+    layers: dict = {}
+    for name, entry in catalog.items():
+        layers.setdefault(name.split(".", 1)[0] if "." in name else "sources", {})[name] = entry
+    for layer, entries in layers.items():
+        (project / "catalog" / f"{layer}.yaml").write_text(yaml.safe_dump(entries))
+    (project / "catalog.yaml").unlink()
+    repo = git.Repo(project)
+    repo.git.add(A=True)
+    repo.index.commit("split the catalog")
+    return project
+
+
+class TestSplitCatalog:
+    def test_the_views_are_the_same_as_for_a_single_file(self, split_project):
+        store = _store(split_project)
+        assert "source_data" in store.documents()["input"]
+        assert store.file_for("input") == split_project / "catalog"
+
+    def test_an_edited_dataset_stays_in_its_file(self, split_project):
+        store = _store(split_project)
+        inputs = store.documents()["input"]
+        inputs["source_data"] = dict(inputs["source_data"], filepath="data/other.csv")
+        store.save_document("input", inputs, "base")
+        written = yaml.safe_load((split_project / "catalog" / "sources.yaml").read_text())
+        assert written["source_data"]["path"] == "data/other.csv"
+        assert not (split_project / "catalog.yaml").exists()
+
+    def test_a_new_dataset_goes_to_its_layer_file(self, split_project):
+        store = _store(split_project)
+        outputs = store.documents()["output"]
+        outputs["gold.etl.extra"] = {"format": "delta", "filepath": "${output_path}/x"}
+        store.save_document("output", outputs, "base")
+        layer = yaml.safe_load((split_project / "catalog" / "gold.yaml").read_text())
+        assert "gold.etl.extra" in layer
+        assert "gold.etl.final_output" in layer
+
+
 def test_api_executions_load_format_2(project):
     from ducta.api.workspace.manager import WorkspaceManager
 
@@ -216,3 +258,39 @@ def test_the_config_route_writes_through_the_store(project, monkeypatch):
     assert resp.json()["commit_sha"]
     settings = yaml.safe_load((project / "ducta.yaml").read_text())["settings"]
     assert settings["max_parallel_nodes"] == 7
+
+
+class TestProfilesFile:
+    @pytest.fixture
+    def with_profiles(self, project) -> Path:
+        doc = yaml.safe_load((project / "ducta.yaml").read_text())
+        profiles = (doc.get("settings") or {}).get("quality", {}).get("profiles") or {}
+        (project / "quality").mkdir()
+        (project / "quality" / "profiles.yaml").write_text(yaml.safe_dump(profiles or {}))
+        if profiles:
+            del doc["settings"]["quality"]["profiles"]
+            (project / "ducta.yaml").write_text(yaml.safe_dump(doc, sort_keys=False))
+        repo = git.Repo(project)
+        repo.git.add(A=True)
+        repo.index.commit("profiles file")
+        return project
+
+    def test_saving_settings_does_not_copy_the_profiles_back_into_ducta_yaml(self, with_profiles):
+        store = _store(with_profiles)
+        g = dict(store.documents()["global_config"], max_parallel_nodes=7)
+        store.save_document("global_config", g, "base")
+        doc = yaml.safe_load((with_profiles / "ducta.yaml").read_text())
+        assert doc["settings"]["max_parallel_nodes"] == 7
+        assert "profiles" not in (doc["settings"].get("quality") or {})
+
+    def test_a_new_profile_goes_to_the_profiles_file(self, with_profiles):
+        store = _store(with_profiles)
+        g = store.documents()["global_config"]
+        quality = dict(g.get("quality") or {})
+        quality["profiles"] = {
+            **(quality.get("profiles") or {}),
+            "fresh": {"checks": {"empty_dataset": {"enabled": True}}},
+        }
+        store.save_document("global_config", dict(g, quality=quality), "base")
+        written = yaml.safe_load((with_profiles / "quality" / "profiles.yaml").read_text())
+        assert "fresh" in written

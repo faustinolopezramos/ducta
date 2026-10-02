@@ -42,7 +42,7 @@ Ducta Console is the CLI/UX layer, implementing:
 *   **Project discovery**: `ConfigManager` finds the project a command works on — the nearest `ducta.yaml` with `version: 2` from `--base-path` (or the cwd) upwards — runs the command from its root, and reports a missing project with how to create one (`config.py`).
 *   **Validation**: field/enum/JSON/date validators for command-line arguments (`validation.py`); project files are validated by `ducta.setting.project_loader`.
 *   **Execution bridge**: `load_context(path, env)` builds a project's `Context`; thin wrappers construct a `PipelineExecutor` and run batch/streaming pipelines (`execution.py`).
-*   **Project scaffolding**: `template.py` generates runnable projects (`ducta.yaml`, `catalog.yaml`, `pipelines/`), verified to compile in every environment.
+*   **Project scaffolding**: `template.py` generates runnable projects (`ducta.yaml`, `catalog.yaml` or `catalog/<layer>`, `quality/profiles`, `pipelines/`), verified to compile in every environment; `template_layout.py` cuts the single-file templates into the split layout without losing their comments.
 *   **Rich UX**: Rich-based logging, schema formatters, and an `error_analyzer` that turns tracebacks into actionable developer guidance (`ux/`).
 *   **Command groups**: execution, quality, config, MLOps (experiment/model), ingestion `init`, and run-certificate `certify` (`commands/`, `mlops_commands.py`).
 
@@ -56,6 +56,7 @@ Invoked as `ducta <subcommand> [options]`:
 |------------|---------|
 | `start`    | Run a batch/ML/hybrid pipeline (`--pipeline`, `--env`, `--start-date`, `--end-date`, `--node`, `--dry-run`, `--validate-only`) |
 | `stream`   | `run` / `status` / `stop` a streaming pipeline (`--mode sync\|async`, `--execution-id`) |
+| `init project` | Create a project in the recommended layout (`--name`, `--type batch|ml|streaming|hybrid`, `--format yaml|toml|json`, `--path`, `--layout split|single`) |
 | `template` | Scaffold a new project (`--template`, `--project-name`, `--output-path`, `--evidence-level`, `--format yaml|toml|json`) |
 | `config`   | `validate`, `list-pipelines`, `pipeline-info`, `schema`, `show`, `explain`, `diff`, `convert` |
 | `ui` / `server` | Launch the local web UI / API server (`--host`, `--port`, `--no-browser`) |

@@ -60,6 +60,9 @@ from ducta.setting.project_schema import (
 
 PROJECT_FILE = "ducta.yaml"
 CATALOG_FILE = "catalog.yaml"
+CATALOG_DIR = "catalog"
+QUALITY_DIR = "quality"
+PROFILES_STEM = "profiles"
 PIPELINES_DIR = "pipelines"
 
 #: format-2 placeholders → the names the engine's interpolator resolves.
@@ -121,6 +124,28 @@ class _Located:
     #: ("catalog", "silver.orders", "path") → "catalog.yaml:12"
     where: Dict[Tuple[str, ...], str] = field(default_factory=dict)
     pipeline_files: Dict[str, Path] = field(default_factory=dict)
+    #: dataset name → the catalog file that declares it
+    catalog_files: Dict[str, Path] = field(default_factory=dict)
+    #: ``quality/profiles.*`` and the profile names it declares
+    profiles_file: Optional[Path] = None
+    file_profiles: Tuple[str, ...] = ()
+
+
+def catalog_dir_files(root: Path) -> List[Path]:
+    """The files of ``catalog/`` (any depth), in a stable order — ``[]`` when there is none."""
+    base = Path(root) / CATALOG_DIR
+    if not base.is_dir():
+        return []
+    return sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in pf.SUFFIXES)
+
+
+def catalog_location(root: Path) -> Path:
+    """Where the catalog lives: the ``catalog/`` folder, or the single ``catalog.*`` file."""
+    root = Path(root)
+    if catalog_dir_files(root):
+        return root / CATALOG_DIR
+    found = pf.find_files(root, "catalog")
+    return found[0] if found else root / CATALOG_FILE
 
 
 def _read(
@@ -139,7 +164,8 @@ def _read(
 
 
 def read_project(root: Path, *, expand: bool = True) -> _Located:
-    """Read ``ducta.*``, ``catalog.*`` and every ``pipelines/**/*.*`` (YAML, TOML or JSON).
+    """Read ``ducta.*``, the catalog (``catalog.*`` or every ``catalog/**/*.*``) and every
+    ``pipelines/**/*.*`` (YAML, TOML or JSON).
 
     ``expand=False`` leaves ``extends`` and ``defaults`` unresolved, which is how
     ``ducta config explain`` tells a value written in a file from one it inherited.
@@ -155,10 +181,39 @@ def read_project(root: Path, *, expand: bool = True) -> _Located:
             problems.append(f"{names}: a project keeps one {stem} file; remove all but one")
         if found:
             singles[stem] = found[0]
+    dir_files = catalog_dir_files(root)
+    if dir_files and "catalog" in singles:
+        problems.append(
+            f"{singles['catalog'].name} and {CATALOG_DIR}/: a project keeps its datasets in one "
+            f"place; use {singles['catalog'].name} or {CATALOG_DIR}/, not both"
+        )
     if problems:
         raise ProjectConfigError(problems)
     project = _read(singles.get("ducta", root / PROJECT_FILE), ("project",), where, root)
-    catalog = _read(singles["catalog"], ("catalog",), where, root) if "catalog" in singles else {}
+    profiles_path, file_profiles = _merge_profiles(root, project, where, problems)
+    catalog: Dict[str, Any] = {}
+    catalog_files: Dict[str, Path] = {}
+    for path in dir_files or ([singles["catalog"]] if "catalog" in singles else []):
+        data = _read(path, ("catalog",), where, root)
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            problems.append(
+                f"{path.relative_to(root)}: a catalog file maps dataset names to datasets"
+            )
+            continue
+        for name, entry in data.items():
+            if name in catalog:
+                problems.append(
+                    f"{where.get(('catalog', str(name)), str(path.relative_to(root)))} dataset "
+                    f"'{name}' is already defined in {catalog_files[name].relative_to(root)} — "
+                    "a dataset is declared once"
+                )
+                continue
+            catalog[name] = entry
+            catalog_files[name] = path
+    if problems:
+        raise ProjectConfigError(problems)
     pipelines: Dict[str, Dict[str, Any]] = {}
     files: Dict[str, Path] = {}
     pipeline_dir = root / PIPELINES_DIR
@@ -183,14 +238,66 @@ def read_project(root: Path, *, expand: bool = True) -> _Located:
     if problems:
         raise ProjectConfigError(problems)
     if not expand:
-        return _Located(project, catalog, pipelines, where, files)
+        return _Located(
+            project, catalog, pipelines, where, files, catalog_files, profiles_path, file_profiles
+        )
     pipelines, problems = resolve_extends(
         root, pipelines, lambda path: _read(path, ("templates", path.stem), where, root)
     )
     if problems:
         raise ProjectConfigError(problems)
     catalog, pipelines = apply_defaults(project, catalog, pipelines)
-    return _Located(project, catalog, pipelines, where, files)
+    return _Located(
+        project, catalog, pipelines, where, files, catalog_files, profiles_path, file_profiles
+    )
+
+
+def _merge_profiles(
+    root: Path, project: Any, where: Dict[Tuple[str, ...], str], problems: List[str]
+) -> Tuple[Optional[Path], Tuple[str, ...]]:
+    """Fold ``quality/profiles.*`` into ``settings.quality.profiles`` (before environments).
+
+    A profile defined both there and in ``ducta.yaml`` is an error: two homes for one
+    name would make the winner depend on an order nobody wrote down.
+    """
+    found = pf.find_files(root / QUALITY_DIR, PROFILES_STEM)
+    if len(found) > 1:
+        names = " and ".join(f"{QUALITY_DIR}/{f.name}" for f in found)
+        raise ProjectConfigError(
+            [f"{names}: a project keeps one profiles file; remove all but one"]
+        )
+    if not found or not isinstance(project, dict):
+        return None, ()
+    path = found[0]
+    prefix = ("project", "settings", "quality", "profiles")
+    profiles = _read(path, prefix, where, root)
+    rel = str(path.relative_to(root))
+    if profiles is None:
+        return path, ()
+    if not isinstance(profiles, dict):
+        raise ProjectConfigError([f"{rel}: maps profile names to their checks"])
+    settings = project.get("settings")
+    if settings is None:
+        settings = project["settings"] = {}
+    quality = settings.get("quality") if isinstance(settings, dict) else None
+    if quality is None and isinstance(settings, dict):
+        quality = settings["quality"] = {}
+    if not isinstance(quality, dict):
+        return path, tuple(profiles)  # settings.quality is malformed; validation reports it
+    existing = quality.get("profiles") or {}
+    if not isinstance(existing, dict):
+        return path, tuple(profiles)
+    for name in profiles:
+        if name in existing:
+            problems.append(
+                f"{where.get(('project', 'settings', 'quality', 'profiles', str(name)), rel)} "
+                f"profile '{name}' is also defined in settings.quality.profiles of "
+                f"ducta.yaml — define it in one place"
+            )
+    if problems:
+        raise ProjectConfigError(problems)
+    quality["profiles"] = {**existing, **profiles}
+    return path, tuple(profiles)
 
 
 # ── environments ─────────────────────────────────────────────────────────────
@@ -248,6 +355,33 @@ def project_tree(located: _Located) -> Dict[str, Any]:
     }
 
 
+#: Containers whose children are named things: an override addressing a child that
+#: is not there is a typo (or a stale name), not a request to create one.
+_ENTITY_KINDS = {"pipelines": "pipeline", "nodes": "node", "catalog": "dataset"}
+
+
+def _missing_entity(tree: Dict[str, Any], path: List[str]) -> Optional[str]:
+    """Why a dotted override cannot apply: the pipeline, node or dataset it names is not there."""
+    node: Any = tree
+    for index, key in enumerate(path):
+        if not isinstance(node, dict):
+            return None
+        container = path[index - 1] if index else None
+        if key not in node:
+            kind = _ENTITY_KINDS.get(container or "")
+            if kind is None:
+                return None  # a new setting or an optional key: the schema judges it
+            near = difflib.get_close_matches(key, list(node), n=1, cutoff=0.6)
+            if container == "nodes" and index >= 2:
+                where = f"pipeline '{path[index - 2]}'"
+            else:
+                where = "the catalog" if container == "catalog" else "the project"
+            hint = f" — did you mean '{near[0]}'?" if near else ""
+            return f"there is no {kind} '{key}' in {where}{hint}"
+        node = node[key]
+    return None
+
+
 def environment_overrides(
     located: _Located, env: Optional[str], tree: Optional[Dict[str, Any]] = None
 ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -266,11 +400,19 @@ def environment_overrides(
             logger.info("No overrides for environment '{}' — using the base project", active)
         return None, {}
     overrides: Dict[str, Any] = {}
+    unreachable: List[str] = []
     for key, value in environments[name].items():
         if "." in key:
+            missing = _missing_entity(tree, resolve_path(tree, key))
+            if missing:
+                at = located.where.get(("project", "environments", name, key), PROJECT_FILE)
+                unreachable.append(f"{at} environments.{name}: '{key}' — {missing}")
+                continue
             overrides = _deep_merge(overrides, _expand_dotted(tree, key, value))
         else:
             overrides = _deep_merge(overrides, {key: value})
+    if unreachable:
+        raise ProjectConfigError(unreachable)
     unknown = sorted(set(overrides) - {"settings", "paths", "catalog", "pipelines", "metadata"})
     if unknown:
         raise ProjectConfigError(
@@ -281,6 +423,48 @@ def environment_overrides(
             ]
         )
     return name, overrides
+
+
+def override_positions(
+    located: _Located, env: Optional[str], tree: Dict[str, Any]
+) -> Dict[Tuple[str, ...], str]:
+    """Where, in ``ducta.yaml``, each value an environment overrides was written.
+
+    Errors about a merged value are located through these, so a typo in
+    ``environments.prod`` is reported at ``ducta.yaml``, not at the pipeline
+    file whose key it addressed.
+    """
+    environments = located.project.get("environments") or {}
+    name, _ = environment_overrides(located, env, tree)
+    if name is None:
+        return {}
+    block = environments[name]
+    found: Dict[Tuple[str, ...], str] = {}
+
+    def keyed(path: Tuple[str, ...]) -> Tuple[str, ...]:
+        # ducta.yaml's own sections are filed under ("project", ...).
+        return ("project", *path) if path[0] in ("settings", "paths", "metadata") else path
+
+    def mark(path: Tuple[str, ...], at: str) -> None:
+        # The value itself always comes from here. A step on the way is claimed only
+        # when it exists nowhere else (a whole new node), never taken from the file
+        # that really declares it.
+        for end in range(1, len(path) + 1):
+            key = keyed(path[:end])
+            if end == len(path) or key not in located.where:
+                found[key] = at
+
+    def walk(path: Tuple[str, ...], value: Any, source: Tuple[str, ...]) -> None:
+        at = located.where.get(("project", "environments", name, *source), PROJECT_FILE)
+        mark(path, at)
+        if isinstance(value, dict):
+            for key, inner in value.items():
+                walk((*path, str(key)), inner, (*source, str(key)))
+
+    for key, value in block.items():
+        path = tuple(resolve_path(tree, key)) if "." in key else (key,)
+        walk(path, value, (key,))
+    return found
 
 
 def apply_environment(located: _Located, env: Optional[str]) -> Dict[str, Any]:
@@ -345,7 +529,7 @@ def validate_project(root: Path, env: Optional[str] = None) -> Project:
     root = Path(root)
     located = read_project(root)
     tree = apply_environment(located, env)
-    where = located.where
+    where = {**located.where, **override_positions(located, env, project_tree(located))}
     problems: List[str] = []
 
     project_doc = {k: v for k, v in tree.items() if k not in ("catalog", "pipelines")}
@@ -430,8 +614,8 @@ def _check_params(
                     found.extend(f"{here}: {m}" for m in problems_in(value, declared[key], key))
 
     for dname, dataset in catalog.items():
-        if dataset.checks is not None:
-            scan(dataset.checks, ("catalog", dname, "checks"), f"catalog.{dname}.checks")
+        if dataset.quality is not None:
+            scan(dataset.quality, ("catalog", dname, "quality"), f"catalog.{dname}.quality")
     for pname, pipeline in pipelines.items():
         for nname, node in pipeline.nodes.items():
             base = ("pipelines", pname, "nodes", nname)
@@ -489,13 +673,13 @@ def _cross_checks(
             for ds in _node_inputs(node):
                 if ds not in catalog:
                     problems.append(
-                        f"{at} node '{nname}' reads '{ds}', which is not in catalog.yaml"
+                        f"{at} node '{nname}' reads '{ds}', which is not in the catalog"
                         + _suggest(ds, catalog)
                     )
             for ds in node.outputs:
                 if ds not in catalog:
                     problems.append(
-                        f"{at} node '{nname}' writes '{ds}', which is not in catalog.yaml"
+                        f"{at} node '{nname}' writes '{ds}', which is not in the catalog"
                         + _suggest(ds, catalog)
                     )
                 elif ds in producers:
@@ -524,7 +708,52 @@ def _cross_checks(
                     f"{where.get(('pipelines', pname), 'pipelines/' + pname)} pipeline "
                     f"'{pname}': depends_on '{dep}' is not a pipeline" + _suggest(dep, pipelines)
                 )
+    problems += _cycle_checks(pipelines, producers, where)
     problems += _path_checks(catalog, pipelines, where)
+    return problems
+
+
+def _cycle_checks(
+    pipelines: Dict[str, PipelineFile],
+    producers: Dict[str, str],
+    where: Dict[Tuple[str, ...], str],
+) -> List[str]:
+    """A node that (through ``after`` or the data it reads) waits for itself, or pipelines
+    whose ``depends_on`` loop. Caught here so every way of loading a project catches it,
+    not only the CLI's preflight."""
+    from ducta.setting.dependency_resolver import GraphCycleError, detect_cycles_dfs
+
+    problems: List[str] = []
+    nodes = {
+        nname: (pname, node)
+        for pname, pipeline in pipelines.items()
+        for nname, node in pipeline.nodes.items()
+    }
+    graph: Dict[str, List[str]] = {}
+    for nname, (pname, node) in nodes.items():
+        needs = {d for d in node.after if d in nodes}
+        # Reading what you also write (an upsert) is not waiting for yourself.
+        needs |= {producers[ds] for ds in _node_inputs(node) if ds in producers} - {nname}
+        graph[nname] = sorted(needs)
+    try:
+        detect_cycles_dfs(graph)
+    except GraphCycleError as e:
+        first = e.cycle[0] if e.cycle else next(iter(nodes), "?")
+        pname = nodes[first][0] if first in nodes else "?"
+        at = where.get(("pipelines", pname, "nodes", first), f"pipelines/{pname}")
+        problems.append(
+            f"{at} nodes wait for each other: {' → '.join(e.cycle)} (through `after` or the "
+            "datasets they read and write)"
+        )
+    pipeline_graph = {
+        p: [d for d in pl.depends_on if d in pipelines] for p, pl in pipelines.items()
+    }
+    try:
+        detect_cycles_dfs(pipeline_graph)
+    except GraphCycleError as e:
+        first = e.cycle[0] if e.cycle else "?"
+        at = where.get(("pipelines", first), f"pipelines/{first}")
+        problems.append(f"{at} pipelines depend on each other: {' → '.join(e.cycle)}")
     return problems
 
 
@@ -708,8 +937,8 @@ def _input_contracts(node: TransformNode, catalog: Dict[str, CatalogEntry]) -> D
     contracts: Dict[str, Any] = {}
     for ds in _node_inputs(node):
         entry = catalog.get(ds)
-        if entry is not None and entry.checks is not None:
-            contracts[ds] = _checks(entry.checks, "gate")
+        if entry is not None and entry.quality is not None:
+            contracts[ds] = _checks(entry.quality, "gate")
     for target, block in node.input_checks.items():
         ds = params.get(target, target)
         contracts[ds] = _checks(block, "gate")
@@ -771,6 +1000,50 @@ def compile_project(project: Project) -> Dict[str, Dict[str, Any]]:
     }
 
 
+def _engine_problems(root: Path, project: "Project", error: BaseException) -> Optional[List[str]]:
+    """The engine's schema errors, each at the project file that produced the value.
+
+    The engine validates the five compiled documents with its own schema. When that
+    rejects something the project schema let through, the raw error names engine
+    paths (``nodes_config.extract.input``) nobody wrote; this maps them back to
+    ``file:line``. ``None`` when the error is not a schema error.
+    """
+    from pydantic import ValidationError as _ValidationError
+
+    cause = error.__cause__ if isinstance(error.__cause__, _ValidationError) else error
+    if not isinstance(cause, _ValidationError):
+        return None
+    located = read_project(root)
+    owner = {n: p for p, pl in project.pipelines.items() for n in pl.nodes}
+    out: List[str] = []
+    for err in cause.errors():
+        loc = [str(x) for x in err["loc"]]
+        head, name = (loc + ["", ""])[:2]
+        rest = ".".join(loc[2:])
+        if head == "pipelines_config" and name in located.pipelines:
+            at = located.where.get(("pipelines", name), f"pipelines/{name}")
+            what = f"pipeline '{name}'"
+        elif head == "nodes_config" and name in owner:
+            at = located.where.get(
+                ("pipelines", owner[name], "nodes", name), f"pipelines/{owner[name]}"
+            )
+            what = f"node '{name}'"
+        elif head in ("input_config", "output_config") and name in located.catalog:
+            at = located.where.get(("catalog", name), CATALOG_FILE)
+            what = f"dataset '{name}'"
+        else:
+            at, what = PROJECT_FILE, ".".join(loc[:2]) or "configuration"
+        field = f".{rest}" if rest else ""
+        msg = err["msg"].removeprefix("Value error, ")
+        if head == "pipelines_config" and rest == "nodes" and err["type"] == "missing":
+            # The API creates a pipeline before its first node, so the project itself may
+            # be empty of nodes; running or loading one for execution may not.
+            out.append(f"{at} {what} has no nodes — add at least one under `nodes:`")
+            continue
+        out.append(f"{at} {what}{field}: {msg} (rejected by the engine's own schema)")
+    return out or None
+
+
 def load_project_v2(root: Path, env: Optional[str], allow_python_config: bool = True) -> "Context":
     """A :class:`Context` for the format-2 project at ``root``.
 
@@ -781,15 +1054,21 @@ def load_project_v2(root: Path, env: Optional[str], allow_python_config: bool = 
 
     project = validate_project(root, env)
     docs = compile_project(project)
-    context = Context(
-        global_config=docs["global_config"],
-        pipelines_config=docs["pipelines_config"],
-        nodes_config=docs["nodes_config"],
-        input_config=docs["input_config"],
-        output_config=docs["output_config"],
-        env=env,
-        allow_python_config=allow_python_config,
-    )
+    try:
+        context = Context(
+            global_config=docs["global_config"],
+            pipelines_config=docs["pipelines_config"],
+            nodes_config=docs["nodes_config"],
+            input_config=docs["input_config"],
+            output_config=docs["output_config"],
+            env=env,
+            allow_python_config=allow_python_config,
+        )
+    except Exception as e:  # noqa: BLE001 — the engine's schema rejected what ours accepted
+        problems = _engine_problems(root, project, e)
+        if problems is None:
+            raise
+        raise ProjectConfigError(problems) from e
     # Where the configuration came from, plus the format marker.
     setattr(context, "_config_file_path", str(project_file(root).resolve()))
     setattr(context, "config_paths", {})
