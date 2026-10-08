@@ -27,7 +27,12 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from ducta.api.dependencies import require_permission, resolve_source
+from ducta.api.dependencies import (
+    CurrentUserDep,
+    check_git_source,
+    require_permission,
+    resolve_source,
+)
 from ducta.api.exceptions import http_error_on
 from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.source.resolver import SourceResolver
@@ -192,8 +197,9 @@ async def browse_directories(
     summary="Resolve a source (local or Git clone)",
     dependencies=[Depends(require_permission("workspace.write"))],
 )
-async def select_source(request: SourceValidateRequest) -> dict:
+async def select_source(request: SourceValidateRequest, user: CurrentUserDep) -> dict:
     """Resolve a local path or clone a Git repo and return its info."""
+    check_git_source(request.path_or_url, user)
     resolved = resolve_source(request.path_or_url.strip())
     return {
         "status": "success",

@@ -259,6 +259,8 @@ def _show(root: Path, parsed_args) -> int:
         from ducta.setting.project_loader import compile_project, validate_project
 
         data: Any = compile_project(validate_project(root, env))
+    elif getattr(parsed_args, "ml", False):
+        data = inspect.ml_plan(root, env, getattr(parsed_args, "pipeline", None))
     else:
         data = inspect.resolved_tree(root, env, getattr(parsed_args, "pipeline", None))
     print(inspect.dump(data, fmt), end="")

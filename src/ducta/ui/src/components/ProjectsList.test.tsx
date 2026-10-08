@@ -15,6 +15,14 @@ const mocks = vi.hoisted(() => ({
   schedules: [] as unknown[],
 }));
 
+// The dashboard is tested as someone who may create and delete projects; what a viewer
+// sees is covered in ProjectsList.permissions.test.tsx.
+vi.mock("../hooks/usePermission", () => ({
+  usePermission: () => true,
+  usePermissions: () => ({ isLoading: false, can: () => true }),
+  requiresPermission: (p: string) => `Requires the '${p}' permission`,
+}));
+
 vi.mock("../api/queries", () => ({
   // Deliberately absent: `useServerProjectPipelines`. Rows read the pipeline
   // count off the project; if one reaches for a per-project request again this

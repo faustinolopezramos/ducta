@@ -56,7 +56,12 @@ A stream node
    * - ``transform``
      - The registered transform to apply: ``key``, optional ``module`` to
        import first and ``params`` passed to it. Omit it to copy the stream
-       as-is.
+       as-is (or, with ``model``, to score it).
+   * - ``model``
+     - A registered model to score each micro-batch with — the same block as a
+       serving node's (see :doc:`mlops`). Applied by the built-in scorer, or
+       handed to a transform that takes an ``ml_context`` parameter. Resolved when
+       the query starts; a restart resolves it again.
    * - ``output``
      - The sink: ``format``, ``path`` and ``options``.
    * - ``streaming``

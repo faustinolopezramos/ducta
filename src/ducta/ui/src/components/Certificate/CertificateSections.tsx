@@ -10,6 +10,7 @@ import type {
   CertificateDatasetFingerprint,
   CertificateEnvironment,
   CertificateNode,
+  CertificateNodeML,
   CertificateQualityEntry,
   RunCertificate,
 } from "../../api/certificatesApi";
@@ -75,6 +76,109 @@ export function NodesSection({ nodes }: { nodes: CertificateNode[] }) {
         density="compact"
         empty={<EmptyState icon={IconBox} size="sm" title="No nodes recorded" description="This certificate has no node-level detail." />}
       />
+    </Panel>
+  );
+}
+
+// ── ML ───────────────────────────────────────────────────────────────────────
+
+const SPLIT_ORDER = ["method", "test_size", "val_size", "stratify_col", "time_col", "group_col", "seed"];
+
+/** `stratified, test_size=0.2, stratify_col=churned, seed=42` */
+export function describeSplit(split: Record<string, unknown> | null | undefined): string {
+  if (!split) return "—";
+  const keys = [...SPLIT_ORDER.filter((k) => k in split), ...Object.keys(split).filter((k) => !SPLIT_ORDER.includes(k))];
+  return keys
+    .filter((k) => split[k] != null)
+    .map((k) => (k === "method" ? String(split[k]) : `${k}=${String(split[k])}`))
+    .join(", ");
+}
+
+/** The one question a reviewer asks of an ML run: was the declared split used? */
+export function SplitVerdict({ ml }: { ml: CertificateNodeML }) {
+  if (!ml.split) return <span>—</span>;
+  if (ml.split_applied) {
+    return (
+      <span className="cert-mode-chip cert-mode-chip--strong" title="The node called split_dataframe with its ml_context.">
+        applied
+      </span>
+    );
+  }
+  if (ml.split_required) {
+    return (
+      <span
+        className="cert-mode-chip cert-mode-chip--failed"
+        title="The node was bound to this split and did not apply it: its model was fitted on a partition nobody declared."
+      >
+        not applied
+      </span>
+    );
+  }
+  return (
+    <span className="cert-mode-chip" title="This node received the split but is not bound to apply it (e.g. feature engineering).">
+      not required
+    </span>
+  );
+}
+
+interface MLRow extends CertificateNodeML {
+  name: string;
+}
+
+/**
+ * What each ML node was given and did. Shown only when the certificate has ML
+ * evidence; certificates written before Ducta recorded it simply omit the panel.
+ */
+export function MLSection({ nodes }: { nodes: CertificateNode[] }) {
+  const rows: MLRow[] = nodes.filter((n) => n.ml).map((n) => ({ name: n.name, ...(n.ml as CertificateNodeML) }));
+  if (rows.length === 0) return null;
+  const missed = rows.filter((r) => r.split && r.split_required && !r.split_applied);
+  const columns: DataTableColumn<MLRow>[] = [
+    { key: "name", header: "Node", mono: true, sortable: true },
+    { key: "stage", header: "Stage", cell: (r) => r.stage ?? "—" },
+    { key: "split", header: "Split", mono: true, cell: (r) => describeSplit(r.split) },
+    { key: "split_source", header: "Declared on", cell: (r) => r.split_source ?? "—" },
+    { key: "split_applied", header: "Split", cell: (r) => <SplitVerdict ml={r} /> },
+    { key: "model_version", header: "Model version", mono: true, cell: (r) => r.model_version ?? "—" },
+    ...(rows.some((r) => r.model)
+      ? [
+          {
+            key: "model",
+            header: "Served model",
+            mono: true,
+            cell: (r: MLRow) =>
+              r.model ? (
+                <span title={`${r.model.uri}\n${r.model.artifact_sha256 ?? ""}`}>
+                  {r.model.name} v{r.model.version}
+                  {r.model.stage_at_resolution ? ` (${r.model.stage_at_resolution})` : ""}
+                </span>
+              ) : (
+                "—"
+              ),
+          } as DataTableColumn<MLRow>,
+        ]
+      : []),
+    {
+      key: "hyperparams",
+      header: "Hyperparameters",
+      mono: true,
+      cell: (r) => {
+        const entries = Object.entries(r.hyperparams ?? {});
+        if (entries.length === 0) return "—";
+        const text = entries.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+        return <span title={text}>{text.length > 60 ? `${text.slice(0, 57)}…` : text}</span>;
+      },
+    },
+  ];
+  return (
+    <Panel title="ML">
+      {missed.length > 0 && (
+        <p className="cert-section-warning" role="alert">
+          <IconAlertTriangle size={14} /> {missed.map((r) => r.name).join(", ")}{" "}
+          {missed.length === 1 ? "was" : "were"} given a train/test split and did not apply it.
+        </p>
+      )}
+      <DataTable columns={columns} rows={rows} rowKey={(r) => r.name} density="compact" />
     </Panel>
   );
 }

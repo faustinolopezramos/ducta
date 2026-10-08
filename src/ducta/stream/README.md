@@ -60,7 +60,8 @@ document this module reads (`input`, `output`, `streaming`, `function`,
 *   **`stream.input.format`**: `kafka` | `kinesis` | `delta_stream` | `file_stream` (with `file_format`) | `socket` | `rate` | `memory`, with format-specific `options`.
 *   **`stream.output.format`**: `kafka` | `delta` | `parquet` | `json` | `csv` | `console` | `memory`, with `path` and `options`.
 *   **`stream.streaming`**: `checkpoint_location`, `trigger` (`processing_time`, `once`, `available_now`, `continuous`, `adaptive`), `output_mode` (`append`/`update`/`complete`), `watermark`, `shuffle_partitions`.
-*   **`stream.transform`**: `{key, module, params}` — a transform from the registry; `module` is imported so its `register_transforms(registry)` runs first.
+*   **`stream.transform`**: `{key, module, params}` — a transform from the registry; `module` is imported so its `register_transforms(registry)` runs first. A transform with an `ml_context` parameter receives the node's model.
+*   **`stream.model`**: a registered model (`{name, stage | version}` or `{source: mlflow, uri}`), resolved by `ducta.mlrun.serving` when the query starts and pinned for its lifetime. Without a transform the built-in scorer applies it; `StreamingPipelineManager` reports it per node under `served_models`.
 *   **`after`**: intra-pipeline ordering; independent nodes in the same wave start concurrently. When an upstream has a terminating trigger (`once`/`available_now`), its dependants start after it finishes.
 *   **Settings** (`settings:` in `ducta.yaml`): `max_streaming_pipelines`, `checkpoints_base`, `streaming_transform_modules`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`, `streaming_shuffle_partitions`, `streaming_adaptive_base_interval`, `streaming_adaptive_max_interval_seconds`, `streaming_disable_backpressure_defaults`.
 

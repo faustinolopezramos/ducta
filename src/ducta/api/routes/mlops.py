@@ -108,6 +108,14 @@ def _resolve_global_config(
         if isinstance(gs, dict):
             return gs
 
+    docs = _compiled_project(source_path, env, project)
+    return dict(docs.get("global_config") or {})
+
+
+def _compiled_project(
+    source_path: Path, env: Optional[str], project: Optional[str] = None
+) -> Dict[str, Any]:
+    """The project's compiled engine documents, or ``{}`` when it cannot be read."""
     project_root = source_path
     if project:
         from ducta.api.workspace.manager import WorkspaceManager
@@ -122,11 +130,38 @@ def _resolve_global_config(
 
         root = find_project_root(project_root)
         if root is not None:
-            return dict(compile_project(validate_project(root, env))["global_config"])
+            return dict(compile_project(validate_project(root, env)))
     except Exception as exc:
-        logger.debug("Could not read global config: {}", exc)
-
+        logger.debug("Could not read the project configuration: {}", exc)
     return {}
+
+
+def serving_references(docs: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """registered model name → the nodes that serve it (``model:`` on a node).
+
+    Read from configuration only: which *version* a stage names is decided when a
+    run starts. MLflow models are left out — they are not in this registry.
+    """
+    pipeline_of = {
+        node: pname
+        for pname, pcfg in (docs.get("pipelines_config") or {}).items()
+        for node in (pcfg.get("nodes") or [])
+    }
+    out: Dict[str, List[Dict[str, Any]]] = {}
+    for node, cfg in (docs.get("nodes_config") or {}).items():
+        ref = (cfg or {}).get("model")
+        if not isinstance(ref, dict) or ref.get("source", "ducta") != "ducta":
+            continue
+        out.setdefault(str(ref.get("name")), []).append(
+            {
+                "pipeline": pipeline_of.get(node),
+                "node": node,
+                "stage": ref.get("stage"),
+                "version": ref.get("version"),
+                "streaming": cfg.get("type") == "streaming",
+            }
+        )
+    return out
 
 
 def _resolve_mlops_storage(
@@ -201,13 +236,69 @@ class MLOpsScope:
     def global_config(self) -> Dict[str, Any]:
         return _resolve_global_config(self._source_path, self._env, self._project)
 
+    def serving_references(self) -> Dict[str, List[Dict[str, Any]]]:
+        """Which nodes of this project serve each registered model."""
+        return serving_references(_compiled_project(self._source_path, self._env, self._project))
+
     def tracker(self) -> ExperimentTracker:
         storage = LocalStorageBackend(base_path=self.storage)
         return ExperimentTracker(storage=storage, tracking_path=DEFAULT_TRACKING_PATH)
 
     def registry(self) -> ModelRegistry:
-        storage = LocalStorageBackend(base_path=self.storage)
-        return ModelRegistry(storage=storage, registry_path=DEFAULT_REGISTRY_PATH)
+        return _registry_at(self.storage)
+
+
+def _registry_at(storage_path: str) -> ModelRegistry:
+    storage = LocalStorageBackend(base_path=storage_path)
+    return ModelRegistry(storage=storage, registry_path=DEFAULT_REGISTRY_PATH)
+
+
+def resolve_served_models(
+    nodes: Dict[str, Dict[str, Any]],
+    source_path: Path,
+    env: Optional[str],
+    project: Optional[str] = None,
+) -> None:
+    """Add ``model_resolution`` to each planned node with a ``model``: the version its
+    stage names in the registry right now — what a run starting now would pin.
+
+    Reads registry metadata only; nothing is downloaded or loaded.
+    """
+    from ducta.mlrun.serving import ServingError, resolve_model
+    from ducta.setting.project_schema import ModelRef
+
+    registry: Optional[ModelRegistry] = None
+    for item in nodes.values():
+        raw = item.get("model")
+        if not raw:
+            continue
+        try:
+            ref = ModelRef.model_validate(raw)
+            if ref.source != "ducta":
+                item["model_resolution"] = {
+                    "status": "at_run_time",
+                    "message": "an MLflow model is resolved when the run starts",
+                }
+                continue
+            if registry is None:
+                registry = _registry_at(
+                    _resolve_mlops_storage(source_path, None, env, project=project)
+                )
+            resolved = resolve_model(ref, registry=registry)
+            item["model_resolution"] = {
+                "status": "resolved",
+                "version": resolved.version,
+                "stage": resolved.stage_at_resolution,
+                "framework": resolved.framework,
+                "artifact_sha256": resolved.registered_sha256,
+            }
+        except ServingError as e:
+            item["model_resolution"] = {"status": "unresolved", "message": str(e)}
+        except Exception as e:  # noqa: BLE001 — a plan must render even without a registry
+            item["model_resolution"] = {
+                "status": "unknown",
+                "message": f"could not read the model registry: {e}",
+            }
 
 
 MLOpsScopeDep = Annotated[MLOpsScope, Depends()]
@@ -273,8 +364,18 @@ async def delete_run(experiment_id: str, run_id: str, scope: MLOpsScopeDep) -> N
 
 @router.get("/models", dependencies=[Depends(require_permission("execution.read"))])
 async def list_models(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
-    """List all registered models (latest version per model)."""
-    return await run_in_threadpool(lambda: scope.registry().list_models())
+    """List all registered models (latest version per model).
+
+    Each carries ``served_by``: the project's serving nodes that name it, with the
+    stage or version they ask for.
+    """
+
+    def _run() -> List[Dict[str, Any]]:
+        models = scope.registry().list_models()
+        served = scope.serving_references()
+        return [{**m, "served_by": served.get(str(m.get("name")), [])} for m in models]
+
+    return await run_in_threadpool(_run)
 
 
 @router.get("/models/{name}", dependencies=[Depends(require_permission("execution.read"))])
@@ -285,7 +386,7 @@ async def get_model_versions(name: str, scope: MLOpsScopeDep) -> List[Dict[str, 
 
 @router.post(
     "/models/{name}/promote",
-    dependencies=[Depends(require_permission("execution.write"))],
+    dependencies=[Depends(require_permission("model.promote"))],
 )
 async def promote_model(
     name: str, body: PromoteModelRequest, scope: MLOpsScopeDep
@@ -318,14 +419,15 @@ async def promote_model(
 @router.delete(
     "/models/{name}/versions/{version}",
     status_code=204,
-    dependencies=[Depends(require_permission("execution.write"))],
+    dependencies=[Depends(require_permission("model.delete"))],
 )
 async def delete_model_version(name: str, version: int, scope: MLOpsScopeDep) -> None:
     """Delete a specific model version and its artifact."""
     await run_in_threadpool(lambda: scope.registry().delete_model_version(name, version))
 
 
-@router.post("/gc", dependencies=[Depends(require_permission("execution.write"))])
+# Garbage collection deletes old model versions: the same right as deleting one.
+@router.post("/gc", dependencies=[Depends(require_permission("model.delete"))])
 async def run_gc(body: GcRequest, scope: MLOpsScopeDep) -> Dict[str, Any]:
     """Garbage-collect old model versions."""
 

@@ -491,6 +491,16 @@ class GlobalConfigSchema(BaseModel):
         ),
     )
 
+    split_enforcement: Literal["error", "warn"] = Field(
+        default="error",
+        description=(
+            "What happens when a node bound to a declared train/test split (its own "
+            "`split:`, or the pipeline's for an `ml_stage: training`/`evaluation` node) "
+            "finishes without applying it through ducta.mlrun.split_dataframe: 'error' "
+            "fails the node before its output is written (default); 'warn' logs it. "
+            "Either way the run certificate records whether the split was applied."
+        ),
+    )
     mlops_required: bool = Field(
         default=False,
         description=(
@@ -764,7 +774,8 @@ class DataQualitySchema(BaseModel):
             "Supported: null_rate, schema, row_count, duplicates, range, "
             "referential_integrity, anomaly_detection, incremental_volume, "
             "freshness, drift_detection, statistical, cross_table_referential, "
-            "dataset_completeness, business_rules, empty_dataset, or any custom check"
+            "dataset_completeness, business_rules, empty_dataset, prediction_rate, "
+            "prediction_contract, prediction_drift, or any custom check"
         ),
     )
     quality_gate: Optional[QualityGateSchema] = Field(

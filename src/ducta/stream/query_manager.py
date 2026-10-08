@@ -325,7 +325,8 @@ class StreamingQueryManager:
             logger.info(f"Creating streaming query for node '{node_name}'")
 
             input_df = self._load_streaming_input(node_config)
-            transformed_df = self._apply_transformations(input_df, node_config)
+            models, serving = self._serving_model(node_config)
+            transformed_df = self._apply_transformations(input_df, node_config, serving)
             query, checkpoint_location = self._configure_and_start_query(
                 transformed_df, node_config, execution_id, pipeline_name
             )
@@ -342,6 +343,9 @@ class StreamingQueryManager:
                     "pipeline_name": pipeline_name,
                     "node_name": node_name,
                     "resolved_checkpoint": checkpoint_location,
+                    # Pinned for the query's lifetime; a restart resolves it again.
+                    "model": serving.evidence() if serving is not None else None,
+                    "model_cache": models,
                 }
                 self.checkpoint_manager.discard_reservation(checkpoint_location)
 
@@ -482,22 +486,64 @@ class StreamingQueryManager:
                     cause=e,
                 ) from e
 
-    def _apply_transformations(self, input_df: DataFrame, node_config: Dict[str, Any]) -> DataFrame:
+    def _serving_model(self, node_config: Dict[str, Any]) -> Tuple[Any, Any]:
+        """The node's ``model:``, resolved and loaded for this query (None without one)."""
+        if not node_config.get("model"):
+            return None, None
+        from ducta.mlrun.serving import model_cache_for
+
+        models = model_cache_for(self.context)
+        serving = models.get(node_config["model"])
+        logger.info(
+            "Streaming node '{}' scores with model '{}' v{} until the query restarts",
+            node_config.get("name", "unknown"),
+            serving.resolved.name,
+            serving.resolved.version,
+        )
+        return models, serving
+
+    def served_models(self, execution_id: str) -> Dict[str, Dict[str, Any]]:
+        """node name → the model its running query scores with."""
+        with self._active_queries_lock:
+            return {
+                info["node_name"]: info["model"]
+                for info in self._active_queries.values()
+                if info.get("execution_id") == execution_id and info.get("model")
+            }
+
+    def _apply_transformations(
+        self, input_df: DataFrame, node_config: Dict[str, Any], serving: Any = None
+    ) -> DataFrame:
         """
         Apply transformations to the streaming DataFrame with error handling.
         """
         try:
             function_config = node_config.get("function")
             if not function_config:
+                if serving is not None:
+                    from ducta.mlrun.serving import score
+
+                    logger.info("No transformation function: scoring with the built-in scorer")
+                    return score(input_df, serving)
                 logger.info("No transformation function specified, using input DataFrame as-is")
                 return input_df
 
             transform_func = self._get_transform_function(function_config)
             function_params = function_config.get("params")
+            ml_context = None
+            if serving is not None:
+                from ducta.core.ml_context import MLNodeContext
+
+                ml_context = MLNodeContext(
+                    model=serving.model,
+                    model_ref=serving,
+                    node_config=node_config,
+                    spark=getattr(input_df, "sparkSession", None),
+                )
 
             try:
                 transformed_df = self._call_transform_function(
-                    transform_func, input_df, function_params
+                    transform_func, input_df, function_params, ml_context
                 )
             except StreamingError:
                 raise
@@ -546,12 +592,15 @@ class StreamingQueryManager:
         transform_func: Callable[..., DataFrame],
         input_df: DataFrame,
         params: Optional[Dict[str, Any]],
+        ml_context: Any = None,
     ) -> DataFrame:
         """Call transformation with backward-compatible signatures.
 
         Supported forms:
         - fn(df)
         - fn(df, params)
+        - either with an ``ml_context`` keyword, which a node with ``model:`` fills
+          (``ml_context.model``, ``ml_context.model_ref``)
         """
         safe_params = params if isinstance(params, dict) else {}
 
@@ -573,7 +622,19 @@ class StreamingQueryManager:
                 Parameter.POSITIONAL_ONLY,
                 Parameter.POSITIONAL_OR_KEYWORD,
             )
+            and p.name != "ml_context"
         ]
+        extra: Dict[str, Any] = {}
+        if ml_context is not None:
+            if "ml_context" in func_signature.parameters or any(
+                p.kind == Parameter.VAR_KEYWORD for p in func_signature.parameters.values()
+            ):
+                extra["ml_context"] = ml_context
+            else:
+                logger.warning(
+                    "Streaming node has a model but its transform takes no ml_context "
+                    "parameter; add `ml_context=None` to receive it"
+                )
 
         has_var_positional = any(
             p.kind == Parameter.VAR_POSITIONAL for p in func_signature.parameters.values()
@@ -607,9 +668,9 @@ class StreamingQueryManager:
                         else str(transform_func)
                     ),
                 )
-            return transform_func(input_df)
+            return transform_func(input_df, **extra)
 
-        return transform_func(input_df, safe_params)
+        return transform_func(input_df, safe_params, **extra)
 
     def _get_transform_function(self, function_config: Dict[str, Any]) -> Callable:
         """

@@ -6,8 +6,9 @@ what it reads, and **after**, on what it wrote. A failing check can stop the
 run, skip what depends on it, or only warn — and every outcome is recorded in
 the run's certificate.
 
-- **16 built-in checks** — schema, nulls, duplicates, ranges, freshness,
-  drift, cross-table integrity, SQL business rules — plus your own.
+- **19 built-in checks** — schema, nulls, duplicates, ranges, freshness,
+  drift, cross-table integrity, SQL business rules, a model's predictions — plus
+  your own.
 - **Contracts** on datasets, checked wherever they are read.
 - **Gates** that turn check results into a decision.
 - The same checks run on **Spark** and **pandas**.
@@ -179,7 +180,10 @@ Available checks
        (``column``, ``min``, ``max``), ``referential_integrity``,
        ``schema_drift``
    * - Temporal
-     - ``freshness``, ``incremental_volume``, ``anomaly_detection``
+     - ``freshness``, ``incremental_volume``, ``anomaly_detection`` (whether a
+       column's **mean** moved away from the stored baseline — a property of the
+       whole dataset, not a flag on individual rows; scoring rows as anomalous is
+       a model's job, see :doc:`mlops`)
    * - Distribution
      - ``drift_detection`` (against the dataset's stored baseline),
        ``statistical``
@@ -187,6 +191,42 @@ Available checks
      - ``cross_table_referential``, ``dataset_completeness``
    * - Business
      - ``business_rules`` — SQL predicates each row must satisfy
+   * - Model output
+     - ``prediction_contract`` (``column``, ``min``, ``max``, ``allow_null``),
+       ``prediction_rate`` (``column``, ``threshold``, ``min``, ``max``: the share
+       of rows flagged), ``prediction_drift`` (``column``, ``reference``,
+       ``method: psi | ks``, ``threshold``)
+
+Output checks that compare with another dataset name it — ``reference_dataset`` for
+``referential_integrity``/``dataset_completeness``, ``reference`` for
+``prediction_drift``. It must be in the catalog (``ducta config validate`` says
+so, with a suggestion, when it is not); the run reads it like an input, reusing it
+when the node already read it, and the certificate records its fingerprint.
+
+Checking a model's predictions
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A serving node's output is a prediction column. Data checks ask whether data is
+well formed; these ask whether the model is behaving:
+
+.. code-block:: yaml
+
+   score:
+     ml_stage: serving
+     model: {name: churn, stage: production, method: predict_proba, output_col: churn_score}
+     inputs: [new_customers]
+     outputs: [gold.churn.scores]
+     quality:
+       prediction_contract: {column: churn_score, min: 0, max: 1}
+       # A model that suddenly flags everyone, or no one, has a broken input.
+       prediction_rate: {column: churn_score, threshold: 0.5, min: 0.05, max: 0.6}
+       # Scores distributed as on the set the model was validated on.
+       prediction_drift: {column: churn_score, reference: gold.churn.validation_scores}
+       gate: {max_errors: 0}
+
+``prediction_drift`` compares the statistic itself with ``threshold`` (PSI 0.2
+or KS 0.1 by default), not a p-value: on large data every difference is
+"significant". It is a warning by default; ``severity: error`` makes it block.
 
 A check that names a column the dataset does not have **fails**; it does not
 silently check nothing. ``ducta quality validate-config --node NAME`` checks a

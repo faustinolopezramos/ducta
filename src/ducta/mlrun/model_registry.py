@@ -150,6 +150,9 @@ class ModelVersion:
     updated_at: str
     experiment_run_id: Optional[str] = None
     size_bytes: Optional[int] = None
+    # SHA-256 of the artifact as registered; serving refuses a copy that no longer
+    # matches. None for versions registered before Ducta recorded it.
+    artifact_sha256: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -163,6 +166,7 @@ class ModelVersion:
             "updated_at": self.updated_at,
             "experiment_run_id": self.experiment_run_id,
             "size_bytes": self.size_bytes,
+            "artifact_sha256": self.artifact_sha256,
         }
 
     @classmethod
@@ -372,6 +376,9 @@ class ModelRegistry:
                 artifact_metadata = self.storage.write_artifact(
                     str(artifact_file), artifact_destination, mode="overwrite"
                 )
+                from ducta.mlrun.serving import artifact_digest
+
+                artifact_sha256 = artifact_digest(artifact_file)
 
                 model_version = ModelVersion(
                     model_id=model_id,
@@ -383,6 +390,7 @@ class ModelRegistry:
                     updated_at=now,
                     experiment_run_id=experiment_run_id,
                     size_bytes=artifact_metadata.size_bytes,
+                    artifact_sha256=artifact_sha256,
                 )
 
                 metadata_path = self._metadata_path(model_id, version)
@@ -522,7 +530,14 @@ class ModelRegistry:
                     "stage": model_version.metadata.stage.value,
                     "created_at": model_version.created_at,
                     "artifact_type": model_version.artifact_type,
+                    "framework": model_version.metadata.framework,
                     "metrics": model_version.metadata.metrics,
+                    "hyperparameters": model_version.metadata.hyperparameters,
+                    # The feature contract a serving node reads its columns from.
+                    "features": list(model_version.metadata.input_schema or {}) or None,
+                    "artifact_sha256": model_version.artifact_sha256,
+                    "size_bytes": model_version.size_bytes,
+                    "experiment_run_id": model_version.experiment_run_id,
                 }
             )
 

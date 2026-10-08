@@ -290,3 +290,42 @@ class ExecutionErrorsResponse(BaseModel):
     )
     errors: List[ExecutionErrorDetail] = Field(default_factory=list)
     warnings: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+class StreamingNodeStatus(BaseModel):
+    """One streaming node of a running execution: its query, throughput and model."""
+
+    node: str
+    #: active · failed · skipped (never started) · stopped
+    state: str
+    error: Optional[str] = None
+    last_batch_id: Optional[int] = None
+    num_input_rows: Optional[float] = None
+    input_rows_per_second: Optional[float] = None
+    processed_rows_per_second: Optional[float] = None
+    trigger_execution_ms: Optional[float] = None
+    #: The model the query was pinned to when it started (`model:` on the node).
+    model: Optional[Dict[str, Any]] = None
+
+
+class StreamingPipelineStatus(BaseModel):
+    """A streaming (or hybrid) pipeline an execution is running."""
+
+    stream_execution_id: str
+    pipeline_name: Optional[str] = None
+    status: str
+    uptime_seconds: Optional[float] = None
+    total_queries: int = 0
+    active_queries: int = 0
+    failed_queries: int = 0
+    error: Optional[str] = None
+    nodes: List[StreamingNodeStatus] = Field(default_factory=list)
+
+
+class StreamingStatusResponse(BaseModel):
+    """`GET /executions/{id}/streaming`: the live state of an execution's streams."""
+
+    execution_id: str
+    #: False once the execution no longer holds a running engine.
+    active: bool
+    pipelines: List[StreamingPipelineStatus] = Field(default_factory=list)

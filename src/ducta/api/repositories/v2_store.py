@@ -528,7 +528,7 @@ class V2ProjectStore:
         located = read_project(self.root)
         if not catalog_dir_files(self.root):
             single = catalog_location(self.root)
-            return {single: lambda doc: _sync(doc, desired)}, []
+            return {single: _pipeline_sync(desired)}, []
         target: Dict[str, Path] = {}
         for name in desired:
             layer = name.split(".", 1)[0] if "." in name else "sources"
@@ -541,7 +541,7 @@ class V2ProjectStore:
         for path in sorted(files):
             subset = {n: desired[n] for n in desired if target[n] == path}
             if subset:
-                edits[path] = lambda doc, subset=subset: _sync(doc, subset)
+                edits[path] = _pipeline_sync(subset)
             else:
                 deletes.append(path)
         return edits, deletes

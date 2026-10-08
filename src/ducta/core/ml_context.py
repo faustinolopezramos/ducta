@@ -43,6 +43,10 @@ class MLNodeContext(Mapping):
     mlops_run_id: Optional[str] = None
     spark: Any = None
     split_applied: bool = False
+    # A serving/evaluation node's model (``model:`` in the pipeline file): the loaded
+    # object, and a ``ducta.mlrun.serving.ServingModel`` saying exactly which one.
+    model: Any = None
+    model_ref: Any = None
 
     def _keys(self) -> List[str]:
         return [f.name for f in fields(self)]

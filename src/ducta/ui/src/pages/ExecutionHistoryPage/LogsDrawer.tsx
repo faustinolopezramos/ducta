@@ -4,6 +4,7 @@ import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useExecutionLogs, useExecutionStatus, useServerProjectPipelines } from "../../api/queries";
 import { useCancelExecution, useRetryExecution } from "../../api/mutations";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
+import { StreamingStatusPanel } from "../../components/Execution/StreamingStatusPanel";
 import { type LogEntry, type LogLevel } from "../../store/logsStore";
 import { deriveNodeStates } from "../../utils/nodeStatus";
 import { SlidePanel } from "../../components/ui/SlidePanel";
@@ -120,6 +121,9 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
           </div>
         )}
       </div>
+
+      {/* A streaming/hybrid run's queries, polled while it runs; nothing otherwise. */}
+      <StreamingStatusPanel executionId={executionId} isActive={isActive} />
 
       {logsLoading ? (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", ...styles.fontMono, fontSize: 12, color: colors.textDim }}>

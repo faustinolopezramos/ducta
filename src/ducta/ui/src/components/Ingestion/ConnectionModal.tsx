@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
+import { PermittedButton } from "../ui/PermittedButton";
 import { Field } from "../ui/Field";
 import "../ui/Input.css"; // .input-field, reused on the bare <input>/<select> below
 import { colors, styles } from "../../theme/tokens";
@@ -252,7 +253,7 @@ export function ConnectionModal({
         <Button variant="ghost" size="sm" onClick={onClose}>
           Cancel
         </Button>
-        <Button
+        <PermittedButton permission="ingestion.write"
           variant="secondary"
           size="sm"
           onClick={doTest}
@@ -260,8 +261,8 @@ export function ConnectionModal({
           leftIcon={<IconPlugConnected size={15} />}
         >
           {test.isPending ? "Testing…" : "Test"}
-        </Button>
-        <Button
+        </PermittedButton>
+        <PermittedButton permission="ingestion.write"
           variant="primary"
           size="sm"
           onClick={doSave}
@@ -269,7 +270,7 @@ export function ConnectionModal({
           leftIcon={<IconDeviceFloppy size={15} />}
         >
           {create.isPending ? "Saving…" : editing ? "Save changes" : "Save connection"}
-        </Button>
+        </PermittedButton>
       </div>
     </Modal>
   );

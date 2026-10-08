@@ -16,7 +16,7 @@ def _generate(tmp_path: Path, kind: str, fmt=ConfigFormat.YAML, **kw) -> Path:
     return root
 
 
-_KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "hybrid_basic"]
+_KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "ml_scoring", "hybrid_basic"]
 
 
 @pytest.mark.parametrize("kind", _KINDS)
@@ -101,7 +101,7 @@ def test_the_streaming_cli_loads_a_format_2_project(tmp_path, monkeypatch):
     assert "events_stream" in _load_streaming_context(None, "dev").pipelines
 
 
-_KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "hybrid_basic"]
+_KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "ml_scoring", "hybrid_basic"]
 
 
 @pytest.mark.parametrize("kind", _KINDS)

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { colors, styles } from "../theme/tokens";
-import { Button } from "../components/ui/Button";
+import { PermittedButton } from "../components/ui/PermittedButton";
 import { PageHeader } from "../components/ui/PageHeader";
 import { PageContainer } from "../components/ui/PageContainer";
 import { Panel } from "../components/ui/Panel";
@@ -118,9 +118,9 @@ export function GitPage() {
                   <FileList label="Untracked" files={untracked} color={colors.textMuted} />
                   {(unstaged.length > 0 || untracked.length > 0) && (
                     <div style={{ marginTop: 12 }}>
-                      <Button variant="ghost" size="sm" onClick={handleStageAll} disabled={isStaging}>
+                      <PermittedButton permission="git.write" variant="ghost" size="sm" onClick={handleStageAll} disabled={isStaging}>
                         {isStaging ? "Staging…" : `Stage all (${unstaged.length + untracked.length} files)`}
-                      </Button>
+                      </PermittedButton>
                     </div>
                   )}
                 </>
@@ -159,7 +159,7 @@ export function GitPage() {
                   opacity: staged.length === 0 ? 0.5 : 1,
                 }}
               />
-              <Button
+              <PermittedButton permission="git.write"
                 variant="primary"
                 size="sm"
                 onClick={handleCommit}
@@ -167,7 +167,7 @@ export function GitPage() {
                 loading={isCommitting}
               >
                 Commit
-              </Button>
+              </PermittedButton>
             </Panel>
           </div>
 
@@ -243,12 +243,12 @@ export function GitPage() {
             <SectionTitle>{ICONS.CONNECTIONS} Remote</SectionTitle>
             {sourceType === "git" && (
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-                <Button variant="ghost" size="sm" onClick={() => pullLatest(undefined)} disabled={isPulling} style={{ flex: 1 }}>
+                <PermittedButton permission="git.write" variant="ghost" size="sm" onClick={() => pullLatest(undefined)} disabled={isPulling} style={{ flex: 1 }}>
                   {isPulling ? "Pulling…" : "↓ Pull"}
-                </Button>
-                <Button variant="ghost" size="sm" onClick={() => pushChanges(undefined)} disabled={isPushing} style={{ flex: 1 }}>
+                </PermittedButton>
+                <PermittedButton permission="git.write" variant="ghost" size="sm" onClick={() => pushChanges(undefined)} disabled={isPushing} style={{ flex: 1 }}>
                   {isPushing ? "Pushing…" : "↑ Push"}
-                </Button>
+                </PermittedButton>
               </div>
             )}
           </div>

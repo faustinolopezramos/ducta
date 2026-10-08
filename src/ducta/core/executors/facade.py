@@ -416,6 +416,18 @@ class PipelineExecutor:
             {},
         )
 
+    def streaming_snapshot(self) -> List[Dict[str, Any]]:
+        """Status of every pipeline this engine has streamed, in whatever state — from
+        the streaming executor and the hybrid one, each of which keeps its own
+        queries. Neither is created just to be asked: an engine that never streamed
+        has nothing to say."""
+        snapshot: List[Dict[str, Any]] = []
+        for executor in (self._streaming_executor, self._hybrid_executor):
+            manager = getattr(executor, "streaming_manager", None)
+            if manager is not None:
+                snapshot.extend(self._safe_streaming(manager.list_pipelines, []))
+        return snapshot
+
     def list_streaming_pipelines(self) -> List[Dict[str, Any]]:
         """List running streaming pipelines."""
         return self._safe_streaming(

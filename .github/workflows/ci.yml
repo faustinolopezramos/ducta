@@ -230,18 +230,15 @@ jobs:
       # Audits the resolved environment, so it covers transitive packages the
       # lockfile pulls in — which is where these almost always live.
       #
-      # Advisory, with a known and specific backlog — flip to a hard failure
-      # (drop the `|| true`) once these are cleared:
-      #   * mlflow 2.22.5 — ~20 advisories, all fixed in the 3.x line, which the
-      #     `^2.10.0` constraint forbids. Needs the 2→3 migration tested against
-      #     `ducta.mlrun.mlflow` before the cap moves.
-      #   * pyarrow 19.0.1 — fixed in 23.0.1; the `<20.0.0` cap is there for
-      #     pyspark 3.5 compatibility, so it moves when pyspark does.
-      #   * pytest 7.4.4 — dev-only, fixed in 9.0.3.
-      - name: pip-audit (runtime dependencies — advisory)
+      # Blocking: the backlog that kept it advisory (mlflow 2.x, pyarrow 19,
+      # pytest 7) is cleared — mlflow ^3.15, pyarrow >=23.0.1, pytest ^9.0.3.
+      # `--skip-editable` leaves out Ducta itself, which `poetry install` installs
+      # in editable mode and which is not on PyPI to audit; `--strict` would turn
+      # that skip into a failure.
+      - name: pip-audit (runtime and dev dependencies)
         run: |
           poetry run pip install pip-audit
-          poetry run pip-audit --strict || true
+          poetry run pip-audit --skip-editable
 
       # ── UI ────────────────────────────────────────────────────────────────
       - name: Install UI dependencies

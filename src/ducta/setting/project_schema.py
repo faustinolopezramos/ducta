@@ -368,9 +368,100 @@ class _NodeBase(_Strict):
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
+_REGISTRY_STAGES = ("staging", "production", "archived")
+#: What a serving node without ``run`` executes.
+BUILTIN_SCORER = "ducta.mlrun.serving:predict"
+
+
+class ModelRef(_Strict):
+    """The model a ``serving`` (or ``evaluation``) node scores with.
+
+    Resolved once per run: ``stage: production`` names whichever version is in
+    production when the run starts, and that version — not the stage — is what the
+    run uses and the certificate records.
+    """
+
+    source: Literal["ducta", "mlflow"] = Field(
+        default="ducta", description="ducta (Ducta's model registry) | mlflow"
+    )
+    name: Optional[str] = Field(default=None, description="Registered model name (source: ducta)")
+    stage: Optional[str] = Field(
+        default=None, description="staging | production | archived (source: ducta)"
+    )
+    version: Optional[int] = Field(default=None, ge=1, description="Exact version (source: ducta)")
+    uri: Optional[str] = Field(
+        default=None,
+        description="models:/<name>@<alias> or models:/<name>/<version> (source: mlflow)",
+    )
+    trust_artifact: bool = Field(
+        default=False,
+        description="Allow loading a pickle/joblib artifact. Loading one executes it, so "
+        "only set this for models your own pipelines registered.",
+    )
+    features: Optional[List[str]] = Field(
+        default=None,
+        description="Columns passed to the model. Default: the model's registered input "
+        "schema (source: ducta) or every input column (source: mlflow).",
+    )
+    output_col: str = Field(default="prediction", description="Column the prediction goes to")
+    output_type: Optional[Literal["double", "long", "string", "boolean"]] = Field(
+        default=None,
+        description="Spark type of output_col. Default: inferred from one row in batch; "
+        "double on a stream, which cannot be sampled.",
+    )
+    method: Literal["predict", "predict_proba", "decision_function", "score_samples"] = Field(
+        default="predict",
+        description="Model method the built-in scorer calls. predict_proba keeps the "
+        "positive-class probability of a binary classifier.",
+    )
+
+    @field_validator("stage")
+    @classmethod
+    def _known_stage(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        text = value.strip().lower()
+        if text not in _REGISTRY_STAGES:
+            close = difflib.get_close_matches(text, _REGISTRY_STAGES, n=1, cutoff=0.6)
+            hint = f" — did you mean '{close[0]}'?" if close else ""
+            raise ValueError(
+                f"unknown model stage '{value}'{hint} (one of: {', '.join(_REGISTRY_STAGES)})"
+            )
+        return text
+
+    @model_validator(mode="after")
+    def _one_way_to_name_a_model(self) -> "ModelRef":
+        if self.source == "mlflow":
+            stray = [k for k in ("name", "stage", "version") if getattr(self, k) is not None]
+            if stray:
+                raise ValueError(
+                    f"model: {', '.join(stray)} apply to source: ducta; an MLflow model is "
+                    "named by its uri (models:/<name>@<alias> or models:/<name>/<version>)"
+                )
+            if not self.uri or not self.uri.startswith("models:/"):
+                raise ValueError(
+                    "model: source: mlflow needs uri: models:/<name>@<alias> or "
+                    "models:/<name>/<version>"
+                )
+            return self
+        if self.uri is not None:
+            raise ValueError("model: uri applies to source: mlflow; a Ducta model is named by name")
+        if not self.name:
+            raise ValueError("model: name is required")
+        if (self.stage is None) == (self.version is None):
+            raise ValueError(
+                "model: set exactly one of stage (e.g. production) or version (e.g. 3)"
+            )
+        return self
+
+
 class TransformNode(_NodeBase):
     kind: Literal["transform"] = "transform"
-    run: str = Field(..., description="'package.module:function'")
+    run: Optional[str] = Field(
+        default=None,
+        description="'package.module:function'. A serving node may omit it to use the "
+        "built-in scorer (ducta.mlrun.serving:predict).",
+    )
     inputs: Union[Dict[str, str], List[str]] = Field(
         default_factory=list,
         description="{parameter: dataset} (preferred) or [dataset, ...] passed positionally",
@@ -382,19 +473,64 @@ class TransformNode(_NodeBase):
     run_in_process: bool = False
     execution_mode: Optional[str] = None
     execution_mode_max_rows: Optional[int] = None
-    ml_stage: Optional[str] = None
-    split: Optional[Dict[str, Any]] = None
+    ml_stage: Optional[str] = Field(
+        default=None,
+        description="feature_engineering | training | evaluation | serving. A training or "
+        "evaluation node must apply the pipeline's split.",
+    )
+    split: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="This node's train/test split; overrides the pipeline's. The node must "
+        "apply it with ducta.mlrun.split_dataframe.",
+    )
     hyperparams: Optional[Dict[str, Any]] = None
     model_version: Optional[str] = None
+    model: Optional[ModelRef] = Field(
+        default=None,
+        description="The registered model this node scores with (ml_stage: serving or "
+        "evaluation); delivered as ml_context.model",
+    )
     metrics: Optional[Any] = None
+
+    @field_validator("ml_stage")
+    @classmethod
+    def _known_stage(cls, value: Optional[str]) -> Optional[str]:
+        return _check_ml_stage(value)
+
+    @field_validator("split")
+    @classmethod
+    def _valid_split(cls, value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return _check_split(value)
 
     @field_validator("run")
     @classmethod
-    def _run_is_module_function(cls, value: str) -> str:
+    def _run_is_module_function(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
         module, sep, function = value.partition(":")
         if not sep or not module.strip() or not function.strip():
             raise ValueError(f"run must be 'module:function', got {value!r}")
         return value
+
+    @model_validator(mode="after")
+    def _serving_has_a_model(self) -> "TransformNode":
+        stage = str(self.ml_stage) if self.ml_stage is not None else None
+        if stage == "serving" and self.model is None:
+            raise ValueError(
+                "ml_stage: serving needs model: {name: ..., stage: production} "
+                "(or source: mlflow with a uri)"
+            )
+        if self.model is not None and stage not in ("serving", "evaluation"):
+            raise ValueError(
+                "model: applies to ml_stage: serving or evaluation"
+                + (f", not '{stage}'" if stage else "; set ml_stage")
+            )
+        if self.run is None and stage != "serving":
+            raise ValueError(
+                "run is required ('module:function'); only a serving node may omit it "
+                "to use the built-in scorer"
+            )
+        return self
 
 
 class IngestSpec(_Strict):
@@ -575,6 +711,12 @@ class StreamSpec(_Strict):
     transform: Optional[Union[str, StreamTransform]] = Field(
         default=None, description="A registered transform: its name, or {key, module, params}"
     )
+    model: Optional[ModelRef] = Field(
+        default=None,
+        description="A registered model to score each micro-batch with: handed to the "
+        "transform as ml_context, or applied by the built-in scorer when there is none. "
+        "Resolved when the query starts; a restart resolves it again.",
+    )
     input: StreamInput = Field(default_factory=StreamInput)
     output: StreamOutput = Field(default_factory=StreamOutput)
     streaming: StreamingSpec = Field(default_factory=StreamingSpec)
@@ -618,7 +760,11 @@ class PipelineFile(_Strict):
     )
     reuse_if_materialized: Optional[bool] = None
     spark_config: Optional[Dict[str, Any]] = None
-    split: Optional[Dict[str, Any]] = None
+    split: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Train/test split for the pipeline's training and evaluation nodes "
+        "(ml_stage: training | evaluation), which must apply it.",
+    )
     hyperparams: Optional[Dict[str, Any]] = None
     hyperparams_config: Optional[Union[str, Dict[str, Any]]] = None
     model_version: Optional[str] = None
@@ -626,6 +772,11 @@ class PipelineFile(_Strict):
     # May be empty: the API creates a pipeline, then adds nodes to it. Running
     # an empty pipeline still fails preflight.
     nodes: Dict[str, Node] = Field(default_factory=dict)
+
+    @field_validator("split")
+    @classmethod
+    def _valid_split(cls, value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        return _check_split(value)
 
     @field_validator("nodes", mode="before")
     @classmethod
@@ -645,6 +796,36 @@ class PipelineFile(_Strict):
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+
+
+def _check_ml_stage(value: Optional[str]) -> Optional[str]:
+    """``ml_stage`` is one of the engine's stages; a typo would quietly free a training
+    node from applying its split."""
+    if value is None:
+        return value
+    from ducta.setting.schemas import MLStage
+
+    stages = [s.value for s in MLStage]
+    text = str(getattr(value, "value", value))
+    if text not in stages:
+        close = difflib.get_close_matches(text, stages, n=1, cutoff=0.6)
+        hint = f" — did you mean '{close[0]}'?" if close else ""
+        raise ValueError(f"unknown ml_stage '{text}'{hint} (one of: {', '.join(stages)})")
+    return text
+
+
+def _check_split(value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """A split is checked as strictly as the rest of the file: an unknown key (a
+    misspelt ``stratify_col``) is an error, not a setting the engine never reads."""
+    if value is None:
+        return value
+    if not isinstance(value, dict):
+        raise ValueError("split must be a mapping, e.g. {method: random, test_size: 0.2}")
+    from ducta.setting.schemas import SplitConfig
+
+    _reject_unknown(value, set(SplitConfig.model_fields), "split")
+    SplitConfig.model_validate(value)
+    return value
 
 
 def _reject_unknown(

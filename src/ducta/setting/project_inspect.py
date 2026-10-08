@@ -94,6 +94,73 @@ def _datasets_of(pipeline: Dict[str, Any]) -> set:
     return names
 
 
+def ml_plan(root: Path, env: Optional[str], pipeline: Optional[str] = None) -> Dict[str, Any]:
+    """What each ML node will be given, resolved the way the engine resolves it.
+
+    Per pipeline with ML in it (``type: ml`` or ``hybrid``, or a node with an
+    ``ml_stage`` or a ``split``), per node: its stage; the split it receives and where
+    that was declared; whether it is bound to apply it (and so fails the run if it does
+    not); its hyperparameters after merging pipeline < node; and its model
+    version (node, else pipeline, else ``settings.default_model_version``); and the
+    registered model a serving node scores with, as declared. A run's
+    ``--hyperparams`` / ``--model-version`` go on top of these.
+    """
+    from ducta.core.ml_contract import effective_split, must_apply_split, node_stage
+    from ducta.setting.project_loader import validate_project
+
+    project = validate_project(root, env)
+    settings = project.project.settings
+    enforcement = "warn" if settings.get("split_enforcement") == "warn" else "error"
+    out: Dict[str, Any] = {}
+    for pname, pipe in project.pipelines.items():
+        if pipeline is not None and pname != pipeline:
+            continue
+        nodes = {n: node.model_dump(exclude_none=True) for n, node in pipe.nodes.items()}
+        is_ml = pipe.type in ("ml", "hybrid") or any(
+            cfg.get("ml_stage") or cfg.get("split") for cfg in nodes.values()
+        )
+        if not is_ml:
+            continue
+        entry: Dict[str, Any] = {"type": pipe.type, "split_enforcement": enforcement}
+        if pipe.split:
+            entry["split"] = pipe.split
+        if pipe.hyperparams_config:
+            entry["hyperparams_config"] = pipe.hyperparams_config
+        planned: Dict[str, Any] = {}
+        for nname, cfg in nodes.items():
+            if cfg.get("kind", "transform") != "transform":
+                continue
+            split, source = effective_split(cfg, pipe.split)
+            hyper = {**(pipe.hyperparams or {}), **(cfg.get("hyperparams") or {})}
+            version = (
+                cfg.get("model_version")
+                or pipe.model_version
+                or settings.get("default_model_version")
+            )
+            item: Dict[str, Any] = {"ml_stage": node_stage(cfg) or "none"}
+            if split:
+                item["split"] = split
+                item["split_from"] = source
+                item["must_apply_split"] = must_apply_split(cfg, pipe.split)
+            if hyper:
+                item["hyperparams"] = hyper
+            if version:
+                item["model_version"] = version
+            if cfg.get("model"):
+                # As declared: which version a stage names is only known at run start.
+                item["model"] = cfg["model"]
+                if not cfg.get("run"):
+                    item["run"] = "built-in scorer"
+            planned[nname] = item
+        entry["nodes"] = planned
+        out[pname] = entry
+    if pipeline is not None and pipeline not in out:
+        if pipeline not in project.pipelines:
+            raise ProjectConfigError([f"there is no pipeline '{pipeline}'"])
+        out[pipeline] = {"type": project.pipelines[pipeline].type, "nodes": {}}
+    return out
+
+
 def dump(data: Any, fmt: str, schema: Optional[str] = None) -> str:
     """``data`` as ``yaml``, ``toml`` or ``json`` text (``schema``: the editor schema to name)."""
     if fmt == "json":

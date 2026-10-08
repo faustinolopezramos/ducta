@@ -32,6 +32,13 @@ class QualityCheckInfo(BaseModel):
     class_name: str
     module: str
     origin: str
+    #: First line of the check's docstring.
+    description: Optional[str] = None
+    #: ERROR or WARNING: what a failure counts as unless `severity:` overrides it.
+    default_severity: Optional[str] = None
+    #: {param: JSON-Schema fragment with a description}; None when the check
+    #: declares no parameters (a custom check may not).
+    params: Optional[Dict[str, Dict[str, Any]]] = None
 
 
 class QualityDatasetRef(BaseModel):

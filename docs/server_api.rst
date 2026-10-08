@@ -58,7 +58,9 @@ Key API resources:
    * - ``/api/projects``
      - Projects and their pipelines: create, import, update, delete; execute,
        preflight and sweep a pipeline; its datasets, dependencies and node
-       schemas.
+       schemas; ``GET .../pipelines/{name}/ml-plan?env=`` says what each ML node is
+       given (the same answer as ``ducta config show --ml``), and for a serving
+       node, ``model_resolution``: the registered version its stage names right now.
    * - ``/api/nodes``
      - Nodes of the workspace, their Python code, and their execution history.
    * - ``/api/configs``, ``/api/environments``
@@ -67,15 +69,23 @@ Key API resources:
    * - ``/api/executions``
      - List, inspect, cancel, retry and bulk-cancel executions; their logs and
        errors. Live logs over WebSocket at ``/api/ws/logs/{execution_id}``.
+       ``GET /api/executions/{id}/streaming`` is the live state of a streaming or
+       hybrid run: per pipeline its status and uptime, per node its query's state
+       (``active``, ``failed``, ``skipped``, ``stopped``), the latest batch's
+       throughput and the model it scores with. ``active`` turns false once the
+       run holds no engine.
    * - ``/api/projects/{id}/certificates``, ``/api/certificates/verify``
      - Run Certificates: list, show, verify, diff and reproduce; verify an
        uploaded certificate.
    * - ``/api/quality``
      - Checks, reports, trends and scores; run checks; validate a node's
-       quality configuration.
+       quality configuration. ``GET /api/quality/checks`` describes each check:
+       its description, default severity and parameters (as JSON Schema).
    * - ``/api/mlops``
      - Experiments and runs, the model registry, promotion and garbage
-       collection.
+       collection. Each model lists the project nodes that serve it
+       (``served_by``); each version its stage, metrics, features and artifact
+       hash.
    * - ``/api/schedules``
      - Cron schedules for pipelines.
    * - ``/api/ingestion``
@@ -194,6 +204,52 @@ warnings — and work through this checklist:
      - ``127.0.0.1`` behind a proxy
      - Only bind a public interface intentionally, and terminate TLS in a
        reverse proxy in front of the app.
+
+.. _roles-and-permissions:
+
+Roles and permissions
+---------------------
+
+With ``AUTH_ENABLED=true`` each route checks one permission, granted by the user's
+roles. With authentication off every request runs as a local admin.
+``GET /api/auth/me`` returns the user's ``roles`` and ``permissions`` (``["*"]`` for an
+admin), and the UI hides or disables what the user may not do. The server enforces
+the permissions regardless.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 18 82
+
+   * - Role
+     - Permissions
+   * - ``admin``
+     - ``*`` (everything).
+   * - ``developer``
+     - Read and write on workspace, configs, pipelines, nodes, datasets, Git,
+       repositories, executions, projects, quality, ingestion and templates;
+       ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote`` and
+       ``model.delete``.
+   * - ``viewer``
+     - Read only: ``workspace.read``, ``project.read``, ``config.read``,
+       ``pipeline.read``, ``node.read``, ``dataset.read``, ``git.read``,
+       ``repository.read``, ``execution.read``, ``quality.read``,
+       ``ingestion.read``, ``template.read``.
+
+Some routes need more than their name suggests:
+
+- **Preflight** (``POST .../pipelines/{name}/preflight``) needs
+  ``pipeline.execute``. Its deep check imports the project's modules, and
+  importing a module runs its top-level code.
+- **A Git URL as source** (``?source=`` / ``X-Source-Path``, or
+  ``POST /api/workspace/select``) needs ``repository.write``, because the server
+  clones it. The operator's ``DUCTA_WORKSPACE`` is not checked.
+- **Models**: promoting a version needs ``model.promote``. Deleting a version, and
+  the garbage collection that deletes old ones, needs ``model.delete``.
+- **Testing an unsaved ingestion connection** needs ``ingestion.write``. The
+  server connects to whatever host and port the caller sends.
+
+A test (``tests/api/test_rbac.py``) walks every route and fails if a route that
+writes is reachable by a viewer, so a new route cannot ship without a permission.
 
 See ``SECURITY.md`` in the repository root for the vulnerability-reporting
 process and the same hardening guidance in checklist form.

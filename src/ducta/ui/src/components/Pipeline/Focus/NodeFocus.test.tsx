@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { NodeSchema } from "../../../api/queries";
 import { NodeFocus } from "./NodeFocus";
 
-const store = vi.hoisted(() => ({ isDirty: false }));
+const store = vi.hoisted(() => ({ isDirty: false, canRun: true }));
+
+vi.mock("../../../hooks/usePermission", () => ({
+  usePermission: () => store.canRun,
+  requiresPermission: (p: string) => `Requires the '${p}' permission`,
+}));
 
 vi.mock("../../../api/queries", () => ({
   useNodeCode: () => ({ data: { code: "def train_performance_model(df): ..." } }),
@@ -61,6 +66,7 @@ function renderFocus(overrides: Partial<Parameters<typeof NodeFocus>[0]> = {}) {
 describe("NodeFocus", () => {
   beforeEach(() => {
     store.isDirty = false;
+    store.canRun = true;
   });
 
   it("lays the node out as a bow-tie: neighbours, data, the node, data, neighbours", () => {
@@ -120,5 +126,86 @@ describe("NodeFocus", () => {
     renderFocus({ onViewLogs });
     fireEvent.click(screen.getByRole("button", { name: "View logs" }));
     expect(onViewLogs).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let someone without pipeline.execute run the node, and says why", () => {
+    store.canRun = false;
+    const props = renderFocus();
+    const run = screen.getByRole("button", { name: "Run node" });
+    expect(run).toBeDisabled();
+    expect(run).toHaveAttribute("title", "Requires the 'pipeline.execute' permission");
+    fireEvent.click(run);
+    expect(props.onRunNode).not.toHaveBeenCalled();
+  });
+
+  it("shows what an ML node is given, and that it must apply its split", () => {
+    renderFocus({
+      mlPlan: {
+        ml_stage: "training",
+        split: { method: "stratified", test_size: 0.2, stratify_col: "churned", seed: 42 },
+        split_from: "pipeline",
+        must_apply_split: true,
+        hyperparams: { max_depth: 6 },
+        model_version: "1.0.0",
+      },
+      splitEnforcement: "error",
+    });
+    const ml = screen.getByRole("region", { name: "ML" });
+    expect(ml).toHaveTextContent("training");
+    expect(ml).toHaveTextContent("stratified · test_size 0.2 · stratify_col churned · seed 42 (from pipeline)");
+    expect(ml).toHaveTextContent("the run fails if it does not");
+    expect(ml).toHaveTextContent("max_depth 6");
+    expect(ml).toHaveTextContent("1.0.0");
+  });
+
+  it("shows the model a serving node scores with, and that it uses the built-in scorer", () => {
+    renderFocus({
+      mlPlan: {
+        ml_stage: "serving",
+        model: { name: "churn", stage: "production", output_col: "score", method: "predict_proba" },
+        run: "built-in scorer",
+      },
+    });
+    const ml = screen.getByRole("region", { name: "ML" });
+    expect(ml).toHaveTextContent("churn @ production → score (predict_proba)");
+    expect(ml).toHaveTextContent("built-in scorer");
+  });
+
+  it("says which version the model resolves to right now, or why it does not", () => {
+    const model = { name: "churn", stage: "production" };
+    renderFocus({
+      mlPlan: {
+        ml_stage: "serving",
+        model,
+        model_resolution: { status: "resolved", version: 4, stage: "production" },
+      },
+    });
+    expect(screen.getByRole("region", { name: "ML" })).toHaveTextContent(
+      "v4 (production) — pinned when a run starts"
+    );
+    cleanup();
+    renderFocus({
+      mlPlan: {
+        ml_stage: "serving",
+        model,
+        model_resolution: { status: "unresolved", message: "model 'churn' has no stage production" },
+      },
+    });
+    expect(screen.getByRole("region", { name: "ML" })).toHaveTextContent(
+      "model 'churn' has no stage production"
+    );
+  });
+
+  it("says a warn-only project warns instead of failing", () => {
+    renderFocus({
+      mlPlan: { ml_stage: "training", split: { method: "random" }, split_from: "node", must_apply_split: true },
+      splitEnforcement: "warn",
+    });
+    expect(screen.getByRole("region", { name: "ML" })).toHaveTextContent("warns if it does not");
+  });
+
+  it("has no ML section for a node outside an ML pipeline", () => {
+    renderFocus();
+    expect(screen.queryByRole("region", { name: "ML" })).toBeNull();
   });
 });

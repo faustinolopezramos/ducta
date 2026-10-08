@@ -48,7 +48,7 @@ Ducta Check is the validation layer, implementing:
 *   **Persistence**: `QualityOutputManager` + pluggable `StorageBackend`s persist reports (parquet/delta/json/csv) with a `QualityService` facade (`output_manager.py`, `storage.py`, `service.py`).
 
 ### Built-in checks
-`empty_dataset`, `null_rate`, `schema`, `schema_drift`, `row_count`, `duplicates`, `range`, `referential_integrity`, `cross_table_referential`, `anomaly_detection`, `incremental_volume`, `freshness`, `drift_detection`, `statistical`, `dataset_completeness`, `business_rules` — plus any custom `@register_check`.
+`empty_dataset`, `null_rate`, `schema`, `schema_drift`, `row_count`, `duplicates`, `range`, `referential_integrity`, `cross_table_referential`, `anomaly_detection`, `incremental_volume`, `freshness`, `drift_detection`, `statistical`, `dataset_completeness`, `business_rules`, and on a model's output `prediction_contract`, `prediction_rate`, `prediction_drift` — plus any custom `@register_check`. `anomaly_detection` compares a column's mean with the stored baseline (a dataset-level signal, not a per-row flag).
 
 ---
 

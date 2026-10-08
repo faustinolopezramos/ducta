@@ -24,3 +24,4 @@ export * from "./DataTable";
 export * from "./Skeleton";
 export * from "./PageContainer";
 export * from "./Breadcrumbs";
+export * from "./PermittedButton";

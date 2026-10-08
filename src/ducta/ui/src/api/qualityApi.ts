@@ -5,11 +5,26 @@ import { qk } from "./queryKeys";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
+/** One parameter of a check, as a JSON-Schema fragment (ducta.check.params). */
+export interface QualityCheckParam {
+  type?: string | string[];
+  enum?: unknown[];
+  minimum?: number;
+  maximum?: number;
+  description?: string;
+}
+
 export interface QualityCheckInfo {
   name: string;
   class_name: string;
   module: string;
   origin: string;
+  /** First line of the check's docstring. */
+  description?: string | null;
+  /** What a failure counts as unless the check entry sets `severity`. */
+  default_severity?: "ERROR" | "WARNING" | null;
+  /** null when the check declares no parameters (some custom checks). */
+  params?: Record<string, QualityCheckParam> | null;
 }
 
 export interface QualityDatasetRef {

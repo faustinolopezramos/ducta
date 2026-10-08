@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation, useBlocker } from "react-router-do
 import { IconArrowLeft, IconCode, IconLoader2 } from "@tabler/icons-react";
 import { colors, styles } from "../theme/tokens";
 import { Button } from "../components/ui/Button";
+import { usePermission } from "../hooks/usePermission";
 import { ConfirmDialog } from "../components/ui/ConfirmDialog";
 import { useNode, useNodeCode, useServerProjects, useServerProjectPipelines, useWorkspaceFileContent, useExecutionStatus } from "../api/queries";
 import { useWriteWorkspaceFile, useRunNode, apiErrorMessage } from "../api/mutations";
@@ -296,6 +297,9 @@ export function NodeCodePage() {
     return () => window.removeEventListener("beforeunload", handler);
   }, [isCodeDirty]);
 
+  // Saving goes through the workspace files API, which needs workspace.write.
+  const canEdit = usePermission("workspace.write");
+
   const handleSave = useCallback((content: string) => {
     if (!selectedPath) return;
     writeFile({ path: selectedPath, content }, {
@@ -429,7 +433,8 @@ export function NodeCodePage() {
                 height="100%"
                 filePath={selectedPath}
                 isSaving={isSaving}
-                onSave={handleSave}
+                onSave={canEdit ? handleSave : undefined}
+                readOnly={!canEdit}
                 onDirtyChange={setIsCodeDirty}
               />
             </Suspense>

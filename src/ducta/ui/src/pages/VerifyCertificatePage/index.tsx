@@ -6,6 +6,7 @@ import { Button } from "../../components/ui/Button";
 import { useVerifyCertificateStandalone, type RunCertificate } from "../../api/certificatesApi";
 import { ProofLadder } from "../../components/Certificate/ProofLadder";
 import {
+  MLSection,
   NodesSection,
   DatasetsSection,
   QualitySection,
@@ -135,6 +136,7 @@ export function VerifyCertificatePage() {
           {parsed && (
             <>
               <NodesSection nodes={parsed.nodes ?? []} />
+              <MLSection nodes={parsed.nodes ?? []} />
               <DatasetsSection inputs={parsed.inputs ?? {}} outputs={parsed.outputs ?? {}} />
               <QualitySection quality={parsed.quality ?? []} />
               <CodeSection code={parsed.code} />

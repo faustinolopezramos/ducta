@@ -96,7 +96,7 @@ export default function QualityPage() {
 
   const handleProjectChange = (value: string) => {
     // A different project invalidates env, pipeline and dataset selection —
-    // each project has its own environment.yaml and its own quality data.
+    // each project declares its own environments and keeps its own quality data.
     setParam({
       project: value || undefined,
       env: undefined,

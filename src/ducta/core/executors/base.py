@@ -194,21 +194,6 @@ class BaseExecutor:
             if hyperparams:
                 merged_hyperparams.update(hyperparams)
 
-            if hasattr(self.context, "get_model_registry"):
-                try:
-                    model_registry = self.context.get_model_registry()
-                    model = model_registry.get_model(
-                        pipeline_ml_config.get("model_name"), version=final_model_version
-                    )
-                    if model is not None:
-                        ml_info["model"] = model
-                except Exception as e:
-                    logger.warning(
-                        "Could not resolve model from registry for pipeline '{}': {}",
-                        pipeline_name,
-                        e,
-                    )
-
             ml_info.update(
                 {
                     "model_version": final_model_version,
@@ -500,11 +485,17 @@ class BaseExecutor:
 
         if model_version is not None:
             ml_info["model_version"] = model_version
+            ml_info["cli_model_version"] = model_version
 
         if hyperparams:
             merged_h = dict(ml_info.get("hyperparams", {}) or {})
             merged_h.update(hyperparams)
             ml_info["hyperparams"] = merged_h
+            # Kept apart so a node's own hyperparams (merged later) cannot override
+            # what this run was explicitly asked to use.
+            ml_info["cli_hyperparams"] = {
+                k: v for k, v in hyperparams.items() if k not in ("sweep_id", "sweep_index")
+            }
 
         final_h = ml_info.get("hyperparams")
         if isinstance(final_h, dict):

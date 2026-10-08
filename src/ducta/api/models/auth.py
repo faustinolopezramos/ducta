@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class User(BaseModel):
@@ -40,8 +40,10 @@ class User(BaseModel):
         default="org_default", description="Multi-tenant organization context"
     )
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def permissions(self) -> List[str]:
+        """What the roles allow — serialized, so `/api/auth/me` tells the UI what to show."""
         return _roles_to_permissions(self.roles)
 
     def has_permission(self, permission: str) -> bool:
@@ -100,9 +102,12 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "ingestion.write",
         "template.read",
         "template.write",
+        "model.promote",
+        "model.delete",
     ],
     "viewer": [
         "workspace.read",
+        "project.read",
         "config.read",
         "pipeline.read",
         "node.read",

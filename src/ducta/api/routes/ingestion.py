@@ -172,8 +172,10 @@ async def retest_connection(name: str, manager: WorkspaceManagerDep) -> Connecti
 
 @router.post(
     "/connections/test",
+    # Connects to a host and port the caller supplies: part of creating a connection,
+    # so it needs the right to create one — not a read.
     response_model=ConnectionTestResponse,
-    dependencies=[Depends(require_permission("ingestion.read"))],
+    dependencies=[Depends(require_permission("ingestion.write"))],
     summary="Test a connection without saving it",
 )
 async def test_connection(

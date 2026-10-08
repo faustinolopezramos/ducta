@@ -340,7 +340,9 @@ Pipeline keys
    * - ``spark_config``
      - Spark settings for this pipeline only.
    * - ``model_version``, ``split``, ``hyperparams``, ``hyperparams_config``
-     - ML pipelines — see :doc:`mlops`.
+     - ML pipelines — see :doc:`mlops`. A node may set ``split``, ``hyperparams`` and
+       ``model_version`` too, overriding the pipeline's; ``ml_stage: training`` or
+       ``evaluation`` binds it to apply the pipeline's split.
    * - ``description``, ``metadata``
      - Documentation; not read by Ducta.
 
@@ -376,6 +378,12 @@ Node keys
    * - ``run_in_process``
      - Run the node in its own process, so a timeout can stop pure-Python
        code that never calls Spark.
+   * - ``ml_stage``
+     - ``feature_engineering``, ``training``, ``evaluation`` or ``serving``. A
+       ``training``/``evaluation`` node must apply the pipeline's ``split``.
+   * - ``split``, ``hyperparams``, ``model_version``
+     - This node's own, overriding the pipeline's. A node with a ``split`` must apply
+       it — see :doc:`mlops`.
    * - ``on_missing_input``
      - When an input does not exist yet: ``skip`` (default — the node and its
        dependants are skipped) or ``fail``.

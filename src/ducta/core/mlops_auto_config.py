@@ -79,12 +79,15 @@ class MLOpsAutoConfigurator:
         """Read a node's ML lifecycle stage, accepting both spellings in the wild."""
         if not isinstance(node_config, dict):
             return ""
+        # A validated config holds the MLStage enum, whose str() is "MLStage.TRAINING";
+        # the value ("training") is what every caller compares against.
         flat = node_config.get("ml_stage")
         if flat:
-            return str(flat)
+            return str(getattr(flat, "value", flat))
         nested = node_config.get("ml")
         if isinstance(nested, dict) and nested.get("stage"):
-            return str(nested["stage"])
+            stage = nested["stage"]
+            return str(getattr(stage, "value", stage))
         return ""
 
     @classmethod

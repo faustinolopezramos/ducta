@@ -5,12 +5,49 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - Unreleased
 
-Ducta now has a single configuration version. The migration path from 0.2 is
-gone, and `ducta template` writes the current format directly.
+Configuration format 2 (`ducta.yaml`, the catalog and `pipelines/`) replaces
+format 1, which is no longer read, and `ducta template` writes the new format
+directly.
+
+### Security
+
+- **No known vulnerabilities in the installed dependencies** (pip-audit on a clean
+  `ducta[all]` install; it reported 54 entries — 28 distinct advisories — before):
+  `mlflow` moves to `^3.15.0` (27 advisories, all fixed by 3.15.0 or not affecting
+  3.16), `pyarrow` to `>=23.0.1,<25` (CVE-2026-25087, use-after-free in Arrow C++;
+  `<25` because databricks-connect 14 requires it), and the dev-only `pytest` to
+  `^9.0.3` (`pytest-cov` to `^7.0.0`). The CI's dependency audit is blocking again.
+- **The API's deep preflight needs `pipeline.execute`**, not `pipeline.read`. It
+  imports the project's modules, which runs their top-level code, so a read-only
+  role could run project code through it.
+- **A Git URL as a source needs `repository.write`** (`?source=`, `X-Source-Path`,
+  `POST /api/workspace/select`). Any authenticated user could make the server
+  clone a repository. The operator's `DUCTA_WORKSPACE` is not checked.
+- **Model promotion and deletion have their own permissions**: `model.promote`, and
+  `model.delete` for deleting a version and for gc (both developer). Before, they
+  needed only the generic `execution.write`.
+- **Testing an unsaved ingestion connection needs `ingestion.write`**: the server
+  connects to whatever host and port the caller sends.
+- A test walks every API route and fails if a route that writes is reachable by
+  a viewer.
 
 ### Changed (breaking)
+
+- **A declared train/test split is enforced.** A node bound to a split — its own
+  `split:`, or the pipeline's for an `ml_stage: training`/`evaluation` node — that finishes
+  without applying it (`ducta.mlrun.split_dataframe`/`kfold_splits` with its
+  `ml_context`) now fails before its output is written; it used to log a warning.
+  `settings.split_enforcement: warn` restores the warning. A pipeline `split` that no
+  node is bound to apply, or a bound node whose function has no `ml_context` parameter,
+  is reported by `ducta config validate`. Feature nodes under a pipeline split are no
+  longer warned about.
+
+- **MLflow 3.15 or later** (`mlops` extra). MLflow 3 refuses a local-folder tracking
+  store unless `MLFLOW_ALLOW_FILE_STORE` is set; Ducta sets it when a project
+  configures one (`tracking_uri: mlruns`, `file://...`) and warns, recommending
+  `sqlite:///.../mlflow.db`. Models are logged with MLflow 3's `name=`.
 
 - **A dataset's contract is `quality:`, not `checks:`.** The catalog now names the
   block the way nodes do. `checks:` on a catalog entry is an error that says to use
@@ -27,6 +64,81 @@ gone, and `ducta template` writes the current format directly.
   use `DUCTA_CERTIFICATE_KEY`.
 
 ### Added
+
+- **Serving: `ml_stage: serving` scores with a registered model.** A node names its
+  model — `model: {name: churn, stage: production}`, an exact `version`, or an MLflow
+  `source: mlflow, uri: models:/churn@champion` — and receives it loaded as
+  `ml_context.model`, with `ml_context.model_ref` saying which one it is. A stage is
+  resolved once per run, so every node in the run scores with the same version even
+  if a promotion lands mid-run. Without `run`, the built-in scorer
+  (`ducta.mlrun.serving:predict`) applies the model to the node's single input and
+  adds `output_col` (`method`: `predict`, `predict_proba`, `decision_function`,
+  `score_samples`), on pandas or Spark. A pickle/joblib model loads only with
+  `trust_artifact: true`. `ducta config validate` checks the model resolves.
+  Before, `serving` was accepted and did nothing.
+- **The certificate names the model each serving node scored with** (schema `1.6`):
+  `nodes[].ml.model` records the source, name, the version the run pinned, the stage
+  it was resolved from and the artifact's SHA-256. `ducta certify diff` reports a
+  model change, and two runs that scored with different models are not equivalent.
+- **The model registry records each artifact's SHA-256 at registration**, and serving
+  refuses a copy whose hash no longer matches.
+- **A streaming node can score with a model**: `stream.model` takes the same block.
+  The model is resolved when the query starts and kept for its lifetime (a restart
+  resolves it again); without a `transform` the built-in scorer applies it to each
+  micro-batch, and a transform with an `ml_context` parameter receives it. The
+  pipeline status lists each query's model under `served_models`.
+- **`output_type`** on a model sets the prediction column's Spark type (`double`,
+  `long`, `string`, `boolean`) instead of inferring it from one row; a stream, which
+  cannot be sampled, defaults to `double`.
+- **Checks on a model's output**: `prediction_contract` (every row scored, within
+  `min`/`max`), `prediction_rate` (the share of rows flagged stays within bounds)
+  and `prediction_drift` (PSI or KS of the scores against a `reference` dataset,
+  such as the validation scores the model was promoted on).
+- **`split_dataframe` splits a Spark DataFrame** without collecting it: `random` and
+  `group` by a content hash (independent of partitioning, groups never span
+  partitions), `stratified` with exact per-class shares, `temporal` at the time
+  column's quantiles. `kfold_splits` still needs pandas.
+- **Spark ML models in the registry and the serving node** (`framework:
+  spark-mllib`, the directory `model.save` writes): validated by layout, loaded
+  without unpickling, scored with `transform`.
+- **`ducta[boost]`** installs XGBoost and LightGBM (also in `ducta[all]`).
+- **The API and UI show what serves what.** `GET /api/mlops/models` lists, per
+  model, the project's nodes that serve it and the stage or version each asks for
+  (`served_by`); the registry tab shows them. A version carries its framework,
+  features, hyperparameters and artifact hash, shown in the versions table.
+  `GET .../ml-plan` adds `model_resolution` to a serving node — the version its
+  stage names right now, or why there is none — and the node's ML panel shows it.
+- **`GET /api/quality/checks` describes each check** (description, default
+  severity, parameters as JSON Schema), and the run-checks builder uses it: the
+  check's description, its parameters offered as you type, a value hint per
+  parameter (`psi | ks`, `number 0–1`) and the check's own default severity. It
+  replaces a hard-coded hint list that named parameters some checks do not take
+  (`row_count: min_rows`).
+- **Live streaming status.** `GET /api/executions/{id}/streaming` reports a running
+  streaming or hybrid execution: per pipeline its status, uptime and active/failed
+  query counts; per node its query's state, last batch, input and processed rows
+  per second, trigger time, the model it scores with and any error. A pipeline
+  with one failed node and others still streaming is shown, not hidden. The
+  execution drawer and the pipeline page's log panel show it, refreshed every 5
+  seconds while the run lasts.
+- **`ml_scoring` template**: train and promote a model, then score new data with it
+  through a code-free serving node and prediction checks against the validation
+  scores. `ducta certify diff` between two score runs shows a model change.
+- **The UI follows the user's permissions.** `GET /api/auth/me` now returns
+  `permissions` (`["*"]` for an admin). The UI hides what a role cannot do (create
+  or delete projects) and disables, with a tooltip naming the permission, what it
+  cannot run: run a pipeline or node, run checks, edit code, Git writes, schedules,
+  model promotion/deletion, ingestion connections. With auth off nothing changes.
+- **ML evidence in the certificate view**: an "ML" panel per ML node shows its
+  stage, the split and where it was declared, model version, hyperparameters, and
+  whether the split was *applied*, *not applied* (in red, with a warning, when the
+  node was bound to apply it) or *not required*.
+- **`GET /api/projects/{id}/pipelines/{name}/ml-plan?env=`** (`pipeline.read`)
+  answers what `ducta config show --ml` answers. The pipeline view's node panel
+  shows it: stage, split and its origin, whether the node must apply it (and
+  whether the project fails or warns if not), merged hyperparameters and version.
+- **`ducta config show --ml`**: what each ML node will be given — its split and where it
+  was declared, whether it must apply it, its merged hyperparameters and model version.
 
 - **`ducta init project`**: creates a project in the recommended layout
   (`--type batch|ml|streaming|hybrid`, `--format yaml|toml|json`, `--layout
@@ -66,6 +178,55 @@ gone, and `ducta template` writes the current format directly.
 
 ### Fixed
 
+- **Output checks that compare with another dataset never got it inside a run.**
+  `referential_integrity` and `dataset_completeness` with a `reference_dataset`
+  always failed with "Reference dataset ... not available": the runner never passed
+  the dataset to the checks. It is now read (or reused, when the node already read
+  it) and recorded among the run's inputs, and a reference missing from the catalog
+  is reported by `ducta config validate`.
+- **A streaming run started from the API could read and write in the wrong
+  directory.** Paths a stream node declares inline (`stream.input.options.path`,
+  `output.path`, `checkpoint_location`) stayed relative, and Spark resolves those
+  against the directory its JVM started in — the first project the server ran.
+  They are now made absolute against the run's project, as catalog paths were.
+- **The model registry's versions table showed every version as Staging, with no
+  metrics**: it read `stage`/`metrics` under a `metadata` key the API never sends.
+- **A scikit-learn model saved with joblib could not be registered with
+  validation**: the validator opened it with `pickle.load`, which cannot read
+  joblib's format.
+- **`anomaly_detection` is documented as what it is**: a check on a column's mean
+  against the stored baseline, not a per-row anomaly flag.
+- **The `viewer` role could not list projects**: it lacked `project.read`.
+- **The WebSocket rate limiter could reuse another configuration's limiter** when
+  a settings object's `id()` was recycled. It now matches the settings object
+  itself.
+- **A node's own `split` and `model_version` never reached its `ml_context`.**
+  `Context.get_node_ml_config` dropped them, so the pipeline's split (or none) was
+  used without a word. Both now reach the node, over the pipeline's; a run's
+  `--hyperparams`/`--model-version` override both (a node's hyperparams used to override
+  the CLI's). Running one node (`ducta start -n`) now gets the same per-node ML
+  context as a full run — it used to skip the node's hyperparams too.
+- **The run certificate now proves the split.** Each ML node's entry has an `ml` block:
+  the split it was given, where it was declared, whether it was bound to apply it,
+  whether it did, its model version and hyperparameters. It used to record nothing
+  about whether a split was applied.
+- **ML configuration typos are errors.** An unknown key in a `split`
+  (`stratify_column`) was ignored and an unknown `ml_stage` (`trainning`) accepted,
+  quietly freeing the node from its split; both are errors with file and line now. A
+  node's `split` is validated like the pipeline's, and the preflight's pipeline split
+  validation — which read the split from a view that drops it, so never ran — runs.
+- **MLflow logging failures are errors**, not warnings; with `settings.mlflow.required:
+  true` (or `mlops_required: true`) they fail the node.
+- `ml_stage` read from a validated config came back as `"MLStage.TRAINING"` instead of
+  `"training"`.
+
+- **Models were never logged to MLflow** unless TensorFlow, PyTorch and XGBoost were
+  all installed. The flavor table touched `mlflow.tensorflow` and friends up front,
+  which import their framework; the resulting `ModuleNotFoundError` was caught and
+  logged as a warning, so the run succeeded without its model. Only the flavor in
+  use is loaded now, and the tests read the model back instead of trusting that no
+  error surfaced.
+
 - **Mistakes the validation let through, and errors that named the wrong place.**
   - `ducta config validate` (and `start --validate-only`) now rejects an `inputs` key
     that is not a parameter of the node's function, with the parameters listed and a
@@ -98,8 +259,9 @@ gone, and `ducta template` writes the current format directly.
 
 - **`ducta config migrate`** and everything that read configuration format 1
   (`environment.yaml` + `config/*`): `ducta.setting.project_migrate`, the
-  format-1 detection in the CLI and the API, and the upgrade guide. To move a
-  0.2 project, run `ducta config migrate` from Ducta 0.3.0 first.
+  format-1 detection in the CLI and the API, and the upgrade guide. A project
+  still in format 1 (Ducta 0.1.x) can be converted with `ducta config migrate`
+  from commit `7696708`, the last one that has it.
 
 ### Changed
 
@@ -113,11 +275,6 @@ gone, and `ducta template` writes the current format directly.
 - `ducta.setting.project_decompile` holds what the API's project store still
   uses from the old module: `decompile`, `canonical` and `write_schemas`.
 
-## [0.3.0] - 2026-09-27
-
-Configuration format 1 is gone: Ducta reads only `ducta.yaml` + `catalog.yaml`
-+ `pipelines/*.yaml`. `ducta config migrate` — run with 0.3 — is the one place
-that still reads the old layout, to convert it.
 
 ### Removed
 
@@ -206,7 +363,7 @@ that still reads the old layout, to convert it.
 
 - Rewritten for the current format: configuration reference (settings,
   datasets, nodes, quality, environments, variables and secrets, upgrading from
-  0.2), CLI reference with exit codes, quality, streaming, best practices,
+  format 1), CLI reference with exit codes, quality, streaming, best practices,
   Databricks, MLOps, the REST API overview, and the tutorials (basic examples,
   batch ETL, streaming, MLOps, Airflow, certificates). The tutorials' projects
   were run as written. Corrections along the way: `${DB_PASSWORD}` is refused
@@ -219,7 +376,6 @@ that still reads the old layout, to convert it.
   guide's examples must form one valid project in every environment they
   override.
 
-## [0.2.0] - 2026-09-27
 
 ### Added
 
@@ -288,15 +444,6 @@ that still reads the old layout, to convert it.
   `enable_run_certificate` / `require_run_certificate` keys still work; one
   that contradicts an explicit `evidence_level`, or an unknown level, is a
   preflight error — an unknown level never falls back to a weaker one.
-
-### Deprecated
-
-- **Configuration format 1** (`environment.yaml` + `config/*`, and the bundle,
-  directory-convention and quickstart forms). Still read, with one warning per
-  process (`DUCTA_LEGACY_CONFIG_WARNINGS=off` silences it); planned for removal
-  in `0.3.0`. Run `ducta config migrate`. A migrated project's
-  `config_fingerprint` changes once, because the keys format 2 drops on purpose
-  are gone — chain reuse re-runs once.
 
 ### Changed
 
@@ -1393,6 +1540,6 @@ with data quality, MLOps, and run governance built in.
   `linux/arm64`, including Apple Silicon).
 - Unit test suites and coverage configuration.
 
-[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.1.1...HEAD
+[0.2.0]: https://github.com/faustinolopezramos/ducta/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/faustinolopezramos/ducta/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/faustinolopezramos/ducta/releases/tag/v0.1.0

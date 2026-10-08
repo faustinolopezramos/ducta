@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 from ducta.setting import project_files as pf
 from ducta.setting.project_defaults import apply_defaults, resolve_extends
 from ducta.setting.project_schema import (
+    BUILTIN_SCORER,
     PROJECT_FORMAT_VERSION,
     CatalogEntry,
     ChecksBlock,
@@ -652,6 +653,27 @@ def _node_inputs(node: Any) -> List[str]:
     return []
 
 
+#: Check parameters that name another catalog dataset the check reads.
+_CHECK_REFERENCE_KEYS = ("reference_dataset", "reference")
+
+
+def _check_references(node: Any) -> List[str]:
+    """Datasets a node's output checks compare against (``prediction_drift``'s
+    ``reference``, ``referential_integrity``'s ``reference_dataset``...): read at
+    run time like an input, so they must be in the catalog and readable."""
+    block = getattr(node, "quality", None)
+    checks = getattr(block, "checks", None) or {}
+    return sorted(
+        {
+            value
+            for cfg in checks.values()
+            if isinstance(cfg, dict)
+            for key, value in cfg.items()
+            if key in _CHECK_REFERENCE_KEYS and isinstance(value, str) and value
+        }
+    )
+
+
 def _cross_checks(
     catalog: Dict[str, CatalogEntry],
     pipelines: Dict[str, PipelineFile],
@@ -675,6 +697,12 @@ def _cross_checks(
                     problems.append(
                         f"{at} node '{nname}' reads '{ds}', which is not in the catalog"
                         + _suggest(ds, catalog)
+                    )
+            for ds in _check_references(node):
+                if ds not in catalog:
+                    problems.append(
+                        f"{at} node '{nname}': a quality check compares with '{ds}', which "
+                        "is not in the catalog" + _suggest(ds, catalog)
                     )
             for ds in node.outputs:
                 if ds not in catalog:
@@ -892,7 +920,7 @@ def _compile_node(name: str, node: Any, catalog: Dict[str, CatalogEntry]) -> Dic
         "fail_fast": node.fail_fast,
     }
     if isinstance(node, TransformNode):
-        module, _, function = node.run.partition(":")
+        module, _, function = (node.run or BUILTIN_SCORER).partition(":")
         out.update({"module": module.strip(), "function": function.strip()})
         out["input"] = dict(node.inputs) if isinstance(node.inputs, dict) else list(node.inputs)
         out.update(
@@ -905,6 +933,7 @@ def _compile_node(name: str, node: Any, catalog: Dict[str, CatalogEntry]) -> Dic
                     "split": node.split,
                     "hyperparams": node.hyperparams,
                     "model_version": node.model_version,
+                    "model": node.model.model_dump(exclude_unset=True) if node.model else None,
                     "metrics": node.metrics,
                 }
             )
@@ -965,6 +994,7 @@ def compile_project(project: Project) -> Dict[str, Dict[str, Any]]:
     for pname, pipeline in project.pipelines.items():
         for nname, node in pipeline.nodes.items():
             consumed.update(_node_inputs(node))
+            consumed.update(_check_references(node))
             produced.update(node.outputs)
             nodes_config[nname] = _compile_node(nname, node, project.catalog)
         pipelines_config[pname] = _drop_empty(

@@ -72,8 +72,23 @@ def resolve_source(raw: str) -> ResolvedSource:
         return SourceResolver.resolve(raw)
 
 
+#: Cloning a Git source fetches code the server will later import (preflight, runs),
+#: so it is a write to the server's code base — not something a read role may do.
+GIT_SOURCE_PERMISSION = "repository.write"
+
+
+def check_git_source(raw: str, user: User) -> None:
+    """Refuse a Git URL as a source unless the user may bring code onto the server."""
+    if SourceResolver.is_git_url(raw.strip()) and not user.has_permission(GIT_SOURCE_PERMISSION):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Using a Git repository as a source requires '{GIT_SOURCE_PERMISSION}'",
+        )
+
+
 def get_source_path(
     request: Request,
+    user: CurrentUserDep,
     source: Annotated[
         str | None,
         Query(description="Source path (local directory or Git URL)"),
@@ -92,9 +107,11 @@ def get_source_path(
     """
     import os
 
-    resolved_source = (
-        source or request.headers.get("X-Source-Path") or os.environ.get("DUCTA_WORKSPACE")
-    )
+    requested = source or request.headers.get("X-Source-Path")
+    if requested:
+        # Only what the caller sent is checked: DUCTA_WORKSPACE is the operator's choice.
+        check_git_source(requested, user)
+    resolved_source = requested or os.environ.get("DUCTA_WORKSPACE")
     if not resolved_source:
         raise HTTPException(
             status_code=400,

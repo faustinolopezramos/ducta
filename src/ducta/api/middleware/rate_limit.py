@@ -25,7 +25,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, Optional, Tuple
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -244,7 +244,7 @@ def _build_limiter(
     )
 
 
-_ws_limiter_cache: Dict[int, "SlidingWindowLimiter | RedisSlidingWindowLimiter"] = {}
+_ws_limiter_cache: Dict[int, Tuple[Any, "SlidingWindowLimiter | RedisSlidingWindowLimiter"]] = {}
 _ws_limiter_cache_lock = threading.Lock()
 
 
@@ -262,15 +262,19 @@ def get_websocket_connection_limiter(
     """
     key = id(settings)
     with _ws_limiter_cache_lock:
-        limiter = _ws_limiter_cache.get(key)
-        if limiter is None:
-            limiter = _build_limiter(
-                max_requests=settings.rate_limit_requests or 100,
-                window_seconds=settings.rate_limit_window_seconds,
-                max_keys=settings.rate_limit_max_keys,
-                redis_url=settings.rate_limit_redis_url,
-            )
-            _ws_limiter_cache[key] = limiter
+        # The entry keeps `settings` itself and is matched by identity: an id alone can
+        # be reused by a new object once the old one is freed, which handed back a
+        # limiter built for another configuration (seen as a flaky test).
+        entry = _ws_limiter_cache.get(key)
+        if entry is not None and entry[0] is settings:
+            return entry[1]
+        limiter = _build_limiter(
+            max_requests=settings.rate_limit_requests or 100,
+            window_seconds=settings.rate_limit_window_seconds,
+            max_keys=settings.rate_limit_max_keys,
+            redis_url=settings.rate_limit_redis_url,
+        )
+        _ws_limiter_cache[key] = (settings, limiter)
         return limiter
 
 

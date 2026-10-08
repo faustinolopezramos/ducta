@@ -5,6 +5,7 @@ import { StatusBadge } from "../../components/ui/StatusBadge";
 import { useToggleSchedule, type PipelineSchedule } from "../../api/schedulesApi";
 import { describeCron } from "../../utils/cron";
 import { formatRelative, formatUtc } from "../../utils/timeLabels";
+import { usePermission } from "../../hooks/usePermission";
 
 /**
  * Per-row actions. Its own component because it needs the toggle mutation
@@ -23,6 +24,9 @@ function ScheduleActions({
   onDelete: (schedule: PipelineSchedule) => void;
 }>) {
   const toggleMutation = useToggleSchedule();
+  // Pausing, editing and deleting a schedule all need execution.write.
+  const canWrite = usePermission("execution.write");
+  if (!canWrite) return null;
 
   return (
     <div className="schedule-actions" role="presentation" onClick={(e) => e.stopPropagation()}>

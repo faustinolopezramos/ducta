@@ -239,10 +239,13 @@ class MLNodeCommand(NodeCommand):
         cv_folds: Optional[int] = None,
         spark=None,
         input_names: Optional[List[str]] = None,
+        cli_hyperparams: Optional[Dict[str, Any]] = None,
+        model_ref: Optional[Any] = None,
     ):
         super().__init__(
             function, input_dfs, start_date, end_date, node_name, input_names=input_names
         )
+        self.model_ref = model_ref
 
         self.model_version = model_version or "unknown"
         self.hyperparams = hyperparams or {}
@@ -258,7 +261,12 @@ class MLNodeCommand(NodeCommand):
         self.node_hyperparams = self.node_config.get("hyperparams", {}) or {}
         self.metrics = self.node_config.get("metrics", []) or []
         self.description = self.node_config.get("description", "") or ""
-        self.merged_hyperparams = {**self.hyperparams, **self.node_hyperparams}
+        # Pipeline < node < this run's CLI overrides (`--hyperparams`, a sweep trial).
+        self.merged_hyperparams = {
+            **self.hyperparams,
+            **self.node_hyperparams,
+            **(cli_hyperparams or {}),
+        }
         self._last_ml_context: Any = None
         self.execution_metadata: Dict[str, Any] = {
             "node_name": self.node_name,
@@ -368,6 +376,8 @@ class MLNodeCommand(NodeCommand):
             split=self.split,
             cv_folds=self.cv_folds,
             spark=self.spark,
+            model=getattr(self.model_ref, "model", None),
+            model_ref=self.model_ref,
         )
         self._last_ml_context = ml_context
 

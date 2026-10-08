@@ -42,22 +42,41 @@ export interface ExperimentDetail extends ExperimentSummary {
   runs: ExperimentRun[];
 }
 
+/** A project node that scores with a model (`model:` on a serving node). */
+export interface ModelServedBy {
+  pipeline: string | null;
+  node: string;
+  /** What the node asks for: a stage, resolved when each run starts… */
+  stage: string | null;
+  /** …or an exact version. */
+  version: number | null;
+  streaming: boolean;
+}
+
 export interface ModelInfo {
   name: string;
   latest_version: number;
   stage?: string;
   framework?: string;
   created_at?: string;
+  served_by?: ModelServedBy[];
 }
 
+/** Mirrors ModelRegistry.list_model_versions. */
 export interface ModelVersion {
   version: number;
+  stage?: string;
   created_at?: string;
-  metadata?: {
-    stage?: string;
-    metrics?: Record<string, number>;
-    [k: string]: unknown;
-  };
+  artifact_type?: string;
+  framework?: string;
+  metrics?: Record<string, number>;
+  hyperparameters?: Record<string, unknown>;
+  /** The registered input schema's columns: what the built-in scorer feeds the model. */
+  features?: string[] | null;
+  /** Recorded at registration; serving refuses a copy that no longer matches. */
+  artifact_sha256?: string | null;
+  size_bytes?: number | null;
+  experiment_run_id?: string | null;
 }
 
 /** Final (last-logged) value per metric key for a run. */

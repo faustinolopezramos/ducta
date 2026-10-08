@@ -3,6 +3,8 @@ import { useDialogA11y } from "../../hooks/useDialogA11y";
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { ActionButton } from "../../components/ui/ActionButton";
+import { PermittedButton } from "../../components/ui/PermittedButton";
+import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import { EmptyState } from "../../components/ui/EmptyState";
 import {
   useMlopsModels,
@@ -11,6 +13,7 @@ import {
   useRunMlopsGc,
   useDeleteModelVersion,
   type ModelInfo,
+  type ModelServedBy,
   type ModelVersion,
 } from "../../api/mlopsApi";
 import {
@@ -301,6 +304,7 @@ function DeleteVersionButton({
   project?: string;
 }) {
   const del = useDeleteModelVersion();
+  const canDelete = usePermission("model.delete");
   const inProduction = stage === "Production";
   // Deleting a serving version is the one action here that can take down
   // something live, so it asks the user to type the version out. Everything
@@ -320,6 +324,8 @@ function DeleteVersionButton({
       variant="ghost"
       size="sm"
       leftIcon={<IconTrash size={13} />}
+      disabled={!canDelete}
+      title={canDelete ? undefined : requiresPermission("model.delete")}
       confirm={confirmSpec}
       onAction={() =>
         del.mutateAsync({ name: modelName, version, env, pipelineName: pipeline, project })
@@ -332,6 +338,45 @@ function DeleteVersionButton({
   );
 }
 
+/** `score › score @ production` — which project nodes score with this model. */
+export function ServedBy({ servedBy }: { servedBy: ModelServedBy[] }) {
+  if (servedBy.length === 0) {
+    return (
+      <div className="mlops-served-by" style={{ marginTop: 6, fontSize: 12, color: colors.textMuted }}>
+        Not served by any node of this project.
+      </div>
+    );
+  }
+  return (
+    <div
+      className="mlops-served-by"
+      aria-label="Served by"
+      style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: 12 }}
+    >
+      <span style={{ color: colors.textMuted }}>Served by</span>
+      {servedBy.map((s) => (
+        // Not a <Badge>: it upper-cases, and these are identifiers.
+        <span
+          key={`${s.pipeline}/${s.node}`}
+          style={{
+            fontFamily: "var(--font-mono)",
+            fontSize: 11,
+            padding: "1px 6px",
+            borderRadius: 4,
+            border: `1px solid ${colors.border}`,
+            color: colors.text,
+          }}
+        >
+          {s.pipeline ? `${s.pipeline} › ` : ""}
+          {s.node}
+          {s.version != null ? ` v${s.version}` : ` @ ${s.stage ?? "?"}`}
+          {s.streaming ? " (stream)" : ""}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 /** Column definitions for the per-model versions table. */
 function versionColumns(
   modelName: string,
@@ -340,7 +385,7 @@ function versionColumns(
   pipeline?: string,
   project?: string
 ): DataTableColumn<ModelVersion>[] {
-  const stageOf = (v: ModelVersion) => v.metadata?.stage ?? "Staging";
+  const stageOf = (v: ModelVersion) => v.stage ?? "Staging";
 
   return [
     {
@@ -369,11 +414,35 @@ function versionColumns(
       header: "Metrics",
       mono: true,
       cell: (v) => {
-        const top = Object.entries(v.metadata?.metrics ?? {}).slice(0, 3);
+        const top = Object.entries(v.metrics ?? {}).slice(0, 3);
         return top.length
           ? top.map(([k, val]) => `${k}: ${Number(val).toFixed(4)}`).join(" · ")
           : "—";
       },
+    },
+    {
+      key: "features",
+      header: "Features",
+      mono: true,
+      cell: (v) => {
+        const features = v.features ?? [];
+        if (features.length === 0) return "—";
+        const text = features.join(", ");
+        return <span title={text}>{text.length > 40 ? `${text.slice(0, 37)}…` : text}</span>;
+      },
+    },
+    {
+      key: "artifact_sha256",
+      header: "Artifact",
+      mono: true,
+      cell: (v) =>
+        v.artifact_sha256 ? (
+          <span title={`${v.artifact_sha256}\nServing refuses a copy that no longer matches this hash.`}>
+            {v.artifact_sha256.replace("sha256:", "").slice(0, 12)}
+          </span>
+        ) : (
+          <span title="Registered before Ducta recorded artifact hashes">—</span>
+        ),
     },
     {
       key: "actions",
@@ -382,7 +451,8 @@ function versionColumns(
       align: "right",
       cell: (v) => (
         <div className="mlops-row-actions">
-          <Button
+          <PermittedButton
+            permission="model.promote"
             variant="ghost"
             size="sm"
             onClick={() => onPromote(v.version)}
@@ -390,7 +460,7 @@ function versionColumns(
           >
             <IconArrowUp size={13} />
             Promote
-          </Button>
+          </PermittedButton>
           <DeleteVersionButton
             modelName={modelName}
             version={v.version}
@@ -449,7 +519,8 @@ function ModelCard({
           <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
             v{model.latest_version}
           </span>
-          <Button
+          <PermittedButton
+            permission="model.promote"
             variant="ghost"
             size="sm"
             onClick={() => setPromoteTarget(model.latest_version)}
@@ -457,13 +528,15 @@ function ModelCard({
           >
             <IconArrowUp size={14} />
             Promote
-          </Button>
+          </PermittedButton>
         </div>
 
         <div style={{ display: "flex", gap: 16, fontSize: 12, color: colors.textMuted }}>
           <span>Framework: {model.framework ?? "—"}</span>
           <span>Created: {formatDate(model.created_at, { includeYear: true })}</span>
         </div>
+
+        <ServedBy servedBy={model.served_by ?? []} />
 
         {expanded && (
           <div style={{ marginTop: "var(--space-3)" }}>
@@ -547,10 +620,10 @@ export function ModelRegistryTab({
             <IconRefresh size={14} />
             Refresh
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => setShowGc(true)}>
+          <PermittedButton permission="model.delete" variant="ghost" size="sm" onClick={() => setShowGc(true)}>
             <IconTrash size={14} />
             Run GC
-          </Button>
+          </PermittedButton>
         </div>
       </div>
 

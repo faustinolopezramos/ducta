@@ -93,7 +93,10 @@ class TestReturnTypeValidationIsMeaningful:
             manager, "_get_transform_function", lambda cfg: lambda df: "nope", raising=False
         )
         monkeypatch.setattr(
-            manager, "_call_transform_function", lambda fn, df, params: fn(df), raising=False
+            manager,
+            "_call_transform_function",
+            lambda fn, df, params, ml_context=None: fn(df),
+            raising=False,
         )
 
         with pytest.raises(StreamingError) as caught:
@@ -112,7 +115,10 @@ class TestReturnTypeValidationIsMeaningful:
             manager, "_get_transform_function", lambda cfg: lambda df: transformed, raising=False
         )
         monkeypatch.setattr(
-            manager, "_call_transform_function", lambda fn, df, params: fn(df), raising=False
+            manager,
+            "_call_transform_function",
+            lambda fn, df, params, ml_context=None: fn(df),
+            raising=False,
         )
 
         result = manager._apply_transformations(MagicMock(), {"function": {"key": "ok"}})

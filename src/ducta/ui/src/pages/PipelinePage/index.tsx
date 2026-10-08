@@ -9,10 +9,12 @@ import {
   NodeFocus,
 } from "../../components/Pipeline";
 import { useUpdateNodeCode } from "../../api/mutations";
+import { useMlPlan } from "../../api/queries";
 const CodeEditorModal = lazy(() => import("../../components/CodeEditorModal").then(m => ({ default: m.CodeEditorModal })));
 const CodeEditor = lazy(() => import("../../components/CodeEditor").then(m => ({ default: m.CodeEditor })));
 import { ExecutionControls } from "../../components/Execution";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
+import { StreamingStatusPanel } from "../../components/Execution/StreamingStatusPanel";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
@@ -54,10 +56,14 @@ export function PipelinePage() {
   } = usePipelineGraph({ projectId, pipelineId, requestedScope, selectedNodeId });
   const {
     activeEnv, showToast,
-    setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
+    activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
     logsOpen, setLogsOpen, chainStatus,
     handleRunNode, handleExecute, handleValidate, handleCancel,
   } = usePipelineRun({ projectId, pipelineId, itemById });
+  // What each ML node is given; a pipeline without ML answers with no nodes.
+  const focusedPipeline =
+    (selectedNodeId ? itemById.get(selectedNodeId)?.pipeline : undefined) ?? pipelineId ?? "";
+  const { data: mlPlan } = useMlPlan(projectId ?? "", focusedPipeline, activeEnv);
   const {
     yamlMarkers, setYamlMarkers,
     isCodeEditorOpen, setIsCodeEditorOpen, openedNodeCode, setOpenedNodeCode, openCodeFor,
@@ -306,6 +312,12 @@ export function PipelinePage() {
                 }
                 onViewLogs={() => setLogsOpen(true)}
                 onOpenYaml={() => setLens("yaml")}
+                mlPlan={
+                  mlPlan?.pipeline === focusedPipeline
+                    ? mlPlan.nodes[schemaById.get(selectedNodeId)?.name ?? selectedItem?.name ?? selectedNodeId]
+                    : undefined
+                }
+                splitEnforcement={mlPlan?.split_enforcement}
               />
             )}
 
@@ -325,6 +337,9 @@ export function PipelinePage() {
 
         {logsOpen && (
           <div className="pipeline-logs-layer">
+            {activeExecutionId && (
+              <StreamingStatusPanel executionId={activeExecutionId} isActive={isExecuting} />
+            )}
             <InlineLogs isRunning={isExecuting} onClose={() => setLogsOpen(false)} mode="docked"
               nodes={pipelineNodes} executionStates={executionStates} />
           </div>

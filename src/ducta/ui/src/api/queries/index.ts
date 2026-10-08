@@ -6,3 +6,4 @@ export * from './nodes';
 export * from './executions';
 export * from './git';
 export * from './projects';
+export * from './auth';

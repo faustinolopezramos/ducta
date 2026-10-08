@@ -981,6 +981,10 @@ class StreamingPipelineManager:
                     progress_metrics[node_name] = latest
             if progress_metrics:
                 status["progress_metrics"] = progress_metrics
+            # The model each scoring query was pinned to when it started.
+            served = self.query_manager.served_models(execution_id)
+            if served:
+                status["served_models"] = served
             return status
         except Exception as e:
             logger.error(f"Error getting pipeline status for '{execution_id}': {str(e)}")
@@ -1161,6 +1165,22 @@ class StreamingPipelineManager:
         except Exception as e:
             logger.error(f"Failed to clear checkpoints for '{pipeline_name}': {e}")
             return {"status": "error", "message": str(e)}
+
+    def list_pipelines(self) -> List[Dict[str, Any]]:
+        """Status of every pipeline this manager has started, whatever its state.
+
+        Unlike :meth:`list_running_pipelines`, a ``partial_failure`` pipeline — one
+        node failed, the others still streaming — and a stopped or failed one are
+        included: those are the states someone watching needs to see.
+        """
+        with self._lock:
+            execution_ids = list(self._running_pipelines)
+        statuses = []
+        for execution_id in execution_ids:
+            status = self.get_pipeline_status(execution_id)
+            if status:
+                statuses.append(status)
+        return statuses
 
     def list_running_pipelines(self) -> List[Dict[str, Any]]:
         try:

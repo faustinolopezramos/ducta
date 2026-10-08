@@ -1,6 +1,12 @@
 import type React from "react";
 import { IconArrowRight } from "@tabler/icons-react";
-import type { NodeQualityGate, NodeSchema } from "../../../api/queries";
+import type {
+  MlPlanModel,
+  MlPlanModelResolution,
+  MlPlanNode,
+  NodeQualityGate,
+  NodeSchema,
+} from "../../../api/queries";
 import { compactDuration, formatGlyph, humanizeGate } from "../../../utils/nodePresentation";
 import { formatDate } from "../../../utils/formatDate";
 
@@ -201,5 +207,108 @@ export function NodeRef({
         <IconArrowRight size={13} stroke={1.7} className="inspector-io-go" aria-hidden="true" />
       )}
     </button>
+  );
+}
+
+/** `stratified · test_size 0.2 · stratify_col churned · seed 42` */
+export function splitLine(split: Record<string, unknown> | undefined): string | null {
+  if (!split) return null;
+  const { method, ...rest } = split;
+  return [method, formatParams(Object.fromEntries(Object.entries(rest).filter(([, v]) => v != null)))]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/** `churn @ production → prediction (predict)` or the MLflow uri. */
+export function modelLine(model: MlPlanModel): string {
+  const which =
+    model.source === "mlflow"
+      ? model.uri ?? "mlflow"
+      : `${model.name ?? "?"} ${model.version != null ? `v${model.version}` : `@ ${model.stage ?? "?"}`}`;
+  return `${which} → ${model.output_col ?? "prediction"} (${model.method ?? "predict"})`;
+}
+
+/** Which version a run starting now would score with — or why there is none. */
+export function ModelResolution({ resolution }: { resolution?: MlPlanModelResolution }) {
+  if (!resolution) return <>—</>;
+  switch (resolution.status) {
+    case "resolved":
+      return (
+        <span title={resolution.artifact_sha256 ?? undefined}>
+          v{resolution.version}
+          {resolution.stage ? ` (${resolution.stage})` : ""} — pinned when a run starts
+        </span>
+      );
+    case "unresolved":
+      // The pill stays short; the reason wraps beside it.
+      return (
+        <span>
+          <Pill tone="bad">nothing to serve</Pill> {resolution.message}
+        </span>
+      );
+    case "at_run_time":
+      return <>resolved when the run starts (MLflow)</>;
+    default:
+      return (
+        <span>
+          <Pill tone="warn">unknown</Pill> {resolution.message ?? "the registry could not be read"}
+        </span>
+      );
+  }
+}
+
+/**
+ * What an ML node is given — the same answer as `ducta config show --ml`: its stage,
+ * the split it receives and where that was declared, whether it must apply it, its
+ * merged hyperparameters and its model version.
+ */
+export function MLPlanBlock({
+  plan,
+  enforcement,
+}: {
+  plan: MlPlanNode;
+  enforcement?: "error" | "warn" | null;
+}) {
+  const bound = plan.must_apply_split === true;
+  return (
+    <section className="focus-ml" aria-label="ML">
+      <h4 className="focus-ml-title">ML</h4>
+      <KeyValues
+        rows={[
+          { label: "Stage", value: plan.ml_stage === "none" ? null : plan.ml_stage, absent: "none", plain: true },
+          {
+            label: "Split",
+            value: plan.split ? `${splitLine(plan.split)} (from ${plan.split_from ?? "pipeline"})` : null,
+            absent: "none",
+          },
+          {
+            label: "Must apply",
+            value: !plan.split ? null : bound ? (
+              <Pill tone={enforcement === "warn" ? "warn" : "bad"}>
+                yes — {enforcement === "warn" ? "warns if it does not" : "the run fails if it does not"}
+              </Pill>
+            ) : (
+              "no"
+            ),
+            absent: "—",
+            plain: true,
+          },
+          { label: "Hyperparameters", value: plan.hyperparams ? formatParams(plan.hyperparams) : null, absent: "none" },
+          { label: "Model version", value: plan.model_version ?? null, absent: "not set" },
+          ...(plan.model
+            ? [
+                { label: "Serves", value: modelLine(plan.model), absent: "—" },
+                {
+                  label: "Right now",
+                  value: <ModelResolution resolution={plan.model_resolution} />,
+                  absent: "—",
+                  plain: true,
+                },
+                { label: "Scorer", value: plan.run ?? "own run function", absent: "—", plain: true },
+              ]
+            : []),
+        ]}
+      />
+    </section>
   );
 }

@@ -217,9 +217,13 @@ class MLConfigMixin:
         """Get ML-specific configuration for a node."""
         node = self.nodes_config.get(node_name, {})
         return {
-            "hyperparams": node.get("hyperparams", {}),
+            "hyperparams": node.get("hyperparams", {}) or {},
             "metrics": node.get("metrics", []),
             "description": node.get("description", ""),
+            # These two were dropped here, so a `split:` or `model_version:` written on a
+            # node never reached its ml_context and the pipeline's (or none) was used.
+            "split": node.get("split"),
+            "model_version": node.get("model_version"),
         }
 
     def _merge_hyperparams(self, pipeline_hyperparams: Dict[str, Any]) -> Dict[str, Any]:

@@ -736,6 +736,21 @@ def _handle_diff(parsed_args) -> int:
                 )
             console.print(q_table)
 
+        if result.get("models"):
+            m_table = require_table(title="Models", box=box.SIMPLE_HEAD)
+            m_table.add_column("Node")
+            m_table.add_column(str(result["run_a"])[:8])
+            m_table.add_column(str(result["run_b"])[:8])
+            m_table.add_column("Match")
+            for row in result["models"]:
+                m_table.add_row(
+                    str(row["node"]),
+                    row["model_a"] or "—",
+                    row["model_b"] or "—",
+                    _mark(row["match"]),
+                )
+            console.print(m_table)
+
         console.print()
         if result["identical"]:
             console.print(

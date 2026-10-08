@@ -51,6 +51,9 @@ from ducta.core.settings import (
     clamp_timeout,
 )
 
+#: Check parameters that name another catalog dataset to compare with.
+_REFERENCE_KEYS = ("reference_dataset", "reference")
+
 
 class NodeExecutor:
     """Thin orchestrator: initializes the 6 helper components and provides the public API."""
@@ -120,6 +123,10 @@ class NodeExecutor:
             settings=self.settings,
         )
 
+    def begin_run(self) -> None:
+        """Start a run: the models it serves are resolved afresh, then pinned for it."""
+        self._ml_builder.reset_models()
+
     def set_mlops_context(self, mlops_context: Optional[Any]) -> None:
         """Wire the real MLOps context into node functions' ``ml_context['mlops_context']``."""
         self.mlops_context = mlops_context
@@ -136,7 +143,12 @@ class NodeExecutor:
         start_time = time.perf_counter()
         node_status = "success"
         node_error: Optional[str] = None
+        command: Any = None
         resource_manager = get_resource_manager()
+        # Every run mode reaches a node through here (the coordinator, `--node`, a
+        # worker process), so this is where the node's own split, model_version and
+        # hyperparams are folded in — not only in the parallel coordinator.
+        ml_info = self._ml_builder.prepare_node_ml_info(node_name, ml_info)
 
         node_id_var.set(node_name)
 
@@ -230,7 +242,7 @@ class NodeExecutor:
                 else:
                     result_df = command.execute()
 
-                self._warn_if_split_not_applied(command, node_name)
+                self._enforce_split(command, node_name, node_config, ml_info)
 
                 if result_df is not None:
                     # Register (and materialize) BEFORE the checks, not after.
@@ -260,7 +272,11 @@ class NodeExecutor:
                 dq_report = None
                 if result_df is not None:
                     dq_report = self._quality_executor.run_dq_checks(
-                        result_df, node_config, node_name, pipeline_name=self.pipeline_name
+                        result_df,
+                        node_config,
+                        node_name,
+                        context_dfs=self._check_references(node_config, node_name, input_dfs),
+                        pipeline_name=self.pipeline_name,
                     )
 
                 self._quality_executor.persist_report(
@@ -316,22 +332,112 @@ class NodeExecutor:
                 untag_current_thread(self.context)
                 duration = time.perf_counter() - start_time
                 logger.debug("Node '{}' executed in {:.2f}s", node_name, duration)
-                self._record_node_trace(node_name, node_status, duration, node_error)
+                self._record_node_trace(
+                    node_name,
+                    node_status,
+                    duration,
+                    node_error,
+                    ml=self._ml_evidence(command, node_name, ml_info),
+                )
 
-    @staticmethod
-    def _warn_if_split_not_applied(command: Any, node_name: str) -> None:
-        """Warn when a node declared a `split` but never called split_dataframe/kfold_splits."""
-        split_config = getattr(command, "split", None)
-        if not split_config:
+    def _enforce_split(
+        self, command: Any, node_name: str, node_config: Dict[str, Any], ml_info: Dict[str, Any]
+    ) -> None:
+        """Fail (or warn) when a node bound to a declared split did not apply it.
+
+        Runs after the node's function and before its output is written, so with
+        `split_enforcement: error` nothing trained on an undeclared partition is saved.
+        A node that is not bound to the split (feature engineering under a pipeline
+        split) is left alone: warning about it taught people to ignore the warning.
+        """
+        from ducta.core.ml_contract import (
+            SplitNotAppliedError,
+            must_apply_split,
+            not_applied_message,
+        )
+
+        split = getattr(command, "split", None)
+        was_applied = getattr(command, "split_was_applied", None)
+        if not split or was_applied is None or was_applied():
             return
-        split_was_applied = getattr(command, "split_was_applied", None)
-        if split_was_applied is not None and not split_was_applied():
-            logger.warning(
-                "Node '{}' declared a 'split' but never called split_dataframe/"
-                "kfold_splits — the run certificate records the configured split, "
-                "but nothing enforces the node actually applied it.",
-                node_name,
-            )
+        if not must_apply_split(node_config, ml_info.get("pipeline_split", split)):
+            return
+        message = not_applied_message(node_name, split, ml_info.get("split_source"))
+        if self.settings.split_enforcement == "warn":
+            logger.warning(message)
+            return
+        raise SplitNotAppliedError(message)
+
+    def _check_references(
+        self, node_config: Dict[str, Any], node_name: str, input_dfs: List[Any]
+    ) -> Optional[Dict[str, Any]]:
+        """The datasets the node's output checks compare against, by catalog name.
+
+        ``referential_integrity``/``dataset_completeness`` name theirs in
+        ``reference_dataset``, ``prediction_drift`` in ``reference``. A dataset the
+        node already read is reused; any other is loaded. One that cannot be loaded
+        is left out, and the check that needs it reports it as not available.
+        """
+        checks = (node_config.get("data_quality") or {}).get("checks") or {}
+        wanted = sorted(
+            {
+                value
+                for cfg in checks.values()
+                if isinstance(cfg, dict)
+                for key, value in cfg.items()
+                if key in _REFERENCE_KEYS and isinstance(value, str) and value
+            }
+        )
+        if not wanted:
+            return None
+        raw_inputs = node_config.get("input") or []
+        own_keys = list(raw_inputs.values()) if isinstance(raw_inputs, dict) else list(raw_inputs)
+        references = {k: df for k, df in zip(own_keys, input_dfs) if k in wanted}
+        to_load = [name for name in wanted if name not in references]
+        if to_load:
+            try:
+                loaded = self.input_loader.load_inputs(
+                    {"input": to_load, "on_missing_input": "fail"},
+                    f"{node_name} (check references)",
+                )
+                references.update(zip(to_load, loaded))
+            except Exception as e:  # noqa: BLE001 — the check reports the missing reference
+                logger.warning(
+                    "Node '{}': could not load check reference(s) {}: {}", node_name, to_load, e
+                )
+        return references
+
+    def _ml_evidence(
+        self, command: Any, node_name: str, ml_info: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """What the run certificate records about an ML node: the split it was given,
+        whether it had to apply it, whether it did, its model version and hyperparams."""
+        from ducta.core.ml_contract import must_apply_split, node_stage
+
+        if command is None or not hasattr(command, "split_was_applied"):
+            return None
+        node_config = self.context.nodes_config.get(node_name, {}) or {}
+        split = getattr(command, "split", None)
+        try:
+            applied = bool(command.split_was_applied())
+        except Exception:  # noqa: BLE001 — evidence must never fail the node
+            applied = False
+        evidence = {
+            "stage": node_stage(node_config) or None,
+            "split": split or None,
+            "split_source": ml_info.get("split_source") if split else None,
+            "split_required": bool(split)
+            and must_apply_split(node_config, ml_info.get("pipeline_split", split)),
+            "split_applied": applied,
+            "model_version": getattr(command, "model_version", None),
+            "hyperparams": dict(getattr(command, "merged_hyperparams", None) or {}),
+        }
+        served = getattr(command, "model_ref", None)
+        if served is not None:
+            # The exact model the node scored with — the version the run pinned,
+            # not the stage it was asked for.
+            evidence["model"] = served.evidence()
+        return evidence
 
     def _should_run_in_process(self, node_config: Dict[str, Any]) -> bool:
         """Whether this node opts into process isolation for CPU-bound work."""
@@ -441,7 +547,12 @@ class NodeExecutor:
         return outcome
 
     def _record_node_trace(
-        self, node_name: str, status: str, duration: float, error: Optional[str]
+        self,
+        node_name: str,
+        status: str,
+        duration: float,
+        error: Optional[str],
+        ml: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Append this node's outcome to ``context._run_node_details`` for the certificate."""
         node_config = self.context.nodes_config.get(node_name, {}) or {}
@@ -454,6 +565,7 @@ class NodeExecutor:
             outputs=outputs,
             error=error,
             node_type=node_config.get("type", "batch"),
+            ml=ml,
         )
 
     def execute_nodes_parallel(

@@ -366,10 +366,11 @@ class PreflightResponse(BaseModel):
     description=(
         "Runs the same preflight as `ducta config validate`: imports every node "
         "function and checks its signature, validates I/O catalog keys, intermediate "
-        "registration and DAG cycles — without executing anything. Runs in a fresh "
-        "subprocess so the API process stays clean."
+        "registration and DAG cycles, in a fresh subprocess so the API process stays "
+        "clean. Importing a module runs its top-level code, so this needs the same "
+        "permission as running the pipeline."
     ),
-    dependencies=[Depends(require_permission("pipeline.read"))],
+    dependencies=[Depends(require_permission("pipeline.execute"))],
 )
 async def preflight_project_pipeline(
     project_id: str,
@@ -397,6 +398,63 @@ async def preflight_project_pipeline(
     exec_source = manager.for_project(project_id).root
     result = await asyncio.to_thread(run_deep_preflight, exec_source, name, env)
     return PreflightResponse(pipeline=name, **result)
+
+
+# ── ML plan ───────────────────────────────────────────────
+
+
+class MLPlanResponse(BaseModel):
+    """What each ML node of a pipeline will be given (`ducta config show --ml`)."""
+
+    pipeline: str
+    env: str
+    type: Optional[str] = None
+    split_enforcement: Optional[str] = None
+    split: Optional[Dict[str, Any]] = None
+    hyperparams_config: Optional[Any] = None
+    nodes: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+
+@router.get(
+    "/{project_id}/pipelines/{name}/ml-plan",
+    response_model=MLPlanResponse,
+    summary="What each ML node of a pipeline will be given",
+    description=(
+        "Per node: its ML stage, the train/test split it receives and where it was "
+        "declared, whether it must apply it, its merged hyperparameters and model version — "
+        "resolved as the engine resolves them. A serving node's `model_resolution` is the "
+        "registered version its stage names right now. Reads configuration and registry "
+        "metadata only; no project code is imported. A pipeline without ML returns no nodes."
+    ),
+    dependencies=[Depends(require_permission("pipeline.read"))],
+)
+async def ml_plan_project_pipeline(
+    project_id: str,
+    name: str,
+    manager: WorkspaceManagerDep,
+    svc: ProjectServiceDep,
+    env: str = "base",
+) -> MLPlanResponse:
+    from ducta.setting.project_inspect import ml_plan
+    from ducta.setting.project_loader import ProjectConfigError
+
+    svc.get_pipeline(project_id, name)  # 404 for an unknown project or pipeline
+    with http_error_on(400):
+        validate_environment_name(env)
+    root = manager.for_project(project_id).root
+    try:
+        plan = ml_plan(root, None if env == "base" else env, name)
+    except ProjectConfigError as e:
+        raise HTTPException(status_code=400, detail={"problems": e.problems}) from e
+    entry = plan.get(name, {})
+    nodes = entry.get("nodes") or {}
+    if any(item.get("model") for item in nodes.values()):
+        from ducta.api.routes.mlops import resolve_served_models
+
+        resolve_served_models(
+            nodes, manager.root, None if env == "base" else env, project=project_id
+        )
+    return MLPlanResponse(pipeline=name, env=env, **entry)
 
 
 # ── Execute pipeline ──────────────────────────────────────

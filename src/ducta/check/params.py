@@ -134,6 +134,28 @@ CHECK_PARAMS: Dict[str, Dict[str, Dict[str, Any]]] = {
         ),
         "distinct_limit": _p({"type": "integer", "minimum": 1}, "Cap on distinct values compared"),
     },
+    "prediction_rate": {
+        "column": _p({"type": "string"}, "The prediction or score column"),
+        "threshold": _p({"type": "number"}, "Score at or above which a row is flagged"),
+        "min": _p(_RATE, "Smallest share of flagged rows allowed"),
+        "max": _p(_RATE, "Largest share of flagged rows allowed"),
+    },
+    "prediction_contract": {
+        "column": _p({"type": "string"}, "The prediction or score column"),
+        "min": _p({"type": "number"}, "Lowest value the model can produce"),
+        "max": _p({"type": "number"}, "Highest value the model can produce"),
+        "allow_null": _p({"type": "boolean"}, "Accept rows without a prediction"),
+    },
+    "prediction_drift": {
+        "column": _p({"type": "string"}, "The score column"),
+        "reference": _p({"type": "string"}, "Catalog dataset with reference scores"),
+        "reference_column": _p({"type": "string"}, "Its score column (default: column)"),
+        "method": _p({"type": "string", "enum": ["psi", "ks"]}, "Statistic (default psi)"),
+        "threshold": _p(
+            {"type": "number", "exclusiveMinimum": 0},
+            "Largest allowed statistic (default 0.2 for psi, 0.1 for ks)",
+        ),
+    },
 }
 
 #: Keys every check entry accepts, next to its own parameters.

@@ -66,6 +66,22 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `CORS_ORIGINS` | `["*"]` | Allowed origins |
 | `GIT_CLONE_ALLOWED_HOSTS` | `[]` | Allow-list for Git clone hosts (empty = public hosts only, internal blocked) |
 
+**Roles and permissions** (with `AUTH_ENABLED=true`; with auth off every request runs as a local admin):
+
+| Role | Permissions |
+|------|-------------|
+| `admin` | `*` |
+| `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete` |
+| `viewer` | read only (`*.read`, including `project.read`) |
+
+Some routes need more than their name suggests:
+- The preflight needs `pipeline.execute`, because it imports project code.
+- A Git URL as `source` needs `repository.write`, because the server clones it.
+- Promoting a model needs `model.promote`; deleting a version or running gc needs `model.delete`.
+- Testing an unsaved ingestion connection needs `ingestion.write`.
+
+`GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/api/test_rbac.py` fails if a route that writes is reachable by a viewer.
+
 **Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, and either bind to `127.0.0.1` or place the server behind an authenticating proxy.
 
 **Where execution history lives**: the Execution History page reads from two layers merged together — the in-memory `ExecutionStore` (capped by `max_executions_in_memory`, evicted after `execution_retention_seconds`, lost on restart) and the file-based store at `RUNS_DIR` (persists across restarts). Setting `DATABASE_URL` adds a third, queryable layer used for single-run/log lookups once a record has aged out of both memory and `RUNS_DIR`. To fully clear history, delete `RUNS_DIR` (and the `executions`/`execution_logs` tables if `DATABASE_URL` is set) — restarting the server alone only clears memory. This is independent of Data Quality's storage, which lives under `<output_path>/<environment>/.quality` per pipeline config, not under `RUNS_DIR`.

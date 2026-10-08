@@ -1,11 +1,13 @@
 import React, { useMemo, useState } from "react";
 import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
+import { PermittedButton } from "../ui/PermittedButton";
 import { StatusBadge } from "../ui/StatusBadge";
 import { colors } from "../../theme/tokens";
 import { toastStore } from "../../hooks/useModalStack";
 import {
   useQualityChecks,
+  type QualityCheckParam,
   useRunQualityChecks,
   type RunChecksVars,
 } from "../../api/qualityApi";
@@ -41,17 +43,16 @@ const input: React.CSSProperties = {
   outline: "none",
 };
 
-// Suggested params shown as placeholder hints for the most common checks.
-const PARAM_HINTS: Record<string, string> = {
-  null_rate: "threshold, columns",
-  row_count: "min_rows, max_rows",
-  range: "column, min, max",
-  freshness: "column, max_age_hours",
-  duplicates: "columns",
-  schema: "expected_columns",
-  statistical: "column, min_mean, max_mean",
-  business_rules: "expression",
-};
+/** "psi | ks", "number 0–1", "string[]": what a parameter's value looks like. */
+export function paramValueHint(param?: QualityCheckParam): string {
+  if (!param) return "value (numbers/booleans/[lists] auto-detected)";
+  if (param.enum?.length) return param.enum.map(String).join(" | ");
+  const type = Array.isArray(param.type) ? param.type.join(" or ") : param.type ?? "value";
+  if (type === "array") return "[list]";
+  const range =
+    param.minimum != null && param.maximum != null ? ` ${param.minimum}–${param.maximum}` : "";
+  return `${type}${range}`;
+}
 
 interface BuilderCheck {
   id: number;
@@ -114,6 +115,9 @@ export function RunChecksModal({
 
   const usedNames = new Set(builderChecks.map((c) => c.name));
   const availableNames = (catalog ?? []).filter((c) => !usedNames.has(c.name));
+  const infoOf = (name: string) => (catalog ?? []).find((c) => c.name === name);
+  const defaultSeverity = (name: string): "error" | "warning" =>
+    infoOf(name)?.default_severity === "WARNING" ? "warning" : "error";
 
   const handleInputPath = (path: string) => {
     setInputPath(path);
@@ -126,7 +130,7 @@ export function RunChecksModal({
     if (!first) return;
     setBuilderChecks((cs) => [
       ...cs,
-      { id: nextId.current++, name: first, severity: "error", params: [] },
+      { id: nextId.current++, name: first, severity: defaultSeverity(first), params: [] },
     ]);
   };
 
@@ -260,7 +264,14 @@ export function RunChecksModal({
                     <select
                       style={{ ...input, flex: 1 }}
                       value={c.name}
-                      onChange={(e) => updateCheck(c.id, { name: e.target.value, params: [] })}
+                      aria-label="Check"
+                      onChange={(e) =>
+                        updateCheck(c.id, {
+                          name: e.target.value,
+                          severity: defaultSeverity(e.target.value),
+                          params: [],
+                        })
+                      }
                     >
                       <option value={c.name}>{c.name}</option>
                       {availableNames.map((opt) => (
@@ -289,27 +300,42 @@ export function RunChecksModal({
                     </button>
                   </div>
 
+                  {infoOf(c.name)?.description && (
+                    <div style={{ fontSize: 11, color: colors.textMuted }}>{infoOf(c.name)?.description}</div>
+                  )}
+                  <datalist id={`check-params-${c.id}`}>
+                    {Object.entries(infoOf(c.name)?.params ?? {}).map(([name, param]) => (
+                      <option key={name} value={name}>
+                        {param.description}
+                      </option>
+                    ))}
+                  </datalist>
+
                   {c.params.map((p, i) => (
                     <div key={i} style={{ display: "flex", gap: 6 }}>
                       <input
                         style={{ ...input, width: 160 }}
+                        list={`check-params-${c.id}`}
+                        aria-label="Parameter"
                         value={p.key}
                         onChange={(e) =>
                           updateCheck(c.id, {
                             params: c.params.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)),
                           })
                         }
-                        placeholder={PARAM_HINTS[c.name] ? `e.g. ${PARAM_HINTS[c.name].split(",")[0].trim()}` : "param"}
+                        placeholder={Object.keys(infoOf(c.name)?.params ?? {})[0] ?? "param"}
                       />
                       <input
                         style={{ ...input, flex: 1 }}
+                        aria-label="Value"
+                        title={infoOf(c.name)?.params?.[p.key]?.description}
                         value={p.value}
                         onChange={(e) =>
                           updateCheck(c.id, {
                             params: c.params.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)),
                           })
                         }
-                        placeholder="value (numbers/booleans/[lists] auto-detected)"
+                        placeholder={paramValueHint(infoOf(c.name)?.params?.[p.key])}
                       />
                       <button
                         type="button"
@@ -342,9 +368,9 @@ export function RunChecksModal({
                     >
                       <IconPlus size={12} /> Add parameter
                     </button>
-                    {PARAM_HINTS[c.name] && (
+                    {Object.keys(infoOf(c.name)?.params ?? {}).length > 0 && (
                       <span style={{ fontSize: 10, color: colors.textDim }}>
-                        common: {PARAM_HINTS[c.name]}
+                        params: {Object.keys(infoOf(c.name)?.params ?? {}).join(", ")}
                       </span>
                     )}
                   </div>
@@ -389,7 +415,7 @@ export function RunChecksModal({
           <Button variant="ghost" size="sm" onClick={onClose}>
             Close
           </Button>
-          <Button
+          <PermittedButton permission="quality.run"
             variant="primary"
             size="sm"
             onClick={submit}
@@ -397,7 +423,7 @@ export function RunChecksModal({
             leftIcon={<IconPlayerPlay size={15} />}
           >
             {run.isPending ? "Running…" : "Run checks"}
-          </Button>
+          </PermittedButton>
         </div>
 
         {result && (

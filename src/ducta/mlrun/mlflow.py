@@ -43,6 +43,47 @@ except ImportError:
     MlflowClient = None  # type: ignore
 
 
+def _mlflow_major() -> int:
+    """Major version of the installed MLflow (0 when it cannot be read)."""
+    try:
+        return int(str(mlflow.__version__).split(".")[0])
+    except Exception:  # noqa: BLE001 — absent or unusual version string
+        return 0
+
+
+def _allow_file_store(uri: Optional[str]) -> None:
+    """Let MLflow 3 use a local-folder tracking store when the project asks for one.
+
+    MLflow 3 keeps the filesystem store (``./mlruns``, ``file://...``) in maintenance
+    mode and refuses it unless ``MLFLOW_ALLOW_FILE_STORE`` is set. A Ducta project can
+    configure ``tracking_uri: mlruns`` (resolved under the environment's output path),
+    and refusing it would make every run already recorded there unreadable — so it is
+    allowed, with a warning that points at the database backend MLflow recommends.
+    An explicit ``MLFLOW_ALLOW_FILE_STORE`` in the environment is left as it is.
+    """
+    if not uri or _mlflow_major() < 3:
+        return
+    scheme = uri.split("://", 1)[0].lower() if "://" in uri else ""
+    if scheme not in ("", "file") or "MLFLOW_ALLOW_FILE_STORE" in os.environ:
+        return
+    os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
+    logger.warning(
+        "MLflow tracking URI '{}' is a local folder (file store), which MLflow 3 keeps "
+        "only in maintenance mode. Ducta allows it so existing runs stay readable; prefer "
+        "'sqlite:///<folder>/mlflow.db' (convert existing runs with `mlflow migrate-filestore`).",
+        uri,
+    )
+
+
+def _model_location(artifact_path: str) -> Dict[str, str]:
+    """Where to log a model: ``name=`` in MLflow 3 (``artifact_path`` is deprecated there)."""
+    return {"name": artifact_path} if _mlflow_major() >= 3 else {"artifact_path": artifact_path}
+
+
+class MLflowTrackingError(RuntimeError):
+    """MLflow is required for this run and failed to record something."""
+
+
 def is_mlflow_available() -> bool:
     """Check if MLflow is installed and available."""
     return MLFLOW_AVAILABLE
@@ -140,10 +181,12 @@ class MLflowConfig:
             return
 
         if self.tracking_uri:
+            _allow_file_store(self.tracking_uri)
             mlflow.set_tracking_uri(self.tracking_uri)
             logger.info(f"Set MLflow tracking URI: {self.tracking_uri}")
 
         if self.registry_uri:
+            _allow_file_store(self.registry_uri)
             mlflow.set_registry_uri(self.registry_uri)
             logger.info(f"Set MLflow registry URI: {self.registry_uri}")
 
@@ -163,6 +206,7 @@ class MLflowPipelineTracker:
         enable_autolog: bool = True,
         nested_runs: bool = True,
         tags: Optional[Dict[str, str]] = None,
+        required: bool = False,
     ):
         """
         Initialize MLflow Pipeline Tracker.
@@ -176,6 +220,9 @@ class MLflowPipelineTracker:
         self.enable_autolog = enable_autolog
         self.nested_runs = nested_runs
         self.tags = tags or {}
+        # A run whose model, metrics or artifacts failed to reach MLflow is not the run
+        # it claims to be. `required` fails the node instead of logging and moving on.
+        self.required = required
 
         self._client: Optional[MlflowClient] = None
         self._experiment_id: Optional[str] = None
@@ -191,6 +238,7 @@ class MLflowPipelineTracker:
         """Initialize MLflow client and experiment."""
         try:
             if self.tracking_uri:
+                _allow_file_store(self.tracking_uri)
                 mlflow.set_tracking_uri(self.tracking_uri)
                 logger.info(f"MLflow tracking URI set to: {self.tracking_uri}")
 
@@ -398,7 +446,7 @@ class MLflowPipelineTracker:
                 mlflow.log_metric(key, value, step=step)
             logger.debug(f"Logged metric {key}={value}")
         except Exception as e:
-            logger.warning(f"Failed to log metric {key}: {e}")
+            self._not_recorded(f"metric '{key}'", e)
 
     def log_node_param(
         self,
@@ -416,7 +464,7 @@ class MLflowPipelineTracker:
                 mlflow.log_param(key, value)
             logger.debug(f"Logged param {key}={value}")
         except Exception as e:
-            logger.warning(f"Failed to log param {key}: {e}")
+            self._not_recorded(f"param '{key}'", e)
 
     def log_node_artifact(
         self,
@@ -451,7 +499,7 @@ class MLflowPipelineTracker:
                     mlflow.log_artifact(local_path, artifact_path)
             logger.info(f"Logged artifact: {local_path}")
         except Exception as e:
-            logger.warning(f"Failed to log artifact {local_path}: {e}")
+            self._not_recorded(f"artifact '{local_path}'", e)
 
     def log_model(
         self,
@@ -489,7 +537,7 @@ class MLflowPipelineTracker:
                 _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
             logger.info(f"Logged model to: {artifact_path}")
         except Exception as e:
-            logger.warning(f"Failed to log model: {e}")
+            self._not_recorded(f"model '{artifact_path}'", e)
 
     def log_pipeline_metric(
         self,
@@ -505,7 +553,22 @@ class MLflowPipelineTracker:
             self._client.log_metric(self._active_pipeline_run, key, value, step=step or 0)
             logger.debug(f"Logged pipeline metric {key}={value}")
         except Exception as e:
-            logger.warning(f"Failed to log pipeline metric {key}: {e}")
+            self._not_recorded(f"pipeline metric '{key}'", e)
+
+    def _not_recorded(self, what: str, error: Exception) -> None:
+        """A logging call failed: fail when MLflow is required, else say so as an error.
+
+        It used to be a warning — easy to miss, and a model "logged" this way simply was
+        not there afterwards, with the run reported as a success.
+        """
+        if self.required:
+            raise MLflowTrackingError(f"MLflow did not record the {what}: {error}") from error
+        logger.error(
+            "MLflow did NOT record the {}: {}. The run continues without it; set "
+            "`settings.mlflow.required: true` (or `mlops_required: true`) to fail instead.",
+            what,
+            error,
+        )
 
     def get_node_run_id(self, node_name: str) -> Optional[str]:
         """Get run ID for a specific node."""
@@ -553,6 +616,7 @@ class MLflowPipelineTracker:
             artifact_location=mlflow_config.get("artifact_location"),
             enable_autolog=mlflow_config.get("enable_autolog", True),
             nested_runs=mlflow_config.get("nested_runs", True),
+            required=bool(mlflow_config.get("required") or gs.get("mlops_required")),
             tags=tags,
         )
 
@@ -569,21 +633,20 @@ def _log_model_by_flavor(
     log_model`` and ``MLflowNodeContext.log_model`` share one flavor-detection
     implementation instead of the latter hand-rolling a subset of it.
     """
-    flavor_map = {
-        "sklearn": mlflow.sklearn.log_model,
-        "xgboost": mlflow.xgboost.log_model,
-        "pytorch": mlflow.pytorch.log_model,
-        "tensorflow": mlflow.tensorflow.log_model,
-    }
+    # Only the flavor in use is touched: `mlflow.<flavor>` is a lazy module that
+    # imports its framework on first access, so building a table of every flavor's
+    # log_model up front raised ModuleNotFoundError (no tensorflow) for every model.
+    flavors = ("sklearn", "xgboost", "pytorch", "tensorflow")
 
-    if flavor in flavor_map:
-        flavor_map[flavor](model, artifact_path, **kwargs)
+    where = _model_location(artifact_path)
+    if flavor in flavors:
+        getattr(mlflow, flavor).log_model(model, **where, **kwargs)
     elif flavor == "pyfunc":
-        mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
+        mlflow.pyfunc.log_model(python_model=model, **where, **kwargs)
     elif hasattr(model, "fit") and hasattr(model, "predict"):
-        mlflow.sklearn.log_model(model, artifact_path, **kwargs)
+        mlflow.sklearn.log_model(model, **where, **kwargs)
     else:
-        mlflow.pyfunc.log_model(artifact_path, python_model=model, **kwargs)
+        mlflow.pyfunc.log_model(python_model=model, **where, **kwargs)
 
 
 def _mlf_log_params_from_call(

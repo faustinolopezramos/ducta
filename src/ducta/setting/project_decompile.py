@@ -130,6 +130,7 @@ _TRANSFORM_KEYS = {
     "split": "split",
     "hyperparams": "hyperparams",
     "model_version": "model_version",
+    "model": "model",
     "metrics": "metrics",
 }
 _INGEST_KEYS = ("source", "sources", "table", "query", "columns", "where", "options")

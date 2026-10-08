@@ -75,20 +75,30 @@ class QualityService:
     """Facade over the ducta.check engine for CLI consumption."""
 
     @staticmethod
-    def list_checks() -> List[Dict[str, str]]:
-        """Return metadata for every registered quality check."""
+    def list_checks() -> List[Dict[str, Any]]:
+        """Return metadata for every registered quality check: what it is, what a
+        failure counts as, and the parameters it takes."""
         from ducta.check import QUALITY_CHECKS_REGISTRY
+        from ducta.check.params import schema_for
 
         result = []
         for name, cls in QUALITY_CHECKS_REGISTRY.items():
             module = cls.__module__ or ""
             origin = "built-in" if module.startswith("ducta.check") else module
+            doc = (cls.__doc__ or "").strip().splitlines()
+            try:
+                severity = str(getattr(cls(), "severity", "") or "") or None
+            except Exception:  # noqa: BLE001 — a check that needs arguments
+                severity = None
             result.append(
                 {
                     "name": name,
                     "class_name": cls.__name__,
                     "module": module,
                     "origin": origin,
+                    "description": doc[0] if doc else None,
+                    "default_severity": severity,
+                    "params": schema_for(name, cls),
                 }
             )
         return result

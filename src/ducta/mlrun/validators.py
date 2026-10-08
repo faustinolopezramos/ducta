@@ -439,6 +439,7 @@ class ArtifactValidator:
         "pickle": ["pkl"],
         "joblib": ["joblib"],
         "custom": ["pkl", "bin"],
+        "spark-mllib": [],  # a directory written by model.save(path)
     }
 
     # Frameworks whose loader is pickle/joblib-based, i.e. "validating" them
@@ -524,8 +525,10 @@ class ArtifactValidator:
             return
 
         loaders = {
-            "sklearn": ArtifactValidator._load_pickle,
-            "scikit-learn": ArtifactValidator._load_pickle,
+            # sklearn models are saved with joblib as often as with pickle (.joblib
+            # is a supported extension), and pickle.load cannot read joblib's format.
+            "sklearn": ArtifactValidator._load_pickle_joblib,
+            "scikit-learn": ArtifactValidator._load_pickle_joblib,
             "xgboost": lambda p: ArtifactValidator._load_xgboost(p, trust_artifact_source),
             "lightgbm": lambda p: ArtifactValidator._load_lightgbm(p, trust_artifact_source),
             "pytorch": ArtifactValidator._load_pytorch,
@@ -534,6 +537,7 @@ class ArtifactValidator:
             "pickle": ArtifactValidator._load_pickle_joblib,
             "joblib": ArtifactValidator._load_pickle_joblib,
             "custom": ArtifactValidator._load_pickle_joblib,
+            "spark-mllib": ArtifactValidator._check_spark_ml_dir,
         }
 
         loader = loaders.get(framework_key)
@@ -550,6 +554,16 @@ class ArtifactValidator:
             f"Unknown framework '{framework_key}', skipping artifact validation. "
             f"Supported: {', '.join(ArtifactValidator.SUPPORTED_FRAMEWORKS.keys())}"
         )
+
+    @staticmethod
+    def _check_spark_ml_dir(artifact_path: Path) -> None:
+        # Loading needs a Spark session; the layout model.save() writes is enough
+        # to tell a Spark ML model from anything else, and it executes nothing.
+        if not (artifact_path / "metadata").is_dir():
+            raise ValueError(
+                "a Spark ML model is the directory model.save(path) writes, with a "
+                "metadata/ subdirectory"
+            )
 
     @staticmethod
     def _load_pickle(artifact_path: Path) -> None:

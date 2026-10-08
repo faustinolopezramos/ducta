@@ -152,3 +152,54 @@ export const useExecutionErrors = (executionId: string | null | undefined) =>
     staleTime: 60 * 1000,
     retry: 2,
   });
+
+/** One streaming node of a running execution (mirrors StreamingNodeStatus). */
+export interface StreamingNodeStatus {
+  node: string;
+  /** active · failed · skipped (never started) · stopped */
+  state: "active" | "failed" | "skipped" | "stopped" | string;
+  error?: string | null;
+  last_batch_id?: number | null;
+  num_input_rows?: number | null;
+  input_rows_per_second?: number | null;
+  processed_rows_per_second?: number | null;
+  trigger_execution_ms?: number | null;
+  /** The model the query was pinned to when it started. */
+  model?: { name?: string; version?: number; source?: string; [k: string]: unknown } | null;
+}
+
+export interface StreamingPipelineStatus {
+  stream_execution_id: string;
+  pipeline_name?: string | null;
+  status: string;
+  uptime_seconds?: number | null;
+  total_queries: number;
+  active_queries: number;
+  failed_queries: number;
+  error?: string | null;
+  nodes: StreamingNodeStatus[];
+}
+
+export interface StreamingStatusResponse {
+  execution_id: string;
+  /** False once the execution holds no running engine. */
+  active: boolean;
+  pipelines: StreamingPipelineStatus[];
+}
+
+/** How often a running execution's streams are re-read. */
+export const STREAMING_POLL_MS = 5000;
+
+/**
+ * GET /executions/{id}/streaming — polled while the execution is running and
+ * holds a streaming engine; stops by itself once `active` turns false.
+ */
+export const useExecutionStreaming = (executionId: string, enabled: boolean) =>
+  useQuery<StreamingStatusResponse>({
+    queryKey: qk.executions.streaming(executionId),
+    queryFn: () => client.get(`/executions/${executionId}/streaming`).then((r) => r.data),
+    enabled: !!executionId && enabled,
+    refetchInterval: (query: { state: { data?: StreamingStatusResponse } }) =>
+      query.state.data?.active === false ? false : STREAMING_POLL_MS,
+    staleTime: 0,
+  });

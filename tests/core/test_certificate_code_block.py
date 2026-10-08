@@ -42,7 +42,8 @@ def _make_cert(**overrides) -> RunCertificate:
 
 class TestCodeIsInsideTheHash:
     def test_schema_version_advertises_the_new_block(self):
-        assert SCHEMA_VERSION == "1.5"
+        # The code block arrived in 1.5; later versions keep it.
+        assert tuple(int(p) for p in SCHEMA_VERSION.split(".")) >= (1, 5)
         assert "code" in _make_cert().content()
 
     def test_a_different_code_hash_changes_the_certificate_hash(self):

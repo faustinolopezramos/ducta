@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable, Dict, List, Optional
 
 from ducta.core.commands import Command, MLNodeCommand, NodeCommand
@@ -32,6 +33,37 @@ class MLContextBuilder:
         self.context = context
         self.mlops_context = mlops_context
         self.is_ml_layer = is_ml_layer
+        self._models: Optional[Any] = None
+        # Parallel nodes reach serving_model at once; one cache per run is what
+        # pins a stage to a single version for the whole run.
+        self._models_lock = threading.Lock()
+
+    def reset_models(self) -> None:
+        """Forget the previous run's models (an executor can serve several runs)."""
+        with self._models_lock:
+            self._models = None
+
+    def serving_model(self, node_config: Dict[str, Any]) -> Optional[Any]:
+        """The node's ``model:``, resolved and loaded once per run (None without one)."""
+        ref = (node_config or {}).get("model")
+        if not ref:
+            return None
+        with self._models_lock:
+            if self._models is None:
+                from ducta.mlrun.serving import model_cache_for
+
+                self._models = model_cache_for(self.context, self._model_registry)
+            models = self._models
+        return models.get(ref)
+
+    def _model_registry(self) -> Any:
+        """The registry the run's MLOps context uses, or the project's own."""
+        registry = getattr(self.mlops_context, "model_registry", None)
+        if registry is not None:
+            return registry
+        from ducta.mlrun.config import MLOpsContext
+
+        return MLOpsContext.from_context(self.context).model_registry
 
     def is_ml_node(self, node_config: Dict[str, Any], ml_info: Dict[str, Any]) -> bool:
         """Decide whether a node must receive the ML context."""
@@ -42,6 +74,7 @@ class MLContextBuilder:
             or self.is_ml_layer
             or ml_info.get("pipeline_type") == "ml"
             or ml_info.get("split") is not None
+            or bool((node_config or {}).get("split"))
         )
 
     def create_command(
@@ -106,6 +139,8 @@ class MLContextBuilder:
             "split": ml_info.get("split"),
             "cv_folds": ml_info.get("cv_folds"),
             "input_names": input_names,
+            "cli_hyperparams": ml_info.get("cli_hyperparams"),
+            "model_ref": self.serving_model(node_config),
         }
 
         if hasattr(self.context, "spark"):
@@ -122,11 +157,29 @@ class MLContextBuilder:
                 copied["hyperparams"] = dict(ml_info["hyperparams"])
             return copied
 
+        from ducta.core.ml_contract import effective_split
+
         node_ml_config = self.context.get_node_ml_config(node_name)
         enhanced_ml_info = ml_info.copy()
-        node_hyperparams = enhanced_ml_info.get("hyperparams", {}).copy()
-        node_hyperparams.update(node_ml_config.get("hyperparams", {}))
+
+        # Precedence, lowest first: pipeline < node < this run's CLI overrides.
+        # Idempotent: the coordinator prepares a node and execute_single_node prepares
+        # it again (it is the one path every run mode shares), with the same result.
+        node_hyperparams = dict(enhanced_ml_info.get("hyperparams") or {})
+        node_hyperparams.update(node_ml_config.get("hyperparams") or {})
+        node_hyperparams.update(ml_info.get("cli_hyperparams") or {})
         enhanced_ml_info["hyperparams"] = node_hyperparams
+
+        if ml_info.get("cli_model_version") is not None:
+            enhanced_ml_info["model_version"] = ml_info["cli_model_version"]
+        elif node_ml_config.get("model_version") is not None:
+            enhanced_ml_info["model_version"] = node_ml_config["model_version"]
+
+        pipeline_split = ml_info.get("pipeline_split", ml_info.get("split"))
+        split, source = effective_split(node_config, pipeline_split)
+        enhanced_ml_info["pipeline_split"] = pipeline_split
+        enhanced_ml_info["split"] = split
+        enhanced_ml_info["split_source"] = source
         enhanced_ml_info["node_config"] = node_ml_config
 
         return enhanced_ml_info

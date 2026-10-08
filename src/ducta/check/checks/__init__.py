@@ -25,6 +25,7 @@ from ducta.check.core import QUALITY_CHECKS_REGISTRY, register_check
 from .business import BusinessRulesCheck
 from .cross_table import CrossTableReferentialIntegrityCheck, DatasetCompletenessCheck
 from .distribution import DriftDetectionCheck, StatisticalCheck
+from .model import PredictionContractCheck, PredictionDriftCheck, PredictionRateCheck
 
 # Import all modules to trigger auto-registration
 from .structural import (
@@ -63,4 +64,8 @@ __all__ = [
     "DatasetCompletenessCheck",
     # Business rules (1)
     "BusinessRulesCheck",
+    # Model output (3)
+    "PredictionRateCheck",
+    "PredictionContractCheck",
+    "PredictionDriftCheck",
 ]

@@ -23,7 +23,8 @@ export const useSourceInfo = () =>
 
 /**
  * GET /environments
- * Returns { environments: string[], count } — all envs defined in environment.yaml.
+ * Returns { environments: string[], count } — the environments the project declares
+ * (`environments:` in ducta.yaml).
  * `project`, when given, resolves the environments of a different project
  * than the one the connected source belongs to (see WorkspaceManager.for_project).
  */

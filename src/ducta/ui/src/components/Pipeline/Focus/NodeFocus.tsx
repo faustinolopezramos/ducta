@@ -7,8 +7,9 @@ import {
   IconPlayerPlay,
   IconTerminal2,
 } from "@tabler/icons-react";
-import { useNodeCode, type NodeSchema } from "../../../api/queries";
+import { useNodeCode, type MlPlanNode, type NodeSchema } from "../../../api/queries";
 import { Button } from "../../ui/Button";
+import { PermittedButton } from "../../ui/PermittedButton";
 import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Skeleton } from "../../ui/Skeleton";
 import { useBuilderStore } from "../../../store/builderStore";
@@ -21,6 +22,7 @@ import {
   ChecksList,
   DatasetRef,
   KeyValues,
+  MLPlanBlock,
   NodeRef,
   Pill,
   lastRunLine,
@@ -55,6 +57,9 @@ interface NodeFocusProps {
   onViewQualityReports?: (args: { dataset: string; pipelineName: string }) => void;
   onViewLogs?: () => void;
   onOpenYaml?: () => void;
+  /** What this node is given if it is part of an ML pipeline; absent otherwise. */
+  mlPlan?: MlPlanNode | null;
+  splitEnforcement?: "error" | "warn" | null;
 }
 
 /**
@@ -81,6 +86,8 @@ export function NodeFocus({
   onViewQualityReports,
   onViewLogs,
   onOpenYaml,
+  mlPlan,
+  splitEnforcement,
 }: NodeFocusProps) {
   const { data: codeData } = useNodeCode(nodeId);
   const isDirty = useBuilderStore((s) => s.isDirty);
@@ -204,8 +211,11 @@ export function NodeFocus({
 
         <ChecksList quality={schema?.quality} />
 
+        {mlPlan && <MLPlanBlock plan={mlPlan} enforcement={splitEnforcement} />}
+
         <div className="focus-actions">
-          <Button
+          <PermittedButton
+            permission="pipeline.execute"
             variant="primary"
             size="sm"
             disabled={isRunningThis}
@@ -214,7 +224,7 @@ export function NodeFocus({
             leftIcon={<IconPlayerPlay size={14} />}
           >
             {isRunningThis ? "Running…" : "Run node"}
-          </Button>
+          </PermittedButton>
           {codeData?.code && (
             <Button
               variant="secondary"

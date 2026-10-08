@@ -55,22 +55,18 @@ def _mark_split_applied(ml_context: Any) -> None:
         logger.debug("Could not mark split_applied on ml_context: {}", e)
 
 
-def _require_pandas(df: Any) -> None:
-    """Reject non-pandas inputs with an actionable message."""
+def _require_pandas(df: Any, caller: str = "split_dataframe") -> None:
+    """Reject inputs that are neither pandas nor (where supported) Spark."""
     if hasattr(df, "iloc") and hasattr(df, "columns"):
         return
     type_name = f"{type(df).__module__}.{type(df).__name__}"
-    if "pyspark" in type_name or hasattr(df, "sparkSession") or hasattr(df, "rdd"):
+    if _is_spark(df):
         raise SplitError(
-            "split_dataframe operates on pandas DataFrames, but received a Spark "
-            f"DataFrame ({type_name}). Collect it with .toPandas() before splitting "
-            "(e.g. inside a vectorized node), or split with Spark's randomSplit/"
-            "filter before handing rows to the node."
+            f"{caller} operates on pandas DataFrames, but received a Spark DataFrame "
+            f"({type_name}). Collect it with .toPandas() first (e.g. inside a vectorized "
+            "node); split_dataframe itself accepts a Spark DataFrame."
         )
-    raise SplitError(
-        f"split_dataframe expects a pandas DataFrame, got {type_name}. "
-        "Provide a pandas DataFrame (use .toPandas() for Spark)."
-    )
+    raise SplitError(f"{caller} expects a pandas or Spark DataFrame, got {type_name}.")
 
 
 def _require_column(df: Any, column: Optional[str], method: str, key: str) -> str:
@@ -93,10 +89,19 @@ def split_dataframe(
     default_seed: Optional[int] = None,
     ml_context: Any = None,
 ) -> Tuple[Any, ...]:
-    """Split a pandas DataFrame according to a declarative split config."""
+    """Split a pandas or Spark DataFrame according to a declarative split config.
+
+    Returns ``(train, test)``, or ``(train, val, test)`` with ``val_size``. A Spark
+    DataFrame is split without being collected (see :func:`_split_spark`).
+    """
     parts = _split_dataframe_impl(df, split_config, default_seed)
     _mark_split_applied(ml_context)
     return parts
+
+
+def _is_spark(df: Any) -> bool:
+    type_name = f"{type(df).__module__}.{type(df).__name__}"
+    return "pyspark" in type_name or (hasattr(df, "sparkSession") and hasattr(df, "schema"))
 
 
 def _split_dataframe_impl(
@@ -104,7 +109,9 @@ def _split_dataframe_impl(
     split_config: Any,
     default_seed: Optional[int] = None,
 ) -> Tuple[Any, ...]:
-    _require_pandas(df)
+    spark = _is_spark(df)
+    if not spark:
+        _require_pandas(df)
     cfg = _normalize_config(split_config)
 
     method = cfg.get("method", "random")
@@ -124,6 +131,9 @@ def _split_dataframe_impl(
     seed = _resolve_seed(cfg, default_seed, "split_dataframe")
 
     holdout = test_size + (val_size or 0.0)
+
+    if spark:
+        return _split_spark(df, cfg, method, seed, test_size, val_size)
 
     if method == "temporal":
         time_col = _require_column(df, cfg.get("time_col"), method, "time_col")
@@ -164,6 +174,87 @@ def _split_dataframe_impl(
     parts = (df[~test_mask], df[test_mask])
     _check_non_degenerate(parts, len(df), method)
     return parts
+
+
+_PART = "__ducta_split_part"
+_FRACTION = "__ducta_split_fraction"
+
+
+def _split_spark(
+    df: Any,
+    cfg: Dict[str, Any],
+    method: str,
+    seed: int,
+    test_size: float,
+    val_size: Optional[float],
+) -> Tuple[Any, ...]:
+    """The same declarative split on a Spark DataFrame, without collecting it.
+
+    ``random`` and ``group`` assign rows by a hash of their content (or group)
+    and the seed, so the assignment does not depend on how the data is
+    partitioned; ``stratified`` takes exactly ``test_size`` of each class;
+    ``temporal`` cuts at the time column's quantiles. Same proportions and
+    guarantees as the pandas path — not the same rows, since the hashes differ.
+    """
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    holdout = test_size + (val_size or 0.0)
+
+    def _hash_fraction(*cols: Any) -> Any:
+        return F.pmod(F.xxhash64(F.lit(seed), *cols), F.lit(2**31)) / F.lit(float(2**31))
+
+    if method == "temporal":
+        time_col = _require_column(df, cfg.get("time_col"), method, "time_col")
+        dtype = dict(df.dtypes)[time_col]
+        as_number = (
+            F.unix_timestamp(F.col(time_col))
+            if dtype in ("date", "timestamp", "timestamp_ntz")
+            else F.col(time_col).cast("double")
+        )
+        probs = [1 - holdout] + ([1 - test_size] if val_size is not None else [])
+        cuts = df.select(as_number.alias(_FRACTION)).approxQuantile(_FRACTION, probs, 1e-4)
+        if len(cuts) < len(probs):
+            raise SplitError(f"split.method='temporal': '{time_col}' has no values to cut on")
+        part = F.when(as_number < cuts[0], F.lit("train"))
+        if val_size is not None:
+            part = part.when(as_number < cuts[1], F.lit("val"))
+        labeled = df.withColumn(_PART, part.otherwise(F.lit("test")))
+    else:
+        if method == "group":
+            group_col = _require_column(df, cfg.get("group_col"), method, "group_col")
+            fraction = _hash_fraction(F.col(group_col))
+        elif method == "stratified":
+            stratify_col = _require_column(df, cfg.get("stratify_col"), method, "stratify_col")
+            small = df.groupBy(stratify_col).count().filter(F.col("count") < 2).limit(10).collect()
+            if small:
+                shown = {str(r[stratify_col]): int(r["count"]) for r in small}
+                raise SplitError(
+                    f"Stratified split requires at least 2 rows per class; {len(shown)} "
+                    f"class(es) have fewer: {shown}. Drop or merge these classes, or use "
+                    "method='random'."
+                )
+            window = Window.partitionBy(stratify_col).orderBy(_hash_fraction(*df.columns))
+            fraction = F.percent_rank().over(window)
+        else:  # random
+            fraction = _hash_fraction(*df.columns)
+        part = F.when(fraction >= F.lit(1 - test_size), F.lit("test"))
+        if val_size is not None:
+            part = part.when(fraction >= F.lit(1 - holdout), F.lit("val"))
+        labeled = df.withColumn(_PART, part.otherwise(F.lit("train")))
+
+    names = ("train", "val", "test") if val_size is not None else ("train", "test")
+    counts = {r[_PART]: r["count"] for r in labeled.groupBy(_PART).count().collect()}
+    sizes = [counts.get(name, 0) for name in names]
+    if sum(sizes) >= 2 and 0 in sizes:
+        empty = ", ".join(n for n, size in zip(names, sizes) if size == 0)
+        raise SplitError(
+            f"split.method='{method}' produced an empty partition ({empty}) — too few "
+            "distinct groups/classes (or too skewed a distribution) for the requested "
+            "test_size/val_size. Use a larger dataset, adjust the split sizes, or "
+            "merge/drop rare groups."
+        )
+    return tuple(labeled.filter(F.col(_PART) == name).drop(_PART) for name in names)
 
 
 def _check_non_degenerate(parts: Tuple[Any, ...], n: int, method: str) -> None:
@@ -268,7 +359,7 @@ def _kfold_splits_impl(
     n_splits: int = 5,
     default_seed: Optional[int] = None,
 ) -> List[Tuple[Any, Any]]:
-    _require_pandas(df)
+    _require_pandas(df, "kfold_splits")
     cfg = _normalize_config(split_config) if split_config is not None else {"method": "random"}
 
     method = cfg.get("method", "random")

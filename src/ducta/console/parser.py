@@ -408,6 +408,14 @@ class UnifiedArgumentParser:
             action="store_true",
             help="Print the five documents the engine reads instead of the project's shape",
         )
+        show_parser.add_argument(
+            "--ml",
+            action="store_true",
+            help=(
+                "What each ML node will be given: its split and where it was declared, "
+                "whether it must apply it, its merged hyperparameters and model version"
+            ),
+        )
 
         explain_parser = config_subparsers.add_parser(
             "explain",

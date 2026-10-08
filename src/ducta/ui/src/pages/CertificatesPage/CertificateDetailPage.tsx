@@ -17,6 +17,7 @@ import { ProofLadder, type ReproduceState } from "../../components/Certificate/P
 import { CopyButton } from "../../components/Certificate/CopyButton";
 import { CertificateDiffView } from "../../components/Certificate/CertificateDiffView";
 import {
+  MLSection,
   NodesSection,
   DatasetsSection,
   QualitySection,
@@ -177,6 +178,7 @@ export function CertificateDetailPage() {
           </div>
 
           <NodesSection nodes={cert.nodes ?? []} />
+          <MLSection nodes={cert.nodes ?? []} />
           <DatasetsSection inputs={cert.inputs ?? {}} outputs={cert.outputs ?? {}} />
           <QualitySection quality={cert.quality ?? []} />
           <CodeSection code={cert.code} />

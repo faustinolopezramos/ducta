@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { IconCalendarEvent, IconPlus, IconSearch } from "@tabler/icons-react";
 import { useSchedules, useDeleteSchedule, type PipelineSchedule } from "../../api/schedulesApi";
-import { Button, PageHeader, PageContainer, EmptyState, DataTable, ConfirmDialog } from "../../components/ui";
+import { Button, PageHeader, PageContainer, EmptyState, DataTable, ConfirmDialog, PermittedButton } from "../../components/ui";
 import { scheduleColumns } from "./scheduleColumns";
 import { ScheduleFormModal } from "./ScheduleFormModal";
 import "./schedules.css";
@@ -37,9 +37,9 @@ export function SchedulesPage() {
         title="Automated Schedules"
         description="Configure autonomous background pipeline triggers powered by Ducta AsyncCronScheduler. Cron expressions run in UTC."
         actions={
-          <Button variant="primary" onClick={() => setShowCreateModal(true)}>
+          <PermittedButton permission="execution.write" variant="primary" onClick={() => setShowCreateModal(true)}>
             <IconPlus size={16} /> New Schedule
-          </Button>
+          </PermittedButton>
         }
       />
 
@@ -56,9 +56,9 @@ export function SchedulesPage() {
           title="No automated schedules"
           description="Set up cron expressions to automatically run data pipelines at scheduled intervals."
           action={
-            <Button variant="primary" onClick={() => setShowCreateModal(true)}>
+            <PermittedButton permission="execution.write" variant="primary" onClick={() => setShowCreateModal(true)}>
               <IconPlus size={16} /> Create First Schedule
-            </Button>
+            </PermittedButton>
           }
         />
       ) : (

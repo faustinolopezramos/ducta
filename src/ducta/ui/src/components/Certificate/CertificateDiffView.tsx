@@ -58,6 +58,11 @@ export function CertificateDiffView({ diff, labelA = "This certificate", labelB 
         <div>Environment: {diff.environment_match ? "match" : "differs"}</div>
         <div>Status: {diff.status_match ? "match" : `${diff.status_a} → ${diff.status_b}`}</div>
         <div>Config fingerprint: {diff.config_fingerprint_match ? "match" : "changed"}</div>
+        {(diff.models ?? []).map((m) => (
+          <div key={m.node}>
+            Model ({m.node}): {m.match ? "match" : `${m.model_a ?? "—"} → ${m.model_b ?? "—"}`}
+          </div>
+        ))}
       </div>
       {diff.outputs.length > 0 && (
         <div style={{ marginTop: "var(--space-4)" }}>

@@ -24,8 +24,12 @@ def tracker(tmp_path, monkeypatch):
     # Spark session on construction, and the fake module's stub SparkSession
     # doesn't implement that API — remove it for the duration of this test
     # only; monkeypatch restores sys.modules afterward regardless.
-    monkeypatch.delitem(sys.modules, "pyspark", raising=False)
-    monkeypatch.delitem(sys.modules, "pyspark.sql", raising=False)
+    # Only a stub (no __file__): removing the real pyspark would make MLflow import
+    # a second copy without the submodules (pyspark.ml) other tests already loaded.
+    for name in ("pyspark", "pyspark.sql"):
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "__file__", None) is None:
+            monkeypatch.delitem(sys.modules, name)
     return MLflowPipelineTracker(
         experiment_name="test_exp",
         tracking_uri=f"file://{tmp_path / 'mlruns'}",

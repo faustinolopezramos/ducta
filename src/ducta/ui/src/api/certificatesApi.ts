@@ -77,7 +77,46 @@ export interface CertificateDiffResult {
    *  cover the subset that could actually be measured. */
   outputs_comparable: boolean;
   quality: CertificateDiffQualityRow[];
+  /** The model each serving node scored with, side by side (schema >= 1.6). */
+  models?: CertificateDiffModelRow[];
+  models_match?: boolean;
   identical: boolean;
+}
+
+export interface CertificateDiffModelRow {
+  node: string;
+  model_a: string | null;
+  model_b: string | null;
+  match: boolean;
+}
+
+/** The registered model a serving/evaluation node scored with (schema >= 1.6). */
+export interface CertificateServedModel {
+  source: "ducta" | "mlflow";
+  name: string;
+  /** The version the run pinned — not the stage it asked for. */
+  version: number;
+  stage_at_resolution: string | null;
+  uri: string;
+  framework: string;
+  artifact_sha256: string | null;
+  /** "registry": matched the hash recorded at registration; "load": hashed on load. */
+  hash_source: "registry" | "load" | null;
+}
+
+/** What an ML node was given and did — present only on ML nodes. */
+export interface CertificateNodeML {
+  stage: string | null;
+  split: Record<string, unknown> | null;
+  /** Where the split was declared. */
+  split_source: "node" | "pipeline" | null;
+  /** Whether the node was bound to apply it (its own split, or training/evaluation). */
+  split_required: boolean;
+  /** True only when the node really called split_dataframe with its ml_context. */
+  split_applied: boolean;
+  model_version: string | null;
+  hyperparams: Record<string, unknown>;
+  model?: CertificateServedModel;
 }
 
 export interface CertificateNode {
@@ -87,6 +126,7 @@ export interface CertificateNode {
   duration_seconds: number;
   outputs: string[];
   error?: string | null;
+  ml?: CertificateNodeML;
 }
 
 /** How strongly a dataset's fingerprint actually proves its content — the

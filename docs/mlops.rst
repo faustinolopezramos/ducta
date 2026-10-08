@@ -67,6 +67,117 @@ any setup function in your code.
      prod:
        settings.mlops.backend_type: databricks
 
+MLflow tracking (optional)
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+With the ``mlops`` extra installed, ``settings.mlflow`` also records every run, node,
+metric and model in MLflow (version 3.15 or later):
+
+.. code-block:: yaml
+
+   # ducta.yaml
+   version: 2
+   project: churn
+   paths: {input: data, output: data}
+   settings:
+     mlflow:
+       enabled: true
+       experiment_name: churn
+       tracking_uri: sqlite:////srv/mlflow/mlflow.db   # or http://mlflow.internal:5000
+
+Use a database or a tracking server for ``tracking_uri``. MLflow 3 keeps the local
+folder store (``tracking_uri: mlruns``, ``file://...``) only in maintenance mode and
+refuses it by default; Ducta still accepts one, so runs already recorded there stay
+readable, and says so with a warning. Convert such a folder with
+``mlflow migrate-filestore``, or set ``MLFLOW_ALLOW_FILE_STORE=false`` to have MLflow
+refuse it. A ``tracking_uri`` without a scheme (``mlruns``) is placed under
+``<paths.output>/<env>/``; one with a scheme (``sqlite:///``, ``http://``) is used as
+written. Without ``tracking_uri``, MLflow uses ``./mlflow.db`` in the working directory.
+
+Writing an ML Pipeline
+----------------------
+
+The split, the hyperparameters and the model version live in the pipeline file, so a
+data scientist changes an experiment without touching Python — and Ducta makes sure
+the Python actually uses them.
+
+.. code-block:: yaml
+
+   # pipelines/churn.yaml
+   type: ml
+   requires_dates: false
+   model_version: "1.0"
+   hyperparams: {n_estimators: 200, max_depth: 8}
+   split: {method: stratified, stratify_col: churned, test_size: 0.2, seed: 42}
+   nodes:
+     build_features:
+       run: churn.features:build_features
+       ml_stage: feature_engineering
+       inputs: {customers: silver.crm.customers}
+       outputs: [ml.churn.features]
+     train:
+       run: churn.model:train
+       ml_stage: training                 # bound to apply the split above
+       hyperparams: {max_depth: 6}        # merged over the pipeline's
+       inputs: {features: ml.churn.features}
+       outputs: [ml.churn.metrics]
+
+.. code-block:: python
+
+   # churn/model.py
+   from ducta.mlrun import split_dataframe
+
+   def train(features, ml_context=None):
+       df = features.toPandas()
+       # The split declared in the pipeline file — never a second copy in code.
+       train_df, test_df = split_dataframe(df, ml_context.split, ml_context=ml_context)
+       model = fit(train_df, **ml_context.hyperparams, random_state=ml_context.node_seed)
+       ...
+
+**Where each value comes from.** A ``split``, ``hyperparams`` or ``model_version``
+written on a node overrides the pipeline's (hyperparameters are merged key by key).
+A run's ``--hyperparams`` and ``--model-version`` override both, for that run.
+
+**Who must apply the split.** A node with its own ``split:``, and a node with
+``ml_stage: training`` or ``evaluation`` under a pipeline ``split:``. Other nodes (feature
+engineering) receive ``ml_context.split`` too but are not bound by it. A bound node
+that finishes without calling ``split_dataframe`` (or ``kfold_splits``) with its
+``ml_context`` **fails before its output is written** — its model would have been
+fitted and scored on a partition nobody declared. ``settings.split_enforcement: warn``
+lets the run continue with a warning instead.
+
+**Checked before anything runs.** ``ducta config validate`` reports, with file and line:
+an unknown key in a ``split`` (``stratify_column``), a ``stratified`` split without
+``stratify_col``, an unknown ``ml_stage`` (``trainning`` — which would quietly free a
+node from the split), a pipeline ``split`` that no node is bound to apply, and a bound
+node whose function has no ``ml_context`` parameter to receive it.
+
+**See what each node will get:**
+
+.. code-block:: bash
+
+   ducta config show --ml --pipeline churn
+
+.. code-block:: text
+
+   churn:
+     type: ml
+     split_enforcement: error
+     split: {method: stratified, stratify_col: churned, test_size: 0.2, seed: 42}
+     nodes:
+       build_features: {ml_stage: feature_engineering, split_from: pipeline, must_apply_split: false, ...}
+       train:          {ml_stage: training, split_from: pipeline, must_apply_split: true,
+                        hyperparams: {n_estimators: 200, max_depth: 6}, model_version: '1.0'}
+
+**What the run certificate proves.** Each ML node's entry carries an ``ml`` block:
+the split it was given, where it was declared (``node`` or ``pipeline``), whether it was
+bound to apply it, **whether it did**, its model version and its hyperparameters. The
+split is recorded as applied only when the node really called ``split_dataframe``.
+
+**MLflow.** A model, metric or artifact that fails to reach MLflow is logged as an
+error. With ``settings.mlflow.required: true`` (or ``mlops_required: true``) it fails
+the node instead, so a run never reports success without the model it was meant to log.
+
 Tracking Inside a Node
 ----------------------
 
@@ -139,6 +250,120 @@ The Ducta registry provides version-controlled model management. Newly registere
 Promotion to ``production`` is checked against your promotion policy; use
 ``--force`` to bypass it (the bypass is audit-logged). See :doc:`cli_usage` for
 the full ``ducta model`` and ``ducta experiment`` command reference.
+
+Serving a Model
+---------------
+
+A node with ``ml_stage: serving`` scores data with a registered model. It names the
+model; Ducta resolves it, verifies it and hands it over loaded:
+
+.. code-block:: yaml
+
+   # pipelines/score.yaml
+   type: ml
+   requires_dates: false
+   nodes:
+     score:
+       ml_stage: serving
+       model:
+         name: churn_clf
+         stage: production           # or version: 3
+         trust_artifact: true        # required for a pickle/joblib (sklearn) model
+         features: [tenure, spend]   # default: the model's registered input schema
+         output_col: churn_score     # default: prediction
+         method: predict_proba       # predict | predict_proba | decision_function | score_samples
+       inputs: {customers: silver.crm.customers}
+       outputs: [gold.crm.churn_scores]
+
+Without ``run``, the built-in scorer applies the model to the node's single input
+and adds ``output_col`` — on a pandas or a Spark DataFrame (``mapInPandas``; on
+Spark 3 with Java 21+, where Arrow cannot run, a slower row-based path). With
+``run``, your function receives the model:
+
+.. code-block:: python
+
+   def score(customers, ml_context=None):
+       model = ml_context.model                      # loaded once per run
+       ref = ml_context.model_ref                    # which model, exactly
+       ...                                           # ref.local_path for frameworks
+                                                     # Ducta does not load itself
+
+**One version per run.** ``stage: production`` is resolved when the run starts, and
+every node naming it in that run gets that version, even if a promotion lands
+mid-run. The next run resolves it again.
+
+**Output type.** In batch the scorer infers the prediction's Spark type from one
+row; ``output_type: double | long | string | boolean`` sets it instead.
+
+**A Spark ML model.** Register the directory ``model.save(path)`` writes, with
+``framework: spark-mllib``. It loads without unpickling anything, scores with
+``model.transform`` (its pipeline assembles its own features, so ``features`` is
+not used) and supports ``method: predict`` or ``predict_proba``. It is read from
+the registry's own storage, so a cluster can read it too.
+
+**On a stream.** A ``kind: stream`` node takes the same block under ``stream:``:
+
+.. code-block:: yaml
+
+   score_events:
+     kind: stream
+     stream:
+       input: {format: kafka, options: {subscribe: events, ...}}
+       output: {format: delta, path: ${paths.output}/${env}/scored_events}
+       model: {name: fraud, stage: production, trust_artifact: true, output_type: double}
+       streaming: {trigger: {processing_time: 30 seconds}}
+
+Without a ``transform`` the built-in scorer applies the model to each
+micro-batch; a transform declared with an ``ml_context`` parameter receives the
+model instead (``def score(df, params, ml_context=None)``). The model is resolved
+when the query starts and kept for its lifetime — a restart resolves the stage
+again — and the pipeline status lists it under ``served_models``. A stream cannot
+be sampled, so its prediction type is ``double`` unless ``output_type`` says
+otherwise. Scoring a stream needs Arrow (``mapInPandas``): Spark 3 on Java 21+
+cannot run it, and the node says so.
+
+**From MLflow.** ``model: {source: mlflow, uri: "models:/churn_clf@champion"}`` (or
+``models:/churn_clf/3``) resolves the alias to a version through
+``settings.mlflow.tracking_uri`` and loads it as a pyfunc model (``method: predict``).
+
+**What is checked.** A pickle-based model (sklearn, joblib, pickle) loads only with
+``trust_artifact: true``: loading it runs its contents. The registry records each
+artifact's SHA-256 at registration, and a copy that no longer matches is refused.
+``ducta config validate`` warns when the model does not resolve yet — a chain may
+register it in an earlier pipeline.
+
+**What the certificate proves.** The node's ``ml.model`` entry records the source,
+name, the version the run pinned, the stage it was resolved from and the artifact's
+hash; ``ducta certify diff`` reports when two runs scored with different models.
+
+Training at Scale
+-----------------
+
+``split_dataframe`` takes a Spark DataFrame as well as a pandas one, and splits it
+without collecting it to the driver — so a training set that does not fit in
+memory never has to:
+
+.. code-block:: python
+
+   from ducta.mlrun import split_dataframe
+
+   def train(features, ml_context=None):
+       train_df, test_df = split_dataframe(features, ml_context.split, ml_context=ml_context)
+       model = pipeline.fit(train_df)               # pyspark.ml
+       ...
+
+The methods keep their guarantees: ``random`` and ``group`` assign rows by a hash
+of their content (or group) and the seed, so the assignment does not depend on
+partitioning and a group never spans two partitions; ``stratified`` takes exactly
+``test_size`` of each class; ``temporal`` cuts at the time column's quantiles.
+They are the same proportions as the pandas path, not the same rows.
+``kfold_splits`` still needs pandas.
+
+Register a ``pyspark.ml`` model with ``framework="spark-mllib"`` (the directory
+``model.save`` wrote); the registry checks its layout without loading it, and the
+serving node scores with it on Spark. For gradient boosting,
+``pip install "ducta[boost]"`` adds XGBoost and LightGBM, whose native formats
+(``.json``/``.ubj``, ``.txt``) load without trusting a pickle.
 
 Lineage & Reproducibility
 -------------------------

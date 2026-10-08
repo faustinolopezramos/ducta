@@ -116,6 +116,13 @@ class CertificateDiffQualityRow(BaseModel):
     match: bool
 
 
+class CertificateDiffModelRow(BaseModel):
+    node: str
+    model_a: Optional[str] = None
+    model_b: Optional[str] = None
+    match: bool
+
+
 class CertificateDiffResponse(BaseModel):
     """Structural diff between two Run Certificates."""
 
@@ -136,6 +143,9 @@ class CertificateDiffResponse(BaseModel):
     #: so `outputs_match`/`identical` cover only what could actually be checked.
     outputs_comparable: bool = True
     quality: List[CertificateDiffQualityRow]
+    #: The model each serving node scored with, side by side (schema >= 1.6).
+    models: List[CertificateDiffModelRow] = []
+    models_match: bool = True
     identical: bool
 
 

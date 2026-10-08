@@ -35,7 +35,9 @@ from loguru import logger  # type: ignore
 from ducta.core.context_utils import get_context_value as _ctx_get
 from ducta.setting.environments import sanitize_env_for_path
 
-SCHEMA_VERSION = "1.5"
+# 1.6: an ML node that scored with a registered model records it under ``ml.model``
+# (source, name, the version the run pinned, artifact hash).
+SCHEMA_VERSION = "1.6"
 DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
 LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
@@ -572,6 +574,9 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
             }
         )
 
+    model_rows = _model_rows(a, b)
+    models_match = all(row["match"] for row in model_rows)
+
     config_fingerprint_match = bool(a.get("config_fingerprint")) and a.get(
         "config_fingerprint"
     ) == b.get("config_fingerprint")
@@ -596,9 +601,48 @@ def diff_certificates(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
         "outputs": output_rows,
         "outputs_match": outputs_match,
         "quality": quality_rows,
+        "models": model_rows,
+        "models_match": models_match,
         "identical": pipeline_match
         and environment_match
         and status_match
         and config_fingerprint_match
-        and outputs_match,
+        and outputs_match
+        and models_match,
     }
+
+
+def _served_models(cert: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """node name → the model it scored with (schema >= 1.6)."""
+    return {
+        str(n.get("name")): n["ml"]["model"]
+        for n in cert.get("nodes", []) or []
+        if isinstance(n, dict) and isinstance(n.get("ml"), dict) and n["ml"].get("model")
+    }
+
+
+def _model_identity(model: Optional[Dict[str, Any]]) -> Optional[tuple]:
+    if not model:
+        return None
+    return (
+        model.get("source"),
+        model.get("name"),
+        model.get("version"),
+        model.get("artifact_sha256"),
+    )
+
+
+def _model_rows(a: Dict[str, Any], b: Dict[str, Any]) -> List[Dict[str, Any]]:
+    models_a, models_b = _served_models(a), _served_models(b)
+    rows = []
+    for node in sorted(set(models_a) | set(models_b)):
+        ma, mb = models_a.get(node), models_b.get(node)
+        rows.append(
+            {
+                "node": node,
+                "model_a": f"{ma.get('name')} v{ma.get('version')}" if ma else None,
+                "model_b": f"{mb.get('name')} v{mb.get('version')}" if mb else None,
+                "match": _model_identity(ma) == _model_identity(mb),
+            }
+        )
+    return rows

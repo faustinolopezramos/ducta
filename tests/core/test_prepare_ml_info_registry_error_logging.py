@@ -1,8 +1,8 @@
-"""Regression: BaseExecutor._prepare_ml_info swallowed model_registry.get_model()
-errors with a bare `except Exception: pass` — unlike every other except block in
-this file, which logs. A misconfigured registry, bad credentials, or a missing
-model version failed silently, and the pipeline ran on without ml_info["model"]
-with no trace of why.
+"""Regression: BaseExecutor._prepare_ml_info used to call
+``context.get_model_registry().get_model(...)`` — neither of which exists on the
+real context, so the lookup never ran and no node ever received a model. Models
+are now resolved per node by ``ml_stage: serving`` (``ducta.mlrun.serving``);
+pipeline preparation must not touch the registry at all.
 """
 
 from __future__ import annotations
@@ -36,28 +36,11 @@ def _executor(registry):
     return executor
 
 
-class TestModelRegistryErrorIsLogged:
-    def test_registry_error_is_logged_as_a_warning(self, monkeypatch):
-        import ducta.core.executors.base as base_module
-
-        warnings = []
-        monkeypatch.setattr(base_module.logger, "warning", lambda *a, **k: warnings.append((a, k)))
-
+class TestPipelinePreparationDoesNotLoadModels:
+    def test_registry_is_not_consulted(self):
         registry = MagicMock()
-        registry.get_model.side_effect = RuntimeError("registry unreachable")
 
-        executor = _executor(registry)
-        result = executor._prepare_ml_info("my_pipeline", None, {})
+        result = _executor(registry)._prepare_ml_info("my_pipeline", None, {})
 
+        registry.get_model.assert_not_called()
         assert "model" not in result
-        assert len(warnings) == 1
-        assert "my_pipeline" in warnings[0][0]
-
-    def test_successful_lookup_still_populates_model(self):
-        registry = MagicMock()
-        registry.get_model.return_value = "the-model"
-
-        executor = _executor(registry)
-        result = executor._prepare_ml_info("my_pipeline", None, {})
-
-        assert result["model"] == "the-model"

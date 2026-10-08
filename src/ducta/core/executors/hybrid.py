@@ -58,6 +58,7 @@ class HybridExecutor(BaseExecutor):
     ) -> Dict[str, Any]:
         self._mlops_pipeline_name = pipeline_name
         self.node_executor.pipeline_name = pipeline_name
+        self.node_executor.begin_run()
         logger.info("Executing hybrid pipeline: {}", pipeline_name)
 
         pipeline = self._get_pipeline_config(pipeline_name)

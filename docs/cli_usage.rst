@@ -150,6 +150,11 @@ default, so everything below applies to it too.
      - A churn model: Spark features, scikit-learn training, the split and
        hyperparameters declared in the pipeline file, a seeded run, and a
        baseline gate before the model is registered. Needs ``ducta[spark,mlops]``.
+   * - ``ml_scoring``
+     - Train and promote a model, then score new data with it: a ``serving`` node
+       with no code, prediction checks against the validation scores, and the
+       model version in the run certificate. Run ``train``, then ``score``. Needs
+       ``ducta[spark,mlops]``.
    * - ``hybrid_basic``
      - One ``type: hybrid`` pipeline: a batch node builds a dimension table, then
        a streaming query enriches orders against it (stream-static join). Runs
@@ -171,7 +176,7 @@ comments).
    ducta config list-pipelines [--env ENV] [--filter TEXT] [--format table|json|list]
    ducta config pipeline-info --pipeline NAME [--env ENV]
    ducta config schema [--out DIR]
-   ducta config show [--env ENV] [--pipeline NAME] [--format yaml|toml|json] [--engine]
+   ducta config show [--env ENV] [--pipeline NAME] [--format yaml|toml|json] [--engine | --ml]
    ducta config explain PATH [--env ENV]
    ducta config diff ENV_A ENV_B
    ducta config convert --to yaml|toml|json --out DIR
@@ -184,12 +189,15 @@ comments).
   completion.
 - ``show`` prints the project as it resolves for an environment — templates,
   defaults and overrides applied — in any of the three formats; ``--engine``
-  prints the five documents the engine reads.
+  prints the five documents the engine reads; ``--ml`` prints what each ML node will
+  be given (its split and where it was declared, whether it must apply it, its merged
+  hyperparameters and model version — see :doc:`mlops`).
 - ``explain`` says where one value comes from (file, template, defaults or
   environment), with the file and line of each step.
 - ``diff`` lists every value that differs between two environments.
 - ``convert`` rewrites the configuration files in another format, in a new
   directory; comments are not carried over.
+
 ``ducta stream`` — streaming pipelines
 --------------------------------------
 

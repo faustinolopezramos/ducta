@@ -21,6 +21,10 @@ const scope = ({ env, pipelineName, project }: ScopeKey = {}) =>
 
 export const qk = {
   platform: () => ["platform"] as const,
+  /** The signed-in user: not scoped to a source, it is the same everywhere. */
+  auth: {
+    me: () => ["auth", "me"] as const,
+  },
   source: () => ["source", sourceKey()] as const,
   workspaceBrowse: (cwd: string | null | undefined) => ["workspace-browse", cwd] as const,
   environments: (project?: string) => ["environments", sourceKey(), project ?? null] as const,
@@ -52,6 +56,8 @@ export const qk = {
       ["server-projects", sourceKey(), projectId, "pipelines", name] as const,
     dependencies: (projectId: string) =>
       ["server-projects", sourceKey(), projectId, "dependencies"] as const,
+    mlPlan: (projectId: string, pipeline: string, env: string) =>
+      ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "ml-plan", env] as const,
     datasets: (projectId: string) =>
       ["server-projects", sourceKey(), projectId, "datasets"] as const,
     nodeSchemas: (projectId: string, pipeline: string) =>
@@ -73,6 +79,7 @@ export const qk = {
     detail: (executionId: string) => ["executions", sourceKey(), executionId] as const,
     logs: (executionId: string) => ["executions", sourceKey(), executionId, "logs"] as const,
     errors: (executionId: string | null | undefined) => ["executions", sourceKey(), executionId, "errors"] as const,
+    streaming: (executionId: string) => ["executions", sourceKey(), executionId, "streaming"] as const,
   },
 
   files: {

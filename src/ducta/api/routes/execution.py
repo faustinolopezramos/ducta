@@ -31,6 +31,7 @@ from fastapi import (  # type: ignore
     WebSocket,
     WebSocketDisconnect,
 )
+from fastapi.concurrency import run_in_threadpool
 from loguru import logger  # type: ignore
 
 from ducta.api.config import Settings, get_settings
@@ -56,6 +57,7 @@ from ducta.api.models.execution import (
     ExecutionResponse,
     LogEntry,
     QueueStatusResponse,
+    StreamingStatusResponse,
 )
 
 _WS_HEARTBEAT_INTERVAL = 30
@@ -140,6 +142,30 @@ async def get_execution(
     user_id = current_user.id if current_user else None
 
     return await exec_manager.load_execution(execution_id, user_id=user_id)
+
+
+@router.get(
+    "/{execution_id}/streaming",
+    response_model=StreamingStatusResponse,
+    dependencies=[Depends(require_permission("execution.read"))],
+    summary="The live state of an execution's streaming queries",
+    description=(
+        "For a streaming or hybrid execution that is still running: per pipeline, its "
+        "queries' state, each node's latest batch throughput and the model it scores "
+        "with. `active` is false once the execution holds no running engine."
+    ),
+)
+async def get_execution_streaming_status(
+    execution_id: str,
+    exec_manager: ExecutionManagerDep,
+    current_user: Annotated[User, Depends(get_current_user)] = None,
+) -> StreamingStatusResponse:
+    from ducta.api.services.streaming_status import streaming_status
+
+    user_id = current_user.id if current_user else None
+    await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
+    engine = exec_manager.get_active_engine(execution_id)
+    return await run_in_threadpool(streaming_status, execution_id, engine)
 
 
 @router.get(

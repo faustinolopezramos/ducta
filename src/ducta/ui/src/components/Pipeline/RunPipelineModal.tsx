@@ -4,6 +4,7 @@ import { Modal } from "../ui/Modal";
 import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
 import { toastStore } from "../../hooks/useModalStack";
+import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import { useSourceStore } from "../../store/workspace";
 import { useEnvironments } from "../../api/queries";
 import { useExecutePipeline, apiErrorMessage } from "../../api/mutations";
@@ -27,6 +28,7 @@ export function RunPipelineModal({
   const { data: envsData } = useEnvironments();
   const envs: string[] = envsData?.environments?.length ? envsData.environments : [defaultEnv];
   const [env, setEnv] = useState(defaultEnv);
+  const canRun = usePermission("pipeline.execute");
   const execute = useExecutePipeline();
 
   const submit = () => {
@@ -67,7 +69,8 @@ export function RunPipelineModal({
             variant="primary"
             size="sm"
             onClick={submit}
-            disabled={execute.isPending}
+            disabled={execute.isPending || !canRun}
+            title={canRun ? undefined : requiresPermission("pipeline.execute")}
             leftIcon={<IconPlayerPlay size={15} />}
           >
             {execute.isPending ? "Starting…" : "Run"}

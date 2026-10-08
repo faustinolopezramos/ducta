@@ -12,8 +12,10 @@ import { formatRelative } from "../../utils/timeLabels";
 interface ProjectsBoardProps {
   projects: ProjectSummary[];
   activity: Map<string, ProjectActivity>;
-  onDelete: (projectId: string) => void;
-  onCreate: () => void;
+  /** Omitted when the user may not delete projects: the delete control is not shown. */
+  onDelete?: (projectId: string) => void;
+  /** Omitted when the user may not create projects: the create action is not shown. */
+  onCreate?: () => void;
 }
 
 /**
@@ -42,9 +44,11 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
         title="No projects yet"
         description="Create a project to start building pipelines — empty, or from a template with a medallion layout ready to run."
         action={
-          <Button variant="primary" onClick={onCreate} leftIcon={<IconPlus size={16} stroke={1.75} />}>
-            New project
-          </Button>
+          onCreate && (
+            <Button variant="primary" onClick={onCreate} leftIcon={<IconPlus size={16} stroke={1.75} />}>
+              New project
+            </Button>
+          )
         }
       />
     );
@@ -80,14 +84,16 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
                   )}
                 </div>
               </Link>
-              <button
-                type="button"
-                className="dash-project-card-delete"
-                aria-label={`Delete ${project.name}`}
-                onClick={() => onDelete(project.id)}
-              >
-                <IconX size={14} stroke={1.8} />
-              </button>
+              {onDelete && (
+                <button
+                  type="button"
+                  className="dash-project-card-delete"
+                  aria-label={`Delete ${project.name}`}
+                  onClick={() => onDelete(project.id)}
+                >
+                  <IconX size={14} stroke={1.8} />
+                </button>
+              )}
             </li>
           );
         })}

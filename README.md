@@ -227,7 +227,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.5",
+  "schema_version": "1.6",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -235,7 +235,7 @@ flowchart LR
   "started_at": "2026-01-01T09:00:00+00:00",
   "ended_at": "2026-01-01T09:01:12+00:00",
   "duration_seconds": 72.418,
-  "ducta_version": "0.3.0",
+  "ducta_version": "0.2.0",
   "config_fingerprint": "sha256:6c1f…",     // the config this ran with
   "environment": {                           // where it ran
     "python_version": "3.12.4", "os_info": "Linux 6.8.0",
@@ -340,7 +340,7 @@ it ran correctly.** An honest comparison:
 | **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
 | **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
 | **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
-| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.3.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.2.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
 
 **Where Ducta is genuinely different:** the run certificate. Most tools can
 tell you a job succeeded. Ducta gives you a portable, self-hashed and

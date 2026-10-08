@@ -184,6 +184,7 @@ class CoreSettings:
     # ── MLOps ────────────────────────────────────────────────────────────────
     mlops_enabled: bool = True
     mlops_required: bool = False
+    split_enforcement: str = "error"
     mlflow_enabled: bool = False
     fingerprint_policy: str = "record"
 
@@ -275,6 +276,11 @@ class CoreSettings:
             ),
             mlops_enabled=cls._resolve_mlops_enabled(gs, mlops_section),
             mlops_required=coerce_bool("mlops_required", gs.get("mlops_required"), default=False),
+            split_enforcement=(
+                "warn"
+                if str(gs.get("split_enforcement") or "").strip().lower() == "warn"
+                else "error"
+            ),
             mlflow_enabled=cls._resolve_mlflow_enabled(mlflow_section),
             fingerprint_policy=str(gs.get("fingerprint_policy") or "record"),
             evidence_level=evidence_level,

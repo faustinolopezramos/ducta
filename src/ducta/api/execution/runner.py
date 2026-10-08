@@ -152,8 +152,8 @@ def _absolutize_path_value(value: Any, base_dir: Path) -> Optional[str]:
     if not isinstance(value, str):
         return None
     raw_value = value.strip()
-    if not raw_value or _looks_like_uri(raw_value):
-        return value
+    if not raw_value or _looks_like_uri(raw_value) or "${" in raw_value:
+        return value  # a URI, or a placeholder resolved later
     candidate = Path(raw_value)
     if candidate.is_absolute():
         return str(candidate)
@@ -215,6 +215,26 @@ def normalize_execution_context_paths(ctx: Any, base_dir: Path) -> None:
         path_keys=("filepath", "path", "checkpointLocation", "schemaLocation"),
         base_dir=base_dir,
     )
+    # A stream node declares its source, sink and checkpoint inline rather than in
+    # the catalog. Spark resolves a relative path against the JVM's working
+    # directory, fixed when the server's first session started — so once the
+    # server has run another project, `data/events` points into that one.
+    nodes_config = getattr(ctx, "nodes_config", None)
+    if isinstance(nodes_config, dict):
+        _normalize_config_mapping(
+            {
+                name: node
+                for name, node in nodes_config.items()
+                if isinstance(node, dict) and node.get("type") == "streaming"
+            },
+            path_keys=(
+                "path",
+                "checkpoint_location",
+                "checkpointLocation",
+                "schemaLocation",
+            ),
+            base_dir=base_dir,
+        )
 
 
 def select_execution_cwd(source_path: Path, env_dir: Path, ctx: Any) -> Path:

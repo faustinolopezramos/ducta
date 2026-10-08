@@ -3,6 +3,7 @@ import { IconPlus } from "@tabler/icons-react";
 import { useDeleteServerProject, useExecutionList } from "../api/queries";
 import { useSchedules } from "../api/schedulesApi";
 import { toastStore } from "../hooks/useModalStack";
+import { usePermission } from "../hooks/usePermission";
 import { Button, ConfirmDialog, PageContainer, PageHeader } from "./ui";
 import type { ProjectSummary } from "../types";
 import { activityWindowStart, nextScheduledRun, summarizeRuns, type RunLike } from "../utils/dashboardStats";
@@ -48,6 +49,9 @@ export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
 
   const projectToDelete = projects.find((project) => project.id === confirmDelete);
 
+  // Creating and deleting projects needs project.write; a viewer sees the board only.
+  const canWrite = usePermission("project.write");
+
   const handleDelete = () => {
     if (!projectToDelete) return;
     deleteProject.mutate(
@@ -74,13 +78,15 @@ export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
             : "What is running, what needs attention, and every project in this workspace."
         }
         actions={
-          <Button
-            variant="primary"
-            onClick={() => setNewProjectOpen(true)}
-            leftIcon={<IconPlus size={16} stroke={1.75} />}
-          >
-            New project
-          </Button>
+          canWrite && (
+            <Button
+              variant="primary"
+              onClick={() => setNewProjectOpen(true)}
+              leftIcon={<IconPlus size={16} stroke={1.75} />}
+            >
+              New project
+            </Button>
+          )
         }
       />
 
@@ -102,8 +108,8 @@ export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
         <ProjectsBoard
           projects={projects}
           activity={stats.byProject}
-          onDelete={setConfirmDelete}
-          onCreate={() => setNewProjectOpen(true)}
+          onDelete={canWrite ? setConfirmDelete : undefined}
+          onCreate={canWrite ? () => setNewProjectOpen(true) : undefined}
         />
       </div>
 

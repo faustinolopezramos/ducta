@@ -45,6 +45,12 @@
   border-color: var(--status-success-border);
 }
 
+.cert-mode-chip--failed {
+  color: var(--status-failed-fg);
+  background: var(--status-failed-bg);
+  border-color: var(--status-failed-border);
+}
+
 .cert-mode-chip--weak {
   color: var(--status-warning-fg);
   background: var(--status-warning-bg);

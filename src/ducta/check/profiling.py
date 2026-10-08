@@ -79,6 +79,9 @@ NOT_INFERABLE_CHECKS = (
     "dataset_completeness",
     "freshness",
     "statistical",
+    "prediction_rate",
+    "prediction_contract",
+    "prediction_drift",
 )
 
 _NUMERIC_HINTS = ("int", "float", "double", "decimal", "long", "short", "byte", "number")

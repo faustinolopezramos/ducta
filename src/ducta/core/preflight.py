@@ -83,6 +83,70 @@ def _is_ingestion_node(node_config: Dict[str, Any]) -> bool:
     return str(node_config.get("type", "")).lower() == "ingestion"
 
 
+def _check_ml_contract(
+    report: PreflightReport,
+    context: Any,
+    pipeline_name: str,
+    pipeline_split: Any,
+    node_configs: Dict[str, Dict[str, Any]],
+    loader: Any,
+) -> None:
+    """A declared split must have a node bound to apply it, and that node must be able to.
+
+    Both are known before any data is read: who is bound comes from `ml_stage` and
+    `split`, and whether the function can receive `ml_context` from its signature.
+    Under `split_enforcement: warn` they are warnings; otherwise errors, because the run
+    would fail on them anyway — after the nodes before had already done their work.
+    """
+    from ducta.core.commands import _accepts_ml_context
+    from ducta.core.ml_contract import describe_split, must_apply_split, node_split
+    from ducta.core.settings import CoreSettings
+
+    flag = (
+        report.warn
+        if CoreSettings.from_context(context).split_enforcement == "warn"
+        else report.error
+    )
+
+    for name, cfg in node_configs.items():
+        own = node_split(cfg)
+        if own:
+            try:
+                validate_split_config(own, _PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL)
+            except SplitValidationError as e:
+                report.error(f"Node '{name}': invalid split config — {e}")
+
+    if pipeline_split and not any(
+        must_apply_split(cfg, pipeline_split) and not node_split(cfg)
+        for cfg in node_configs.values()
+    ):
+        flag(
+            f"Pipeline '{pipeline_name}' declares a split ({describe_split(pipeline_split)}) but "
+            "no node is bound to apply it, so nothing guarantees the model is fitted and scored "
+            "on it. Mark the node that trains with `ml_stage: training` (or `evaluation`), or "
+            "move the split onto that node."
+        )
+
+    for name, cfg in node_configs.items():
+        if (
+            _is_streaming_node(cfg)
+            or _is_ingestion_node(cfg)
+            or not must_apply_split(cfg, pipeline_split)
+        ):
+            continue
+        try:
+            func = loader.load({**cfg, "name": name})
+            accepts = _accepts_ml_context(func)
+        except Exception:  # noqa: BLE001 — an unloadable function is reported elsewhere
+            continue
+        if not accepts:
+            flag(
+                f"Node '{name}' must apply a train/test split, but its function takes no "
+                "`ml_context`, so it can never receive it. Add `ml_context=None` to its "
+                "parameters and call `split_dataframe(df, ml_context.split, ml_context=ml_context)`."
+            )
+
+
 def _check_ingestion_node(
     report: PreflightReport, node_name: str, node_config: Dict[str, Any]
 ) -> None:
@@ -262,6 +326,7 @@ _EXTRA_NODE_KEYS = frozenset(
         "split",  # core.executors.base._get_pipeline_split_config
         "hyperparams",  # core.commands.MLNodeCommand
         "model_version",  # core.execution.output.OutputWriter.save
+        "model",  # core.execution.ml_builder.MLContextBuilder.serving_model
         "execution_mode",  # core.commands (vectorized execution)
         "execution_mode_max_rows",  # core.commands._guarded_to_pandas
         "metrics",  # setting.contexts.MLConfigMixin.get_node_ml_config
@@ -409,6 +474,48 @@ def _check_profiles(report: PreflightReport, context: Any) -> None:
                 f"Quality profile '{profile_name}'",
                 profile.get("checks") or {},
             )
+
+
+def _check_serving_models(
+    report: PreflightReport, context: Any, node_configs: Dict[str, Dict[str, Any]]
+) -> None:
+    """A node's ``model:`` is well formed, and the registry can name the version it means.
+
+    Resolution reads metadata only — nothing is downloaded or loaded. A model that
+    is not there yet is a warning, not an error: a chain may register it in an
+    earlier pipeline of the same run.
+    """
+    from ducta.mlrun.serving import ServingError, mlflow_client_from_context, resolve_model
+    from ducta.setting.project_schema import ModelRef
+
+    registry: Any = None
+    for name, cfg in node_configs.items():
+        raw = cfg.get("model")
+        if not raw:
+            continue
+        try:
+            ref = ModelRef.model_validate(raw)
+        except Exception as e:  # noqa: BLE001 — pydantic's message names the field
+            report.error(f"Node '{name}': invalid model — {e}")
+            continue
+        try:
+            if ref.source == "ducta" and registry is None:
+                from ducta.mlrun.config import MLOpsContext
+
+                registry = MLOpsContext.from_context(context).model_registry
+            resolved = resolve_model(
+                ref,
+                registry=registry,
+                mlflow_client=mlflow_client_from_context(context)
+                if ref.source == "mlflow"
+                else None,
+            )
+        except ServingError as e:
+            report.warn(f"Node '{name}': {e}")
+        except Exception as e:  # noqa: BLE001 — an unreachable registry must not crash preflight
+            report.warn(f"Node '{name}': could not check model '{ref.name or ref.uri}' — {e}")
+        else:
+            logger.debug("Node '{}' will serve '{}' v{}", name, resolved.name, resolved.version)
 
 
 def _check_unknown_node_keys(
@@ -585,12 +692,22 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     _check_profiles(report, context)
     _check_evidence_policy(report, context)
 
-    split_config = pipeline.get("split")
+    # From pipelines_config: `context.pipelines` rebuilds each pipeline without its
+    # `split`, so reading it there meant this validation never ran.
+    raw_pipeline = (getattr(context, "pipelines_config", {}) or {}).get(pipeline_name) or {}
+    split_config = (
+        raw_pipeline.get("split") if isinstance(raw_pipeline, dict) else None
+    ) or pipeline.get("split")
+    if split_config is not None and hasattr(split_config, "model_dump"):
+        split_config = split_config.model_dump(exclude_none=True)
     if split_config:
         try:
             validate_split_config(split_config, _PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL)
         except SplitValidationError as e:
             report.error(f"Pipeline '{pipeline_name}': invalid split config — {e}")
+
+    _check_ml_contract(report, context, pipeline_name, split_config, node_configs, loader)
+    _check_serving_models(report, context, node_configs)
 
     streaming_nodes = [n for n in pipeline_nodes if _is_streaming_node(node_configs[n])]
     if streaming_nodes:
