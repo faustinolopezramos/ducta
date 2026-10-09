@@ -10,7 +10,12 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Modal, Button, Skeleton } from "../ui";
-import { useCertificate, useVerifyCertificate, type CertificateVerifyResult } from "../../api/certificatesApi";
+import {
+  isMissingCertificate,
+  useCertificate,
+  useVerifyCertificate,
+  type CertificateVerifyResult,
+} from "../../api/certificatesApi";
 import { ProofLadder } from "../Certificate/ProofLadder";
 import { StatusBadge } from "../ui/StatusBadge";
 
@@ -49,7 +54,12 @@ export function CertificateModal({
           <Skeleton variant="text" width="40%" />
         </div>
       )}
-      {error != null && <p style={{ color: "var(--danger)" }}>Could not load certificate.</p>}
+      {error != null &&
+        (isMissingCertificate(error) ? (
+          <p style={{ color: "var(--text-muted)" }}>There is no certificate for this run in this workspace.</p>
+        ) : (
+          <p style={{ color: "var(--danger)" }}>Could not load certificate.</p>
+        ))}
       {cert && (
         <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", fontFamily: "var(--font-sans)", fontSize: "var(--text-sm)" }}>

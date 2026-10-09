@@ -6,6 +6,10 @@ import {
   IconGauge,
   IconPlayerPlay,
   IconTerminal2,
+  IconTemplate,
+  IconTrash,
+  IconX,
+  IconFlask,
 } from "@tabler/icons-react";
 import { useNodeCode, type MlPlanNode, type NodeSchema } from "../../../api/queries";
 import { Button } from "../../ui/Button";
@@ -18,6 +22,15 @@ import type { DagCanvasItem } from "../types";
 import { FAILURE_STATUSES } from "../../ui/statusMeta";
 import { statusTone } from "../../ui/StatusBadge";
 import { FocusColumn, FocusPanel } from "./FocusPanel";
+import { NodeRuns } from "./NodeRuns";
+import { NodeTests } from "./NodeTests";
+import { NodeQuality } from "./NodeQuality";
+import { NodeConnection } from "./NodeConnection";
+import { CommentThreads } from "../../Comments/CommentThreads";
+import { useComments } from "../../../api/queries/comments";
+import { NodeConfig } from "./NodeConfig";
+import { DataPreview } from "./DataPreview";
+import { Tabs } from "../../ui/Tabs";
 import {
   ChecksList,
   DatasetRef,
@@ -60,7 +73,35 @@ interface NodeFocusProps {
   /** What this node is given if it is part of an ML pipeline; absent otherwise. */
   mlPlan?: MlPlanNode | null;
   splitEnforcement?: "error" | "warn" | null;
+  /** For links to runs; absent outside a project. */
+  projectId?: string;
+  /** Remove the node from its pipeline (undoable). Absent when it is not editable here. */
+  onRemoveNode?: () => void;
+  /** Move the node's configuration into a reusable node template. */
+  onExtractTemplate?: () => void;
+  /** Move it (and nodes like it) into a subpipeline. */
+  onExtractSubpipeline?: () => void;
+  /** Stop reading a dataset (undoable). */
+  onDisconnect?: (dataset: string) => void;
+  /** Why the node no longer matches its last successful run, when it does not. */
+  staleReasons?: string[];
+  /** The environment previews and effective values are shown for. */
+  activeEnv?: string;
+  /** Set one of the node's keys (null drops it back to the inherited value). */
+  onSetKey?: (key: string, value: unknown) => void;
+  /** Run it on the first rows of its inputs, writing nothing real. */
+  onRunSample?: () => void;
 }
+
+type NodeTab = "overview" | "config" | "quality" | "data" | "runs" | "comments";
+const nodeTabs = (comments: number) => [
+  { id: "overview" as const, label: "Overview" },
+  { id: "config" as const, label: "Config" },
+  { id: "quality" as const, label: "Quality" },
+  { id: "data" as const, label: "Data" },
+  { id: "runs" as const, label: "Runs" },
+  { id: "comments" as const, label: "Comments", count: comments || undefined },
+];
 
 /**
  * A node, focused: the datasets it reads and writes on either side of it, its
@@ -88,12 +129,28 @@ export function NodeFocus({
   onOpenYaml,
   mlPlan,
   splitEnforcement,
+  projectId,
+  onRemoveNode,
+  onExtractTemplate,
+  onExtractSubpipeline,
+  onDisconnect,
+  staleReasons,
+  activeEnv = "base",
+  onSetKey,
+  onRunSample,
 }: NodeFocusProps) {
-  const { data: codeData } = useNodeCode(nodeId);
+  const [tab, setTab] = useState<NodeTab>("overview");
   const isDirty = useBuilderStore((s) => s.isDirty);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
 
   const name = schema?.name ?? fallback?.name ?? nodeId;
+  // Only a node whose Python file exists has code to fetch. An ingest's schema
+  // still carries a `module` (its own name), so that is no sign — asking was a
+  // 404 per ingest node opened.
+  const hasCode = schema ? schema.file_exists : !!fallback?.module;
+  const { data: codeData } = useNodeCode(hasCode ? nodeId : "");
+  const { data: commentData } = useComments(projectId ?? "", { node: name }, !!projectId);
+  const openComments = (commentData?.threads ?? []).filter((t) => !t.resolved).length;
   const entry = [schema?.module ?? fallback?.module, schema?.fn ?? fallback?.fn].filter(Boolean).join(":");
   const description = schema?.description ?? fallback?.description;
   const status = execState ?? schema?.last_execution_status ?? null;
@@ -115,7 +172,46 @@ export function NodeFocus({
   };
 
   return (
-    <FocusPanel label={`Focus: node ${name}`} onClose={onClose}>
+    <FocusPanel
+      label={`Focus: node ${name}`}
+      onClose={onClose}
+      tabs={<Tabs items={nodeTabs(openComments)} value={tab} onChange={setTab} label="Node inspector views" />}
+    >
+      {tab === "comments" && projectId ? (
+        <CommentThreads
+          projectId={projectId}
+          filter={{ node: name }}
+          anchor={{ pipeline: pipelineId, node: name }}
+          label={`comments on ${name}`}
+        />
+      ) : tab === "quality" && projectId ? (
+        <NodeQuality
+          projectId={projectId}
+          pipeline={pipelineId}
+          node={name}
+          env={activeEnv && activeEnv !== "base" ? activeEnv : "dev"}
+          onSave={onSetKey ? (q) => onSetKey("quality", q) : undefined}
+        />
+      ) : tab === "runs" ? (
+        <>
+          <NodeRuns nodeName={name} projectId={projectId} pipelineId={pipelineId} />
+          {/* Tests call a node's function: an ingest has none (its tests and snapshot answer 404). */}
+          {projectId && hasCode && <NodeTests projectId={projectId} node={name} env={activeEnv && activeEnv !== "base" ? activeEnv : "dev"} />}
+        </>
+      ) : tab === "config" && projectId ? (
+        <>
+          <NodeConnection projectId={projectId} pipeline={pipelineId} node={name} onSet={onSetKey} />
+          <NodeConfig projectId={projectId} pipeline={pipelineId} node={name} activeEnv={activeEnv} onSet={onSetKey} />
+        </>
+      ) : tab === "data" && projectId ? (
+        <DataPreview
+          projectId={projectId}
+          inputs={inputs.map((i) => i.name)}
+          outputs={outputs.map((o) => o.name)}
+          env={activeEnv === "base" ? "dev" : activeEnv}
+        />
+      ) : (
+      <>
       <ConfirmDialog
         open={confirmRunOpen}
         title="Unsaved changes"
@@ -143,7 +239,22 @@ export function NodeFocus({
 
       <FocusColumn label="Reads" side="in" count={inputs.length}>
         {inputs.length > 0 ? (
-          inputs.map((io) => <DatasetRef key={io.id ?? io.name} item={io} onSelect={onSelectDataset} />)
+          inputs.map((io) => (
+            <div key={io.id ?? io.name} className="focus-io-editable">
+              <DatasetRef item={io} onSelect={onSelectDataset} />
+              {onDisconnect && (
+                <button
+                  type="button"
+                  className="focus-io-remove"
+                  aria-label={`Stop reading ${io.name}`}
+                  title={`Stop reading ${io.name} (undoable)`}
+                  onClick={() => onDisconnect(io.name)}
+                >
+                  <IconX size={12} />
+                </button>
+              )}
+            </div>
+          ))
         ) : (
           <p className="focus-empty">No inputs declared.</p>
         )}
@@ -168,6 +279,12 @@ export function NodeFocus({
         <h3 className="focus-title">{name}</h3>
         {entry && <div className="focus-fn">{entry}</div>}
         {description && <p className="focus-desc">{description}</p>}
+
+        {staleReasons && staleReasons.length > 0 && (
+          <div className="focus-stale" role="note">
+            <strong>Stale.</strong> {staleReasons.join("; ")}.
+          </div>
+        )}
 
         {failed && schema?.last_execution_error_message && (
           <div className="focus-alert" role="alert">
@@ -225,6 +342,18 @@ export function NodeFocus({
           >
             {isRunningThis ? "Running…" : "Run node"}
           </PermittedButton>
+          {onRunSample && (
+            <PermittedButton
+              permission="pipeline.execute"
+              variant="secondary"
+              size="sm"
+              onClick={onRunSample}
+              leftIcon={<IconFlask size={14} />}
+              title="Run on the first 100 rows of each input; outputs go to .ducta/scratch"
+            >
+              Sample
+            </PermittedButton>
+          )}
           {codeData?.code && (
             <Button
               variant="secondary"
@@ -255,6 +384,41 @@ export function NodeFocus({
               YAML
             </Button>
           )}
+          {onExtractTemplate && (
+            <PermittedButton
+              permission="pipeline.write"
+              variant="ghost"
+              size="sm"
+              onClick={onExtractTemplate}
+              leftIcon={<IconTemplate size={14} />}
+              title="Move this node's configuration into templates/nodes/ to reuse it"
+            >
+              Make template
+            </PermittedButton>
+          )}
+          {onExtractSubpipeline && (
+            <PermittedButton
+              permission="pipeline.write"
+              variant="ghost"
+              size="sm"
+              onClick={onExtractSubpipeline}
+              title="Move this node and others into templates/pipelines/ to reuse them together"
+            >
+              Make subpipeline
+            </PermittedButton>
+          )}
+          {onRemoveNode && (
+            <PermittedButton
+              permission="pipeline.write"
+              variant="ghost"
+              size="sm"
+              onClick={onRemoveNode}
+              leftIcon={<IconTrash size={14} />}
+              title="Remove the node from its pipeline — undoable"
+            >
+              Remove
+            </PermittedButton>
+          )}
         </div>
       </article>
 
@@ -275,6 +439,8 @@ export function NodeFocus({
           <p className="focus-empty">End of what is drawn.</p>
         )}
       </FocusColumn>
+      </>
+      )}
     </FocusPanel>
   );
 }

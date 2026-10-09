@@ -134,18 +134,29 @@ class GitSyncManager:
         repo = self._require_repo()
         with self._lock:
             try:
-                if not repo.is_dirty(index=True):
-                    return False
+                # Only what is staged is committed — a dirty working tree alone
+                # is not something to commit.
+                try:
+                    if not repo.index.diff("HEAD"):
+                        return False
+                except Exception:  # noqa: BLE001 — no HEAD yet: anything in the index counts
+                    if not repo.index.entries:
+                        return False
 
-                author_name, author_email = author or (
-                    self.auto_commit_author,
-                    self.auto_commit_email,
+                from git import Actor
+
+                # The author goes on this commit only — never into the repo's
+                # config, where it would replace the user's own identity.
+                if author:
+                    name, email = author
+                else:
+                    reader = repo.config_reader()
+                    name = reader.get_value("user", "name", self.auto_commit_author)
+                    email = reader.get_value("user", "email", self.auto_commit_email)
+                actor = Actor(name, email)
+                repo.index.commit(
+                    message or "Auto: config update via API/CLI", author=actor, committer=actor
                 )
-                with repo.config_writer() as git_config:
-                    git_config.set_value("user", "name", author_name)
-                    git_config.set_value("user", "email", author_email)
-
-                repo.index.commit(message or "Auto: config update via API/CLI")
                 logger.info("Auto-committed: {msg}", msg=message)
                 return True
             except GitCommandError as e:
@@ -171,7 +182,9 @@ class GitSyncManager:
             try:
                 staged = [item.a_path for item in repo.index.diff("HEAD")]
                 unstaged = [item.a_path for item in repo.index.diff(None)]
-                untracked = [f for f in repo.untracked_files if str(f).startswith("config/")]
+                # Every untracked file: a new pipeline or source file is a change
+                # to commit as much as an edited one (format 2 has no config/).
+                untracked = list(repo.untracked_files)[:1000]
 
                 try:
                     branch = repo.active_branch.name
@@ -251,6 +264,61 @@ class GitSyncManager:
             except Exception as e:
                 logger.debug("Failed to detect external changes: {err}", err=e)
                 return False
+
+    def branches(self) -> List[Dict[str, Any]]:
+        """Local and remote-tracking branches, each with the commit it points at."""
+        repo = self._require_repo()
+        with self._lock:
+            try:
+                current = repo.active_branch.name
+            except TypeError:  # detached HEAD
+                current = None
+            out = [
+                {
+                    "name": h.name,
+                    "sha": h.commit.hexsha,
+                    "current": h.name == current,
+                    "remote": False,
+                }
+                for h in repo.heads
+            ]
+            for remote in repo.remotes:
+                for ref in remote.refs:
+                    if ref.remote_head == "HEAD":
+                        continue
+                    out.append(
+                        {
+                            "name": ref.name,
+                            "sha": ref.commit.hexsha,
+                            "current": False,
+                            "remote": True,
+                        }
+                    )
+            return out
+
+    def file_at(self, rel_path: str, rev: str) -> Optional[str]:
+        """*rel_path* as it was at commit *rev*; None when it did not exist there."""
+        repo = self._require_repo()
+        with self._lock:
+            try:
+                blob = repo.commit(rev).tree / rel_path
+            except (KeyError, ValueError):
+                return None
+            return blob.data_stream.read().decode("utf-8", "replace")
+
+    def working_diff(self, rel_path: str) -> Dict[str, str]:
+        """``{original, modified}``: *rel_path* at HEAD ("" if new) and on disk ("" if deleted)."""
+        repo = self._require_repo()
+        with self._lock:
+            try:
+                original = (
+                    (repo.head.commit.tree / rel_path).data_stream.read().decode("utf-8", "replace")
+                )
+            except (KeyError, ValueError):
+                original = ""
+        path = self.workspace_root / rel_path
+        modified = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
+        return {"original": original, "modified": modified}
 
     def get_remote_url(self) -> Optional[str]:
         if not self.is_available():

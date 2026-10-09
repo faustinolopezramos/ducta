@@ -46,7 +46,12 @@ from ducta.setting.exceptions import ConfigurationError
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context
 from ducta.setting import project_files as pf
-from ducta.setting.project_defaults import apply_defaults, resolve_extends
+from ducta.setting.project_defaults import (
+    apply_defaults,
+    resolve_extends,
+    resolve_node_templates,
+    resolve_pipeline_uses,
+)
 from ducta.setting.project_schema import (
     BUILTIN_SCORER,
     PROJECT_FORMAT_VERSION,
@@ -244,6 +249,23 @@ def read_project(root: Path, *, expand: bool = True) -> _Located:
         )
     pipelines, problems = resolve_extends(
         root, pipelines, lambda path: _read(path, ("templates", path.stem), where, root)
+    )
+    if problems:
+        raise ProjectConfigError(problems)
+    pipelines, catalog, problems = resolve_pipeline_uses(
+        root,
+        pipelines,
+        catalog,
+        lambda path: _read(path, ("templates", "pipelines", path.stem), where, root),
+        lambda path: where.get(path) or where.get(path[:-1]) or "?",
+    )
+    if problems:
+        raise ProjectConfigError(problems)
+    pipelines, problems = resolve_node_templates(
+        root,
+        pipelines,
+        lambda path: _read(path, ("templates", "nodes", path.stem), where, root),
+        lambda path: where.get(path) or where.get(path[:-1]) or "?",
     )
     if problems:
         raise ProjectConfigError(problems)

@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { colors } from "../theme/tokens";
 import { PageHeader } from "../components/ui/PageHeader";
 import { PageContainer } from "../components/ui/PageContainer";
+import type { SectionHeader } from "../components/App/SectionTabs";
 import { Button } from "../components/ui/Button";
 import { ActionButton } from "../components/ui/ActionButton";
 import { EmptyState } from "../components/ui/EmptyState";
@@ -21,7 +22,6 @@ import { toastStore } from "../hooks/useModalStack";
 import {
   IconPlus,
   IconTrash,
-  IconPlugConnected,
   IconRefresh,
   IconHistory,
   IconChevronDown,
@@ -33,6 +33,7 @@ import {
   IconCircleCheck,
   IconCircleX,
 } from "@tabler/icons-react";
+import { routes } from "../utils/routes";
 
 interface TestState {
   ok: boolean;
@@ -97,7 +98,7 @@ function ConnectionUsagePanel({ name }: { name: string }) {
         <button
           key={e.execution_id}
           onClick={() =>
-            e.project_id && navigate(`/project/${e.project_id}/pipeline/${e.pipeline_name}`)
+            e.project_id && navigate(routes.pipeline(e.project_id, e.pipeline_name))
           }
           style={{
             display: "flex",
@@ -210,7 +211,7 @@ function ConnectionRow({
   );
 }
 
-export default function IngestionPage() {
+export default function IngestionPage({ header }: { header?: SectionHeader } = {}) {
   const { data, isLoading, isError, refetch } = useConnections();
   const connections = data?.connections ?? [];
   const [modal, setModal] = useState<
@@ -227,8 +228,9 @@ export default function IngestionPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Ingestion"
-        description="Database connections and declarative ingestion nodes"
+        title={header?.title ?? "Connections"}
+        description={header?.description ?? "The databases your ingestion nodes read from."}
+        tabs={header?.tabs}
         actions={
           <Button
             variant="primary"
@@ -242,12 +244,6 @@ export default function IngestionPage() {
       />
 
       <Panel>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-          <IconPlugConnected size={16} color={colors.accent} />
-          <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text }}>
-            Connections
-          </h2>
-        </div>
 
         {isLoading && (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

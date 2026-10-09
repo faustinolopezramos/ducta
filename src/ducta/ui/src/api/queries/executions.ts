@@ -203,3 +203,93 @@ export const useExecutionStreaming = (executionId: string, enabled: boolean) =>
       query.state.data?.active === false ? false : STREAMING_POLL_MS,
     staleTime: 0,
   });
+
+export interface Diagnosis {
+  execution_id: string;
+  status: string;
+  /** code | data | quality_gate | config | infra | unknown */
+  kind: string;
+  title: string;
+  message?: string | null;
+  node?: string | null;
+  frame?: { file: string; line: number; function: string } | null;
+  what_changed?: {
+    since_run_id?: string | null;
+    since?: string | null;
+    since_commit?: string | null;
+    code: string[];
+    data: string[];
+    config: boolean;
+  } | null;
+  suggestions: string[];
+  hint?: string | null;
+}
+
+/** GET /executions/{id}/diagnosis — what kind of failure, where, and what changed. */
+export const useDiagnosis = (executionId: string, enabled = true) =>
+  useQuery<Diagnosis>({
+    queryKey: [...qk.executions.detail(executionId), "diagnosis"],
+    queryFn: () => client.get(`/executions/${executionId}/diagnosis`).then((r) => r.data),
+    enabled: !!executionId && enabled,
+    staleTime: 60 * 1000,
+  });
+
+export interface TrendPoint {
+  at: string;
+  status: string;
+  seconds?: number | null;
+}
+
+export interface PipelineMetrics {
+  pipeline: string;
+  runs: number;
+  success_rate?: number | null;
+  p50_seconds?: number | null;
+  p95_seconds?: number | null;
+  last_status?: string | null;
+  last_run_at?: string | null;
+  last_success_at?: string | null;
+  sla?: string | null;
+  /** ok | late | no_sla | unknown */
+  freshness: string;
+  trend: TrendPoint[];
+}
+
+export interface NodeMetrics {
+  node: string;
+  pipeline: string;
+  runs: number;
+  failures: number;
+  p50_seconds?: number | null;
+  p95_seconds?: number | null;
+  trend: TrendPoint[];
+}
+
+/** GET /projects/{id}/metrics — from the run certificates of `env`. */
+export const useProjectMetrics = (projectId: string, env: string, days = 30) =>
+  useQuery<{ days: number; pipelines: PipelineMetrics[]; nodes: NodeMetrics[] }>({
+    queryKey: ["server-projects", projectId, "metrics", env, days],
+    queryFn: () => client.get(`/projects/${projectId}/metrics`, { params: { env, days } }).then((r) => r.data),
+    enabled: !!projectId,
+    staleTime: 30 * 1000,
+  });
+
+export interface DebuggerInfo {
+  available: boolean;
+  reason?: string | null;
+  host: string;
+  port: number;
+  /** The project's absolute path where the API runs — breakpoints are set by it. */
+  root?: string;
+  vscode: Record<string, unknown>;
+}
+
+/** GET /projects/{id}/debugger — polled while a debug run waits for the IDE. */
+export const useDebugger = (projectId: string, poll = false) =>
+  useQuery<DebuggerInfo>({
+    queryKey: ["server-projects", projectId, "debugger"],
+    queryFn: () => client.get(`/projects/${projectId}/debugger`).then((r) => r.data),
+    enabled: !!projectId,
+    refetchInterval: poll ? 2000 : false,
+    retry: false,
+  });

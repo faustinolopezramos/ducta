@@ -65,11 +65,11 @@ export const useSaveConfig = () => {
   return useMutation({
     mutationFn: ({ env, name, content, expected_commit_sha }: SaveConfigPayload) =>
       client.put(`/configs/${env}/${name}`, { content, expected_commit_sha }).then((r) => r.data),
-    onSuccess: (data: { commit_sha?: string }) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: qk.configs.all() });
       queryClient.invalidateQueries({ queryKey: qk.git.all() });
-      const sha = data?.commit_sha ? ` · ${data.commit_sha.slice(0, 7)}` : "";
-      toastStore.getState().show(`Config saved${sha}`, "success");
+      // Saved, not committed — the status bar counts it until it is.
+      toastStore.getState().show("Config saved", "success");
     },
     onError: defaultOnError,
   });
@@ -96,15 +96,24 @@ export const useValidateConfig = () =>
 export const useWriteWorkspaceFile = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ path, content }: { path: string; content: string }) =>
-      client.put("/workspace/files/content", { path, content }),
+    mutationFn: ({ path, content, expectedVersion }: { path: string; content: string; expectedVersion?: string }) =>
+      client.put("/workspace/files/content", {
+        path,
+        content,
+        ...(expectedVersion !== undefined ? { expected_version: expectedVersion } : {}),
+      }),
     onSuccess: (_data, { path }) => {
       const dir = path.includes("/") ? path.split("/").slice(0, -1).join("/") : "";
       queryClient.invalidateQueries({ queryKey: qk.files.all() });
       queryClient.invalidateQueries({ queryKey: qk.files.content(path) });
       queryClient.invalidateQueries({ queryKey: qk.files.dir(dir) });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
     },
-    onError: defaultOnError,
+    // A conflict (409) is the editor's to show — with both versions — not a toast.
+    onError: (error, variables, context) => {
+      if ((error as { response?: { status?: number } })?.response?.status === 409) return;
+      defaultOnError(error, variables, context);
+    },
   });
 };
 

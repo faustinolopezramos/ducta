@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { Button } from "../../components/ui/Button";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { PageContainer } from "../../components/ui/PageContainer";
+import type { SectionHeader } from "../../components/App/SectionTabs";
 import { useExecutionList, type ExecutionListFilters } from "../../api/queries";
 import { useBulkCancelExecutions } from "../../api/mutations";
 import type { Execution } from "../../types";
@@ -29,7 +30,8 @@ import {
 
 const PAGE_SIZE = 50;
 
-export function ExecutionHistoryPage() {
+/** `projectId`: under a project, its runs — the filter starts there and stays editable. */
+export function ExecutionHistoryPage({ projectId, header }: { projectId?: string; header?: SectionHeader } = {}) {
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("run");
   const selectExecution = (id: string | null) => {
@@ -39,7 +41,11 @@ export function ExecutionHistoryPage() {
     setSearchParams(next, { replace: true });
   };
 
-  const [filters, setFilters] = useState<ExecutionListFilters>({});
+  // `?pipeline=` — linked from a pipeline or a node — narrows to that pipeline.
+  const [filters, setFilters] = useState<ExecutionListFilters>(() => ({
+    ...(projectId ? { project_id: projectId } : {}),
+    ...(searchParams.get("pipeline") ? { pipeline_name: searchParams.get("pipeline")! } : {}),
+  }));
   const [limit, setLimit] = useState(PAGE_SIZE);
   const [checkedIds, setCheckedIds] = useState<Set<string>>(() => new Set());
   const [certModal, setCertModal] = useState<{ projectId: string; runId: string } | null>(null);
@@ -84,17 +90,19 @@ export function ExecutionHistoryPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Execution History"
-        description="All pipeline runs — click any row to view its logs."
-        backTo="/projects"
-        backLabel="Dashboard"
+        title={header?.title ?? (projectId ? "Runs" : "All runs")}
+        description={header?.description ?? (projectId ? undefined : "Every project's runs. Click a row for its logs.")}
+        backTo={projectId ? undefined : "/projects"}
+        backLabel="Projects"
         actions={<QueueIndicator />}
+        tabs={header?.tabs}
       />
 
       <FilterBar
         filters={filters}
         onChange={setFilters}
         pipelines={pipelineNames}
+        lockedProject={projectId}
       />
 
       {filters.pipeline_name && (
@@ -140,7 +148,8 @@ export function ExecutionHistoryPage() {
           (projectId, runId) => setCertModal({ projectId, runId }),
           (id) => setExpandedId((prev) => (prev === id ? null : id)),
           expandedId,
-          sweepStats
+          sweepStats,
+          { showProject: !projectId },
         )}
         rows={executions}
         rowKey={(ex) => ex.id}

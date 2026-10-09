@@ -183,3 +183,17 @@ class TestProjectRegistry:
         """write_mode only exists on the output side, so that side must win."""
         by_name = {d.name: d for d in service.list_for_project("demo").datasets}
         assert by_name["silver.clean_results"].write_mode == "merge"
+
+
+class TestFormat2Inputs:
+    """A format-2 node reads `{param: dataset}`; the datasets are the values."""
+
+    def test_a_mapping(self):
+        assert node_io({"input": {"student": "bronze.student"}}, "input") == ["bronze.student"]
+
+    def test_a_mapping_as_a_list_item(self):
+        spec = {"inputs": [{"student": "bronze.student", "costs": "bronze.costs"}]}
+        assert node_io(spec, "input") == ["bronze.student", "bronze.costs"]
+
+    def test_outputs_are_unchanged(self):
+        assert node_io({"output": ["silver.x"]}, "output") == ["silver.x"]

@@ -61,3 +61,6 @@
     max-width: 160px;
   }
 }
+
+.ducta-breadcrumbs__switch { display: inline-flex; align-items: center; margin-left: 2px; padding: 2px; border: 0; border-radius: 4px; background: none; color: var(--text-dim); cursor: pointer; }
+.ducta-breadcrumbs__switch:hover, .ducta-breadcrumbs__switch:focus-visible { background: var(--surface-hover, var(--bg-muted)); color: var(--text); }

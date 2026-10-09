@@ -246,9 +246,9 @@ class NodeSchemaService:
         sanity = node_spec.get("sanity_checks") or node_spec.get("sanityChecks")
         dq = node_spec.get("data_quality") or node_spec.get("dataQuality")
         blocks: List[tuple[str, Dict[str, Any]]] = []
-        if isinstance(sanity, dict) and sanity.get("enabled"):
-            blocks.append(("sanity", sanity))
-        if isinstance(dq, dict) and dq.get("enabled"):
+        if isinstance(sanity, dict) and NodeSchemaService._block_on(sanity):
+            blocks.append(("sanity", NodeSchemaService._flatten_per_input(sanity)))
+        if isinstance(dq, dict) and NodeSchemaService._block_on(dq):
             blocks.append(("quality", dq))
         if not blocks:
             return None
@@ -281,6 +281,27 @@ class NodeSchemaService:
             checks=checks,
             gates=gates,
         )
+
+    @staticmethod
+    def _block_on(block: Dict[str, Any]) -> bool:
+        """On when it says so — or, as format 2 compiles it, when it declares anything
+        without ``enabled: false``."""
+        if "enabled" in block:
+            return bool(block.get("enabled"))
+        return bool(block.get("checks") or block.get("inputs"))
+
+    @staticmethod
+    def _flatten_per_input(block: Dict[str, Any]) -> Dict[str, Any]:
+        """``{inputs: {dataset: {checks: {...}}}}`` (format 2's input contracts) as one
+        ``checks`` mapping; other shapes unchanged."""
+        per_input = block.get("inputs")
+        if not isinstance(per_input, dict) or block.get("checks"):
+            return block
+        checks: Dict[str, Any] = {}
+        for entry in per_input.values():
+            if isinstance(entry, dict) and isinstance(entry.get("checks"), dict):
+                checks.update(entry["checks"])
+        return {**block, "checks": checks}
 
     @staticmethod
     def _enabled_checks(checks: Any, phase: str) -> List[QualityCheck]:

@@ -162,11 +162,15 @@ class RunLedger:
         declared), whether it was bound to apply it, whether it did, its model version
         and hyperparameters. Only ML nodes carry it.
         """
+        from datetime import datetime, timezone
+
         record = {
             "name": name,
             "type": node_type,
             "status": status,
             "duration_seconds": round(float(duration_seconds), 3),
+            # When it finished (start = this − duration): a run's timeline.
+            "ended_at": datetime.now(timezone.utc).isoformat(),
             "outputs": list(outputs or []),
             "error": error,
         }

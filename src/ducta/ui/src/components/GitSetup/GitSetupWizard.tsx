@@ -200,8 +200,8 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
         Git identity
       </h2>
       <p style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, margin: "0 0 24px" }}>
-        Every config change Ducta makes is committed to git. Set your author name and email so
-        your commits are properly attributed.
+        Ducta saves your changes as files; you commit them when you choose, from the Changes
+        panel. Set your author name and email so those commits are properly attributed.
       </p>
 
       <div style={{ marginBottom: 16 }}>

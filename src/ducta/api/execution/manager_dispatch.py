@@ -88,6 +88,10 @@ class _DispatchMixin:
         sweep_index: Optional[int] = None,
         reuse_upstream: bool = False,
         rerun_all: bool = False,
+        node_names: Optional[List[str]] = None,
+        sample_rows: Optional[int] = None,
+        debug: bool = False,
+        pause_after: Optional[List[str]] = None,
     ) -> ExecutionResponse:
         execution_id = str(uuid4())
         now = datetime.now(tz=timezone.utc)
@@ -98,6 +102,9 @@ class _DispatchMixin:
             user_id=user_id,
             project_id=project_id,
             node_name=node_name,
+            node_names=node_names,
+            sample_rows=sample_rows,
+            pause_after=pause_after,
             env=env,
             status=ExecutionStatus.PENDING,
             dry_run=dry_run,
@@ -105,6 +112,7 @@ class _DispatchMixin:
             sweep_id=sweep_id,
             sweep_index=sweep_index,
             started_at=now,
+            workspace=str(Path(source_path).resolve()),
         )
         evicted_ids = self._store.add(record)
         for evicted_id in evicted_ids:
@@ -143,6 +151,10 @@ class _DispatchMixin:
             reuse_upstream=reuse_upstream,
             rerun_all=rerun_all,
             project_id=project_id,
+            node_names=node_names,
+            sample_rows=sample_rows,
+            debug=debug,
+            pause_after=pause_after,
         )
         task = asyncio.create_task(self._run_execution(execution_id, spec))
         with self._task_lock:
@@ -300,10 +312,102 @@ class _DispatchMixin:
 
             flush_error_log(execution_id)
 
+            # Alerts (the project's `alerts:` rules), off the event loop. Sample
+            # runs are for the person running them, not for the on-call channel.
+            if spec.project_id and not spec.sample_rows:
+                from ducta.api.services.alerts import notify_run_finished
+
+                _spawn_db_task(
+                    asyncio.to_thread(
+                        notify_run_finished,
+                        spec.source_path,
+                        spec.project_id,
+                        record.model_dump(mode="json"),
+                    ),
+                    "alerts",
+                )
+
             if self._db_store is not None:
                 _spawn_db_task(self._db_store.flush_logs(execution_id), "flush_logs")
                 _spawn_db_task(self._db_store.update(record), "update")
             execution_id_var.reset(token)
+
+    # ── Data breakpoints ────────────────────────────────────────────────
+
+    def _breakpoint_events(self) -> Dict[str, threading.Event]:
+        events = getattr(self, "_paused_events", None)
+        if events is None:
+            events = {}
+            self._paused_events = events
+        return events
+
+    def wait_at_breakpoint(self, execution_id: str, node: str) -> None:
+        """Called from the run's thread after *node* succeeded: pause until resumed.
+
+        Nodes already running finish; nothing new starts. Raises when the run is
+        cancelled while paused, so it stops there.
+        """
+        gate = threading.Event()
+        try:
+            record = self._store.get(execution_id)
+        except Exception:  # noqa: BLE001 — an unknown run has nothing to pause
+            return
+        with self._execution_lock:
+            record.status = ExecutionStatus.PAUSED
+            record.paused_at = node
+        self._breakpoint_events()[execution_id] = gate
+        self.emit_execution_status(record)
+        logger.info("Paused after {}: its output is written; resume or cancel the run", node)
+        try:
+            gate.wait()
+        finally:
+            self._breakpoint_events().pop(execution_id, None)
+        with self._execution_lock:
+            if record.status == ExecutionStatus.CANCELLED:
+                raise RuntimeError(f"Run cancelled while paused after {node}")
+            record.status = ExecutionStatus.RUNNING
+            record.paused_at = None
+        self.emit_execution_status(record)
+        logger.info("Resumed after {}", node)
+
+    # ── Debug runs ──────────────────────────────────────────────────────
+
+    def set_debug_port(self, execution_id: str, port: int) -> None:
+        try:
+            record = self._store.get(execution_id)
+        except Exception:  # noqa: BLE001
+            return
+        with self._execution_lock:
+            record.debug_port = port
+        self.emit_execution_status(record)
+
+    def mark_debug_attached(self, execution_id: str) -> None:
+        attached = getattr(self, "_debug_attached", None)
+        if attached is None:
+            attached = set()
+            self._debug_attached = attached
+        attached.add(execution_id)
+
+    def debug_attached(self, execution_id: str) -> bool:
+        return execution_id in (getattr(self, "_debug_attached", None) or set())
+
+    def is_cancelled(self, execution_id: str) -> bool:
+        try:
+            return self._store.get(execution_id).status == ExecutionStatus.CANCELLED
+        except Exception:  # noqa: BLE001
+            return False
+
+    def resume(self, execution_id: str, user_id: Optional[str] = None) -> bool:
+        """Let a run paused at a breakpoint continue; False when it is not paused."""
+        with self._execution_lock:
+            record = self._get_owned(execution_id, user_id)
+            if record.status != ExecutionStatus.PAUSED:
+                return False
+        gate = self._breakpoint_events().get(execution_id)
+        if gate is None:
+            return False
+        gate.set()
+        return True
 
     def retry(
         self,
@@ -345,7 +449,11 @@ class _DispatchMixin:
         with self._execution_lock:
             record = self._get_owned(execution_id, user_id)
 
-            if record.status not in {ExecutionStatus.PENDING, ExecutionStatus.RUNNING}:
+            if record.status not in {
+                ExecutionStatus.PENDING,
+                ExecutionStatus.RUNNING,
+                ExecutionStatus.PAUSED,
+            }:
                 return False
 
             record.status = ExecutionStatus.CANCELLED
@@ -356,6 +464,10 @@ class _DispatchMixin:
 
             self._timeout_manager.cancel_handler(execution_id)
             self._execution_queue.cancel_execution(execution_id)
+            # Paused at a breakpoint: wake it so it sees the cancellation and stops.
+            gate = self._breakpoint_events().get(execution_id)
+            if gate is not None:
+                gate.set()
 
             # Retrieve the active engine and shut it down asynchronously to avoid blocking the API loop
             engine = self._active_engines.get(execution_id)

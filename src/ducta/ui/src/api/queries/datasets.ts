@@ -27,6 +27,9 @@ export interface ProjectDataset {
   declared_in: string[];
   producers: DatasetEndpoint[];
   consumers: DatasetEndpoint[];
+  description?: string | null;
+  /** The catalog entry's metadata: owner, tags, sla, pii, criticality, docs… */
+  metadata?: Record<string, unknown>;
 }
 
 export interface ProjectDatasets {

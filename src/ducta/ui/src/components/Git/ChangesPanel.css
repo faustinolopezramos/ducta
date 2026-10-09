@@ -1,0 +1,21 @@
+.changes { display: grid; grid-template-columns: minmax(240px, 320px) 1fr; gap: var(--space-3); height: calc(100vh - 120px); min-height: 0; }
+.changes__side { display: flex; flex-direction: column; gap: var(--space-2); min-height: 0; }
+.changes__branch { margin: 0; font-size: var(--text-xs); color: var(--text-muted); }
+.changes__list { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.changes__item { display: flex; align-items: center; gap: 6px; padding: 0 var(--space-2); height: var(--row-height); }
+.changes__item.is-active { background: color-mix(in srgb, var(--primary) 12%, transparent); }
+.changes__item input { accent-color: var(--primary); }
+.changes__file { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: 0; background: none; color: var(--text); cursor: pointer; text-align: left; padding: 0; }
+.changes__path { font-family: var(--font-mono); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.changes__status { width: 16px; text-align: center; font-family: var(--font-mono); font-size: 10px; font-weight: var(--weight-bold); }
+.changes__status--modified { color: var(--warning); }
+.changes__status--added, .changes__status--untracked { color: var(--success); }
+.changes__status--deleted { color: var(--danger); }
+.changes__label { font-size: var(--text-xs); color: var(--text-muted); }
+.changes__message {
+  resize: vertical; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--surface); color: var(--text); font-family: var(--font-mono); font-size: var(--text-xs);
+}
+.changes__hint { margin: 0; font-size: var(--text-2xs); color: var(--text-dim); }
+.changes__diff { min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+@media (max-width: 760px) { .changes { grid-template-columns: 1fr; height: auto; } .changes__diff { height: 50vh; } }

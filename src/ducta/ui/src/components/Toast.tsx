@@ -11,6 +11,8 @@ export interface ToastProps {
   message: string;
   type?: 'success' | 'error' | 'warn' | 'info';
   duration?: number;
+  /** A button on the toast, e.g. "Undo". Clicking it also dismisses the toast. */
+  action?: { label: string; onClick: () => void };
   onDismiss: (id: string) => void;
 }
 
@@ -24,7 +26,7 @@ const TOAST_CONFIG: Record<string, { icon: React.ReactNode }> = {
 /**
  * Individual Toast Component
  */
-export function Toast({ id, message, type = 'info', duration, onDismiss }: Readonly<ToastProps>) {
+export function Toast({ id, message, type = 'info', duration, action, onDismiss }: Readonly<ToastProps>) {
   useEffect(() => {
     if (duration && duration > 0) {
       const timer = setTimeout(() => onDismiss(id), duration);
@@ -46,6 +48,18 @@ export function Toast({ id, message, type = 'info', duration, onDismiss }: Reado
     >
       <span className="toast__icon">{cfg.icon}</span>
       <span className="toast__body">{message}</span>
+      {action && (
+        <button
+          type="button"
+          className="toast__action"
+          onClick={() => {
+            action.onClick();
+            onDismiss(id);
+          }}
+        >
+          {action.label}
+        </button>
+      )}
       <button
         onClick={() => onDismiss(id)}
         aria-label="Dismiss notification"

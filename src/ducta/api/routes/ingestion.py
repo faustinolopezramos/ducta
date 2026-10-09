@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Set
+from typing import Any, Dict, List, Set
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -117,6 +117,34 @@ async def get_connection(name: str, manager: WorkspaceManagerDep) -> ConnectionI
         return ConnectionInfo(**_service(manager).get_connection(name))
     except IngestionServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get(
+    "/connections/{name}/credentials",
+    dependencies=[Depends(require_permission("ingestion.read"))],
+    summary="Whether a connection's credentials are set — never their values",
+)
+async def get_connection_credentials(name: str, manager: WorkspaceManagerDep) -> Dict[str, Any]:
+    """`<NAME>_USER` / `<NAME>_PASSWORD`, each set or not — in the server's
+    environment or the project's `.env` — the way the engine looks them up."""
+    import os
+
+    service = _service(manager)
+    try:
+        service.get_connection(name)
+    except IngestionServiceError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    in_file: set = set()
+    if service.env_path.is_file():
+        for line in service.env_path.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and not key.startswith("#") and value.strip().strip("\"'"):
+                in_file.add(key.strip().removeprefix("export ").strip())
+    out = []
+    for var in (f"{name.upper()}_USER", f"{name.upper()}_PASSWORD"):
+        where = "environment" if os.environ.get(var) else ".env" if var in in_file else None
+        out.append({"name": var, "set": where is not None, "where": where})
+    return {"connection": name, "variables": out}
 
 
 @router.get(

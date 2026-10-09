@@ -25,3 +25,8 @@ export * from "./Skeleton";
 export * from "./PageContainer";
 export * from "./Breadcrumbs";
 export * from "./PermittedButton";
+export * from "./ResizeHandle";
+export * from "./InheritedValue";
+export * from "./Sparkline";
+export * from "./EntityChip";
+export * from "./KeyHint";

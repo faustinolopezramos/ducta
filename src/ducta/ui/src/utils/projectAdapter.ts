@@ -15,5 +15,6 @@ export function toProjectSummary(sp: WorkspaceProject): ProjectSummary {
     pipelineCount: sp.pipeline_count,
     createdAt: sp.created_at,
     updatedAt: sp.updated_at,
+    configError: sp.config_status === "invalid" ? sp.config_error ?? "The configuration does not load" : null,
   };
 }

@@ -49,6 +49,31 @@ from ducta.check.storage import (
 # ---------------------------------------------------------------------------
 
 
+#: Default quality storage, under ``${output_path}/${environment}``: visible, so a
+#: project can browse or ship its reports (see "Ducta storage convention").
+QUALITY_DIR_NAME = "quality"
+#: The pre-convention default, still used where it already holds a history.
+LEGACY_QUALITY_DIR_NAME = ".quality"
+
+
+def _default_quality_dir(env_root: Path) -> str:
+    """``<env_root>/quality``, or ``<env_root>/.quality`` if only the legacy one exists.
+
+    Baselines and score history live in this directory, so a project that already
+    has them under the old hidden name keeps using it rather than starting over.
+    Renaming the directory to ``quality`` moves the project to the new default.
+    """
+    current = env_root / QUALITY_DIR_NAME
+    legacy = env_root / LEGACY_QUALITY_DIR_NAME
+    if not current.exists() and legacy.is_dir():
+        logger.info(
+            f"Quality reports stay in legacy '{legacy}'; rename it to '{current}' "
+            "to use the current default."
+        )
+        return str(legacy)
+    return str(current)
+
+
 def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[str] = None) -> None:
     """Apply a failed gate's ``behavior``.
 
@@ -751,7 +776,7 @@ class ValidationPhaseRunner:
                         "Missing 'output_path' in global_config or 'base_path' in global_config.quality.output."
                     )
                 env = gs.get("environment", "base")
-                base_path = str(Path(global_output) / env / ".quality")
+                base_path = _default_quality_dir(Path(global_output) / env)
 
             self.workspace_path = base_path
             self.storage = storage_backend or ContextAwareStorageBackend(
@@ -1012,8 +1037,11 @@ class ValidationPhaseRunner:
             if dq_gate_result is not None and not dq_gate_result.passed:
                 _raise_or_warn_gate(dq_gate_result, dataset_name, run_id=run_id)
 
-            # Non-fail-fast mode: check for errors (AFTER gate so gate result is persisted)
-            if not self.fail_fast:
+            # Non-fail-fast mode: check for errors (AFTER gate so gate result is
+            # persisted). Not when a gate decided: as at the sanity site, its
+            # `warn_only` means "log and carry on", and raising here regardless
+            # would take the node down for failures the gate declared tolerable.
+            if not self.fail_fast and dq_gate_result is None:
                 errors = [r for r in results if r.is_error]
                 if errors:
                     raise QualityChecksFailed(results, dataset_name, run_id)

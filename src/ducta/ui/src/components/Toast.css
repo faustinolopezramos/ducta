@@ -75,3 +75,10 @@
     opacity: 1;
   }
 }
+
+.toast__action {
+  flex-shrink: 0; margin-left: auto; padding: 2px 10px; border-radius: var(--radius-sm);
+  border: 1px solid currentColor; background: transparent; color: inherit;
+  font-size: var(--text-xs); font-weight: var(--weight-semibold); cursor: pointer;
+}
+.toast__action:hover, .toast__action:focus-visible { background: var(--surface-hover); outline: none; }

@@ -11,6 +11,10 @@ import { IconFolderOff, IconPlus, IconLayoutGrid, IconSitemap } from "@tabler/ic
 import { ProjectDependenciesView } from "./DependenciesMap";
 import { NewPipelineModal } from "./NewPipelineModal";
 import { PipelinesView, type PipelineSpecLike } from "./PipelinesTable";
+import { routes } from "../../utils/routes";
+import { useProjectProblems } from "../../hooks/useProjectProblems";
+import { useApplyFix } from "../../hooks/useApplyFix";
+import { ProjectConfigErrors } from "../../components/Problems/ProjectConfigErrors";
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -59,6 +63,10 @@ export function ProjectPage() {
         />
       </div>
     );
+  }
+
+  if (currentProject.configError) {
+    return <BrokenProject projectId={projectId ?? ""} />;
   }
 
   const isMap = view === "dependencies" && Boolean(projectId);
@@ -113,7 +121,7 @@ export function ProjectPage() {
           project={currentProject}
           pipelines={pipelines}
           specs={(serverPipelines?.pipelines ?? {}) as Record<string, PipelineSpecLike | undefined>}
-          onOpen={(id) => navigate(`/project/${projectId}/pipeline/${id}`)}
+          onOpen={(id) => navigate(routes.pipeline(projectId!, id))}
           onRun={setRunPipelineId}
           onDelete={setConfirmDeleteId}
           onCreate={() => setShowCreate(true)}
@@ -127,7 +135,7 @@ export function ProjectPage() {
           onClose={() => setShowCreate(false)}
           onCreated={(name) => {
             setShowCreate(false);
-            navigate(`/project/${projectId}/pipeline/${name}`);
+            navigate(routes.pipeline(projectId!, name));
           }}
         />
       )}
@@ -151,5 +159,20 @@ export function ProjectPage() {
         onCancel={() => setConfirmDeleteId(null)}
       />
     </div>
+  );
+}
+
+
+/** The project's configuration does not load: its problems, each a way to the line. */
+function BrokenProject({ projectId }: { projectId: string }) {
+  const { problems, isChecking } = useProjectProblems(projectId, null);
+  const applyFix = useApplyFix();
+  return (
+    <ProjectConfigErrors
+      projectId={projectId}
+      problems={problems}
+      isChecking={isChecking}
+      onFix={(p) => void applyFix(projectId, p).catch(() => undefined)}
+    />
   );
 }

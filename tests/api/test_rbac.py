@@ -163,9 +163,13 @@ _OPEN = {"/api/auth/login", "/api/auth/logout", "/api/auth/refresh", "/api/certi
 _READ_ONLY_POSTS = {
     "/api/nodes/{name}/code/ast": "ast.parse of the node's source; nothing is imported",
     "/api/configs/validate": "validate_project: schema and references, no imports",
+    "/api/projects/{project_id}/validate": "validate_project on a scratch copy + ast of the "
+    "node functions; nothing is written or imported",
     "/api/quality/validate-config": "checks the quality config with load_extensions=False",
     "/api/projects/{project_id}/certificates/{run_id}/verify": "recomputes a certificate's hash",
     "/api/ingestion/connections/{name}/test": "re-tests a saved connection an editor configured",
+    "/api/projects/{project_id}/quality/failing-rows": "reads a dataset's rows, like the "
+    "preview a viewer already has; writes nothing",
 }
 
 

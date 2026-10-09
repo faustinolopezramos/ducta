@@ -1,7 +1,8 @@
-import React from "react";
+import { useLocation } from "react-router-dom";
 import { useWorkspaceSelection } from "../../hooks/useWorkspaceSelection";
-import { useSourceStore } from "../../store/workspace";
 import { useUIStore } from "../../store/uiStore";
+import { EnvSwitcher } from "../Shell/EnvSwitcher";
+import { projectIdFromPath } from "../../utils/routes";
 import {
   IconSun,
   IconMoon,
@@ -12,8 +13,9 @@ import {
 
 export function Header() {
   const { selectedSource } = useWorkspaceSelection();
-  const activeEnv = useSourceStore((s) => s.activeEnv);
+  const { pathname } = useLocation();
   const { theme, toggleTheme } = useUIStore();
+  const projectId = projectIdFromPath(pathname);
 
   return (
     <header className="ducta-header">
@@ -23,14 +25,8 @@ export function Header() {
           <span className="context-label">{selectedSource || "No workspace"}</span>
         </div>
 
-        {activeEnv && (
-          <>
-            <IconChevronRight size={14} stroke={1.5} color="var(--border-hover)" />
-            <div className="context-item env-badge">
-              {activeEnv}
-            </div>
-          </>
-        )}
+        <IconChevronRight size={14} stroke={1.5} color="var(--border-hover)" />
+        <EnvSwitcher projectId={projectId} />
       </div>
 
       <div className="header-actions">

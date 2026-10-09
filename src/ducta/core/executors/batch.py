@@ -36,6 +36,9 @@ from ducta.stream.constants import PipelineType
 class BatchExecutor(BaseExecutor):
     """Executor for batch pipelines."""
 
+    #: Set by the facade for one run: only these nodes of the pipeline.
+    node_subset: Optional[List[str]] = None
+
     def execute(
         self,
         pipeline_name: str,
@@ -149,6 +152,16 @@ class BatchExecutor(BaseExecutor):
                 self._skipped_atomic_node = {"node": node_name, "reason": str(e)}
         else:
             pipeline_nodes = extract_pipeline_nodes(pipeline)
+            if self.node_subset:
+                unknown = sorted(set(self.node_subset) - set(pipeline_nodes))
+                if unknown:
+                    raise ValueError(f"Not nodes of this pipeline: {', '.join(unknown)}")
+                pipeline_nodes = [n for n in pipeline_nodes if n in set(self.node_subset)]
+                logger.info(
+                    "Running {} of the pipeline's nodes: {}",
+                    len(pipeline_nodes),
+                    ", ".join(pipeline_nodes),
+                )
             self._execute_pipeline_nodes(pipeline_nodes, start_date, end_date, ml_info)
 
     def _execute_pipeline_nodes(
@@ -160,6 +173,20 @@ class BatchExecutor(BaseExecutor):
     ) -> None:
         """Execute all nodes in batch pipeline."""
         node_configs = self._get_node_configs(pipeline_nodes)
+        if self.node_subset:
+            # Ordering edges to nodes outside the subset do not apply: those
+            # nodes are not running, their outputs are read as materialized.
+            from ducta.setting.dependency_inference import normalize_dependencies
+
+            keep = set(pipeline_nodes)
+            pruned = {}
+            for name, cfg in node_configs.items():
+                cfg = dict(cfg)
+                for key in ("dependencies", "depends_on"):
+                    if key in cfg:
+                        cfg[key] = [d for d in normalize_dependencies(cfg[key]) if d in keep]
+                pruned[name] = cfg
+            node_configs = pruned
         PipelineValidator.validate_node_configs(pipeline_nodes, node_configs)
         PipelineValidator.validate_no_dag_cycles(pipeline_nodes, node_configs)
 

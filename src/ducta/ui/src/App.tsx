@@ -4,6 +4,7 @@ import {
   RouterProvider,
   Outlet,
   Navigate,
+  useParams,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 const ReactQueryDevtools = lazy(() => import("@tanstack/react-query-devtools").then(m => ({ default: m.ReactQueryDevtools })));
@@ -19,6 +20,8 @@ import { ProtectedRoute } from "./components/Auth/ProtectedRoute";
 import { RequireWorkspace } from "./components/Auth/RequireWorkspace";
 import { ProjectsList } from "./components/ProjectsList";
 import { ProjectPage } from "./pages/ProjectPage";
+import { ProjectOverviewPage } from "./pages/ProjectOverviewPage";
+import { RunsTabs } from "./components/App/SectionTabs";
 import { PipelinePage } from "./pages/PipelinePage";
 import { useExecutionNotifications } from "./hooks/useExecutionNotifications";
 import { useProjectList } from "./hooks/useProjects";
@@ -41,7 +44,14 @@ const CertificatesPage       = lazy(() => import("./pages/CertificatesPage")    
 const CertificateDetailPage  = lazy(() => import("./pages/CertificatesPage/CertificateDetailPage")    .then(m => ({ default: m.CertificateDetailPage })));
 const VerifyCertificatePage  = lazy(() => import("./pages/VerifyCertificatePage")                     .then(m => ({ default: m.VerifyCertificatePage })));
 
+const DatasetPage            = lazy(() => import("./pages/DatasetPage")                                .then(m => ({ default: m.DatasetPage })));
+const CodePage               = lazy(() => import("./pages/CodePage")                                   .then(m => ({ default: m.CodePage })));
+const RunPage                = lazy(() => import("./pages/RunPage")                                    .then(m => ({ default: m.RunPage })));
+const ProjectSettingsPage    = lazy(() => import("./pages/ProjectSettingsPage")                        .then(m => ({ default: m.ProjectSettingsPage })));
+
 import { useUIStore } from "./store/uiStore";
+import { routes } from "./utils/routes";
+import { LegacyRedirect, ProjectScope, ToLastProject, WithProjectParam } from "./components/App/ProjectScope";
 
 // ── Route helpers ─────────────────────────────────────────────────────────────
 
@@ -60,6 +70,31 @@ function ProjectsListRoute() {
   // the header always fell back to a generic line.
   const { selectedSource } = useWorkspaceSelection();
   return <ProjectsList workspacePath={selectedSource ?? undefined} projects={projects} />;
+}
+
+// Runs and Schedules are one rail section: one header, two tabs.
+function ProjectRunsRoute() {
+  const { projectId = "" } = useParams<{ projectId: string }>();
+  return (
+    <ExecutionHistoryPage
+      projectId={projectId}
+      header={{ title: "Runs", tabs: <RunsTabs projectId={projectId} current="history" /> }}
+    />
+  );
+}
+
+function ProjectSchedulesRoute() {
+  const { projectId = "" } = useParams<{ projectId: string }>();
+  return (
+    <SchedulesPage
+      projectId={projectId}
+      header={{
+        title: "Runs",
+        description: "Pipelines that run on their own. Times are UTC.",
+        tabs: <RunsTabs projectId={projectId} current="schedules" />,
+      }}
+    />
+  );
 }
 
 // ── Main content shell ────────────────────────────────────────────────────────
@@ -147,21 +182,43 @@ export default function App() {
                   handle: { breadcrumb: () => "Projects" },
                   element: <ProjectsListRoute />,
                 },
-                { path: "project/:projectId", handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectPage /> },
-                { path: "project/:projectId/pipeline/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline", hideTrail: true }, element: <PipelinePage /> },
+                {
+                  path: "p/:projectId",
+                  element: <ProjectScope />,
+                  children: [
+                    { index: true, handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectOverviewPage /> },
+                    { path: "pipelines", handle: { breadcrumb: () => "Pipelines" }, element: <ProjectPage /> },
+                    { path: "pipelines/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline", hideTrail: true }, element: <PipelinePage /> },
+                    { path: "datasets/:dataset", handle: { breadcrumb: (d: any) => `Dataset: ${d?.params?.dataset}` }, element: <DatasetPage /> },
+                    { path: "code/*", handle: { breadcrumb: () => "Code", hideTrail: true }, element: <CodePage /> },
+                    { path: "runs", handle: { breadcrumb: () => "Runs" }, element: <ProjectRunsRoute /> },
+                    { path: "runs/:runId", handle: { breadcrumb: (d: any) => `Run ${d?.params?.runId?.slice(0, 8)}`, hideTrail: true }, element: <RunPage /> },
+                    { path: "quality", handle: { breadcrumb: () => "Quality" }, element: <WithProjectParam><QualityPage /></WithProjectParam> },
+                    { path: "models", handle: { breadcrumb: () => "Models" }, element: <WithProjectParam><MLOpsPage /></WithProjectParam> },
+                    { path: "schedules", handle: { breadcrumb: () => "Schedules" }, element: <ProjectSchedulesRoute /> },
+                    // Connections moved into Settings.
+                    { path: "connections", element: <LegacyRedirect to={(p) => routes.section(p.projectId!, "settings", "connections")} /> },
+                    { path: "settings", handle: { breadcrumb: () => "Settings" }, element: <ProjectSettingsPage /> },
+                    { path: "settings/:tab", handle: { breadcrumb: () => "Settings" }, element: <ProjectSettingsPage /> },
+                  ],
+                },
+                // Links written before project-scoped URLs keep working.
+                { path: "project/:projectId", element: <LegacyRedirect to={(p) => routes.project(p.projectId!)} /> },
+                { path: "project/:projectId/pipeline/:pipelineId", element: <LegacyRedirect to={(p) => routes.pipeline(p.projectId!, p.pipelineId!)} /> },
                 {
                   path: "workspace",
                   element: <WorkspaceShellWrapper />,
                   children: [
                     { path: "nodes/:name/code", element: <NodeCodePage />, handle: { breadcrumb: (d: any) => `Node: ${d?.params?.name}` } },
-                    { path: "executions", element: <ExecutionHistoryPage />, handle: { breadcrumb: () => "Executions" } },
+                    { path: "executions", element: <ExecutionHistoryPage />, handle: { breadcrumb: () => "All runs" } },
                     { path: "certificates", element: <CertificatesPage />, handle: { breadcrumb: () => "Certificates" } },
                     { path: "certificates/:projectId/:runId", element: <CertificateDetailPage />, handle: { breadcrumb: (d: any) => `Certificate ${d?.params?.runId?.slice(0, 8)}` } },
-                    { path: "quality", element: <QualityPage />, handle: { breadcrumb: () => "Quality" } },
-                    { path: "ingestion", element: <IngestionPage />, handle: { breadcrumb: () => "Ingestion" } },
+                    // Workspace-wide copies of project sections: old links land in the last project's.
+                    { path: "quality", element: <ToLastProject to={(id) => routes.section(id, "quality")} fallback={<QualityPage />} />, handle: { breadcrumb: () => "Quality" } },
+                    { path: "ingestion", element: <ToLastProject to={(id) => routes.section(id, "settings", "connections")} fallback={<IngestionPage />} />, handle: { breadcrumb: () => "Connections" } },
                     { path: "git", element: <GitPage />, handle: { breadcrumb: () => "Git" } },
-                    { path: "mlops", element: <MLOpsPage />, handle: { breadcrumb: () => "MLOps" } },
-                    { path: "schedules", element: <SchedulesPage />, handle: { breadcrumb: () => "Schedules" } },
+                    { path: "mlops", element: <ToLastProject to={(id) => routes.section(id, "models")} fallback={<MLOpsPage />} />, handle: { breadcrumb: () => "Models" } },
+                    { path: "schedules", element: <ToLastProject to={(id) => routes.section(id, "schedules")} fallback={<SchedulesPage />} />, handle: { breadcrumb: () => "Schedules" } },
                   ],
                 },
                 { path: "*", element: <Navigate to="/" replace /> },

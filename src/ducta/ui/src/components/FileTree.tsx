@@ -17,6 +17,12 @@ import { colors, styles } from "../theme/tokens";
 interface FileTreeProps {
   activePath?: string;
   onSelectFile: (path: string) => void;
+  /** Directory to show, relative to the workspace root ("" = the whole workspace). */
+  rootPath?: string;
+  /** Header label; defaults to "Workspace". */
+  title?: string;
+  /** Where "New file" puts a file, relative to `rootPath`. */
+  newFileDir?: string;
 }
 
 function FileIcon({ name }: { name: string }) {
@@ -61,7 +67,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
             display: "flex",
             alignItems: "center",
             gap: 5,
-            minHeight: 28,
+            minHeight: "var(--row-height)",
             padding: `4px 8px 4px ${indent}px`,
             color: colors.textMuted,
             fontSize: 12,
@@ -106,7 +112,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
         display: "flex",
         alignItems: "center",
         gap: 6,
-        minHeight: 28,
+        minHeight: "var(--row-height)",
         padding: `4px 8px 4px ${indent}px`,
         background: isActive ? colors.accentBg : "transparent",
         borderLeft: isActive ? `2px solid ${colors.accent}` : "2px solid transparent",
@@ -173,14 +179,20 @@ function NewFileRow({ onConfirm, onCancel }: NewFileRowProps) {
   );
 }
 
-export function FileTree({ activePath, onSelectFile }: FileTreeProps) {
+export function FileTree({
+  activePath,
+  onSelectFile,
+  rootPath = "",
+  title = "Workspace",
+  newFileDir = "nodes",
+}: FileTreeProps) {
   const [addingFile, setAddingFile] = useState(false);
-  const { data, isLoading } = useWorkspaceFiles("");
+  const { data, isLoading } = useWorkspaceFiles(rootPath);
   const { mutate: writeFile } = useWriteWorkspaceFile();
 
   const handleCreate = (name: string) => {
     if (!name) return;
-    const path = `nodes/${name}`;
+    const path = [rootPath, newFileDir, name].filter(Boolean).join("/");
     writeFile({ path, content: "" }, {
       onSuccess: () => {
         setAddingFile(false);
@@ -217,7 +229,7 @@ export function FileTree({ activePath, onSelectFile }: FileTreeProps) {
           flexShrink: 0,
         }}
       >
-        <span>Workspace</span>
+        <span>{title}</span>
         <button
           type="button"
           title="New file"

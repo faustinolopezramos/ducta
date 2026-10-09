@@ -90,6 +90,13 @@ describe("nodeIoNames", () => {
     expect(nodeIoNames({ inputs: ["a"], input: ["b"] }, "input")).toEqual(["a"]);
   });
 
+  it("reads a format-2 node's {param: dataset} inputs as the datasets", () => {
+    expect(nodeIoNames({ input: { student: "bronze.student" } }, "input")).toEqual(["bronze.student"]);
+    expect(nodeIoNames({ inputs: [{ a: "x", b: "y" }] }, "input")).toEqual(["x", "y"]);
+    // A dict keyed by dataset name keeps its keys.
+    expect(nodeIoNames({ inputs: { "bronze.a": { format: "csv" } } }, "input")).toEqual(["bronze.a"]);
+  });
+
   it("is empty for a spec that declares nothing", () => {
     expect(nodeIoNames({ module: "m" }, "input")).toEqual([]);
     expect(nodeIoNames(undefined, "input")).toEqual([]);

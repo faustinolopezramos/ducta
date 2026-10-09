@@ -151,9 +151,10 @@ export function executionColumns(
   onShowCertificate: (projectId: string, runId: string) => void,
   onToggleDetail: (id: string) => void,
   expandedId: string | null,
-  sweepStats: Map<string, SweepStats>
+  sweepStats: Map<string, SweepStats>,
+  { showProject = true }: { showProject?: boolean } = {},
 ): DataTableColumn<ExecutionListItem>[] {
-  return [
+  const columns: DataTableColumn<ExecutionListItem>[] = [
     {
       key: "status",
       header: "Status",
@@ -242,6 +243,8 @@ export function executionColumns(
       ),
     },
   ];
+  // Under a project every row is that project's: the column only repeats it.
+  return showProject ? columns : columns.filter((c) => c.key !== "project_id");
 }
 
 /** The row detail shown by DataTable's `renderRowDetail`: a quick error

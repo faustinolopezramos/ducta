@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from ducta.api.dependencies import get_current_user, get_source_path  # noqa: E402
 from ducta.api.models.auth import User  # noqa: E402
 from ducta.api.routes import certificates as certificates_route  # noqa: E402
+from ducta.api.services.run_certificates import env_runs_dir  # noqa: E402
 
 RUN_ID = "6d5b1c20e9ab41268dec6f9bbf2faef7"
 
@@ -92,13 +93,13 @@ class TestEnvRunsDir:
     def test_resolves_the_template_to_the_environment_output_dir(self, project: Path):
         (project / "data" / "dev").mkdir(parents=True)
 
-        runs_dir = certificates_route._env_runs_dir(project, "dev")
+        runs_dir = env_runs_dir(project, "dev")
 
         assert runs_dir == (project / "data" / "dev" / ".ducta" / "runs").resolve()
 
     def test_never_changes_the_server_process_cwd(self, project: Path):
         before = os.getcwd()
-        certificates_route._env_runs_dir(project, "dev")
+        env_runs_dir(project, "dev")
         assert os.getcwd() == before
 
 

@@ -1,0 +1,26 @@
+.problems { list-style: none; margin: 0; padding: 0; overflow-y: auto; height: 100%; font-size: var(--text-xs); }
+.problems--empty { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); color: var(--success); }
+.problem { display: flex; align-items: center; border-bottom: 1px solid var(--border); }
+.problem__main {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: var(--space-2);
+  min-height: var(--row-height); padding: 2px var(--space-3); border: 0; background: none;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit;
+}
+.problem__main:disabled { cursor: default; }
+.problem__main:not(:disabled):hover, .problem__main:focus-visible { background: var(--surface-hover); outline: none; }
+.problem__icon { flex-shrink: 0; }
+.problem--error .problem__icon { color: var(--danger); }
+.problem--warning .problem__icon { color: var(--warning); }
+.problem--info .problem__icon { color: var(--info); }
+.problem__message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.problem__where { flex-shrink: 0; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-2xs); }
+.problem__source {
+  flex-shrink: 0; color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: var(--tracking-wider);
+}
+.problem__fix {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; margin-right: var(--space-2);
+  padding: 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface);
+  color: var(--primary); font-size: var(--text-2xs); cursor: pointer; max-width: 260px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.problem__fix:hover, .problem__fix:focus-visible { border-color: var(--primary); outline: none; }

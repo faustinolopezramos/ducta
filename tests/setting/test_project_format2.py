@@ -229,7 +229,14 @@ def test_kind_defaults_to_transform_and_other_kinds_forbid_transform_keys():
 
 def test_json_schema_covers_every_file_kind():
     schema = json_schema()
-    assert set(schema["$defs"]) == {"project", "catalog", "pipeline", "profiles"}
+    assert set(schema["$defs"]) == {
+        "project",
+        "catalog",
+        "pipeline",
+        "profiles",
+        "node_template",
+        "pipeline_template",
+    }
 
 
 class TestLoadProject:

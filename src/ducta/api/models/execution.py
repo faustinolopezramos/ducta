@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, PrivateAttr, field_validator
 
@@ -46,6 +46,8 @@ class ExecutionStatus(str, Enum):
     #: (data absent) and from FAILED (something broke); mirrors
     #: ``ducta.core.results.RunStatus.GATE_BLOCKED``.
     GATE_BLOCKED = "gate_blocked"
+    #: Stopped at a data breakpoint, after a node, until resumed or cancelled.
+    PAUSED = "paused"
 
 
 class ExecutionResponse(BaseModel):
@@ -58,6 +60,21 @@ class ExecutionResponse(BaseModel):
     )
     project_id: Optional[str] = Field(default=None, description="Project that owns the pipeline")
     node_name: Optional[str] = Field(default=None, description="Specific node executed, if any")
+    node_names: Optional[List[str]] = Field(
+        default=None, description="The nodes run, when a run covered some of the pipeline's"
+    )
+    sample_rows: Optional[int] = Field(
+        default=None, description="Rows per input, when this was a sample run"
+    )
+    pause_after: Optional[List[str]] = Field(
+        default=None, description="Data breakpoints: the run pauses after each of these nodes"
+    )
+    paused_at: Optional[str] = Field(
+        default=None, description="The node the run is paused after, while it is paused"
+    )
+    debug_port: Optional[int] = Field(
+        default=None, description="A debug run: the 127.0.0.1 port its process listens on"
+    )
     env: str = Field(description="Environment used for execution")
     status: ExecutionStatus = Field(description="Current execution status")
     dry_run: bool = Field(default=False, description="True if this was a dry-run")
@@ -82,6 +99,15 @@ class ExecutionResponse(BaseModel):
         description=(
             "run_id of the Run Certificate emitted by this execution "
             "(fetch it via /projects/{project_id}/certificates/{run_id})"
+        ),
+    )
+    workspace: Optional[str] = Field(
+        default=None,
+        description=(
+            "The directory the run executed from. Run history is shared by every "
+            "workspace this server (and any other process using RUNS_DIR) has run, "
+            "and project ids repeat across them; this is what tells them apart. "
+            "None on records written before it existed."
         ),
     )
 
@@ -155,6 +181,35 @@ class ExecuteRequest(BaseModel):
     rerun_all: bool = Field(
         default=False,
         description="If True, force re-execution of all upstream nodes in the DAG.",
+    )
+    scope: Optional[Literal["pipeline", "selected", "from", "after", "until", "stale"]] = Field(
+        default=None,
+        description="What to run: the pipeline (default); `selected` nodes; everything "
+        "downstream `from` one node; everything a node needs and the node, stopping there "
+        "(`until` — a data breakpoint: inspect its output, then run the rest with `after`); or only the "
+        "nodes `stale` since the last successful run in `env`. Nodes outside the set are read "
+        "as last materialized.",
+    )
+    nodes: Optional[List[str]] = Field(
+        default=None, description="The nodes `selected`, or the one node `from` starts at"
+    )
+    sample_rows: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=1_000_000,
+        description="A sample run: each node reads this many rows of each input, and the "
+        "outputs, quality reports and certificate go to <output>/<env>/.ducta/scratch — real "
+        "datasets are not written.",
+    )
+    pause_after: Optional[List[str]] = Field(
+        default=None,
+        description="Data breakpoints: after each of these nodes succeeds the run pauses — its "
+        "outputs written, nothing downstream started — until POST /executions/{id}/resume.",
+    )
+    debug: bool = Field(
+        default=False,
+        description="Wait for an IDE debugger (debugpy, on 127.0.0.1) to attach before running; "
+        "breakpoints in the project's code then stop the run. Local servers only.",
     )
 
     @field_validator("start_date", "end_date", mode="before")

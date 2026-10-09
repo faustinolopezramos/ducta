@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { IconChevronUp, IconChevronDown, IconTerminal2 } from "@tabler/icons-react";
 import { useLogsStore, useLogLevelCounts } from "../../store/logsStore";
 
@@ -10,12 +11,15 @@ export function LogsStatusBar({
   nodeCount,
   open,
   onToggle,
+  diagnoseHref,
 }: {
   execStatus: string | null;
   executionStates: Record<string, string>;
   nodeCount: number;
   open: boolean;
   onToggle: () => void;
+  /** The failed run's page — why it failed and what changed. */
+  diagnoseHref?: string;
 }) {
   const levelCounts = useLogLevelCounts();
   const totalLogs = useLogsStore((s) => s.currentLogs.length);
@@ -46,7 +50,7 @@ export function LogsStatusBar({
     summary = <>Completed · <span className="sb-mono">{doneNodes}/{nodeCount}</span> nodes</>;
   }
 
-  return (
+  const bar = (
     <button
       className={`pipeline-status-bar sb-${stateClass}`}
       onClick={onToggle}
@@ -62,5 +66,12 @@ export function LogsStatusBar({
       <span className="sb-spacer" />
       {open ? <IconChevronDown size={13} /> : <IconChevronUp size={13} />}
     </button>
+  );
+  if (!diagnoseHref) return bar;
+  return (
+    <div className="pipeline-status-row">
+      {bar}
+      <Link className="pipeline-status-diagnose" to={diagnoseHref}>Diagnose →</Link>
+    </div>
   );
 }

@@ -278,7 +278,8 @@ export function NodeCodePage() {
   const { mutate: writeFile, isPending: isSaving }  = useWriteWorkspaceFile();
 
   const [isCodeDirty, setIsCodeDirty] = useState(false);
-  const returnTo = location.state?.returnTo ?? "/workspace/pipelines";
+  // No such page as /workspace/pipelines: the default sent you to "/".
+  const returnTo = location.state?.returnTo ?? "/projects";
 
   // Block in-app navigation when there are unsaved changes. `useBlocker` is
   // already an async state machine, so it drives a real dialog directly — no

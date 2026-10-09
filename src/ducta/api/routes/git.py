@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
@@ -47,11 +47,14 @@ from ducta.api.models.git import (
     RevertResponse,
 )
 from ducta.api.models.git_sync import (
+    GitChange,
+    GitChangesResponse,
     GitCommitRequest,
     GitCommitResponse,
     GitStageRequest,
     GitStageResponse,
     GitSyncStatus,
+    GitWorkingDiffResponse,
 )
 from ducta.api.utils.git_utils import safe_path
 
@@ -286,6 +289,11 @@ async def commit_changes(
 
 def _do_commit(request: GitCommitRequest, git_sync, lock_mgr) -> GitCommitResponse:
     with lock_mgr.write_lock(timeout=5.0):
+        if request.paths is not None:
+            with http_error_on(400):
+                paths = _validate_git_paths(request.paths, git_sync.workspace_root)
+            # force: a deleted file is staged as a deletion.
+            git_sync.stage_changes(paths=paths, force=True)
         author = None
         if request.author_name and request.author_email:
             author = (request.author_name, request.author_email)
@@ -301,6 +309,96 @@ def _do_commit(request: GitCommitRequest, git_sync, lock_mgr) -> GitCommitRespon
             ),
             git_status=status,
         )
+
+
+@router.get(
+    "/changes",
+    response_model=GitChangesResponse,
+    summary="Uncommitted changes in the working tree",
+    description="Every changed, added, deleted or untracked file, and whether it is staged — "
+    "what the UI's Changes panel lists before a commit.",
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_changes(git_sync: GitSyncManagerDep) -> GitChangesResponse:
+    return await run_in_threadpool(_changes, git_sync)
+
+
+def _changes(git_sync) -> GitChangesResponse:
+    if not git_sync.is_available():
+        return GitChangesResponse(available=False, branch="unknown")
+    repo = git_sync._require_repo()
+    out: dict[str, GitChange] = {}
+    _KIND = {"M": "modified", "A": "added", "D": "deleted", "R": "renamed", "T": "modified"}
+    try:
+        for d in repo.index.diff("HEAD", R=True):
+            out[d.b_path or d.a_path] = GitChange(
+                path=d.b_path or d.a_path, status=_KIND.get(d.change_type, "modified"), staged=True
+            )
+    except Exception:  # noqa: BLE001 — no HEAD yet: nothing is staged against it
+        pass
+    for d in repo.index.diff(None):
+        path = d.a_path
+        if path not in out:
+            out[path] = GitChange(
+                path=path, status=_KIND.get(d.change_type, "modified"), staged=False
+            )
+    for path in list(repo.untracked_files)[:1000]:
+        out.setdefault(path, GitChange(path=path, status="untracked", staged=False))
+    status = git_sync.status()
+    return GitChangesResponse(
+        available=True,
+        branch=status.get("branch", "unknown"),
+        changes=sorted(out.values(), key=lambda c: c.path),
+    )
+
+
+@router.get(
+    "/working-diff",
+    response_model=GitWorkingDiffResponse,
+    summary="A file at HEAD and on disk, for a side-by-side diff",
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_working_diff(path: str, git_sync: GitSyncManagerDep) -> GitWorkingDiffResponse:
+    with http_error_on(400):
+        safe_path(git_sync.workspace_root, path)
+    if not git_sync.is_available():
+        raise HTTPException(status_code=409, detail="Git is not available in this workspace")
+    result = await run_in_threadpool(git_sync.working_diff, path)
+    return GitWorkingDiffResponse(path=path, **result)
+
+
+@router.get(
+    "/branches",
+    summary="Branches (local and remote-tracking) and the commit each points at",
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_branches(git_sync: GitSyncManagerDep) -> Dict[str, Any]:
+    if not git_sync.is_available():
+        raise HTTPException(status_code=409, detail="Git is not available in this workspace")
+    return {"branches": await run_in_threadpool(git_sync.branches)}
+
+
+class GitFileAtResponse(BaseModel):
+    path: str
+    rev: str
+    exists: bool
+    content: str = ""
+
+
+@router.get(
+    "/file-at",
+    response_model=GitFileAtResponse,
+    summary="A file as it was at a commit",
+    dependencies=[Depends(require_permission("git.read"))],
+)
+async def get_file_at(path: str, rev: str, git_sync: GitSyncManagerDep) -> GitFileAtResponse:
+    with http_error_on(400):
+        safe_path(git_sync.workspace_root, path)
+        _validate_sha(rev)
+    if not git_sync.is_available():
+        raise HTTPException(status_code=409, detail="Git is not available in this workspace")
+    content = await run_in_threadpool(git_sync.file_at, path, rev)
+    return GitFileAtResponse(path=path, rev=rev, exists=content is not None, content=content or "")
 
 
 @router.post(

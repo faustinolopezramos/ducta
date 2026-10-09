@@ -43,7 +43,7 @@ describe("PipelineTopBar chain strip", () => {
     expect(within(strip).getByText("golden.transformation")).toHaveAttribute("aria-current", "page");
     expect(within(strip).getByRole("link", { name: "bronze.ingestion" })).toHaveAttribute(
       "href",
-      "/project/batch/pipeline/bronze.ingestion"
+      "/p/batch/pipelines/bronze.ingestion"
     );
     expect(within(strip).getByLabelText("failed")).toBeInTheDocument();
   });

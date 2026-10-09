@@ -8,6 +8,7 @@ import type { ProjectSummary } from "../../types";
 import { runTimestamp, type ProjectActivity } from "../../utils/dashboardStats";
 import { FAILURE_STATUSES } from "../ui/statusMeta";
 import { formatRelative } from "../../utils/timeLabels";
+import { routes } from "../../utils/routes";
 
 interface ProjectsBoardProps {
   projects: ProjectSummary[];
@@ -65,8 +66,12 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
           const lastRun = activity.get(project.id)?.lastRun ?? null;
           const failing = Boolean(lastRun && FAILURE_STATUSES.has(lastRun.status));
           return (
-            <li key={project.id} className="dash-project-card" data-health={failing ? "failing" : undefined}>
-              <Link to={`/project/${encodeURIComponent(project.id)}`} className="dash-project-card-link">
+            <li
+              key={project.id}
+              className="dash-project-card"
+              data-health={project.configError ? "invalid" : failing ? "failing" : undefined}
+            >
+              <Link to={routes.project(project.id)} className="dash-project-card-link">
                 <div className="dash-project-card-head">
                   <span className="dash-project-card-name">{project.name}</span>
                   <span className="dash-project-card-count">
@@ -74,7 +79,11 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
                   </span>
                 </div>
                 <div className="dash-project-card-foot">
-                  {lastRun ? (
+                  {project.configError ? (
+                    <span className="dash-project-card-invalid" title={project.configError}>
+                      Configuration errors — open to fix
+                    </span>
+                  ) : lastRun ? (
                     <>
                       <StatusBadge status={lastRun.status} size="sm" variant="dot" />
                       {formatRelative(lastRun.started_at ?? lastRun.finished_at)}

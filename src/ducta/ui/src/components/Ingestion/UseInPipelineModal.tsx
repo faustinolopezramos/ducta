@@ -7,6 +7,7 @@ import { toastStore } from "../../hooks/useModalStack";
 import { useServerProjects, useServerProjectPipelines } from "../../api/queries";
 import { useUpdateNode, useUpdatePipeline, apiErrorMessage } from "../../api/mutations";
 import { IconPlus } from "@tabler/icons-react";
+import { routes } from "../../utils/routes";
 
 const label: React.CSSProperties = {
   display: "block",
@@ -101,7 +102,7 @@ export function UseInPipelineModal({
         .getState()
         .show(`Ingestion node "${nodeName}" added to pipeline "${pipelineName}"`, "success");
       onClose();
-      navigate(`/project/${projectId}/pipeline/${pipelineName}`);
+      navigate(routes.pipeline(projectId, pipelineName));
     } catch (e) {
       toastStore.getState().show(apiErrorMessage(e, "Failed to create ingestion node"), "error");
     } finally {

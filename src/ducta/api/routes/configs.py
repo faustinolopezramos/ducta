@@ -45,7 +45,7 @@ def _validate_env(env: str) -> None:
 
 class ConfigUpdateRequest(BaseModel):
     content: Dict[str, Any] = Field(description="Updated config content")
-    expected_commit_sha: Optional[str] = Field(None, description="SHA for OCC validation")
+    expected_commit_sha: Optional[str] = Field(None, description="Version token for OCC validation")
 
 
 @router.get(

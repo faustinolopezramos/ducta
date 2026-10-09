@@ -17,7 +17,12 @@ export interface WorkspaceProject {
   name: string;
   description?: string;
   workspace: string;
+  /** The project directory relative to the workspace root; "" when the workspace is the project. */
+  root?: string;
   pipeline_count: number;
+  /** "invalid" when the configuration does not load; listed anyway so it can be fixed. */
+  config_status?: "ok" | "invalid";
+  config_error?: string | null;
   variables: Record<string, unknown>;
   metadata: Record<string, unknown>;
   created_at?: string;

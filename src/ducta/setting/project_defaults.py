@@ -253,3 +253,258 @@ def _pipeline_with_defaults(doc: Any, project_defaults: Dict[str, Any]) -> Any:
 
 def _dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+# ── node templates (use / with) ──────────────────────────────────────────────
+
+#: Where node templates live: ``templates/nodes/<name>.yaml``.
+NODE_TEMPLATES_DIR = "templates/nodes"
+
+#: Keys that belong to the instance, not to the node it produces.
+_USE_KEYS = ("use", "with")
+
+
+def _param_values(declared: Dict[str, Any]) -> Dict[str, Any]:
+    """A template's params as name → default: ``{type, default}`` specs or a bare default."""
+    out: Dict[str, Any] = {}
+    for key, spec in declared.items():
+        if isinstance(spec, dict) and (set(spec) <= {"type", "default", "description"}):
+            out[key] = spec.get("default", REQUIRED)
+        else:
+            out[key] = spec
+    return out
+
+
+def node_template_names(root: Path) -> List[str]:
+    folder = root / NODE_TEMPLATES_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(p.stem for p in folder.iterdir() if p.suffix.lower() in (".yaml", ".yml"))
+
+
+def resolve_node_templates(
+    root: Path,
+    pipelines: Dict[str, Dict[str, Any]],
+    read_template: Callable[[Path], Any],
+    locate: Callable[[Tuple[str, ...]], str] = lambda _p: "?",
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
+    """Expand every node's ``use`` + ``with`` (ADR 0001 §3); returns the pipelines and problems.
+
+    The template's ``node`` body, with ``${params.x}`` filled, is the base; keys set on
+    the instance win. Problems point at the instance (``file:line``) and name the template.
+    """
+    problems: List[str] = []
+    cache: Dict[str, Any] = {}
+    out: Dict[str, Dict[str, Any]] = {}
+    for pname, doc in pipelines.items():
+        nodes = doc.get("nodes") if isinstance(doc, dict) else None
+        if not isinstance(nodes, dict) or not any(
+            isinstance(n, dict) and "use" in n for n in nodes.values()
+        ):
+            out[pname] = doc
+            continue
+        new_nodes: Dict[str, Any] = {}
+        for nname, node in nodes.items():
+            if not isinstance(node, dict) or "use" not in node:
+                new_nodes[nname] = node
+                continue
+            at = f"{locate(('pipelines', pname, 'nodes', nname, 'use'))} node '{nname}'"
+            ref = node.get("use")
+            if not isinstance(ref, str) or not ref.strip() or "/" in ref or ".." in ref:
+                problems.append(f"{at}: use must name a template in {NODE_TEMPLATES_DIR}/")
+                continue
+            path = with_a_suffix(root, f"{NODE_TEMPLATES_DIR}/{ref}")
+            if not path.is_file():
+                known = node_template_names(root)
+                close = difflib.get_close_matches(ref, known, n=1)
+                hint = f" — did you mean '{close[0]}'?" if close else ""
+                problems.append(
+                    f"{at}: uses '{ref}', but {NODE_TEMPLATES_DIR}/{ref}.yaml does not exist{hint}"
+                )
+                continue
+            if ref not in cache:
+                cache[ref] = read_template(path)
+            template = cache[ref]
+            if not isinstance(template, dict) or not isinstance(template.get("node"), dict):
+                problems.append(f"{at}: template '{ref}' must be a mapping with a 'node' block")
+                continue
+            if "use" in template["node"]:
+                problems.append(
+                    f"{at}: template '{ref}' uses another template; templates cannot chain"
+                )
+                continue
+            declared = template.get("params") or {}
+            supplied = node.get("with") or {}
+            if not isinstance(declared, dict) or not isinstance(supplied, dict):
+                problems.append(f"{at}: 'with' and the template's params must be mappings")
+                continue
+            values = {**_param_values(declared), **supplied}
+            bad = False
+            for key in supplied:
+                if key not in declared:
+                    close = difflib.get_close_matches(str(key), [str(k) for k in declared], n=1)
+                    hint = f" — did you mean '{close[0]}'?" if close else ""
+                    problems.append(f"{at}: template '{ref}' has no parameter '{key}'{hint}")
+                    bad = True
+            for key in dict.fromkeys(_placeholders(template["node"])):
+                if key not in values:
+                    problems.append(
+                        f"{at}: template '{ref}' uses ${{params.{key}}}, which it does not declare"
+                    )
+                    bad = True
+            for key, value in values.items():
+                if value is None or value == REQUIRED:
+                    problems.append(
+                        f"{at}: template '{ref}' needs the parameter '{key}' (in 'with')"
+                    )
+                    bad = True
+            if bad:
+                continue
+            try:
+                body = _substitute(template["node"], values)
+            except ValueError as e:
+                problems.append(f"{at}: template '{ref}': {e}")
+                continue
+            own = {k: v for k, v in node.items() if k not in _USE_KEYS}
+            new_nodes[nname] = _merge(body, own)
+        out[pname] = {**doc, "nodes": new_nodes}
+    return out, problems
+
+
+# ── subpipelines (use: pipeline:<name>) ──────────────────────────────────────
+
+#: Where subpipelines live: ``templates/pipelines/<name>.yaml``.
+PIPELINE_TEMPLATES_DIR = "templates/pipelines"
+PIPELINE_PREFIX = "pipeline:"
+
+
+def pipeline_template_names(root: Path) -> List[str]:
+    folder = root / PIPELINE_TEMPLATES_DIR
+    if not folder.is_dir():
+        return []
+    return sorted(p.stem for p in folder.iterdir() if p.suffix.lower() in (".yaml", ".yml"))
+
+
+def resolve_pipeline_uses(
+    root: Path,
+    pipelines: Dict[str, Dict[str, Any]],
+    catalog: Dict[str, Any],
+    read_template: Callable[[Path], Any],
+    locate: Callable[[Tuple[str, ...]], str] = lambda _p: "?",
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any], List[str]]:
+    """Expand every ``use: pipeline:<name>`` node into the subpipeline's nodes.
+
+    The subpipeline (``templates/pipelines/<name>.yaml``: ``params``, ``nodes`` and
+    an optional ``catalog`` for the datasets it writes) is filled with the
+    instance's ``with`` and takes the instance's place, in order. Its catalog
+    entries join the project's; an entry that clashes with a different one is a
+    problem, never a silent overwrite.
+    """
+    problems: List[str] = []
+    cache: Dict[str, Any] = {}
+    catalog = dict(catalog)
+    out: Dict[str, Dict[str, Any]] = {}
+    for pname, doc in pipelines.items():
+        nodes = doc.get("nodes") if isinstance(doc, dict) else None
+        if not isinstance(nodes, dict) or not any(
+            isinstance(n, dict) and str(n.get("use", "")).startswith(PIPELINE_PREFIX)
+            for n in nodes.values()
+        ):
+            out[pname] = doc
+            continue
+        new_nodes: Dict[str, Any] = {}
+        for iname, node in nodes.items():
+            if not (
+                isinstance(node, dict) and str(node.get("use", "")).startswith(PIPELINE_PREFIX)
+            ):
+                if iname in new_nodes:
+                    problems.append(
+                        f"{locate(('pipelines', pname, 'nodes', iname))} node '{iname}' is defined twice"
+                    )
+                new_nodes[iname] = node
+                continue
+            at = f"{locate(('pipelines', pname, 'nodes', iname, 'use'))} node '{iname}'"
+            ref = str(node["use"])[len(PIPELINE_PREFIX) :].strip()
+            extra = sorted(set(node) - {"use", "with", "description"})
+            if extra:
+                problems.append(
+                    f"{at}: a subpipeline instance takes only use and with, not {', '.join(extra)}"
+                )
+                continue
+            if not ref or "/" in ref or ".." in ref:
+                problems.append(f"{at}: use must name a subpipeline in {PIPELINE_TEMPLATES_DIR}/")
+                continue
+            path = with_a_suffix(root, f"{PIPELINE_TEMPLATES_DIR}/{ref}")
+            if not path.is_file():
+                close = difflib.get_close_matches(ref, pipeline_template_names(root), n=1)
+                hint = f" — did you mean '{close[0]}'?" if close else ""
+                problems.append(
+                    f"{at}: uses 'pipeline:{ref}', but {PIPELINE_TEMPLATES_DIR}/{ref}.yaml does not exist{hint}"
+                )
+                continue
+            if ref not in cache:
+                cache[ref] = read_template(path)
+            template = cache[ref]
+            if not isinstance(template, dict) or not isinstance(template.get("nodes"), dict):
+                problems.append(f"{at}: subpipeline '{ref}' must be a mapping with 'nodes'")
+                continue
+            if any(
+                isinstance(n, dict) and str(n.get("use", "")).startswith(PIPELINE_PREFIX)
+                for n in template["nodes"].values()
+            ):
+                problems.append(
+                    f"{at}: subpipeline '{ref}' uses another subpipeline; they cannot nest"
+                )
+                continue
+            declared = template.get("params") or {}
+            supplied = node.get("with") or {}
+            if not isinstance(declared, dict) or not isinstance(supplied, dict):
+                problems.append(f"{at}: 'with' and the subpipeline's params must be mappings")
+                continue
+            values = {**_param_values(declared), **supplied}
+            bad = False
+            for key in supplied:
+                if key not in declared:
+                    close = difflib.get_close_matches(str(key), [str(k) for k in declared], n=1)
+                    hint = f" — did you mean '{close[0]}'?" if close else ""
+                    problems.append(f"{at}: subpipeline '{ref}' has no parameter '{key}'{hint}")
+                    bad = True
+            body = {k: template.get(k) for k in ("nodes", "catalog") if template.get(k) is not None}
+            for key in dict.fromkeys(_placeholders(body)):
+                if key not in values:
+                    problems.append(
+                        f"{at}: subpipeline '{ref}' uses ${{params.{key}}}, which it does not declare"
+                    )
+                    bad = True
+            for key, value in values.items():
+                if value is None or value == REQUIRED:
+                    problems.append(
+                        f"{at}: subpipeline '{ref}' needs the parameter '{key}' (in 'with')"
+                    )
+                    bad = True
+            if bad:
+                continue
+            try:
+                expanded = _substitute(body, values)
+            except ValueError as e:
+                problems.append(f"{at}: subpipeline '{ref}': {e}")
+                continue
+            for name, entry in (expanded.get("catalog") or {}).items():
+                if name in catalog and catalog[name] != entry:
+                    problems.append(
+                        f"{at}: subpipeline '{ref}' declares dataset '{name}', which the catalog "
+                        "already declares differently"
+                    )
+                    bad = True
+                else:
+                    catalog[name] = entry
+            for name, sub in expanded["nodes"].items():
+                if name in new_nodes or name in nodes and name != iname:
+                    problems.append(
+                        f"{at}: subpipeline '{ref}' adds node '{name}', which the pipeline already has"
+                    )
+                    bad = True
+                    continue
+                new_nodes[name] = sub
+        out[pname] = {**doc, "nodes": new_nodes}
+    return out, catalog, problems

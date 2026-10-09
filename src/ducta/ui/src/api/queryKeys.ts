@@ -45,6 +45,8 @@ export const qk = {
       ["git", sourceKey(), "log", { path, limit }] as const,
     commit: (sha: string) => ["git", sourceKey(), "commit", sha] as const,
     diff: (sha: string) => ["git", sourceKey(), "diff", sha] as const,
+    changes: () => ["git", sourceKey(), "changes"] as const,
+    workingDiff: (path: string) => ["git", sourceKey(), "working-diff", path] as const,
   },
 
   projects: {
@@ -64,6 +66,10 @@ export const qk = {
       ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema"] as const,
     nodeSchema: (projectId: string, pipeline: string, node: string) =>
       ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", node, "schema"] as const,
+    codeIndex: (projectId: string) =>
+      ["server-projects", sourceKey(), projectId, "code-index"] as const,
+    schema: (projectId: string) =>
+      ["server-projects", sourceKey(), projectId, "schema"] as const,
   },
 
   nodes: {

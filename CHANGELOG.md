@@ -35,6 +35,20 @@ directly.
 
 ### Changed (breaking)
 
+- **Saving from the web app or the API no longer commits.** Every write is still
+  validated against every environment before it is kept, but committing is now the
+  user's call — the web app's Changes panel, or git itself. The optimistic-concurrency
+  token (still returned as `commit_sha`, sent back as `expected_sha` /
+  `expected_commit_sha`) is now a hash of the file's content, so an uncommitted edit
+  made by someone else since you read the file is a `409` too.
+
+- **Quality reports of a pipeline run default to `<paths.output>/<env>/quality/`**, not
+  the hidden `.quality/`, so they sit next to the data and can be browsed or shipped.
+  A project whose environment already has a `.quality/` (and no `quality/`) keeps
+  using it, so its baselines and score history carry over; rename it to adopt the new
+  default. `settings.quality.output.base_path` still overrides both. `ducta quality
+  run` on a bare file still writes to `<workspace>/.quality/_adhoc/`.
+
 - **A declared train/test split is enforced.** A node bound to a split — its own
   `split:`, or the pipeline's for an `ml_stage: training`/`evaluation` node — that finishes
   without applying it (`ducta.mlrun.split_dataframe`/`kfold_splits` with its
@@ -64,6 +78,32 @@ directly.
   use `DUCTA_CERTIFICATE_KEY`.
 
 ### Added
+
+- **The web app is laid out like a code editor**: explorer, canvas or editor,
+  an inspector for the selected node or dataset (effective config per environment,
+  data preview, quality, runs, tests, connection), a bottom panel for logs and
+  problems, a command menu (⌘K / Ctrl+K) and one environment switcher for the whole
+  app. The Python editor lints with Ruff (WebAssembly, in the browser) and, when the
+  server finds one (`LSP_COMMAND`, or `basedpyright`/`pyright`/`pylsp` on the PATH),
+  talks to a language server; a debugger attaches over DAP with breakpoints.
+- **Format 2 grows, additively** (`version: 2` unchanged; ADR 0001 in `docs/adr/`):
+  recognised `metadata` keys (`owner`, `tags`, `sla`, `pii`, `criticality`, `docs`);
+  `alerts:` rules in `ducta.yaml` (`failure`, `quality_gate`, `sla_miss`, `slow`,
+  `stale` → Slack, Teams, webhook, email); node templates (`templates/nodes/`,
+  `use`/`with`) and subpipelines (`templates/pipelines/`, `use: pipeline:<name>`);
+  and a `governance:` block (`protected_environments`, warnings for a missing owner or
+  contract).
+- **An `operator` role**: runs pipelines — including in protected environments, which
+  take the new `pipeline.execute.protected` permission — and handles runs, but does
+  not change projects or code. Developers can no longer run in a protected
+  environment (`prod`, `production` by default).
+- **API for the editor and inspector**: validate unsaved edits, edit a pipeline's
+  source or apply canvas operations (with undo), extract a node template or a
+  subpipeline, node effective config, environment comparison, dataset preview, column
+  lineage for ingest nodes, quality drafts and failing rows, node tests and snapshot
+  tests, staleness since the last success, run metrics, a failed run's diagnosis,
+  comment threads (`.ducta/comments/`), alerts (`SLA_CHECK_MINUTES` for an SLA watch)
+  and governance. See `docs/server_api.rst`.
 
 - **Serving: `ml_stage: serving` scores with a registered model.** A node names its
   model — `model: {name: churn, stage: production}`, an exact `version`, or an MLflow
@@ -142,7 +182,7 @@ directly.
 
 - **`ducta init project`**: creates a project in the recommended layout
   (`--type batch|ml|streaming|hybrid`, `--format yaml|toml|json`, `--layout
-  split|single`). `ducta template --layout split` writes the same layout.
+  split|single`).
 - **A catalog split by layer**: `catalog/<layer>.yaml` (any depth, any format)
   instead of one `catalog.yaml`. A dataset declared twice, or `catalog.yaml` next to
   `catalog/`, is an error naming the files; errors and `config explain` cite the

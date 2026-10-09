@@ -31,6 +31,7 @@ import {
 } from "@tabler/icons-react";
 import { findProjectForPipeline } from "./shared";
 import { formatDate } from "../../utils/formatDate";
+import { routes } from "../../utils/routes";
 
 function RunActionsCell({
   experimentId,
@@ -61,7 +62,7 @@ function RunActionsCell({
       throw new Error(`No project contains a pipeline named '${pipelineName}'`);
     }
     await executePipeline.mutateAsync({ projectId, pipelineName });
-    navigate(`/project/${projectId}/pipeline/${pipelineName}`);
+    navigate(routes.pipeline(projectId, pipelineName));
   };
 
   return (

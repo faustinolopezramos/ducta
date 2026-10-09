@@ -12,6 +12,7 @@
 @import "./theme/pipeline-focus.css";
 @import "./theme/dashboard.css";
 @import "./theme/pipeline-chrome.css";
+@import "./theme/shell.css";
 
 #root {
   min-height: 100vh;

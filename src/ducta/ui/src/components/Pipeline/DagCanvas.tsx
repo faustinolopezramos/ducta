@@ -41,6 +41,24 @@ interface DagCanvasProps {
   selection?: CanvasSelection;
   lineage?: Lineage | null;
   onSelect?: (selection: CanvasSelection) => void;
+  /** Double-click on a node: open it (its code). */
+  onOpenNode?: (id: string) => void;
+  /**
+   * Editable canvas: dragging from a node's out handle onto another node asks
+   * for `to` to read what `from` writes. Edges still come from the data — the
+   * caller edits the pipeline and the canvas redraws.
+   */
+  onConnectNodes?: (from: string, to: string) => void;
+  /** Whether `from` → `to` may be connected (no cycle, not already connected). */
+  canConnect?: (from: string, to: string) => boolean;
+  /** Validation per node: its worst problem. */
+  designStates?: ReadonlyMap<string, "error" | "warning">;
+  /** Freshness per node against its last successful run. */
+  freshness?: Readonly<Record<string, "fresh" | "stale" | "never">>;
+  /** Open comment threads per node. */
+  comments?: ReadonlyMap<string, number>;
+  /** A search or filter is on: nodes outside this set are dimmed (not hidden — the graph keeps its shape). */
+  highlight?: ReadonlySet<string> | null;
   /** Hide the dataset chips and draw plain edges. */
   hideDatasetChips?: boolean;
   /** Receives the canvas' viewport controls once React Flow is mounted. */
@@ -51,6 +69,10 @@ interface DagCanvasProps {
   orientation?: "vertical" | "horizontal";
   /** Draw a pipeline chain as bands, one per pipeline, in execution order. */
   strata?: Strata | null;
+}
+
+function notFresh(state: "fresh" | "stale" | "never" | undefined): "stale" | "never" | undefined {
+  return state === "stale" || state === "never" ? state : undefined;
 }
 
 /** Space between two cards of the same layer, across the flow. */
@@ -161,6 +183,13 @@ function DagCanvasInner({
   selection,
   lineage,
   onSelect,
+  onOpenNode,
+  onConnectNodes,
+  canConnect,
+  designStates,
+  freshness,
+  comments,
+  highlight = null,
   hideDatasetChips = false,
   showMinimap = false,
   orientation = "vertical",
@@ -259,7 +288,9 @@ function DagCanvasInner({
           : null;
         // With a lens active, anything outside it is dimmed rather than hidden:
         // the shape of the graph stays readable while the relevant path lifts.
-        const dimmed = Boolean(lineage) && !lensDir && item.id !== selectedNodeId;
+        const dimmed =
+          (Boolean(lineage) && !lensDir && item.id !== selectedNodeId) ||
+          (highlight != null && !highlight.has(item.id));
 
         const data: DuctaNodeData = {
           item,
@@ -276,6 +307,11 @@ function DagCanvasInner({
           context: contextIds.has(item.id),
           render: renderItem,
           onSelect: selectNode,
+          onOpen: onOpenNode,
+          connectable: Boolean(onConnectNodes),
+          design: designStates?.get(item.id),
+          freshness: notFresh(freshness?.[item.id]),
+          comments: comments?.get(item.id) ?? 0,
         };
 
         return {
@@ -287,7 +323,7 @@ function DagCanvasInner({
           // are drawn from the layout's own waypoints rather than from live
           // handle positions. The layout is the source of truth here.
           draggable: false,
-          connectable: false,
+          connectable: Boolean(onConnectNodes),
           selected: item.id === selectedNodeId,
         };
       }),
@@ -302,6 +338,12 @@ function DagCanvasInner({
       contextIds,
       renderItem,
       selectNode,
+      onOpenNode,
+      onConnectNodes,
+      designStates,
+      freshness,
+      comments,
+      highlight,
     ]
   );
 
@@ -442,12 +484,19 @@ function DagCanvasInner({
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onPaneClick={() => onSelect?.(null)}
+        onNodeDoubleClick={onOpenNode ? (_e, node) => onOpenNode(node.id) : undefined}
+        zoomOnDoubleClick={!onOpenNode}
         fitView
         fitViewOptions={{ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM }}
         minZoom={0.2}
         maxZoom={1.6}
         nodesDraggable={false}
-        nodesConnectable={false}
+        nodesConnectable={Boolean(onConnectNodes)}
+        onConnect={onConnectNodes ? (c) => c.source && c.target && onConnectNodes(c.source, c.target) : undefined}
+        isValidConnection={
+          canConnect ? (c) => Boolean(c.source && c.target && c.source !== c.target && canConnect(c.source, c.target)) : undefined
+        }
+        connectionRadius={36}
         elementsSelectable
         proOptions={{ hideAttribution: false }}
       >

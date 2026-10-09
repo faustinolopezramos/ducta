@@ -21,10 +21,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from loguru import logger
 from pydantic import BaseModel, Field
 
 from ducta.api.dependencies import (
@@ -34,8 +33,8 @@ from ducta.api.dependencies import (
     WorkspaceManagerDep,
     require_permission,
 )
-from ducta.api.execution.runner import normalize_execution_context_paths, select_execution_cwd
 from ducta.api.models.execution import ExecutionResponse
+from ducta.api.services.run_certificates import candidate_runs_dirs as _candidate_runs_dirs
 from ducta.api.workspace.manager import WorkspaceManager
 from ducta.core.certificate import (
     diff_certificates,
@@ -45,8 +44,6 @@ from ducta.core.certificate import (
     resolve_signing_key_from_dir,
     verify_certificate,
 )
-from ducta.core.settings import CoreSettings
-from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
 router = APIRouter(prefix="/projects", tags=["certificates"])
 
@@ -156,12 +153,6 @@ class ReproduceRequest(BaseModel):
     end_date: Optional[str] = None
 
 
-#: Pre-convention default, relative to the project directory. Kept discoverable
-#: (read-only) so certificates written before the storage convention moved
-#: run_certificate_dir under ${output_path}/${environment} don't disappear.
-_LEGACY_RUNS_DIR = Path(".ducta") / "runs"
-
-
 def _read_certificate(path: Path) -> Dict[str, Any]:
     """Load a certificate the caller has already located; a file that exists
     but cannot be parsed is a server-side fault (500)."""
@@ -174,44 +165,6 @@ def _read_certificate(path: Path) -> Dict[str, Any]:
 def _project_dir(root: Path, project_id: str) -> Path:
     """The directory a project's runs execute from (same rule as execute/reproduce)."""
     return WorkspaceManager(root).for_project(project_id).root
-
-
-def _env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
-    """The run-certificates directory a run in *env* writes to, or None.
-
-    Resolved the way the runner resolves it before executing
-    (execution/runner.py): same context loader, same execution cwd, same path
-    normalisation — so the ``${output_path}/${environment}/.ducta/runs``
-    template lands on the directory the executor actually wrote. Nothing here
-    calls ``os.chdir``: it runs inside the server process.
-    """
-    try:
-        ctx = WorkspaceManager(project_dir).load_context(env)
-    except Exception as exc:  # noqa: BLE001 — an environment the project can't load is skipped
-        logger.debug("Could not resolve run-certificates dir for env '{}': {}", env, exc)
-        return None
-    env_dir = project_dir / env if (project_dir / env).is_dir() else project_dir
-    execution_cwd = select_execution_cwd(project_dir, env_dir, ctx)
-    normalize_execution_context_paths(ctx, execution_cwd)
-    runs_dir = Path(CoreSettings.from_context(ctx).run_certificate_dir)
-    return runs_dir if runs_dir.is_absolute() else execution_cwd / runs_dir
-
-
-def _candidate_runs_dirs(project_dir: Path, env: Optional[str]) -> List[Tuple[Optional[str], Path]]:
-    """``[(env, runs_dir), ...]`` to search: each environment's own directory
-    that exists (only *env* when given), then the legacy directory — labelled
-    ``None`` because its layout may itself nest several environments."""
-    dirs: List[Tuple[Optional[str], Path]] = []
-    seen: set = set()
-    for candidate_env in [env] if env else DEFAULT_ENVIRONMENTS:
-        runs_dir = _env_runs_dir(project_dir, candidate_env)
-        if runs_dir is not None and runs_dir.is_dir() and runs_dir not in seen:
-            seen.add(runs_dir)
-            dirs.append((candidate_env, runs_dir))
-    legacy = project_dir / _LEGACY_RUNS_DIR
-    if legacy.is_dir():
-        dirs.append((None, legacy))
-    return dirs
 
 
 def _certificate_path(root: Path, project_id: str, run_id: str, env: Optional[str] = None) -> Path:
@@ -370,6 +323,10 @@ async def reproduce_certificate(
         )
 
     exec_source = _project_dir(manager.root, project_id)
+    from ducta.api.services.governance import check_can_run
+
+    # Reproducing is running: a protected environment takes an operator here too.
+    check_can_run(current_user, str(cert.get("environment_name") or "base"), exec_source)
 
     return exec_manager.execute(
         source_path=exec_source,

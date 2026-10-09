@@ -117,10 +117,44 @@ export const useWorkspaceFiles = (path: string = "") =>
  * Reads a text file from the workspace.
  */
 export const useWorkspaceFileContent = (path: string) =>
-  useQuery<{ path: string; content: string; size_bytes: number }>({
+  useQuery<{ path: string; content: string; size_bytes: number; version?: string }>({
     queryKey: qk.files.content(path),
     queryFn: () =>
       client.get("/workspace/files/content", { params: { path } }).then((r) => r.data),
     staleTime: 15 * 1000,
     enabled: !!path,
+  });
+
+export interface EnvironmentRow {
+  key: string;
+  values: Record<string, unknown>;
+  differs: boolean;
+  overridden: Record<string, boolean>;
+}
+
+export interface EnvironmentsCompare {
+  environments: string[];
+  rows: EnvironmentRow[];
+}
+
+/**
+ * GET /projects/{id}/environments/compare
+ * Every path and setting in force per environment, plus the catalog/pipeline
+ * values an environment changes — "why does prod behave differently?".
+ */
+export const useEnvironmentsCompare = (projectId: string) =>
+  useQuery<EnvironmentsCompare>({
+    queryKey: [...qk.projects.detail(projectId), "environments-compare"],
+    queryFn: () => client.get(`/projects/${projectId}/environments/compare`).then((r) => r.data),
+    staleTime: 30 * 1000,
+    enabled: !!projectId,
+  });
+
+/** GET /projects/{id}/governance — protected environments, and whether this user may run there. */
+export const useGovernance = (projectId: string) =>
+  useQuery<{ protected_environments: string[]; can_run_protected: boolean; permission: string }>({
+    queryKey: ["server-projects", projectId, "governance"],
+    queryFn: () => client.get(`/projects/${projectId}/governance`).then((r) => r.data),
+    enabled: !!projectId,
+    staleTime: 60 * 1000,
   });

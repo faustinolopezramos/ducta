@@ -4,6 +4,7 @@ import { IconChevronDown, IconChevronUp, IconSelector } from "@tabler/icons-reac
 import { Skeleton } from "./Skeleton";
 import { cx } from "../../utils/classNames";
 import "./DataTable.css";
+import { useUIStore } from "../../store/uiStore";
 
 /**
  * The one table in the app.
@@ -92,7 +93,7 @@ export function DataTable<T>({
   columns,
   rows,
   rowKey,
-  density = "comfortable",
+  density: densityProp,
   stickyHeader = false,
   loading = false,
   error,
@@ -107,6 +108,9 @@ export function DataTable<T>({
   renderRowDetail,
   expandedRowKey = null,
 }: Readonly<DataTableProps<T>>) {
+  // A table follows the app's density unless it asks for one.
+  const appDensity = useUIStore((st) => st.density);
+  const density = densityProp ?? appDensity;
   const [sort, setSort] = useState<SortState>(null);
 
   const sorted = useMemo(() => {

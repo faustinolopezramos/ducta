@@ -212,6 +212,28 @@ class Settings(BaseSettings):
         default=False, description="Enable JWT authentication (basic login required)"
     )
 
+    # ── Editor: language server ─────────────────────────────────────────────────
+    lsp_command: str = Field(
+        default="",
+        description=(
+            "Python language server for the code editor, run per open editor over stdio. "
+            "Empty = the first found of basedpyright-langserver, pyright-langserver, pylsp. "
+            "'off' disables it."
+        ),
+    )
+    lsp_max_processes: int = Field(
+        default=4, ge=1, description="Language-server processes running at once"
+    )
+
+    # ── SLA watch ───────────────────────────────────────────────────────────────
+    sla_check_minutes: int = Field(
+        default=0,
+        ge=0,
+        description="Check every project's metadata.sla this often and send its sla_miss "
+        "alerts (one per late streak). 0 = off; POST .../alerts/check still works.",
+    )
+    sla_check_env: str = Field(default="prod", description="Environment the SLA watch checks")
+
     # ── Database persistence ────────────────────────────────────────────────────
     database_url: str = Field(
         default="",

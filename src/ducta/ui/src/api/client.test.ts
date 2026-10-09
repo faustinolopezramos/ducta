@@ -18,6 +18,7 @@ import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from "ax
 
 import client from "./client";
 import { useAuthStore } from "../store/auth";
+import { toastStore } from "../hooks/useModalStack";
 
 /** A JWT whose `exp` is `secondsFromNow` away. Only the payload is read. */
 function makeToken(secondsFromNow: number): string {
@@ -264,6 +265,28 @@ describe("client.ts interceptors", () => {
       ).rejects.toBeDefined();
 
       expect(adapter).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("expected statuses", () => {
+    it("rejects quietly with a status the caller expects", async () => {
+      const toast = vi.spyOn(toastStore.getState(), "error");
+      const adapter = vi.fn(async (config) => {
+        throw httpError(409, config);
+      });
+
+      await expect(
+        withAdapter(adapter as unknown as AxiosAdapter, () =>
+          client.get("/git/working-diff", { expectedStatuses: [409] }),
+        ),
+      ).rejects.toMatchObject({ response: { status: 409 } });
+      expect(toast).not.toHaveBeenCalled();
+
+      await expect(
+        withAdapter(adapter as unknown as AxiosAdapter, () => client.get("/git/working-diff")),
+      ).rejects.toBeDefined();
+      expect(toast).toHaveBeenCalledTimes(1);
+      toast.mockRestore();
     });
   });
 });

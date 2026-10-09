@@ -92,6 +92,11 @@ class DatasetResponse(BaseModel):
     consumers: List[DatasetEndpoint] = Field(
         default_factory=list, description="Nodes that read this dataset"
     )
+    description: Optional[str] = Field(default=None, description="The catalog entry's description")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="The catalog entry's metadata (owner, tags, sla, pii, criticality, docs…)",
+    )
 
     model_config = {"populate_by_name": True}
 

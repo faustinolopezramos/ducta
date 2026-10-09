@@ -55,6 +55,8 @@ export interface ProjectSummary {
   pipelineCount?: number;
   createdAt?: string;
   updatedAt?: string;
+  /** Why the configuration does not load, when it does not. */
+  configError?: string | null;
 }
 
 export interface Pipeline {

@@ -16,6 +16,8 @@ import { qk } from "../queryKeys";
 function invalidateNodeConsumers(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: qk.nodes.all() });
   queryClient.invalidateQueries({ queryKey: qk.projects.all() });
+  // Every write leaves an uncommitted change for the status bar to count.
+  queryClient.invalidateQueries({ queryKey: qk.git.all() });
 }
 
 interface UpdateNodePayload {
@@ -60,11 +62,11 @@ export const useUpdateNodeCode = () => {
   return useMutation({
     mutationFn: ({ name, code }: UpdateNodeCodePayload) =>
       client.put(`/nodes/${name}/code`, { code }).then((r) => r.data),
-    onSuccess: (data: { commit_sha?: string }) => {
+    onSuccess: () => {
       invalidateNodeConsumers(queryClient);
       queryClient.invalidateQueries({ queryKey: qk.git.all() });
-      const sha = data?.commit_sha ? ` · ${data.commit_sha.slice(0, 7)}` : "";
-      toastStore.getState().show(`Code saved${sha}`, "success");
+      // Saved, not committed — the status bar counts it until it is.
+      toastStore.getState().show("Code saved", "success");
     },
     onError: defaultOnError,
   });
@@ -72,7 +74,7 @@ export const useUpdateNodeCode = () => {
 
 /**
  * DELETE /nodes/{name}
- * Removes a node from the workspace config and commits to git.
+ * Removes a node from its pipeline file (not committed — see the Changes panel).
  */
 export const useDeleteNode = () => {
   const queryClient = useQueryClient();

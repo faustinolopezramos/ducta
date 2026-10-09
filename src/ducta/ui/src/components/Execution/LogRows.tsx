@@ -1,9 +1,12 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
 import { StatusBadge } from "../ui/StatusBadge";
 import type { LogEntry } from "../../store/logsStore";
 import { HighlightedText } from "./HighlightedText";
 import { AnsiText } from "./AnsiText";
+import { Link, useInRouterContext } from "react-router-dom";
+import { fileRefs, foldJvmFrames } from "./logMessage";
+import { projectIdFromPath, routes } from "../../utils/routes";
 import {
   fmt,
   formatElapsed,
@@ -157,8 +160,27 @@ export function NodeStatusRow({
 
 // ── LogRow ────────────────────────────────────────────────────────────────────
 
-export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuery: string; t0?: number }) {
+export function LogRow({
+  entry,
+  searchQuery,
+  t0,
+  lineLink,
+  highlighted = false,
+}: {
+  entry: LogEntry & { repeat?: number };
+  searchQuery: string;
+  t0?: number;
+  /** A URL that opens the run at this line — copied by the row's link button. */
+  lineLink?: string;
+  /** The line a link pointed at. */
+  highlighted?: boolean;
+}) {
   const [hovered, setHovered] = useState(false);
+  const [unfolded, setUnfolded] = useState(false);
+  const folded = useMemo(() => foldJvmFrames(entry.message), [entry.message]);
+  const shown = unfolded ? entry.message : folded.text;
+  // Read from the address bar: log rows also render outside the router (tests, portals).
+  const projectId = projectIdFromPath(window.location.pathname);
   const isCliLine = entry.render === "cli";
   const levelColor = LEVEL_COLOR[entry.level] ?? "var(--text-dim)";
   const isError   = entry.level === "ERROR";
@@ -207,7 +229,9 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
         lineHeight: "var(--leading-relaxed)",
         alignItems: "flex-start",
         padding: isCliLine ? "1px var(--space-4)" : "var(--space-2) var(--space-4)",
-        background: isCliLine ? "var(--overlay-subtle)" : hovered ? rowBgHover : "transparent",
+        background: highlighted
+          ? "color-mix(in srgb, var(--primary) 14%, transparent)"
+          : isCliLine ? "var(--overlay-subtle)" : hovered ? rowBgHover : "transparent",
         borderLeft: `3px solid ${railColor}`,
         transition: "background 0.08s",
         position: "relative",
@@ -244,8 +268,33 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
         flex: 1,
         lineHeight: "var(--leading-relaxed)",
       }}>
-        <HighlightedText text={entry.message} query={searchQuery} renderer={(t) => <AnsiText text={t} />} />
+        <HighlightedText
+          text={shown}
+          query={searchQuery.trim().startsWith("/") ? "" : searchQuery}
+          renderer={(t) => <LinkedText text={t} projectId={projectId} />}
+        />
+        {(entry.repeat ?? 1) > 1 && (
+          <span className="ilog__repeat" title={`The same line, ${entry.repeat} times in a row`}>×{entry.repeat}</span>
+        )}
+        {folded.hidden > 0 && (
+          <button type="button" className="ilog__unfold" onClick={() => setUnfolded((v) => !v)}>
+            {unfolded ? "fold JVM frames" : `show ${folded.hidden} JVM frames`}
+          </button>
+        )}
       </span>
+      {hovered && lineLink && (
+        <button
+          type="button"
+          className="ilog__link-btn"
+          title="Copy a link to this line"
+          onClick={(e) => {
+            e.stopPropagation();
+            void navigator.clipboard?.writeText(new URL(lineLink, window.location.origin).toString());
+          }}
+        >
+          link
+        </button>
+      )}
       {hovered && (
         <button
           onClick={handleCopyLine}
@@ -271,6 +320,33 @@ export function LogRow({ entry, searchQuery, t0 }: { entry: LogEntry; searchQuer
       )}
     </div>
   );
+}
+
+/**
+ * Text with project file references as links to that line in the code view;
+ * everything else rendered as before (ANSI colours).
+ */
+function LinkedText({ text, projectId }: { text: string; projectId: string | null }) {
+  const inRouter = useInRouterContext();
+  const refs = projectId ? fileRefs(text) : [];
+  if (refs.length === 0) return <AnsiText text={text} />;
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  for (const ref of refs) {
+    if (ref.start > cursor) parts.push(<AnsiText key={`t${cursor}`} text={text.slice(cursor, ref.start)} />);
+    const href = routes.code(projectId!, ref.file, ref.line);
+    const label = text.slice(ref.start, ref.end);
+    parts.push(
+      inRouter ? (
+        <Link key={`l${ref.start}`} className="ilog__file-link" to={href}>{label}</Link>
+      ) : (
+        <a key={`l${ref.start}`} className="ilog__file-link" href={href}>{label}</a>
+      ),
+    );
+    cursor = ref.end;
+  }
+  if (cursor < text.length) parts.push(<AnsiText key={`t${cursor}`} text={text.slice(cursor)} />);
+  return <>{parts}</>;
 }
 
 // ── SectionHeaderRow ──────────────────────────────────────────────────────────

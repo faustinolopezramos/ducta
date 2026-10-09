@@ -96,3 +96,12 @@ export const useConnectionUsage = (name: string, enabled: boolean) =>
     enabled: enabled && !!name,
     staleTime: 15 * 1000,
   });
+
+/** GET /ingestion/connections/{name}/credentials — whether each variable is set, never its value. */
+export const useConnectionCredentials = (name: string | null | undefined) =>
+  useQuery<{ connection: string; variables: { name: string; set: boolean; where?: string | null }[] }>({
+    queryKey: ["ingestion", "credentials", name],
+    queryFn: () => client.get(`/ingestion/connections/${encodeURIComponent(name!)}/credentials`).then((r) => r.data),
+    enabled: !!name,
+    retry: false,
+  });

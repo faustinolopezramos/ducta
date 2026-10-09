@@ -65,7 +65,21 @@ export function ioNames(value: unknown): string[] {
 export function nodeIoNames(spec: any, side: "input" | "output"): string[] {
   if (!spec) return [];
   const plural = `${side}s`;
-  return ioNames(spec[plural] ?? spec[side]);
+  const value = spec[plural] ?? spec[side];
+  if (side === "input") {
+    // Inputs as {param: dataset} — alone, or as a list item, which is how the
+    // API returns a format-2 node's: the datasets are the values, the keys are
+    // the function's parameter names.
+    // Only string values: `{name: {format…}}` is a dict keyed by name instead.
+    const isMapping = (v: unknown): v is Record<string, string> =>
+      !!v && typeof v === "object" && !Array.isArray(v) && !("name" in v) && !("id" in v) &&
+      Object.values(v).length > 0 && Object.values(v).every((x) => typeof x === "string");
+    if (isMapping(value)) return Object.values(value);
+    if (Array.isArray(value) && value.length > 0 && value.every(isMapping)) {
+      return value.flatMap((m) => Object.values(m));
+    }
+  }
+  return ioNames(value);
 }
 
 const ML_HINT = /(^|[._-])(ml|model|train|predict|infer|forecast|classif|regress|simulat|cluster|embed)/i;

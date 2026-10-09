@@ -150,7 +150,7 @@ describe("Projects", () => {
 
   it("links each card to its project", () => {
     renderDashboard();
-    expect(screen.getByRole("link", { name: /streaming/ })).toHaveAttribute("href", "/project/streaming");
+    expect(screen.getByRole("link", { name: /streaming/ })).toHaveAttribute("href", "/p/streaming");
   });
 
   it("deletes from a quiet icon button on the card, no menu", () => {

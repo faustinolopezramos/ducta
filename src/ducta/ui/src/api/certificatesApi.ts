@@ -36,6 +36,8 @@ export interface PreflightResult {
   pipeline: string;
   errors: string[];
   warnings: string[];
+  /** The same, split into file, line, node, dataset and fix. */
+  problems?: import("./queries/problems").Problem[];
 }
 
 export interface CertificateDiffOutputRow {
@@ -221,17 +223,29 @@ export interface RunCertificate {
 
 // ── Queries ────────────────────────────────────────────────────────────────────
 
-/** GET /projects/{projectId}/certificates/{runId} — the full certificate JSON. */
+/** Whether a certificate request failed because there is no such certificate. */
+export const isMissingCertificate = (error: unknown): boolean =>
+  (error as { response?: { status?: number } } | null)?.response?.status === 404;
+
+/**
+ * GET /projects/{projectId}/certificates/{runId} — the full certificate JSON.
+ *
+ * A 404 is an answer, not a failure: a run can have none (it wrote no
+ * certificate, or it ran in another workspace). It is not retried or toasted;
+ * callers tell it apart with `isMissingCertificate(error)`.
+ */
 export const useCertificate = (projectId: string | null, runId: string | null) =>
   useQuery<RunCertificate>({
     queryKey: qk.certificates.detail(projectId, runId),
     queryFn: async () => {
       const { data } = await executionClient.get(
-        `/projects/${projectId}/certificates/${runId}`
+        `/projects/${projectId}/certificates/${runId}`,
+        { expectedStatuses: [404] },
       );
       return data;
     },
     enabled: !!projectId && !!runId,
+    retry: (count, error) => !isMissingCertificate(error) && count < 1,
   });
 
 /**

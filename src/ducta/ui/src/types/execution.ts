@@ -5,6 +5,15 @@ export interface Execution {
   pipeline_name: string;
   project_id?: string;
   node_name?: string;
+  /** The nodes a scoped run covered. */
+  node_names?: string[];
+  /** Rows per input, when this was a sample run. */
+  sample_rows?: number;
+  /** A debug run: the 127.0.0.1 port its process listens on. */
+  debug_port?: number;
+  /** Paused at a data breakpoint after this node. */
+  paused_at?: string | null;
+  user_id?: string;
   env: string;
   status: ExecutionStatus;
   started_at?: string;

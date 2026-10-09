@@ -104,3 +104,36 @@ class TestListingIncludesPersistedRuns:
     def test_without_a_runs_dir_only_memory_is_listed(self):
         mgr = _manager([_record("live")], None)
         assert [r.id for r in mgr.list_executions()] == ["live"]
+
+
+class TestListingIsScopedToTheWorkspace:
+    """The run store is shared by every workspace, and project ids repeat across
+    them: a copy of `batch` elsewhere listed its runs as this `batch`'s, whose
+    certificates then 404ed here."""
+
+    def test_only_runs_from_this_workspace_or_inside_it(self, store, tmp_path):
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        elsewhere = tmp_path / "copy" / "batch"
+        elsewhere.mkdir(parents=True)
+        store.finish_run(_record("from-copy", workspace=str(elsewhere)))
+        mgr = _manager(
+            [
+                _record("from-root", workspace=str(here)),
+                _record("from-project", workspace=str(here / "projects" / "batch")),
+            ],
+            store,
+        )
+
+        runs, total = mgr.list_executions_paginated(workspace=here)
+        assert sorted(r.id for r in runs) == ["from-project", "from-root"]
+        assert total == 2
+
+        # Opened at the project: the workspace-level run is its too.
+        runs, _ = mgr.list_executions_paginated(workspace=here / "projects" / "batch")
+        assert sorted(r.id for r in runs) == ["from-project", "from-root"]
+
+    def test_runs_that_do_not_say_where_they_ran_are_kept(self, store, tmp_path):
+        store.finish_run(_record("legacy"))
+        runs, _ = _manager([], store).list_executions_paginated(workspace=tmp_path)
+        assert [r.id for r in runs] == ["legacy"]

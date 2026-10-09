@@ -45,7 +45,8 @@ export const nodeCodeQuery = (name: string) => ({
   // Untyped like the endpoint's other consumers read it (NodeCodePage also uses `module_path`).
   queryFn: async (): Promise<any> => {
     try {
-      const result = await client.get(`/nodes/${name}/code`);
+      // A node with no Python module (a config-only ingest) answers 404.
+      const result = await client.get(`/nodes/${name}/code`, { expectedStatuses: [404, 405] });
       return result.data;
     } catch (error: any) {
       // If endpoint returns 404 or any error, return null instead of failing the query

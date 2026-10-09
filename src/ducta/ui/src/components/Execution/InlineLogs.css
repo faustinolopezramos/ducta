@@ -426,3 +426,9 @@
   background: var(--status-failed-fg);
   color: var(--bg);
 }
+
+.ilog__file-link { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.ilog__unfold { display: block; margin-top: 2px; padding: 0; border: 0; background: none; color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-2xs); cursor: pointer; text-decoration: underline; }
+.ilog__repeat { margin-left: 8px; padding: 0 5px; border-radius: 999px; background: var(--surface-hover); color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-2xs); }
+.ilog__link-btn { position: absolute; right: 72px; top: 1px; z-index: 10; padding: 2px 7px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-hover); color: var(--text-dim); font-size: var(--text-xs); cursor: pointer; }
+.ilog__search-input[aria-invalid="true"] { color: var(--danger); }

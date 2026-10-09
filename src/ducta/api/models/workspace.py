@@ -47,6 +47,9 @@ class FileContentResponse(BaseModel):
     path: str = Field(description="File path relative to workspace root")
     content: str = Field(description="File text content")
     size_bytes: int = Field(description="File size in bytes")
+    version: str = Field(
+        default="", description="Hash of the content — send it back as expected_version"
+    )
 
 
 class WriteFileRequest(BaseModel):
@@ -58,6 +61,12 @@ class WriteFileRequest(BaseModel):
     # enforced for config files (see workspace/loaders.py's
     # _MAX_CONFIG_FILE_SIZE) as a reasonable ceiling for a single text file.
     content: str = Field(description="File text content to write", max_length=10 * 1024 * 1024)
+    expected_version: Optional[str] = Field(
+        default=None,
+        description="The version this edit was made on. If the file has changed since "
+        "(someone else, git, another editor), the write is refused with 409 and the "
+        "current content — nothing is overwritten unseen.",
+    )
 
 
 class ConnectRequest(BaseModel):

@@ -121,10 +121,10 @@ const { ProjectPage } = await import("./ProjectPage");
 
 function renderMap() {
   return render(
-    <MemoryRouter initialEntries={["/project/batch"]}>
+    <MemoryRouter initialEntries={["/p/batch"]}>
       <Routes>
-        <Route path="/project/:projectId" element={<ProjectPage />} />
-        <Route path="/project/:projectId/pipeline/:pipelineId" element={<div>pipeline workspace</div>} />
+        <Route path="/p/:projectId" element={<ProjectPage />} />
+        <Route path="/p/:projectId/pipelines/:pipelineId" element={<div>pipeline workspace</div>} />
       </Routes>
     </MemoryRouter>
   );

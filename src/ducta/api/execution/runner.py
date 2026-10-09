@@ -26,7 +26,7 @@ import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from loguru import logger  # type: ignore
 
@@ -366,6 +366,7 @@ def _dispatch_pipeline_type(
         "hyperparams": spec.hyperparams,
         "reuse_upstream": spec.reuse_upstream,
         "rerun_all": spec.rerun_all,
+        "node_names": spec.node_names,
     }
     outcome: Optional[Dict[str, Any]] = None
     if spec.sanity_only:
@@ -442,6 +443,146 @@ class RunSpec:
     reuse_upstream: bool = False
     rerun_all: bool = False
     project_id: Optional[str] = None
+    #: Only these nodes of the pipeline (a scope); None for all of them.
+    node_names: Optional[List[str]] = None
+    #: A sample run: this many rows of each input, outputs to the scratch area.
+    sample_rows: Optional[int] = None
+    #: Wait for an IDE debugger to attach before running (local only).
+    debug: bool = False
+    #: Data breakpoints: pause after each of these nodes until resumed.
+    pause_after: Optional[List[str]] = None
+
+
+def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
+    """Make this run a sample run: each node reads the first *rows* rows of its
+    inputs, and everything the run writes — outputs, quality reports, the run
+    certificate, chain state — lands under ``<output>/<env>/.ducta/scratch``.
+
+    So a sample run cannot overwrite a real dataset, and is never the "last
+    successful run" staleness and "what changed" compare against.
+    """
+    original = Path(str(getattr(ctx, "output_path", None) or ctx.global_config.get("output_path")))
+    scratch = original / env / ".ducta" / "scratch"
+    gs = ctx.global_config
+    ctx.sample_rows = rows
+    ctx.output_path = str(scratch)
+    gs["output_path"] = str(scratch)
+    for key, cfg in (getattr(ctx, "output_config", None) or {}).items():
+        declared = cfg.get("filepath") if isinstance(cfg, dict) else None
+        if not declared:
+            continue  # derived from output_path, which now is the scratch
+        try:
+            rel = Path(declared).relative_to(original)
+        except ValueError:
+            # Elsewhere — on another disk, or remote storage (s3://…): a sample
+            # run writes none of it, only a local copy under the scratch.
+            rel = Path(*str(key).split("."))
+        cfg["filepath"] = str(scratch / rel)
+    gs["run_certificate_dir"] = str(scratch / ".ducta" / "runs")
+    chain = gs.get("chain") if isinstance(gs.get("chain"), dict) else {}
+    gs["chain"] = {**chain, "state_dir": str(scratch / ".ducta" / "chain_state")}
+    quality = gs.get("quality") if isinstance(gs.get("quality"), dict) else None
+    if quality is not None:
+        output = quality.get("output") if isinstance(quality.get("output"), dict) else {}
+        quality["output"] = {**output, "base_path": str(scratch / "quality")}
+    # Checks still run and report, but a sample is small by design: a gate such
+    # as `row_count >= 350` would always block it. Warn instead of blocking.
+    for node in (getattr(ctx, "nodes_config", None) or {}).values():
+        if isinstance(node, dict):
+            for block in _gate_blocks(node):
+                for gate_key in ("quality_gate", "sanity_gate"):
+                    gate = block.get(gate_key)
+                    if isinstance(gate, dict):
+                        block[gate_key] = {**gate, "behavior": "warn_only"}
+    return scratch
+
+
+def _gate_blocks(node: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Every check block of a node that may carry a ``quality_gate``."""
+    blocks: List[Dict[str, Any]] = []
+    for key in ("data_quality", "sanity_checks"):
+        block = node.get(key)
+        if isinstance(block, dict):
+            blocks.append(block)
+            per_input = block.get("inputs")
+            if isinstance(per_input, dict):
+                blocks += [b for b in per_input.values() if isinstance(b, dict)]
+    return blocks
+
+
+#: How long a debug run waits for an IDE to attach before running without one.
+DEBUG_ATTACH_TIMEOUT_SECONDS = 300
+
+
+def _run_debug_child(
+    execution_id: str, spec: RunSpec, source_path: Path, manager: Any
+) -> Optional[Dict[str, Any]]:
+    """Run *spec* in a child process listening for a debugger; wait for it."""
+    import dataclasses
+    import json
+    import subprocess
+    import tempfile
+    import time
+
+    from ducta.api.services import debugger
+
+    if not debugger.available():
+        raise RuntimeError(
+            "Debug run: debugpy is not installed where the API runs (pip install debugpy)"
+        )
+    port = debugger.free_port()
+    manager.set_debug_port(execution_id, port)
+    with tempfile.TemporaryDirectory(prefix="ducta-debug-") as tmp:
+        spec_file = Path(tmp) / "spec.json"
+        result_file = Path(tmp) / "result.json"
+        payload = {**dataclasses.asdict(spec), "source_path": str(source_path)}
+        spec_file.write_text(json.dumps(payload, default=str), encoding="utf-8")
+        cmd = [
+            sys.executable, "-X", "frozen_modules=off", "-m", "debugpy",
+            "--listen", f"{debugger.HOST}:{port}", "--wait-for-client",
+            "-m", "ducta.api.execution.debug_child", str(spec_file), str(result_file),
+        ]  # fmt: skip
+        # settrace, not sys.monitoring: under 3.12+ monitoring, a node run on an
+        # executor thread stopped where pydevd could not find the thread again
+        # (no variables, no evaluate).
+        env = {
+            **os.environ,
+            "PYDEVD_DISABLE_FILE_VALIDATION": "1",
+            "PYDEVD_USE_SYS_MONITORING": "0",
+        }
+        logger.info(
+            "Debug run: waiting for a debugger on {}:{} — the browser's Debug panel, or "
+            "'Attach to Ducta' in your IDE",
+            debugger.HOST,
+            port,
+        )
+        # stdout/stderr are inherited: they land in this run's captured logs.
+        proc = subprocess.Popen(cmd, cwd=str(source_path), env=env)
+        started = time.monotonic()
+        try:
+            while proc.poll() is None:
+                if manager.is_cancelled(execution_id):
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    raise RuntimeError("Debug run cancelled")
+                if (
+                    not manager.debug_attached(execution_id)
+                    and time.monotonic() - started > DEBUG_ATTACH_TIMEOUT_SECONDS
+                ):
+                    proc.terminate()
+                    proc.wait(timeout=10)
+                    raise RuntimeError(f"No debugger attached in {DEBUG_ATTACH_TIMEOUT_SECONDS}s")
+                time.sleep(0.3)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+        result = json.loads(result_file.read_text(encoding="utf-8")) if result_file.exists() else {}
+    if result.get("certificate_run_id"):
+        manager.attach_certificate(execution_id, str(result["certificate_run_id"]))
+    if proc.returncode != 0:
+        raise RuntimeError(result.get("error") or f"The debug run failed (exit {proc.returncode})")
+    logger.success("Debug run finished")
+    return result.get("outcome")
 
 
 def run_pipeline_sync(
@@ -524,6 +665,25 @@ def run_pipeline_sync(
                     execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
                     os.chdir(execution_cwd)
                     normalize_execution_context_paths(ctx, execution_cwd)
+                    if spec.sample_rows:
+                        scratch = redirect_to_scratch(ctx, env, int(spec.sample_rows))
+                        logger.info(
+                            "Sample run: first {} rows of each input; outputs and evidence "
+                            "go to {} — the real datasets are not touched",
+                            spec.sample_rows,
+                            scratch,
+                        )
+
+                    if spec.debug:
+                        # Its own process, under debugpy: a breakpoint there can
+                        # stop every thread without stopping this server.
+                        return _run_debug_child(execution_id, spec, source_path, manager)
+                    if spec.pause_after:
+                        # Read by the coordinator after each node succeeds.
+                        ctx.pause_after = set(spec.pause_after)
+                        ctx.breakpoint_hook = lambda node: manager.wait_at_breakpoint(
+                            execution_id, node
+                        )
 
                     if timeout_handler:
                         timeout_handler.verify()
@@ -553,14 +713,25 @@ def run_pipeline_sync(
 
                         console = RichLoggerManager.get_console()
                         console.print()
+                        finished = (outcome or {}).get("status")
                         print_process_separator(
-                            "success", "EXECUTION COMPLETED", f"Pipeline: {pipeline_name}", console
+                            "warning" if finished else "success",
+                            f"EXECUTION {str(finished).upper()}"
+                            if finished
+                            else "EXECUTION COMPLETED",
+                            f"Pipeline: {pipeline_name}",
+                            console,
                         )
                         console.print()
                     except Exception:
                         pass
 
-                    logger.success("Ducta pipeline execution completed successfully")
+                    status = (outcome or {}).get("status")
+                    if status:
+                        # gate_blocked / skipped: it finished, but did not do all its work.
+                        logger.warning("Ducta pipeline execution finished: {}", status)
+                    else:
+                        logger.success("Ducta pipeline execution completed successfully")
                     return outcome
                 except DuctaError:
                     # Engine errors already carry the pipeline, the failed nodes and

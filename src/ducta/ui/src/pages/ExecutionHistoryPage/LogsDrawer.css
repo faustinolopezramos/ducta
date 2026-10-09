@@ -35,3 +35,6 @@
 .logs-drawer-summary__value--mono {
   font-family: var(--font-mono);
 }
+
+.logs-drawer-open { align-self: center; font-size: var(--text-xs); color: var(--primary); text-decoration: none; margin-right: 4px; }
+.logs-drawer-open:hover { text-decoration: underline; }

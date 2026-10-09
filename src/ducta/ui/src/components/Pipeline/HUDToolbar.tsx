@@ -39,6 +39,8 @@ interface HUDToolbarProps {
   showMinimap?: boolean;
   /** Absent where the current lens has no minimap to toggle. */
   onToggleMinimap?: () => void;
+  /** Undo/redo of the page's edits; without it, the builder's own history. */
+  history?: { canUndo: boolean; canRedo: boolean; undo: () => void; redo: () => void };
 }
 
 const LENSES: Array<{ id: PipelineLens; label: string; icon: React.ComponentType<any>; hint: string }> = [
@@ -69,11 +71,17 @@ export function HUDToolbar({
   onFitView,
   showMinimap = false,
   onToggleMinimap,
+  history,
 }: HUDToolbarProps) {
-  const canUndo = useBuilderStore((s) => s.historyIndex > 0);
-  const canRedo = useBuilderStore((s) => s.historyIndex < s.history.length - 1);
-  const undo = useBuilderStore((s) => s.undo);
-  const redo = useBuilderStore((s) => s.redo);
+  const builderCanUndo = useBuilderStore((s) => s.historyIndex > 0);
+  const builderCanRedo = useBuilderStore((s) => s.historyIndex < s.history.length - 1);
+  const builderUndo = useBuilderStore((s) => s.undo);
+  const builderRedo = useBuilderStore((s) => s.redo);
+  // The page's own history (edits to the pipeline file) when it gives one.
+  const canUndo = history ? history.canUndo : builderCanUndo;
+  const canRedo = history ? history.canRedo : builderCanRedo;
+  const undo = history ? history.undo : builderUndo;
+  const redo = history ? history.redo : builderRedo;
 
   // The zoom controls act on React Flow's own viewport, passed up from the
   // canvas. They used to call into `builderStore`, which nothing applied to the

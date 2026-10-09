@@ -37,6 +37,17 @@ export class AppError extends Error {
 export { Logger };
 
 /**
+ * Browser notices that arrive as `error` events but are not errors. A
+ * ResizeObserver whose callback changes layout (the DAG canvas, Monaco's
+ * automaticLayout) has the rest of its notifications delivered next frame;
+ * nothing failed, and "Something went wrong" was a false alarm.
+ */
+const BENIGN_ERRORS = [/^ResizeObserver loop (completed with undelivered notifications|limit exceeded)/];
+
+export const isBenignError = (message: string | undefined): boolean =>
+  !!message && BENIGN_ERRORS.some((re) => re.test(message));
+
+/**
  * Initialize error reporting (idempotent — safe to call multiple times).
  */
 let _errorHandlingInitialized = false;
@@ -48,6 +59,7 @@ export function initializeErrorHandling() {
   // by the axios interceptor) failed silently from the user's point of view
   // — nothing told them the action they just took didn't work.
   globalThis.addEventListener('error', (event: ErrorEvent) => {
+    if (isBenignError(event.message)) return;
     Logger.error('Unhandled error', undefined, {
       message: event.message,
       filename: event.filename,

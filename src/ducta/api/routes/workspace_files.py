@@ -23,7 +23,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
-from ducta.api.exceptions import http_error_on
+from ducta.api.exceptions import ConcurrencyError, http_error_on
 from ducta.api.models.workspace import FileContentResponse, FilesListResponse, WriteFileRequest
 from ducta.api.workspace.manager import FileTooLargeError
 
@@ -57,7 +57,9 @@ async def read_file(
     """Read a text file from the workspace."""
     with http_error_on(404), http_error_on(413, FileTooLargeError):
         content = manager.read_file(path)
-    return FileContentResponse(path=path, content=content, size_bytes=len(content.encode()))
+    return FileContentResponse(
+        path=path, content=content, size_bytes=len(content.encode()), version=text_version(content)
+    )
 
 
 @router.put(
@@ -67,8 +69,26 @@ async def read_file(
 )
 async def write_file(body: WriteFileRequest, manager: WorkspaceManagerDep) -> None:
     """Create or overwrite a text file in the workspace."""
+    if body.expected_version is not None:
+        try:
+            current = manager.read_file(body.path)
+        except Exception:  # noqa: BLE001 — a file that is gone has no version to match
+            current = None
+        found = text_version(current) if current is not None else ""
+        if found != body.expected_version:
+            raise ConcurrencyError(
+                "The file changed since it was opened",
+                detail={"path": body.path, "version": found, "content": current},
+            )
     with http_error_on(400):
         manager.write_file(body.path, body.content)
+
+
+def text_version(text: str) -> str:
+    """The optimistic-concurrency token of a text file: a hash of what it holds."""
+    import hashlib
+
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
 @router.delete(

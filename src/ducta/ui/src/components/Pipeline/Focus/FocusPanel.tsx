@@ -2,25 +2,30 @@ import type React from "react";
 import { IconX } from "@tabler/icons-react";
 
 /**
- * The focus sheet: the selected object in the middle, what flows into it on the
- * left, what flows out of it on the right. It docks along the bottom of the
- * canvas, so the graph — and the lineage lens lighting up the selection's path —
- * stays in view above it, in either orientation.
+ * The inspector: the selected object first, then what it reads and writes,
+ * then its neighbours. It docks to the right of the canvas, so the graph — and
+ * the lineage lens lighting up the selection's path — stays fully in view.
+ * `tabs` sits in its header; the body is whichever view is selected.
  */
 export function FocusPanel({
   label,
   onClose,
+  tabs,
   children,
 }: {
   label: string;
   onClose: () => void;
+  tabs?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <aside className="focus-sheet" aria-label={label} data-no-pan>
-      <button type="button" className="focus-close" onClick={onClose} aria-label="Close focus (Esc)">
-        <IconX size={16} />
-      </button>
+      <div className="focus-head">
+        <div className="focus-head-tabs">{tabs}</div>
+        <button type="button" className="focus-close" onClick={onClose} aria-label="Close inspector (Esc)">
+          <IconX size={16} />
+        </button>
+      </div>
       <div className="focus-bowtie">{children}</div>
     </aside>
   );

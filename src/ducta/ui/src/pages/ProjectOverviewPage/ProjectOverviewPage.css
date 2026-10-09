@@ -1,0 +1,104 @@
+/* ── Project overview ────────────────────────────────────────────────────────
+   Quiet by design: type and rules, no cards. Colour only where something needs
+   attention. */
+
+.overview-head {
+  margin: var(--space-2) 0 var(--space-8);
+}
+.overview-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+.overview-desc {
+  margin: var(--space-2) 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  max-width: 64ch;
+}
+
+.overview-section {
+  margin-bottom: var(--space-8);
+}
+.overview-h-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.overview-h {
+  margin: 0 0 var(--space-3);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.overview-more {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+.overview-more:hover { color: var(--text); }
+
+.overview-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--border);
+}
+.overview-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 40px;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  text-decoration: none;
+  font-size: var(--text-sm);
+}
+.overview-row:hover,
+.overview-row:focus-visible { background: var(--surface); }
+.overview-row-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overview-row-go {
+  color: var(--text-dim);
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.overview-row:hover .overview-row-go,
+.overview-row:focus-visible .overview-row-go { opacity: 1; }
+
+.overview-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.overview-row.tone-danger .overview-dot { background: var(--danger); }
+.overview-row.tone-warning .overview-dot { background: var(--warning); }
+
+.overview-muted { color: var(--text-muted); font-size: var(--text-sm); }
+.overview-num { min-width: 56px; text-align: right; font-variant-numeric: tabular-nums; }
+.overview-when { min-width: 72px; text-align: right; }
+
+.overview-clear {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+.overview-clear svg { color: var(--success); }
+
+@media (max-width: 640px) {
+  .overview-num { display: none; }
+}

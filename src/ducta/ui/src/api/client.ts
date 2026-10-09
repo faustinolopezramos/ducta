@@ -14,6 +14,17 @@ import { apiErrorMessage } from "./mutations/errors";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? "/api";
 
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /**
+     * Statuses this request expects as an answer rather than a failure — a 404
+     * for something that may not exist, a 409 for "no Git here". The caller
+     * shows them; the client neither toasts nor logs them as API errors.
+     */
+    expectedStatuses?: number[];
+  }
+}
+
 // ── Shared interceptor state ──────────────────────────────────────────────────
 
 interface RetryConfig {
@@ -163,6 +174,7 @@ function applySharedInterceptors(
       const config = error.config as RetryableRequestConfig | undefined;
       const retryConfig: RetryConfig = config?._retryConfig ?? {};
       const retryCount = retryConfig.retryCount ?? 0;
+      if (error.response && config?.expectedStatuses?.includes(error.response.status)) throw error;
 
       // Log enriched error info for debugging
       if (error.response?.data) {

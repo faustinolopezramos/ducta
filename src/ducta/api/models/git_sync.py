@@ -81,6 +81,11 @@ class GitStageResponse(BaseModel):
 class GitCommitRequest(BaseModel):
     """Request to commit staged changes."""
 
+    paths: Optional[List[str]] = Field(
+        default=None,
+        description="Stage exactly these workspace-relative paths first, then commit. "
+        "Omitted: commit whatever is already staged.",
+    )
     message: Optional[str] = Field(
         default=None, description="Commit message. If None, uses default."
     )
@@ -112,3 +117,23 @@ class GitExternalChangesResponse(BaseModel):
     local_commit: Optional[str] = Field(default=None, description="Local HEAD commit hash")
     remote_commit: Optional[str] = Field(default=None, description="Remote HEAD commit hash")
     force_fetched: bool = Field(description="Whether this check forced a git fetch")
+
+
+class GitChange(BaseModel):
+    """One uncommitted change in the working tree."""
+
+    path: str = Field(description="Workspace-relative path")
+    status: str = Field(description="modified | added | deleted | untracked | renamed")
+    staged: bool = Field(description="In the index (will be in the next commit)")
+
+
+class GitChangesResponse(BaseModel):
+    available: bool
+    branch: str
+    changes: List[GitChange] = Field(default_factory=list)
+
+
+class GitWorkingDiffResponse(BaseModel):
+    path: str
+    original: str = Field(description="The file at HEAD; empty when it is new")
+    modified: str = Field(description="The file on disk; empty when it was deleted")

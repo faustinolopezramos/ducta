@@ -34,7 +34,20 @@ class ProjectResponse(BaseModel):
     name: str = Field(description="Human-readable project name")
     description: Optional[str] = Field(default=None, description="Project description")
     workspace: str = Field(description="Workspace root path this project belongs to")
+    root: str = Field(
+        default="",
+        description="The project's directory relative to the workspace root, POSIX-style "
+        "('' when the workspace is the project) — the prefix of its files in /workspace/files",
+    )
     pipeline_count: int = Field(default=0, description="Number of pipelines in this project")
+    config_status: str = Field(
+        default="ok",
+        description="'ok', or 'invalid' when the configuration does not load — the project is "
+        "listed anyway, so it can be opened and fixed",
+    )
+    config_error: Optional[str] = Field(
+        default=None, description="Why the configuration does not load (first lines)"
+    )
     variables: Dict[str, Any] = Field(
         default_factory=dict,
         description="Shared variables available to all pipelines in this project",

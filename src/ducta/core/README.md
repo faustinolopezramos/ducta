@@ -75,7 +75,7 @@ Every directory Ducta itself writes to — as opposed to a node's own data outpu
 
 | What                          | Setting                | Default                                          | Visible? |
 |--------------------------------|-------------------------|---------------------------------------------------|----------|
-| Quality reports/baselines/history | `quality.output.base_path` | `${output_path}/${environment}/quality`            | yes — a project may want to browse or ship these |
+| Quality reports/baselines/history | `settings.quality.output.base_path` | `${output_path}/${environment}/quality` (an existing legacy `.quality` there is kept, so its history carries over) | yes — a project may want to browse or ship these |
 | Run certificates               | `run_certificate_dir`   | `${output_path}/${environment}/.ducta/runs`        | no — hidden, framework bookkeeping |
 | Chain-state markers            | `chain.state_dir`       | `${output_path}/${environment}/.ducta/chain_state` | no — hidden, framework bookkeeping |
 | Run-lock files / leases       | `run_lock.dir`          | `${output_path}/${environment}/.ducta/locks`       | no — hidden, framework bookkeeping |

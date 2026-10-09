@@ -7,3 +7,4 @@ export * from "./pipelines";
 export * from "./nodes";
 export * from "./executions";
 export * from "./git";
+export * from './pipelineOps';

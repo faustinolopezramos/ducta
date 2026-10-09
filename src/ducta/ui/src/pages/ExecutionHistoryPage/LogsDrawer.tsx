@@ -9,6 +9,8 @@ import { type LogEntry, type LogLevel } from "../../store/logsStore";
 import { deriveNodeStates } from "../../utils/nodeStatus";
 import { SlidePanel } from "../../components/ui/SlidePanel";
 import { IconPlayerStop, IconRefresh } from "@tabler/icons-react";
+import { Link } from "react-router-dom";
+import { routes } from "../../utils/routes";
 import "./LogsDrawer.css";
 
 // The REST payload (models/execution.py LogEntry) carries `timestamp` as an ISO
@@ -85,6 +87,11 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
               <IconPlayerStop size={12} style={{ marginRight: 4 }} />
               Cancel
             </Button>
+          )}
+          {statusData?.project_id && (
+            <Link className="logs-drawer-open" to={routes.run(statusData.project_id, executionId)}>
+              {statusData.status === "failed" ? "Diagnose →" : "Open run →"}
+            </Link>
           )}
           {isTerminal && statusData?.status !== "success" && (
             <Button

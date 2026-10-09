@@ -61,6 +61,8 @@ Key API resources:
        schemas; ``GET .../pipelines/{name}/ml-plan?env=`` says what each ML node is
        given (the same answer as ``ducta config show --ml``), and for a serving
        node, ``model_resolution``: the registered version its stage names right now.
+       The editor, inspector, alerts and governance endpoints under
+       ``/api/projects/{id}`` are described in `Editing and inspecting a project`_.
    * - ``/api/nodes``
      - Nodes of the workspace, their Python code, and their execution history.
    * - ``/api/configs``, ``/api/environments``
@@ -69,6 +71,9 @@ Key API resources:
    * - ``/api/executions``
      - List, inspect, cancel, retry and bulk-cancel executions; their logs and
        errors. Live logs over WebSocket at ``/api/ws/logs/{execution_id}``.
+       ``GET .../{id}/diagnosis`` says why a run failed — the kind of failure,
+       where, and what changed since the last good run; ``POST .../{id}/resume``
+       continues a run paused at a data breakpoint.
        ``GET /api/executions/{id}/streaming`` is the live state of a streaming or
        hybrid run: per pipeline its status and uptime, per node its query's state
        (``active``, ``failed``, ``skipped``, ``stopped``), the latest batch's
@@ -80,7 +85,9 @@ Key API resources:
    * - ``/api/quality``
      - Checks, reports, trends and scores; run checks; validate a node's
        quality configuration. ``GET /api/quality/checks`` describes each check:
-       its description, default severity and parameters (as JSON Schema).
+       its description, default severity and parameters (as JSON Schema);
+       ``GET /api/quality/summary`` is the per-dataset overview (latest status and
+       score trend).
    * - ``/api/mlops``
      - Experiments and runs, the model registry, promotion and garbage
        collection. Each model lists the project nodes that serve it
@@ -93,7 +100,9 @@ Key API resources:
    * - ``/api/templates``
      - List templates and generate a project into ``projects/``.
    * - ``/api/git``
-     - The workspace repository: status, history, diffs, blame, commit, pull/push, revert.
+     - The workspace repository: status, branches, history, diffs (including the
+       uncommitted working diff and a file at any commit), blame, commit, pull/push,
+       revert.
 
 Projects and configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -107,12 +116,87 @@ variables and timestamps live in its ``ducta.yaml`` (``description`` and
 Every write — a node, a pipeline, settings or a catalog entry — edits the YAML
 in place, keeping comments and key order, and is validated against every
 environment before it is kept: an edit that would make any environment invalid
-is refused with the problems, and the files are left untouched. Edits are
-committed to git when the workspace is a repository, and the commit SHA is the
-optimistic-concurrency token: send back the ``commit_sha`` you read —
-``expected_commit_sha`` for nodes and configs, ``expected_sha`` for pipelines —
-and a change someone else committed in between answers ``409`` instead of
-being overwritten.
+is refused with the problems, and the files are left untouched. Saving does
+**not** commit: committing is the user's call, from the web app's Changes panel
+or with git itself. The optimistic-concurrency token is a hash of the file's
+content (still returned as ``commit_sha`` for compatibility): send back the one
+you read — ``expected_commit_sha`` for nodes and configs, ``expected_sha`` for
+pipelines — and a change someone else saved in between, committed or not,
+answers ``409`` instead of being overwritten.
+
+Editing and inspecting a project
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+These are what the web app's editor and inspector use; all live under
+``/api/projects/{id}``. None of them imports project code unless it says so,
+and none commits.
+
+.. list-table::
+   :widths: 38 62
+   :header-rows: 1
+
+   * - Endpoint
+     - What it does
+   * - ``POST .../validate``
+     - Validates the project *with unsaved edits*, without writing: the format-2
+       loader in every environment, then each node's ``run:`` against its
+       function's signature (from the syntax tree). Every problem carries file,
+       line, node and, when there is one, a fix.
+   * - ``GET``/``PUT .../pipelines/{name}/source``
+     - A pipeline's YAML as written; replacing it keeps the file only if the
+       whole project still validates.
+   * - ``POST .../pipelines/{name}/ops``
+     - Canvas edits (connect a dataset, add or remove a node, set a key) applied
+       in place; the response carries the inverse operations for undo.
+   * - ``POST .../pipelines/{p}/nodes/{n}/extract-template``,
+       ``POST .../pipelines/{p}/extract-subpipeline``
+     - Move a node into ``templates/nodes/`` (``use``/``with``) or several nodes
+       into ``templates/pipelines/`` (``use: pipeline:<name>``), in one validated
+       transaction. ``GET .../templates/nodes`` and ``.../templates/pipelines``
+       list them. See ADR 0001 in ``docs/adr/``.
+   * - ``GET .../schema``, ``.../locations``, ``.../code-index``, ``.../ruff-config``
+     - Editor support: the format-2 JSON Schema; where each dataset, pipeline and
+       node is written (file:line, for go-to-definition); which function each node
+       runs and where; the project's Ruff settings.
+   * - ``GET .../lsp``, ``GET .../debugger``
+     - Whether a Python language server is available (``LSP_COMMAND``) and whether
+       a run can be debugged. The editor talks to them over WebSockets at
+       ``/api/projects/{id}/lsp`` and ``/api/projects/{id}/debug``.
+   * - ``GET .../pipelines/{name}/nodes/{node}/effective-config``,
+       ``GET .../environments/compare``
+     - A node's settings per environment and where each comes from; every
+       effective value side by side across environments.
+   * - ``GET .../datasets/{dataset}/preview``
+     - Columns and first rows of a dataset as materialized in ``env``.
+   * - ``GET .../pipelines/{p}/nodes/{n}/column-lineage``
+     - Source columns for each column an ingest node writes (parsed from its SQL
+       with sqlglot). Python transforms are not analysed.
+   * - ``POST .../quality/try``, ``POST .../quality/failing-rows``
+     - Run a draft quality block on a dataset's data without saving anything; the
+       rows a row-level check fails on.
+   * - ``GET .../nodes/{n}/tests``, ``POST .../nodes/{n}/tests/snapshot``,
+       ``POST .../tests/run``
+     - The tests that cover a node; write a snapshot test from its materialized
+       inputs; run the tests with pytest (runs project code, so it needs
+       ``pipeline.execute``).
+   * - ``GET .../staleness``, ``GET .../pipelines/{name}/last-success``
+     - Which nodes changed since their pipeline's last successful run (from the
+       source and the run certificates); that last success and its commit.
+   * - ``GET .../metrics``
+     - Runs, success rate, p50/p95 duration and SLA freshness per pipeline and
+       node, from the run certificates.
+   * - ``.../comments``
+     - Comment threads on nodes and lines of code: list, start, reply,
+       resolve/reopen, delete. Stored as ``.ducta/comments/<id>.json``, meant to be
+       committed with the project.
+   * - ``GET .../alerts``, ``POST .../alerts/test``, ``POST .../alerts/check``
+     - The ``alerts:`` rules of ``ducta.yaml``; send a test message; alert on
+       pipelines late for their ``metadata.sla`` — call it from a schedule, or set
+       ``SLA_CHECK_MINUTES``.
+   * - ``GET .../governance``
+     - Protected environments (``governance.protected_environments``, default
+       ``[prod, production]``) and whether the current user may run in them —
+       that takes ``pipeline.execute.protected`` (operator, admin).
 
 Integration
 -----------

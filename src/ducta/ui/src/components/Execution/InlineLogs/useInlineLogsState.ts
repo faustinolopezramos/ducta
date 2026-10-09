@@ -7,6 +7,7 @@ import {
   type LogEntry,
 } from "../../../store/logsStore";
 import { groupIntoSections, type Section } from "../logUtils";
+import { collapseRepeats, logMatcher } from "../logFilter";
 
 export type FlattenedItem =
   | { type: "header"; section: Section; id: string }
@@ -73,17 +74,21 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
     return currentLogs.filter((log) => log.nodeId === nodeFilter);
   }, [currentLogs, nodeFilter]);
 
+  const matcher = useMemo(() => logMatcher(searchFilter), [searchFilter]);
   const filteredLogs = useMemo(() => {
     if (levelFilter === "ALL" && !searchFilter) return nodeFilteredLogs;
-    const needle = searchFilter.toLowerCase();
     return nodeFilteredLogs.filter((log) => {
       if (levelFilter !== "ALL" && log.level !== levelFilter) return false;
-      if (needle && !log.message.toLowerCase().includes(needle)) return false;
+      if (searchFilter && !matcher.test(log.message)) return false;
       return true;
     });
-  }, [nodeFilteredLogs, searchFilter, levelFilter]);
+  }, [nodeFilteredLogs, searchFilter, levelFilter, matcher]);
 
-  const sections = useMemo(() => groupIntoSections(filteredLogs), [filteredLogs]);
+  // A line repeated back to back (a retry loop, a poll) is shown once, counted.
+  const sections = useMemo(
+    () => groupIntoSections(filteredLogs).map((sec) => ({ ...sec, entries: collapseRepeats(sec.entries) })),
+    [filteredLogs],
+  );
 
   // Mount time, sampled once, as the origin used when the logs carry no
   // timestamp of their own. Read via a lazy initialiser rather than during
@@ -135,6 +140,7 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
   }
 
   return {
+    searchError: matcher.error,
     currentLogs,
     usingStore,
     searchFilter,

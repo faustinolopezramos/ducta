@@ -433,7 +433,7 @@ class ContextAwareStorageBackend(StorageBackend):
             self._root = Path(base_path)
         else:
             output_path = self._base_io._ctx_get("output_path") or "."
-            self._root = Path(str(output_path)) / ".quality"
+            self._root = Path(str(output_path)) / "quality"
 
         if not self._is_cloud_path(str(self._root)):
             self._base_io._prepare_local_directory(str(self._root))

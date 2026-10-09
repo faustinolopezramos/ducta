@@ -214,3 +214,30 @@ class TestRoute:
         assert body["pipeline_name"] == "silver.clean"
         assert len(body["nodes"]) == 2
         assert body["last_execution"]["status"] == "failed"
+
+
+class TestFormat2Quality:
+    """Format 2 compiles blocks without `enabled`, and input contracts per dataset."""
+
+    def test_a_block_without_enabled_is_on(self):
+        q = NodeSchemaService._quality(
+            {
+                "data_quality": {
+                    "checks": {"row_count": {"min": 1}},
+                    "quality_gate": {"max_errors": 0},
+                }
+            }
+        )
+        assert q is not None and [c.name for c in q.checks] == ["row_count"]
+
+    def test_enabled_false_still_turns_it_off(self):
+        assert (
+            NodeSchemaService._quality({"data_quality": {"enabled": False, "checks": {"x": {}}}})
+            is None
+        )
+
+    def test_input_contracts_are_listed_as_sanity_checks(self):
+        q = NodeSchemaService._quality(
+            {"sanity_checks": {"inputs": {"bronze.a": {"checks": {"empty_dataset": {}}}}}}
+        )
+        assert q is not None and q.is_sanity and [c.name for c in q.checks] == ["empty_dataset"]

@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
@@ -29,6 +30,18 @@ from ducta.api.exceptions import ExecutionNotFoundError
 from ducta.api.execution.error_recovery import load_error_log_summary
 from ducta.api.models.execution import ExecutionResponse, LogEntry
 from ducta.api.utils.pagination import paginate
+
+
+def ran_in(execution: ExecutionResponse, workspace: Path) -> bool:
+    """Whether *execution* ran in *workspace* — from it, or from a project inside it
+    (or from the workspace a project directory belongs to). A record that does not
+    say where it ran (written before ``workspace`` existed) is kept: hiding it would
+    hide history, not another workspace's runs."""
+    if not execution.workspace:
+        return True
+    ran = Path(execution.workspace)
+    here = Path(workspace).resolve()
+    return ran == here or ran.is_relative_to(here) or here.is_relative_to(ran)
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -106,8 +119,11 @@ class _ReadsMixin:
         sweep_id: Optional[str] = None,
         project_id: Optional[str] = None,
         q: Optional[str] = None,
+        workspace: Optional[Path] = None,
     ) -> tuple[List[ExecutionResponse], int]:
         all_executions = self.list_executions(user_id=user_id)
+        if workspace is not None:
+            all_executions = [e for e in all_executions if ran_in(e, workspace)]
         if pipeline_name:
             all_executions = [e for e in all_executions if e.pipeline_name == pipeline_name]
         if node_name:

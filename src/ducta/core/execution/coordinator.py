@@ -568,6 +568,7 @@ class ParallelCoordinator:
             "config": node_info["config"],
         }
         execution_state.mark_completed(node_name, result_dict)
+        self._maybe_pause(node_name)
 
         try:
             from ducta.console.ux.rich_logger import log_node_complete
@@ -580,6 +581,22 @@ class ParallelCoordinator:
 
         newly_ready = self._find_newly_ready_nodes(node_name, dag, execution_state)
         execution_state.add_to_ready_queue(newly_ready)
+
+    def _maybe_pause(self, node_name: str) -> None:
+        """A data breakpoint: after *node_name*, wait (nothing new starts) until resumed.
+
+        The pause does not count towards the run's execution timeout.
+        """
+        breakpoints = getattr(self.context, "pause_after", None) or ()
+        hook = getattr(self.context, "breakpoint_hook", None)
+        if node_name not in breakpoints or hook is None:
+            return
+        paused = time.time()
+        try:
+            hook(node_name)
+        finally:
+            if hasattr(self, "_run_started"):
+                self._run_started += time.time() - paused
 
     def _handle_node_timeout(
         self,

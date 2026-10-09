@@ -1,0 +1,42 @@
+.explorer {
+  display: flex; flex-direction: column; height: 100%; min-height: 0;
+  background: var(--surface); border-right: 1px solid var(--border);
+  font-size: var(--text-sm);
+}
+.explorer__search {
+  display: flex; align-items: center; gap: 6px; margin: var(--space-2);
+  padding: 0 var(--space-2); height: 28px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg);
+  color: var(--text-dim);
+}
+.explorer__search:focus-within { border-color: var(--primary); }
+.explorer__search input {
+  flex: 1; min-width: 0; border: 0; background: transparent; color: var(--text);
+  font-size: var(--text-xs); outline: none;
+}
+.explorer__scroll { flex: 1; min-height: 0; overflow-y: auto; padding-bottom: var(--space-3); }
+.explorer__section {
+  margin: var(--space-3) var(--space-3) var(--space-1);
+  font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+  letter-spacing: var(--tracking-wider); text-transform: uppercase; color: var(--text-dim);
+}
+.explorer__list { list-style: none; margin: 0; padding: 0; }
+.explorer__list .explorer__list .explorer__row { padding-left: 30px; }
+.explorer__row {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  height: var(--row-height); padding: 0 var(--space-2) 0 var(--space-3);
+  border: 0; background: none; color: var(--text-muted); text-align: left; cursor: pointer;
+  font-size: var(--text-xs);
+}
+.explorer__row:hover, .explorer__row:focus-visible { background: var(--surface-hover); color: var(--text); outline: none; }
+.explorer__row.is-current { color: var(--text); font-weight: var(--weight-semibold); }
+.explorer__row.is-selected { background: color-mix(in srgb, var(--primary) 14%, transparent); color: var(--text); box-shadow: inset 2px 0 0 var(--primary); }
+.explorer__row--leaf .explorer__name { font-family: var(--font-mono); }
+.explorer__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.explorer__count { color: var(--text-dim); font-size: var(--text-2xs); font-family: var(--font-mono); }
+.explorer__node-glyph { color: var(--text-dim); font-size: 10px; }
+.explorer__flag { color: var(--danger); font-size: 9px; }
+.explorer__row[data-layer="bronze"] svg:last-of-type { color: var(--layer-bronze); }
+.explorer__row[data-layer="silver"] svg:last-of-type { color: var(--layer-silver); }
+.explorer__row[data-layer="gold"] svg:last-of-type { color: var(--layer-gold); }
+.explorer__empty { padding: var(--space-1) var(--space-3); color: var(--text-dim); font-size: var(--text-xs); }

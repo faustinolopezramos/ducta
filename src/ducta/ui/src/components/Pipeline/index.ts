@@ -2,7 +2,6 @@ export { DagCanvas, edgePath } from "./DagCanvas";
 export { DatasetChip } from "./DatasetChip";
 export { HUDToolbar } from "./HUDToolbar";
 export { NodeCard } from "./NodeCard";
-export { CommandPalette } from "./CommandPalette";
 export { ContractList } from "./ContractList";
 export { NodeFocus } from "./Focus/NodeFocus";
 export { DatasetFocus } from "./Focus/DatasetFocus";

@@ -8,6 +8,7 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import { useToastStack } from "../../hooks/useModalStack";
 import { useExecutionStatus } from "../../api/queries";
 import {
+  isMissingCertificate,
   useCertificate,
   useCertificateDiff,
   useReproduceCertificate,
@@ -40,10 +41,12 @@ export function CertificateDetailPage() {
   // for a different certificate than the one on screen is no verdict.
   const verdict =
     verified?.projectId === projectId && verified?.runId === runId ? verifyData ?? null : null;
+  // Once it has loaded: verifying a certificate that is not there is a second 404.
+  const loaded = cert?.run_id === runId;
   useEffect(() => {
-    if (projectId && runId) verify({ projectId, runId });
+    if (projectId && runId && loaded) verify({ projectId, runId });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-verify only when the identity changes, not on every `verify` reference
-  }, [projectId, runId]);
+  }, [projectId, runId, loaded]);
 
   const { mutate: reproduce, isPending: startingReproduce } = useReproduceCertificate();
   const [reproduceExecId, setReproduceExecId] = useState<string | null>(null);
@@ -99,7 +102,15 @@ export function CertificateDetailPage() {
           <Skeleton variant="block" height="160px" />
         </div>
       )}
-      {error != null && <p style={{ color: "var(--danger)" }}>Could not load this certificate.</p>}
+      {error != null &&
+        (isMissingCertificate(error) ? (
+          <p style={{ color: "var(--text-muted)" }}>
+            There is no certificate for this run in this workspace. The run may not have written one, or it
+            ran in another copy of the project.
+          </p>
+        ) : (
+          <p style={{ color: "var(--danger)" }}>Could not load this certificate.</p>
+        ))}
 
       {cert && (
         <div className="cert-detail">

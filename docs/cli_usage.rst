@@ -122,8 +122,7 @@ Writes a project in the recommended layout: ``ducta.<ext>``, ``catalog/<layer>.<
 schemas in ``.ducta/schema/``. ``--type`` is ``batch`` (default), ``ml``,
 ``streaming`` or ``hybrid``; ``--format`` is ``yaml`` (default, keeps the comments),
 ``toml`` or ``json``; ``--layout single`` keeps every dataset in one ``catalog.<ext>``.
-The directory must be new or empty. It is ``ducta template`` with this layout as the
-default, so everything below applies to it too.
+The directory must be new or empty.
 
 ``ducta template`` — create a project
 -------------------------------------
@@ -131,7 +130,6 @@ default, so everything below applies to it too.
 .. code-block:: bash
 
    ducta template --template medallion_basic --project-name sales
-   ducta template --template medallion_basic --project-name sales --layout split
    ducta template --list-templates
 
 .. list-table::

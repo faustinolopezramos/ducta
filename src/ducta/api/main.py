@@ -133,7 +133,27 @@ def create_app() -> FastAPI:
         await cron_scheduler.start(exec_manager)
         # ─────────────────────────────────────────────────────────────────────
 
+        # ── SLA watch (optional): alerts for runs that did not happen ───────
+        sla_task = None
+        import os as _os
+
+        workspace = _os.environ.get("DUCTA_WORKSPACE")
+        if settings.sla_check_minutes > 0 and workspace:
+            import asyncio as _asyncio
+
+            from ducta.api.services.alerts import sla_watch
+
+            sla_task = _asyncio.create_task(
+                sla_watch(workspace, settings.sla_check_env, settings.sla_check_minutes * 60)
+            )
+            logger.info(
+                "SLA watch: every {} min in {}", settings.sla_check_minutes, settings.sla_check_env
+            )
+
         yield
+
+        if sla_task is not None:
+            sla_task.cancel()
 
         await cron_scheduler.stop()
         exec_manager.shutdown()

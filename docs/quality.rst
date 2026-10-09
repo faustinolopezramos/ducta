@@ -279,15 +279,20 @@ Each run writes its reports next to the environment's data:
 
 .. code-block:: text
 
-   <paths.output>/<env>/.quality/
+   <paths.output>/<env>/quality/
      <pipeline>/
        <node>/
          reports/<run_id>.json        # every check's result
          gate_results/<run_id>.json   # the gate's decision
          history.json                 # scores over time (trends)
          baseline.json                # statistics drift_detection compares against
-     _adhoc/                          # `ducta quality run` on a bare file
 
 Reports are scoped per pipeline, so two pipelines with a node of the same name
-never mix. Read them with ``ducta quality report``, ``trend`` and ``score``, or
+never mix. ``settings.quality.output.base_path`` moves them elsewhere. A project
+that already keeps its reports in the older hidden ``<paths.output>/<env>/.quality/``
+goes on using it, so its baselines and history carry over; rename the directory to
+``quality`` to adopt the current default.
+
+``ducta quality run`` on a bare file is not part of a pipeline run: it writes to
+``<workspace>/.quality/_adhoc/`` (``--workspace``, default the current directory). Read them with ``ducta quality report``, ``trend`` and ``score``, or
 in the web app.

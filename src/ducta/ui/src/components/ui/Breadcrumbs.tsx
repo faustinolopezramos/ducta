@@ -1,8 +1,11 @@
 import { Link, useMatches } from "react-router-dom";
 import type { UIMatch } from "react-router-dom";
-import { IconChevronRight } from "@tabler/icons-react";
+import { IconChevronDown, IconChevronRight } from "@tabler/icons-react";
+import { useCommandMenu } from "../Shell/commandStore";
+import type { CommandKind } from "../Shell/commandIndex";
 import { useProjectList } from "../../hooks/useProjects";
 import "./Breadcrumbs.css";
+import { routes } from "../../utils/routes";
 
 interface BreadcrumbHandle {
   breadcrumb?: (match: UIMatch) => string;
@@ -13,6 +16,8 @@ interface BreadcrumbHandle {
 interface Crumb {
   pathname: string;
   label: string;
+  /** What its switcher lists: the crumb's siblings. */
+  switchKinds?: CommandKind[];
 }
 
 /**
@@ -31,6 +36,7 @@ interface Crumb {
 export function Breadcrumbs() {
   const matches = useMatches();
   const { projects } = useProjectList();
+  const showMenu = useCommandMenu((st) => st.show);
 
   // Every wrapper route (RequireWorkspace, WorkspaceShellWrapper, ...) is
   // handle-less, so at most one match ever carries a breadcrumb — the leaf.
@@ -49,17 +55,21 @@ export function Breadcrumbs() {
 
   const crumbs: Crumb[] = [{ pathname: "/projects", label: "Projects" }];
 
-  // "project/:projectId/pipeline/:pipelineId" is a flat sibling route, not
-  // nested under "project/:projectId" — it never separately matches the
-  // project route, so that intermediate crumb has to be synthesized from
-  // params rather than found in `matches`.
-  if (params.projectId && params.pipelineId) {
-    crumbs.push({ pathname: `/project/${params.projectId}`, label: resolveProject(params.projectId) });
+  // Every page under /p/:projectId — a pipeline, a dataset, the runs — sits
+  // below its project. The project's own page carries the only breadcrumb
+  // handle at that level, so its crumb is synthesized from params.
+  const projectPath = params.projectId ? routes.project(params.projectId) : null;
+  if (params.projectId && projectPath && current.pathname.replace(/\/$/, "") !== projectPath) {
+    crumbs.push({ pathname: projectPath, label: resolveProject(params.projectId), switchKinds: ["project"] });
   }
 
   let label = current.handle.breadcrumb!(current);
   if (params.projectId) label = label.split(params.projectId).join(resolveProject(params.projectId));
-  crumbs.push({ pathname: current.pathname, label });
+  crumbs.push({
+    pathname: current.pathname,
+    label,
+    switchKinds: params.dataset ? ["dataset"] : params.pipelineId ? ["pipeline"] : undefined,
+  });
 
   return (
     <nav className="ducta-breadcrumbs" aria-label="Breadcrumb">
@@ -83,6 +93,17 @@ export function Breadcrumbs() {
               <Link to={crumb.pathname} className="ducta-breadcrumbs__link">
                 {crumb.label}
               </Link>
+            )}
+            {crumb.switchKinds && (
+              <button
+                type="button"
+                className="ducta-breadcrumbs__switch"
+                aria-label={`Switch ${crumb.switchKinds[0]}`}
+                title={`Switch ${crumb.switchKinds[0]}`}
+                onClick={() => showMenu("", crumb.switchKinds)}
+              >
+                <IconChevronDown size={12} stroke={1.8} aria-hidden="true" />
+              </button>
             )}
           </span>
         );

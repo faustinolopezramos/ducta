@@ -65,6 +65,18 @@ def node_io(spec: Dict[str, Any], side: str) -> List[str]:
     value = spec.get(plural)
     if not value:
         value = spec.get(side)
+    if side == "input":
+        # Inputs as {param: dataset} — alone, or as a list item, which is how
+        # the node repository returns a format-2 node's: the datasets are the
+        # values, the keys are the function's parameter names.
+        if isinstance(value, dict):
+            return [str(v) for v in value.values() if isinstance(v, str)]
+        if (
+            isinstance(value, list)
+            and value
+            and all(isinstance(e, dict) and not (e.get("name") or e.get("id")) for e in value)
+        ):
+            return [str(v) for e in value for v in e.values() if isinstance(v, str)]
     return io_names(value)
 
 
@@ -158,6 +170,7 @@ class DatasetService:
 
         inputs = self._repo.list_inputs()
         outputs = self._repo.list_outputs()
+        catalog = self._catalog(project_id)
 
         datasets: List[DatasetResponse] = []
         for name in sorted(referenced):
@@ -178,12 +191,21 @@ class DatasetService:
                     declared_in=declared_in,
                     producers=producers.get(name, []),
                     consumers=consumers.get(name, []),
+                    description=getattr(catalog.get(name), "description", None),
+                    metadata=dict(getattr(catalog.get(name), "metadata", None) or {}),
                 )
             )
 
         return DatasetListResponse(project_id=project_id, datasets=datasets, count=len(datasets))
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _catalog(self, project_id: str) -> Dict[str, Any]:
+        """The project's catalog entries — description and metadata are not in the engine registry."""
+        try:
+            return dict(self._project_svc.store(project_id).project().catalog)
+        except Exception:  # noqa: BLE001 — a dataset list without metadata beats none
+            return {}
 
     @staticmethod
     def _entry_path(entry: Dict[str, Any]) -> Optional[str]:

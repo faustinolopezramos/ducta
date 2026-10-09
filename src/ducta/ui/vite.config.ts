@@ -31,6 +31,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // Monaco's ESM sources, past its exports map (which hides the CSS files):
+      // src/components/Editor/monacoCore.ts imports only the parts Ducta uses.
+      "@monaco-esm": path.resolve(__dirname, "node_modules/monaco-editor/esm/vs"),
+      // monaco-worker-manager (under monaco-yaml) imports this pre-0.56 path,
+      // which 0.56's exports map turns into esm/vs/esm/vs/… — unresolvable.
+      "monaco-editor/esm/vs": path.resolve(__dirname, "node_modules/monaco-editor/esm/vs"),
       "@components": path.resolve(__dirname, "src/components"),
       "@hooks": path.resolve(__dirname, "src/hooks"),
       "@store": path.resolve(__dirname, "src/store"),
@@ -51,8 +57,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 500,
 
     rollupOptions: {
-      onLog(level, log) {
-        if (log.code === "MODULE_LEVEL_DIRECTIVE") return false;
+      // Everything but the directive noise goes on to Vite's handler. Not calling
+      // it swallowed every log — including the unresolved-import one Vite turns
+      // into a build error — and that is how a worker shipped importing a
+      // global that does not exist.
+      onLog(level, log, handler) {
+        if (log.code === "MODULE_LEVEL_DIRECTIVE") return;
+        handler(level, log);
       },
       output: {
         manualChunks(id) {

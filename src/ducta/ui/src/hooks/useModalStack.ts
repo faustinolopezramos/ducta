@@ -87,16 +87,23 @@ export function useModalStack() {
 // TOAST STORE (global Zustand store)
 // ─────────────────────────────────────────────
 
+/** One button on a toast — "Undo" after a change, rather than a confirmation before it. */
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 interface Toast {
   id: string;
   message: string;
   type: 'info' | 'success' | 'error' | 'warn';
   createdAt: number;
+  action?: ToastAction;
 }
 
 interface ToastStore {
   toasts: Toast[];
-  show: (message: string, type?: Toast['type'], duration?: number) => string;
+  show: (message: string, type?: Toast['type'], duration?: number, action?: ToastAction) => string;
   dismiss: (id: string) => void;
   success: (message: string, duration?: number) => string;
   error: (message: string, duration?: number) => string;
@@ -107,9 +114,9 @@ interface ToastStore {
 const useToastStore = create<ToastStore>((set, get) => ({
   toasts: [],
 
-  show: (message, type = 'info', duration = 4000) => {
+  show: (message, type = 'info', duration = 4000, action) => {
     const id = uid();
-    const toast: Toast = { id, message, type, createdAt: Date.now() };
+    const toast: Toast = { id, message, type, createdAt: Date.now(), action };
     set((state) => ({ toasts: [...state.toasts, toast] }));
 
     if (duration > 0) {

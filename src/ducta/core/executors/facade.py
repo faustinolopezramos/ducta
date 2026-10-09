@@ -103,8 +103,20 @@ class PipelineExecutor:
         model_version: Optional[str] = None,
         hyperparams: Optional[Dict[str, Any]] = None,
         execution_mode: Optional[str] = "async",
+        node_names: Optional[List[str]] = None,
     ) -> PipelineRunResult:
-        """Execute one pipeline and return a typed description of what happened."""
+        """Execute one pipeline and return a typed description of what happened.
+
+        ``node_names`` runs only those nodes of a batch pipeline, in dependency
+        order among themselves; what they read from outside the set is read as
+        it was last materialized — like a single node, but several.
+        """
+        # A long-lived process (the API) re-imports edited project code between
+        # runs; fingerprints cached from an earlier run would certify the old
+        # source. Each run hashes the code it actually executes.
+        from ducta.core.code_fingerprint import clear_cache
+
+        clear_cache()
         self._run_preflight(pipeline_name)
 
         pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
@@ -150,9 +162,13 @@ class PipelineExecutor:
         result = PipelineRunResult(pipeline=pipeline_name, run_id=run_id)
         try:
             if pipeline_type in (PipelineType.BATCH.value, PipelineType.ML.value):
-                self.batch_executor.execute(
-                    pipeline_name, node_name, start_date, end_date, model_version, hyperparams
-                )
+                self.batch_executor.node_subset = list(node_names) if node_names else None
+                try:
+                    self.batch_executor.execute(
+                        pipeline_name, node_name, start_date, end_date, model_version, hyperparams
+                    )
+                finally:
+                    self.batch_executor.node_subset = None
                 self._collect_batch_outcome(result)
             elif pipeline_type == PipelineType.HYBRID.value:
                 hybrid_result = self.hybrid_executor.execute(
@@ -192,7 +208,8 @@ class PipelineExecutor:
             result.certificate_error = cert_error
             if cert_error and self.settings.require_run_certificate and result.ok:
                 result.add_error(f"run certificate required but not written: {cert_error}")
-            if result.ok and node_name is None:
+            # Only a whole-pipeline run makes the pipeline "materialized".
+            if result.ok and node_name is None and not node_names:
                 self._record_chain_state(pipeline_name, pipeline_type, start_date, end_date)
 
         if result.failed:
@@ -522,8 +539,12 @@ class PipelineExecutor:
         execution_mode: Optional[str] = "async",
         reuse_upstream: bool = False,
         rerun_all: bool = False,
+        node_names: Optional[List[str]] = None,
     ) -> PipelineRunResult:
-        """Execute *pipeline_name* and its transitive dependencies in topological order."""
+        """Execute *pipeline_name* and its transitive dependencies in topological order.
+
+        ``node_names`` (a subset of the target's nodes) runs only those: no
+        upstream pipelines, as for a single node."""
         from ducta.setting.dependency_inference import merge_pipeline_depends_on
         from ducta.setting.pipeline_dependency_resolver import PipelineDependencyResolver
 
@@ -534,7 +555,7 @@ class PipelineExecutor:
         nodes_config = getattr(self.context, "nodes_config", {}) or {}
         depends_on_map = merge_pipeline_depends_on(pipelines_config, nodes_config)
 
-        if not depends_on_map.get(pipeline_name):
+        if not depends_on_map.get(pipeline_name) or node_names:
             return self.run_pipeline(
                 pipeline_name,
                 node_name,
@@ -543,6 +564,7 @@ class PipelineExecutor:
                 model_version,
                 hyperparams,
                 execution_mode,
+                node_names=node_names,
             )
 
         chain = PipelineDependencyResolver.resolve_execution_chain(

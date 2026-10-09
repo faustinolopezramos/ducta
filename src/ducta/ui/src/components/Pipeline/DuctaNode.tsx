@@ -20,6 +20,13 @@ export interface DuctaNodeData extends Record<string, unknown> {
   /** Escape hatch used by ProjectPage to draw pipeline cards instead of nodes. */
   render?: (item: DagCanvasItem) => React.ReactNode;
   onSelect: (id: string) => void;
+  onOpen?: (id: string) => void;
+  /** Editable canvas: show the handles that connect this node to another. */
+  connectable?: boolean;
+  design?: "error" | "warning";
+  freshness?: "stale" | "never";
+  /** Open comment threads on it. */
+  comments?: number;
 }
 
 /**
@@ -77,7 +84,7 @@ function PortHandles({
  */
 export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
   const d = data as unknown as DuctaNodeData;
-  const { item, render, onSelect } = d;
+  const { item, render, onSelect, onOpen } = d;
 
   const inCount = item.inputs?.length ?? 0;
   const outCount = item.outputs?.length ?? 0;
@@ -117,6 +124,10 @@ export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
           showLayer={d.showLayer}
           context={d.context}
           onClick={() => onSelect(item.id)}
+          onOpen={onOpen ? () => onOpen(item.id) : undefined}
+          design={d.design}
+          freshness={d.freshness}
+          comments={d.comments}
         />
       )}
       <PortHandles
@@ -125,6 +136,26 @@ export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
         position={horizontal ? Position.Right : Position.Bottom}
         orientation={d.orientation}
       />
+      {d.connectable && !d.context && (
+        <>
+          {/* Drag from the out handle to another node: it will read what this one writes. */}
+          <Handle
+            id="connect-out"
+            type="source"
+            position={horizontal ? Position.Right : Position.Bottom}
+            isConnectable
+            className="node-connect node-connect--out"
+            title="Drag to a node to make it read this node's output"
+          />
+          <Handle
+            id="connect-in"
+            type="target"
+            position={horizontal ? Position.Left : Position.Top}
+            isConnectable
+            className="node-connect node-connect--in"
+          />
+        </>
+      )}
     </>
   );
 });

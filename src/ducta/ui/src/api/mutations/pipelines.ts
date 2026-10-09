@@ -43,6 +43,15 @@ export interface ExecutePipelinePayload {
   endDate?: string;
   modelVersion?: string;
   hyperparams?: Record<string, unknown>;
+  /** What to run: some nodes, everything downstream of one, or only what is stale. */
+  scope?: "pipeline" | "selected" | "from" | "after" | "until" | "stale";
+  nodes?: string[];
+  /** A sample run: this many rows of each input; outputs to the scratch area. */
+  sampleRows?: number;
+  /** Wait for an IDE debugger to attach before running (local servers). */
+  debug?: boolean;
+  /** Data breakpoints: pause after each of these nodes until resumed. */
+  pauseAfter?: string[];
 }
 
 /** Launch a hyperparameter sweep (one execution per combination). */
@@ -90,6 +99,7 @@ export const useCreatePipeline = () => {
         queryKey: qk.projects.detail(projectId),
       });
       queryClient.invalidateQueries({ queryKey: qk.projects.all() });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
     },
     onError: defaultOnError,
   });
@@ -115,6 +125,7 @@ export const useUpdatePipeline = () => {
         queryKey: qk.projects.detail(projectId),
       });
       queryClient.invalidateQueries({ queryKey: qk.projects.all() });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
     },
     onError: defaultOnError,
   });
@@ -141,6 +152,7 @@ export const useDeletePipeline = () => {
         queryKey: qk.projects.detail(projectId),
       });
       queryClient.invalidateQueries({ queryKey: qk.projects.all() });
+      queryClient.invalidateQueries({ queryKey: qk.git.all() });
     },
     onError: defaultOnError,
   });
@@ -165,6 +177,11 @@ export const useExecutePipeline = () => {
       endDate,
       modelVersion,
       hyperparams,
+      scope,
+      nodes,
+      sampleRows,
+      debug,
+      pauseAfter,
     }: ExecutePipelinePayload) =>
       executionClient
         .post(`/projects/${projectId}/pipelines/${pipelineName}/execute`, {
@@ -177,6 +194,11 @@ export const useExecutePipeline = () => {
           ...(endDate   ? { end_date:   endDate   } : {}),
           ...(modelVersion ? { model_version: modelVersion } : {}),
           ...(hyperparams  ? { hyperparams } : {}),
+          ...(scope ? { scope } : {}),
+          ...(nodes?.length ? { nodes } : {}),
+          ...(sampleRows ? { sample_rows: sampleRows } : {}),
+          ...(debug ? { debug: true } : {}),
+          ...(pauseAfter?.length ? { pause_after: pauseAfter } : {}),
         })
         .then((r) => r.data),
     onSuccess: () => {

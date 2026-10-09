@@ -795,7 +795,7 @@ class UnifiedArgumentParser:
                 "Create a new Ducta project: ducta.<ext>, catalog/<layer>.<ext>, "
                 "quality/profiles.<ext>, pipelines/<layer>.<domain>.<ext>, the Python the "
                 "nodes run, and the editor schemas. `ducta template` writes the same "
-                "projects, with every dataset in one catalog file unless --layout split."
+                "projects with every dataset in one catalog file (--layout single here)."
             ),
         )
         project_parser.add_argument("--name", required=True, help="Project name")

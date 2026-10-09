@@ -1,6 +1,7 @@
-import { useEffect, type Dispatch, type SetStateAction } from "react";
+import { useEffect } from "react";
 import type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
 import { useBuilderStore } from "../../store/builderStore";
+import { useCommandMenu } from "../../components/Shell/commandStore";
 
 interface NavMaps {
   children: Map<string, string[]>;
@@ -9,7 +10,8 @@ interface NavMaps {
 }
 
 /**
- * ⌘K finder, ⌘Z / ⌘⇧Z undo/redo, arrow-key walking, F fit, O orientation, R run node, Esc deselect.
+ * ⌘K finder, ⌘Z / ⌘⇧Z undo/redo, arrow-key walking, F fit, O orientation, R run node, Esc deselect,
+ * Enter open the node's code, ⌘⇧G between code and graph, ⌘I inspector, ⌘⇧V validate.
  *
  * Arrows follow the flow. Along it they step to a dependency or a consumer;
  * across it, to the neighbour in the same layer — so ↑/↓ walk the dependencies
@@ -17,8 +19,6 @@ interface NavMaps {
  * List lens ↑/↓ move between rows in the order the list shows them.
  */
 export function usePipelineKeyboardShortcuts(params: {
-  paletteOpen: boolean;
-  setPaletteOpen: Dispatch<SetStateAction<boolean>>;
   isCodeEditorOpen: boolean;
   addNodeOpen: boolean;
   lens: PipelineLens;
@@ -37,10 +37,20 @@ export function usePipelineKeyboardShortcuts(params: {
   handleRunNode: (node: { id: string; name?: string }) => void;
   centerOnNode: (id: string) => void;
   fitCanvas: () => void;
+  /** Open the selected node's code beside the canvas. */
+  onOpenCode?: (id: string) => void;
+  /** ⌘⇧G: code open → back to the graph; otherwise open the selected node's code. */
+  onToggleCode?: () => void;
+  onToggleInspector?: () => void;
+  /** ⌘⇧V: the deep preflight. */
+  onValidate?: () => void;
+  /** ⌘Z / ⌘⇧Z: the canvas history (edits to the pipeline file). */
+  onUndo?: () => void;
+  onRedo?: () => void;
+  /** `/`: find on the canvas. */
+  onFocusSearch?: () => void;
 }) {
   const {
-    paletteOpen,
-    setPaletteOpen,
     isCodeEditorOpen,
     addNodeOpen,
     lens,
@@ -57,17 +67,21 @@ export function usePipelineKeyboardShortcuts(params: {
     handleRunNode,
     centerOnNode,
     fitCanvas,
+    onOpenCode,
+    onToggleCode,
+    onToggleInspector,
+    onValidate,
+    onUndo,
+    onRedo,
+    onFocusSearch,
   } = params;
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A control on the page already acted on this key (a node card's Enter).
+      if (e.defaultPrevented) return;
       const isMac = /mac/i.test(navigator.userAgent);
       const mod = isMac ? e.metaKey : e.ctrlKey;
-      if (mod && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        setPaletteOpen((v) => !v);
-        return;
-      }
       // Canvas undo/redo (the builder's edit history). Lived in App.tsx, keyed
       // off the URL, next to a second, project-wide undo that is gone now.
       const key = e.key.toLowerCase();
@@ -75,12 +89,32 @@ export function usePipelineKeyboardShortcuts(params: {
         const target = e.target as HTMLElement | null;
         if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
         e.preventDefault();
+        if (onUndo && onRedo) {
+          if (key === "y" || e.shiftKey) onRedo();
+          else onUndo();
+          return;
+        }
         const builder = useBuilderStore.getState();
         if (key === "y" || e.shiftKey) builder.redo();
         else builder.undo();
         return;
       }
-      if (paletteOpen || mod || e.altKey) return;
+      if (mod && e.shiftKey && key === "g" && onToggleCode) {
+        e.preventDefault();
+        onToggleCode();
+        return;
+      }
+      if (mod && e.shiftKey && key === "v" && onValidate) {
+        e.preventDefault();
+        onValidate();
+        return;
+      }
+      if (mod && !e.shiftKey && key === "i" && onToggleInspector) {
+        e.preventDefault();
+        onToggleInspector();
+        return;
+      }
+      if (useCommandMenu.getState().open || mod || e.altKey) return;
       const target = e.target as HTMLElement | null;
       if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
       if (isCodeEditorOpen || addNodeOpen || lens === "yaml") return;
@@ -96,6 +130,11 @@ export function usePipelineKeyboardShortcuts(params: {
         setSelectedNodeId(null);
         return;
       }
+      if (e.key === "/" && onFocusSearch) {
+        e.preventDefault();
+        onFocusSearch();
+        return;
+      }
       if (onCanvas && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         fitCanvas();
@@ -104,6 +143,12 @@ export function usePipelineKeyboardShortcuts(params: {
       if (onCanvas && (e.key === "o" || e.key === "O")) {
         e.preventDefault();
         onToggleOrientation();
+        return;
+      }
+      // Enter on a focused control is that control's; on the canvas it opens the code.
+      if (e.key === "Enter" && selectedNodeId && onOpenCode && !target?.closest("button, a")) {
+        e.preventDefault();
+        onOpenCode(selectedNodeId);
         return;
       }
       if (e.key === "r" || e.key === "R") {
@@ -147,8 +192,6 @@ export function usePipelineKeyboardShortcuts(params: {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
-    paletteOpen,
-    setPaletteOpen,
     isCodeEditorOpen,
     addNodeOpen,
     lens,
@@ -165,5 +208,12 @@ export function usePipelineKeyboardShortcuts(params: {
     handleRunNode,
     centerOnNode,
     fitCanvas,
+    onOpenCode,
+    onToggleCode,
+    onToggleInspector,
+    onValidate,
+    onUndo,
+    onRedo,
+    onFocusSearch,
   ]);
 }

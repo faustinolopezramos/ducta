@@ -4,6 +4,7 @@ import { useUIStore, type PipelineLens, type PipelineOrientation } from "../../s
 import type { CanvasSelection } from "../../components/Pipeline/types";
 import type { PipelineScope } from "../../components/Pipeline/HUDToolbar";
 import type { CanvasViewport } from "../../components/Pipeline/useCanvasViewport";
+import { routes } from "../../utils/routes";
 
 const LENSES: readonly PipelineLens[] = ["flow", "list", "yaml"];
 
@@ -117,6 +118,17 @@ export function usePipelineView(projectId: string | undefined) {
     [setSelection]
   );
 
+  /**
+   * `?panel=code` — the focused node's source beside the canvas. In the URL
+   * so "node X, with its code open" is a link like any other view.
+   */
+  const codeOpen = searchParams.get("panel") === "code" && selectedNodeId != null;
+  const openCode = useCallback(
+    (id: string) => updateParams({ focus: focusParam({ kind: "node", id }), panel: "code" }),
+    [updateParams]
+  );
+  const closeCode = useCallback(() => updateParams({ panel: null }), [updateParams]);
+
   /** From the list: look at a node (or dataset) on the canvas, focused. */
   const showOnCanvas = useCallback(
     (id: string) => updateParams({ lens: "flow", focus: focusParam({ kind: "node", id }) }),
@@ -134,7 +146,7 @@ export function usePipelineView(projectId: string | undefined) {
       const value = focusParam(focus ?? null);
       if (value) params.set("focus", value);
       const query = params.toString();
-      navigate(`/project/${projectId}/pipeline/${name}${query ? `?${query}` : ""}`);
+      navigate(`${routes.pipeline(projectId ?? "", name)}${query ? `?${query}` : ""}`);
     },
     [navigate, projectId]
   );
@@ -162,6 +174,7 @@ export function usePipelineView(projectId: string | undefined) {
     selection, setSelection, selectedNodeId, selectedDatasetName,
     selectNodeById, selectDatasetByName, clearSelection,
     showOnCanvas, focusDatasetOnCanvas, openPipeline,
+    codeOpen, openCode, closeCode,
     onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
   };
 }

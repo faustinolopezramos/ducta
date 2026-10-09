@@ -141,6 +141,52 @@ def file_commit_sha(root: Path, file_path: Path) -> str:
         return ""
 
 
+def content_version(path: Path) -> str:
+    """A short hash of what *path* holds now — its bytes, or for a directory every
+    file's relative path and bytes. "" when it does not exist.
+
+    The optimistic-concurrency token for edits made through the API. Saving no
+    longer commits, so the last commit that touched a file says nothing about
+    an uncommitted edit made since; the content does.
+    """
+    import hashlib
+
+    path = Path(path)
+    if not path.exists():
+        return ""
+    digest = hashlib.sha256()
+    if path.is_dir():
+        for child in sorted(p for p in path.rglob("*") if p.is_file()):
+            digest.update(child.relative_to(path).as_posix().encode())
+            digest.update(b"\0")
+            digest.update(child.read_bytes())
+            digest.update(b"\0")
+    else:
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def validate_version(root: Path, path: Path, expected: str | None) -> None:
+    """Raise :exc:`~ducta.api.exceptions.ConcurrencyError` if *path* changed since the
+    caller read it (its :func:`content_version` is no longer *expected*)."""
+    if not expected:
+        return
+    current = content_version(path)
+    if current != expected:
+        from ducta.api.exceptions import ConcurrencyError
+        from ducta.api.utils.platform_utils import posix_relative
+
+        raise ConcurrencyError(
+            f"Concurrent modification detected on {Path(path).name}",
+            detail={
+                "path": posix_relative(Path(path), root),
+                "expected_sha": expected,
+                "current_sha": current,
+                "message": "The file changed since you opened it. Reload it, or compare first.",
+            },
+        )
+
+
 def validate_occ(root: Path, file_path: Path, expected_sha: str | None) -> None:
     """Raise :exc:`~ducta.api.exceptions.ConcurrencyError` if *file_path* has been
     modified since *expected_sha* (Optimistic Concurrency Control)..

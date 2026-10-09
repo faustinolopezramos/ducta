@@ -36,7 +36,7 @@ export function usePipelineGraph({
   const { projects, isLoading: projectsLoading } = useProjectList();
   const currentProject = useMemo(() => projects.find((p) => p.id === projectId), [projects, projectId]);
 
-  const { pipelines, raw: pipelinesData } = useProjectPipelines(projectId);
+  const { pipelines, raw: pipelinesData, error: pipelinesError } = useProjectPipelines(projectId);
   const pipelineById = useMemo(() => new Map(pipelines.map((p) => [p.id, p])), [pipelines]);
   const currentPipeline = pipelineId ? pipelineById.get(pipelineId) : undefined;
   const pipelineNodes = useMemo(() => currentPipeline?.nodes ?? [], [currentPipeline]);
@@ -266,7 +266,7 @@ export function usePipelineGraph({
 
   return {
     currentProject, projectsLoading, currentPipeline, pipelineNodes,
-    pipelinesData, rawPipelineSpec, yamlString, existingNodeNames,
+    pipelinesData, pipelinesError, rawPipelineSpec, yamlString, existingNodeNames,
     datasetList, datasetMap, datasetByName, datasetsLoading,
     hasChain, chainStrip, scope, drawnPipelines,
     schemaById, schemasLoading, executionStates, nodeStates,

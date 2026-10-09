@@ -2,13 +2,15 @@ import { useMemo, useState } from "react";
 import { IconCalendarEvent, IconPlus, IconSearch } from "@tabler/icons-react";
 import { useSchedules, useDeleteSchedule, type PipelineSchedule } from "../../api/schedulesApi";
 import { Button, PageHeader, PageContainer, EmptyState, DataTable, ConfirmDialog, PermittedButton } from "../../components/ui";
+import type { SectionHeader } from "../../components/App/SectionTabs";
 import { scheduleColumns } from "./scheduleColumns";
 import { ScheduleFormModal } from "./ScheduleFormModal";
 import "./schedules.css";
 
 type StatusFilter = "all" | "active" | "paused";
 
-export function SchedulesPage() {
+/** `projectId`: under a project, only its schedules. */
+export function SchedulesPage({ projectId, header }: { projectId?: string; header?: SectionHeader } = {}) {
   const { data, isLoading, isError, refetch } = useSchedules();
   const deleteMutation = useDeleteSchedule();
 
@@ -18,7 +20,10 @@ export function SchedulesPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
-  const schedules = data?.schedules;
+  const schedules = useMemo(
+    () => (projectId ? data?.schedules?.filter((s) => s.project_id === projectId) : data?.schedules),
+    [data?.schedules, projectId],
+  );
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return (schedules ?? []).filter((s) => {
@@ -34,8 +39,9 @@ export function SchedulesPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Automated Schedules"
-        description="Configure autonomous background pipeline triggers powered by Ducta AsyncCronScheduler. Cron expressions run in UTC."
+        title={header?.title ?? "Schedules"}
+        description={header?.description ?? "Pipelines that run on their own. Times are UTC."}
+        tabs={header?.tabs}
         actions={
           <PermittedButton permission="execution.write" variant="primary" onClick={() => setShowCreateModal(true)}>
             <IconPlus size={16} /> New Schedule

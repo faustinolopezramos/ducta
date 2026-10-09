@@ -14,6 +14,10 @@ vi.mock("../../../api/queries", () => ({
   useNodeCode: () => ({ data: { code: "def train_performance_model(df): ..." } }),
 }));
 
+vi.mock("../../../api/queries/comments", () => ({
+  useComments: () => ({ data: { threads: [{ id: "1", resolved: false }, { id: "2", resolved: true }] } }),
+}));
+
 vi.mock("../../../store/builderStore", () => ({
   useBuilderStore: (select: (s: { isDirty: boolean }) => unknown) => select(store),
 }));
@@ -119,6 +123,18 @@ describe("NodeFocus", () => {
     const props = renderFocus();
     fireEvent.click(screen.getByRole("button", { name: "Open code" }));
     expect(props.onEditCode).toHaveBeenCalledWith("def train_performance_model(df): ...");
+  });
+
+  it("counts the open comments on its tab", () => {
+    renderFocus();
+    expect(screen.getByRole("tab", { name: /Comments/ })).toHaveTextContent("Comments1");
+  });
+
+  it("makes a template from the node", () => {
+    const onExtractTemplate = vi.fn();
+    renderFocus({ onExtractTemplate });
+    fireEvent.click(screen.getByRole("button", { name: "Make template" }));
+    expect(onExtractTemplate).toHaveBeenCalledTimes(1);
   });
 
   it("offers the logs for a failed node", () => {

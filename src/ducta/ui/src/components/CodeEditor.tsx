@@ -1,5 +1,15 @@
 import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import Editor, { type Monaco, type OnMount } from "@monaco-editor/react";
+import { defineDuctaTheme } from "./Editor/monacoSetup";
+import { useProjectSchema } from "./Editor/useProjectSchema";
+import { useRuff } from "./Editor/useRuff";
+import { useDuctaCompletions } from "./Editor/useDuctaCompletions";
+import { useLanguageServer } from "./Editor/lsp/useLanguageServer";
+import { useYamlNavigation } from "./Editor/useYamlNavigation";
+import { useGitGutter } from "./Editor/useGitGutter";
+import { useEditorBuffer } from "./Editor/useEditorBuffer";
+import { useBreakpointGutter } from "./Debug/useBreakpointGutter";
+import { projectIdFromPath } from "../utils/routes";
 
 /** A lightweight, monaco-agnostic marker the parent can emit from `validate`. */
 export interface EditorMarker {
@@ -16,6 +26,7 @@ import {
   IconFileCode,
   IconMap,
   IconTextWrap,
+  IconWand,
   IconX,
 } from "@tabler/icons-react";
 import { colors } from "../theme/tokens";
@@ -23,22 +34,48 @@ import { Button } from "./ui";
 
 interface CodeEditorProps {
   value: string;
-  onSave?: (newCode: string) => void;
+  /** What was typed in this file before, to show instead of `value` (it reads unsaved). */
+  draft?: string;
+  /** A returned promise that rejects puts the editor back to "Unsaved". */
+  onSave?: (newCode: string) => void | Promise<unknown>;
   onCancel?: () => void;
   onDirtyChange?: (isDirty: boolean) => void;
   readOnly?: boolean;
   height?: string;
   language?: string;
   filePath?: string;
+  /** The file's path in the git repository (workspace-relative) — turns on the git gutter and blame. */
+  gitPath?: string;
   isSaving?: boolean;
   /** Optional inline validator. Runs debounced and renders Monaco markers. */
   validate?: (value: string) => EditorMarker[];
   /** Notified after each validation pass with the resulting markers. */
   onValidate?: (markers: EditorMarker[]) => void;
+  /** Scroll to and highlight this 1-based line (e.g. a node's function). */
+  revealLine?: number;
+  /** Clickable annotations above lines — "◆ node · ▶ Run · Show in graph". */
+  codeLenses?: EditorCodeLens[];
+  /** Extra controls in the header, before the word-wrap/minimap toggles. */
+  headerActions?: ReactNode;
+  /** The live editor, for callers that add their own Monaco behaviour. */
+  onEditorReady?: (editor: Parameters<OnMount>[0], monaco: Monaco) => void;
+  /** Every edit, as typed — for validating a draft elsewhere (debounce there). */
+  onChangeValue?: (value: string) => void;
+  /** Markers computed elsewhere (e.g. by the server), shown beside `validate`'s own. */
+  markers?: EditorMarker[];
+  /** ⌘⏎: run what this file is (a node, on a sample). */
+  onRun?: () => void;
+}
+
+/** One code lens: a line and the actions shown above it. */
+export interface EditorCodeLens {
+  line: number;
+  items: { title: string; onClick?: () => void }[];
 }
 
 export function CodeEditor({
   value,
+  draft,
   onSave,
   onCancel,
   onDirtyChange,
@@ -46,16 +83,28 @@ export function CodeEditor({
   height = "400px",
   language = "python",
   filePath,
+  gitPath,
   isSaving = false,
   validate,
   onValidate,
+  revealLine,
+  codeLenses,
+  headerActions,
+  onEditorReady,
+  onChangeValue,
+  markers,
+  onRun,
 }: CodeEditorProps) {
-  const [editedCode, setEditedCode] = useState(value);
-  const [isDirty, setIsDirty] = useState(false);
+  useProjectSchema();
+  const buffer = useEditorBuffer(value, filePath, draft);
+  const editedCode = buffer.text;
+  const isDirty = buffer.isDirty;
   const [wordWrap, setWordWrap] = useState(true);
   const [minimap, setMinimap] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [editorReady, setEditorReady] = useState(false);
+  // The live editor as state, for hooks that need it during render (Ruff).
+  const [instance, setInstance] = useState<{ editor: Parameters<OnMount>[0]; monaco: Monaco } | null>(null);
   const handleSaveRef = useRef<() => void>(() => {});
   const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const monacoRef = useRef<Monaco | null>(null);
@@ -75,25 +124,14 @@ export function CodeEditor({
     onDirtyChange?.(isDirty);
   }, [isDirty, onDirtyChange]);
 
-  // Reload the buffer when the file changes. Adjusted during render rather
-  // than in an effect: an effect let the editor paint one frame showing the
-  // previous file's contents against the new file's path.
-  const [loadedValue, setLoadedValue] = useState(value);
-  if (value !== loadedValue) {
-    setLoadedValue(value);
-    setEditedCode(value);
-    setIsDirty(false);
-  }
-
   const handleChange = (newValue: string | undefined) => {
-    setEditedCode(newValue || "");
-    setIsDirty(newValue !== value);
+    buffer.setText(newValue || "");
+    onChangeValue?.(newValue || "");
   };
 
   const handleSave = () => {
     if (!onSave || readOnly || !isDirty) return;
-    onSave?.(editedCode);
-    setIsDirty(false);
+    buffer.markSaved(editedCode, onSave(editedCode));
   };
 
   useEffect(() => {
@@ -101,14 +139,14 @@ export function CodeEditor({
   });
 
   const handleCancel = () => {
-    setEditedCode(value);
-    setIsDirty(false);
+    buffer.revert();
     onCancel?.();
   };
 
   const handleMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
     monacoRef.current = monaco;
+    setInstance({ editor, monaco });
     setEditorReady(true);
 
     const disposable = editor.onDidChangeCursorPosition((event: { position: { lineNumber: number; column: number } }) => {
@@ -123,7 +161,138 @@ export function CodeEditor({
     });
 
     editor.onDidDispose(() => disposable.dispose());
+    onEditorReady?.(editor, monaco);
   };
+
+  // Python: Ruff lint as you type, its fixes as quick fixes, ⇧⌥F to format.
+  const isPython = language === "python";
+  useRuff({
+    enabled: isPython && !readOnly && editorReady,
+    editor: instance?.editor ?? null,
+    monaco: instance?.monaco ?? null,
+    code: editedCode,
+  });
+  // …and a real language server (types, hover, go-to-definition) when the API has one.
+  const lsp = useLanguageServer({
+    enabled: isPython && !readOnly && editorReady,
+    editor: instance?.editor ?? null,
+    monaco: instance?.monaco ?? null,
+    filePath,
+  });
+  // YAML: hover a dataset, node or module:function; ⌘-click goes to it.
+  useYamlNavigation(instance?.monaco ?? null, language === "yaml" && editorReady);
+  // Git: changed-line bars in the margin and blame on the cursor's line.
+  useGitGutter(instance?.editor ?? null, instance?.monaco ?? null, readOnly ? undefined : gitPath);
+  // Python: breakpoints in the margin; the line a debug run stopped on.
+  useBreakpointGutter(
+    instance?.editor ?? null,
+    instance?.monaco ?? null,
+    isPython ? projectIdFromPath(window.location.pathname) : null,
+    filePath,
+  );
+  // ⌘⏎ runs — through a ref, so the command always calls the latest handler.
+  const onRunRef = useRef(onRun);
+  useEffect(() => {
+    onRunRef.current = onRun;
+  });
+  const canRun = Boolean(onRun);
+  useEffect(() => {
+    if (!instance || !canRun) return;
+    const { editor, monaco } = instance;
+    const action = editor.addAction({
+      id: "ducta.run-sample",
+      label: "Run this node on a sample",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+      run: () => onRunRef.current?.(),
+    });
+    return () => action.dispose();
+  }, [instance, canRun]);
+
+  useDuctaCompletions(
+    instance?.monaco ?? null,
+    instance?.editor.getModel()?.uri.toString() ?? null,
+    language,
+  );
+  const formatDocument = () => {
+    editorRef.current?.getAction?.("ducta.ruff.format")?.run();
+  };
+
+  // Markers from outside (server validation), under their own owner so they
+  // never clobber the ones `validate` sets.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor?.getModel?.();
+    if (!editorReady || !monaco || !model) return;
+    const severity = (s: EditorMarker["severity"]) =>
+      s === "error" ? monaco.MarkerSeverity.Error : s === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info;
+    monaco.editor.setModelMarkers(
+      model,
+      "ducta-external",
+      (markers ?? []).map((m) => ({
+        startLineNumber: m.startLineNumber,
+        startColumn: m.startColumn ?? 1,
+        endLineNumber: m.endLineNumber ?? m.startLineNumber,
+        endColumn: m.endColumn ?? model.getLineMaxColumn(Math.min(m.startLineNumber, model.getLineCount())),
+        message: m.message,
+        severity: severity(m.severity),
+      })),
+    );
+  }, [editorReady, markers]);
+
+  // Bring a line into view and mark it — the function a node runs.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editorReady || !editor || !monaco || !revealLine) return;
+    // A few lines of context above, so the code lens over the line shows too.
+    editor.setScrollTop(editor.getTopForLineNumber(Math.max(1, revealLine - 3)));
+    editor.setPosition({ lineNumber: revealLine, column: 1 });
+    const decorations = editor.createDecorationsCollection([
+      {
+        range: new monaco.Range(revealLine, 1, revealLine, 1),
+        options: { isWholeLine: true, className: "ducta-editor-revealed-line" },
+      },
+    ]);
+    return () => decorations.clear();
+  }, [editorReady, revealLine, filePath, value]);
+
+  // Code lenses. Monaco registers providers per language, so this one answers
+  // only for this editor's model, and its commands live on this editor.
+  useEffect(() => {
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = editor?.getModel?.();
+    if (!editorReady || !editor || !monaco || !model || !codeLenses?.length) return;
+    const commands: { dispose(): void }[] = [];
+    const lenses = codeLenses.flatMap((lens, li) =>
+      lens.items.map((item, ii) => {
+        let id = "";
+        if (item.onClick) {
+          id = `ducta.lens.${editor.getId()}.${li}.${ii}.${Date.now()}`;
+          commands.push(monaco.editor.registerCommand(id, () => item.onClick?.()));
+        }
+        return { line: lens.line, title: item.title, id };
+      }),
+    );
+    const provider = monaco.languages.registerCodeLensProvider(model.getLanguageId(), {
+      provideCodeLenses: (target: { uri: { toString(): string } }) => ({
+        lenses:
+          target.uri.toString() === model.uri.toString()
+            ? lenses.map((l, i) => ({
+                range: new monaco.Range(l.line, 1, l.line, 1),
+                id: `ducta-lens-${i}`,
+                command: { id: l.id, title: l.title },
+              }))
+            : [],
+        dispose: () => {},
+      }),
+    });
+    return () => {
+      provider.dispose();
+      commands.forEach((c) => c.dispose());
+    };
+  }, [editorReady, codeLenses]);
 
   // Debounced inline validation → Monaco markers. No-op when no validator given.
   useEffect(() => {
@@ -159,9 +328,11 @@ export function CodeEditor({
     return () => clearTimeout(handle);
   }, [editedCode, validate, editorReady]);
 
-  // Determine if we're in dark mode
+  // The app's own colours, light or dark. Defined once per theme, not per
+  // render: redefining the active theme re-applies it to every editor, and
+  // this renders on each keystroke.
   const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-  const theme = isDark ? "vs-dark" : "vs-light";
+  const theme = useMemo(() => defineDuctaTheme(isDark), [isDark]);
 
   return (
     <div
@@ -228,6 +399,20 @@ export function CodeEditor({
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+          {headerActions}
+          {isPython && !readOnly && (
+            <span
+              className={`code-editor__lsp${lsp.available ? " is-on" : ""}`}
+              title={lsp.available ? `Types, hover and go-to-definition by ${lsp.command}` : lsp.hint ?? "No Python language server"}
+            >
+              {lsp.available ? lsp.command?.replace(/-langserver$/, "") : "no types"}
+            </span>
+          )}
+          {isPython && !readOnly && (
+            <IconButton title="Format document with Ruff (⇧⌥F)" active={false} onClick={formatDocument}>
+              <IconWand size={15} stroke={1.9} />
+            </IconButton>
+          )}
           <EditorPill tone={isDirty ? "warning" : "success"}>
             {isDirty ? "Unsaved" : "Saved"}
           </EditorPill>
@@ -252,6 +437,8 @@ export function CodeEditor({
         <Editor
           height="100%"
           language={language}
+          // The model's URI: the YAML language server picks the schema by it.
+          path={filePath ? `file:///${filePath.replace(/^\/+/, "")}` : undefined}
           value={editedCode}
           onChange={handleChange}
           onMount={handleMount}

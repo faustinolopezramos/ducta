@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ducta.api.repositories.node_repository import NodeRepository
-from ducta.api.utils.git_utils import commit_files
 
 
 @dataclass
@@ -118,7 +117,7 @@ class NodeService:
         expected_sha: Optional[str] = None,
         pipeline: Optional[str] = None,
     ) -> str:
-        """Save a node spec and git-commit.  Returns new commit SHA.
+        """Save a node spec (not committed). Returns the new version token.
 
         ``pipeline``: where to create a new node in a format-2 project.
         """
@@ -132,14 +131,13 @@ class NodeService:
         self._repo.delete(name, expected_sha)
 
     def save_node_code(self, name: str, code: str) -> NodeFileInfo:
-        """Validate Python syntax, write source file, and git-commit."""
+        """Validate Python syntax and write the source file. Committing is the user's step."""
         from ducta.api.utils.validators import validate_python_syntax
 
         py_path = self._repo.resolve_python_file(name)
         validate_python_syntax(code, source_label=py_path.name)
         py_path.parent.mkdir(parents=True, exist_ok=True)
         py_path.write_text(code, encoding="utf-8")
-        commit_files(self._root, [py_path], f"feat: update Python code for node '{name}'")
         rel = py_path.relative_to(self._root)
         return NodeFileInfo(
             abs_path=py_path,

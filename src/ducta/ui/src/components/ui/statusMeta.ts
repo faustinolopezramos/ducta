@@ -7,6 +7,7 @@ import {
   IconAlertTriangle,
   IconCircleX,
   IconBan,
+  IconPlayerPause,
   IconPlayerSkipForward,
 } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
@@ -38,6 +39,7 @@ export type Status =
   | "cancelled"
   | "skipped"
   | "gate_blocked"
+  | "paused"
   | "stopped";
 
 // Tabler icon components are forwardRef exotics; ComponentType<any> avoids the
@@ -78,6 +80,8 @@ export const STATUS_META: Record<Status, StatusMeta> = {
   // but did not do all of its work. Amber like other did-not-finish outcomes,
   // yet counted in FAILURE_STATUSES — it needs a look.
   gate_blocked:    { label: "Gate blocked",    Icon: IconAlertTriangle,     glyph: "!", color: colors.amber,     tone: "warn" },
+  // At a data breakpoint: alive, waiting to be continued or stopped.
+  paused:          { label: "Paused",          Icon: IconPlayerPause,       glyph: "⏸", color: colors.blue,      tone: "warn" },
   stopped:         { label: "Stopped",         Icon: IconBan,               glyph: "■", color: colors.textMuted, tone: "neutral" },
 };
 
@@ -98,6 +102,7 @@ export const EXECUTION_STATUSES = [
   "cancelled",
   "skipped",
   "gate_blocked",
+  "paused",
 ] as const;
 
 export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];

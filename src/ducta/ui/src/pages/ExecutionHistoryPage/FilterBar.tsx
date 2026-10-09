@@ -31,12 +31,15 @@ export function FilterBar({
   filters,
   onChange,
   pipelines,
+  lockedProject,
 }: {
   filters: ExecutionListFilters;
   onChange: (f: ExecutionListFilters) => void;
   pipelines: string[];
+  /** Under a project: no project picker, and "Clear" keeps the project. */
+  lockedProject?: string;
 }) {
-  const hasFilters = Object.values(filters).some((v) => v);
+  const hasFilters = Object.entries(filters).some(([k, v]) => v && !(lockedProject && k === "project_id"));
   const [search, setSearch] = useState(filters.q ?? "");
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { data: envsData } = useEnvironments();
@@ -157,7 +160,7 @@ export function FilterBar({
       )}
 
       {/* Project filter */}
-      {projects.length > 0 && (
+      {!lockedProject && projects.length > 0 && (
         <select
           value={filters.project_id ?? ""}
           onChange={(e) => onChange({ ...filters, project_id: e.target.value || undefined })}
@@ -215,7 +218,7 @@ export function FilterBar({
 
       {hasFilters && (
         <button
-          onClick={() => onChange({})}
+          onClick={() => onChange(lockedProject ? { project_id: lockedProject } : {})}
           style={{
             display: "flex",
             alignItems: "center",

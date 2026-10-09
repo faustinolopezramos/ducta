@@ -22,12 +22,13 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Annotated, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import msgpack  # type: ignore
 from fastapi import (  # type: ignore
     APIRouter,
     Depends,
+    HTTPException,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -37,8 +38,10 @@ from loguru import logger  # type: ignore
 from ducta.api.config import Settings, get_settings
 from ducta.api.dependencies import (
     ExecutionManagerDep,
+    OptionalSourcePathDep,
     SourcePathDep,
     WebSocketAuthError,
+    WorkspaceManagerDep,
     authenticate_websocket,
     extract_ws_token,
     get_current_user,
@@ -108,8 +111,11 @@ async def list_executions(
     sweep_id: Optional[str] = None,
     project_id: Optional[str] = None,
     q: Optional[str] = None,
+    workspace: OptionalSourcePathDep = None,
 ) -> ExecutionListResponse:
     user_id = current_user.id if current_user else None
+    # Only this workspace's runs: the run store is shared, and project ids repeat
+    # across workspaces (a copy of a project lists as the same project).
     executions, total = exec_manager.list_executions_paginated(
         skip=skip,
         limit=limit,
@@ -123,6 +129,7 @@ async def list_executions(
         sweep_id=sweep_id,
         project_id=project_id,
         q=q,
+        workspace=workspace,
     )
     return ExecutionListResponse(
         executions=executions, count=len(executions), total=total, skip=skip, limit=limit
@@ -194,6 +201,64 @@ async def get_execution_logs(
             logger.warning(f"Invalid 'since' timestamp: {since}, returning all logs")
 
     return all_logs
+
+
+@router.get(
+    "/{execution_id}/diagnosis",
+    summary="Why a run failed: what kind of failure, where, and what changed since the last good run",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def get_execution_diagnosis(
+    execution_id: str,
+    exec_manager: ExecutionManagerDep,
+    manager: WorkspaceManagerDep,
+    current_user: Annotated[User, Depends(get_current_user)] = None,
+) -> dict:
+    from ducta.api.services.diagnosis import diagnose
+    from ducta.api.services.run_certificates import candidate_runs_dirs, latest_successful
+    from ducta.core.certificate import find_certificate_dir, load_certificate
+
+    user_id = current_user.id if current_user else None
+    # Memory first, then the persisted run: a diagnosis must survive a restart.
+    record = await exec_manager.load_execution(execution_id, user_id=user_id)
+    from ducta.api.execution.error_recovery import load_error_log_summary
+
+    summary = load_error_log_summary(execution_id) or {}
+    errors = []
+    for entry in summary.get("errors", []):
+        error = entry.get("error") or {}
+        errors.append(
+            {
+                "node_id": entry.get("node_id"),
+                "error_type": error.get("type"),
+                "message": error.get("message"),
+                "traceback": error.get("traceback"),
+                "hint": entry.get("hint"),
+            }
+        )
+
+    def compute() -> dict:
+        project_root = None
+        certificate = None
+        last_ok = None
+        if record.project_id:
+            project_root = manager.for_project(record.project_id).root
+            if record.certificate_run_id:
+                for _env, runs_dir in candidate_runs_dirs(project_root, record.env):
+                    run_dir = find_certificate_dir(runs_dir, record.certificate_run_id)
+                    if run_dir is not None:
+                        certificate = load_certificate(run_dir / "certificate.json")
+                        break
+            ok = latest_successful(project_root, record.env).get(record.pipeline_name)
+            # The last good run before this one, not this one (a later success is no baseline).
+            if ok and (
+                not certificate
+                or (ok.get("started_at") or "") < (certificate.get("started_at") or "")
+            ):
+                last_ok = ok
+        return diagnose(record.model_dump(mode="json"), errors, project_root, certificate, last_ok)
+
+    return await run_in_threadpool(compute)
 
 
 @router.get(
@@ -290,6 +355,21 @@ async def bulk_cancel_executions(
 
 
 @router.post(
+    "/{execution_id}/resume",
+    summary="Resume a run paused at a data breakpoint",
+    dependencies=[Depends(require_permission("execution.write"))],
+)
+async def resume_execution(
+    execution_id: str,
+    exec_manager: ExecutionManagerDep,
+    current_user: Annotated[User, Depends(get_current_user)] = None,
+) -> Dict[str, Any]:
+    if not exec_manager.resume(execution_id):
+        raise HTTPException(status_code=409, detail="The run is not paused at a breakpoint")
+    return {"resumed": execution_id}
+
+
+@router.post(
     "/{execution_id}/retry",
     response_model=ExecutionResponse,
     status_code=202,
@@ -303,6 +383,18 @@ async def retry_execution(
 ) -> ExecutionResponse:
     """Clone a terminal execution and re-enqueue it with the same parameters."""
     user_id = current_user.id if current_user else None
+    if current_user is not None:
+        from ducta.api.services.governance import check_can_run
+        from ducta.api.workspace.manager import WorkspaceManager
+
+        original = exec_manager.get_execution(execution_id)
+        root = None
+        if original.project_id:
+            try:
+                root = WorkspaceManager(source_path).for_project(original.project_id).root
+            except Exception:  # noqa: BLE001 — unknown project: the default protected names apply
+                root = None
+        check_can_run(current_user, original.env, root)
     # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
     with http_error_on(400):
         return exec_manager.retry(execution_id, source_path=source_path, user_id=user_id)

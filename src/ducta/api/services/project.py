@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
@@ -35,6 +35,9 @@ from ducta.api.models.project import (
     ProjectUpdateRequest,
 )
 from ducta.api.repositories.project_repository import ProjectRepository
+
+if TYPE_CHECKING:
+    from ducta.api.repositories.v2_store import V2ProjectStore
 from ducta.api.utils.git_utils import commit_files
 from ducta.api.utils.pagination import paginate
 from ducta.api.utils.validators import validate_project_name
@@ -57,11 +60,16 @@ def _build_response(
     pipelines = repo.get_pipelines(project_id)
     pipeline_count = len(pipelines) if isinstance(pipelines, dict) else 0
 
+    try:
+        root = repo.manifest_path(project_id).parent.relative_to(workspace_path).as_posix()
+    except Exception:  # noqa: BLE001 — an unresolvable root is "", not an error
+        root = ""
     return ProjectResponse(
         id=project_id,
         name=settings.get("name", project_id),
         description=settings.get("description"),
         workspace=str(workspace_path),
+        root="" if root == "." else root,
         pipeline_count=pipeline_count,
         variables=settings.get("variables", {}),
         metadata=settings.get("metadata", {}),
@@ -73,6 +81,17 @@ def _build_response(
             "workspace": "/api/workspace",
         },
     )
+
+
+def _why(exc: Exception) -> str:
+    """The problems behind a configuration error, one per line; else its message."""
+    detail = getattr(exc, "detail", None)
+    problems = (
+        detail.get("problems") if isinstance(detail, dict) else getattr(exc, "problems", None)
+    )
+    if isinstance(problems, list) and problems:
+        return "\n".join(str(p) for p in problems)
+    return str(exc)
 
 
 def _git_commit_files(workspace_path: Path, message: str, files: List[Path]) -> None:
@@ -104,11 +123,27 @@ class ProjectService:
                     _build_response(self._workspace_path, project_id, settings, self._repo)
                 )
             except Exception as exc:
-                logger.warning(
-                    "Skipping malformed project '{name}': {exc}", name=project_id, exc=exc
-                )
+                # Listed, not hidden: a project whose configuration is broken is
+                # the one its owner most needs to open.
+                logger.warning("Project '{name}' does not load: {exc}", name=project_id, exc=exc)
+                items.append(self._invalid_response(project_id, exc))
         return ProjectListResponse(
             projects=items, count=len(items), total=total, skip=skip, limit=limit
+        )
+
+    def _invalid_response(self, project_id: str, exc: Exception) -> ProjectResponse:
+        try:
+            root = self._repo.manifest_path(project_id).parent
+            rel = root.relative_to(self._workspace_path).as_posix()
+        except Exception:  # noqa: BLE001 — an unresolvable root is "", not an error
+            rel = ""
+        return ProjectResponse(
+            id=project_id,
+            name=project_id,
+            workspace=str(self._workspace_path),
+            root="" if rel == "." else rel,
+            config_status="invalid",
+            config_error=_why(exc)[:2000],
         )
 
     def get_project(self, project_id: str) -> ProjectResponse:
@@ -116,7 +151,7 @@ class ProjectService:
         return _build_response(self._workspace_path, project_id, settings, self._repo)
 
     def create_project(
-        self, body: ProjectCreateRequest, *, auto_commit: bool = True
+        self, body: ProjectCreateRequest, *, auto_commit: bool = False
     ) -> ProjectResponse:
         project_id = body.name
         now = _now_iso()
@@ -137,7 +172,7 @@ class ProjectService:
         return _build_response(self._workspace_path, project_id, settings, self._repo)
 
     def update_project(
-        self, project_id: str, body: ProjectUpdateRequest, *, auto_commit: bool = True
+        self, project_id: str, body: ProjectUpdateRequest, *, auto_commit: bool = False
     ) -> ProjectResponse:
         settings = self._repo.get_settings(project_id)
 
@@ -157,7 +192,7 @@ class ProjectService:
         return _build_response(self._workspace_path, project_id, settings, self._repo)
 
     def delete_project(
-        self, project_id: str, *, auto_commit: bool = True, force: bool = False
+        self, project_id: str, *, auto_commit: bool = False, force: bool = False
     ) -> None:
         pdir = self._repo.project_dir(project_id)
         if not pdir.is_dir():
@@ -202,7 +237,7 @@ class ProjectService:
         self._repo.delete_dir(project_id)
 
     def import_project(
-        self, body: ImportProjectRequest, *, auto_commit: bool = True
+        self, body: ImportProjectRequest, *, auto_commit: bool = False
     ) -> ProjectResponse:
         source = Path(body.path).resolve()
 
@@ -235,6 +270,14 @@ class ProjectService:
         settings = self._repo.get_settings(project_id)
         return _build_response(self._workspace_path, project_id, settings, self._repo)
 
+    def store(self, project_id: str) -> "V2ProjectStore":
+        """The project's format-2 store (raises ``ProjectNotFoundError`` if unknown)."""
+        return self._repo.store(project_id)
+
+    @property
+    def workspace_path(self) -> Path:
+        return self._workspace_path
+
     def project_dir(self, project_id: str) -> Path:
         """The project's directory (raises ``ProjectNotFoundError`` if unknown)."""
         self.get_project(project_id)
@@ -255,7 +298,7 @@ class ProjectService:
         return pipelines[pipeline_name]
 
     def get_pipelines_commit_sha(self, project_id: str) -> Optional[str]:
-        """Current commit SHA of this project's pipelines.yaml, for OCC."""
+        """Current version token of this project's pipelines, for OCC."""
         return self._repo.get_pipelines_commit_sha(project_id) or None
 
     def save_project_pipeline(
@@ -266,13 +309,13 @@ class ProjectService:
         *,
         expected_sha: Optional[str] = None,
     ) -> str:
-        """Upsert a pipeline and return the new commit SHA."""
+        """Upsert a pipeline and return the new version token."""
         return self._repo.save_pipeline(project_id, pipeline_name, spec, expected_sha=expected_sha)
 
     def delete_project_pipeline(
         self, project_id: str, pipeline_name: str, *, expected_sha: Optional[str] = None
     ) -> str:
-        """Delete a pipeline and return the new commit SHA (see ``save_project_pipeline``).
+        """Delete a pipeline and return the new version token (see ``save_project_pipeline``).
 
         Raises ``PipelineNotFoundError`` (404) when the pipeline does not exist.
         """

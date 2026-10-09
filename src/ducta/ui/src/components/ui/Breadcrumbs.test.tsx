@@ -15,14 +15,20 @@ function renderAt(path: string) {
         children: [
           { path: "projects", handle: { breadcrumb: () => "Projects" }, element: <Breadcrumbs /> },
           {
-            path: "project/:projectId",
-            handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" },
-            element: <Breadcrumbs />,
-          },
-          {
-            path: "project/:projectId/pipeline/:pipelineId",
-            handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline" },
-            element: <Breadcrumbs />,
+            path: "p/:projectId",
+            children: [
+              {
+                index: true,
+                handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" },
+                element: <Breadcrumbs />,
+              },
+              {
+                path: "pipelines/:pipelineId",
+                handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline" },
+                element: <Breadcrumbs />,
+              },
+              { path: "runs", handle: { breadcrumb: () => "Runs" }, element: <Breadcrumbs /> },
+            ],
           },
           {
             path: "canvas/:pipelineId",
@@ -45,24 +51,30 @@ describe("Breadcrumbs", () => {
   });
 
   it("shows Projects > resolved project name on a project page", () => {
-    renderAt("/project/proj-1");
+    renderAt("/p/proj-1");
 
     expect(screen.getByRole("link", { name: "Projects" })).toHaveAttribute("href", "/projects");
     expect(screen.getByText("Analytics")).toHaveAttribute("aria-current", "page");
   });
 
   it("falls back to the raw id when the project isn't listed yet", () => {
-    renderAt("/project/unknown-id");
+    renderAt("/p/unknown-id");
     expect(screen.getByText("unknown-id")).toBeInTheDocument();
   });
 
   it("synthesizes the intermediate project crumb on a pipeline page", () => {
-    renderAt("/project/proj-1/pipeline/sales_etl");
+    renderAt("/p/proj-1/pipelines/sales_etl");
 
     expect(screen.getByRole("link", { name: "Projects" })).toBeInTheDocument();
     const projectLink = screen.getByRole("link", { name: "Analytics" });
-    expect(projectLink).toHaveAttribute("href", "/project/proj-1");
+    expect(projectLink).toHaveAttribute("href", "/p/proj-1");
     expect(screen.getByText("sales_etl")).toHaveAttribute("aria-current", "page");
+  });
+
+  it("puts the project above any page it owns", () => {
+    renderAt("/p/proj-1/runs");
+    expect(screen.getByRole("link", { name: "Analytics" })).toHaveAttribute("href", "/p/proj-1");
+    expect(screen.getByText("Runs")).toHaveAttribute("aria-current", "page");
   });
 
   it("renders nothing on a page that draws its own trail", () => {

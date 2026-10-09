@@ -16,9 +16,9 @@ Core CLI Commands
      - Runs a pipeline: ``--pipeline <name>``, plus ``--env <env>`` (default ``base``).
    * - ``ducta init project --name NAME``
      - Creates a project in the recommended layout (``--type batch|ml|streaming|hybrid``,
-       ``--format yaml|toml|json``).
+       ``--format yaml|toml|json``, ``--layout split|single``).
    * - ``ducta template``
-     - Scaffolds a new project from a professional template (one catalog file unless ``--layout split``).
+     - Scaffolds a new project from a professional template, with every dataset in one catalog file.
    * - ``ducta config list-pipelines``
      - Shows all available pipelines in your current directory.
    * - ``ducta config validate``

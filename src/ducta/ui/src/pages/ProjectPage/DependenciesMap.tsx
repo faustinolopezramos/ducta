@@ -13,6 +13,7 @@ import { formatGlyph } from "../../utils/nodePresentation";
 import { dependsOnFromEdges } from "../../utils/pipelineChain";
 import { useUIStore } from "../../store/uiStore";
 import { IconSitemap, IconArrowRight } from "@tabler/icons-react";
+import { routes } from "../../utils/routes";
 
 /** Boundary datasets listed per side before the rest are summarised. */
 const MAX_BOUNDARY = 3;
@@ -135,7 +136,7 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
 
   const lineage = useMemo(() => computeLineage(focused, parents), [focused, parents]);
 
-  const open = (pipelineId: string) => navigate(`/project/${projectId}/pipeline/${pipelineId}`);
+  const open = (pipelineId: string) => navigate(routes.pipeline(projectId, pipelineId));
 
   if (isLoading) {
     return (

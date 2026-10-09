@@ -28,7 +28,12 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 from pydantic import BaseModel, Field
 
-from ducta.api.dependencies import ExecutionManagerDep, NodeServiceDep, require_permission
+from ducta.api.dependencies import (
+    ExecutionManagerDep,
+    NodeServiceDep,
+    SourcePathDep,
+    require_permission,
+)
 from ducta.api.exceptions import (
     ConfigFileNotFoundError,
     ConfigValidationError,
@@ -71,7 +76,7 @@ router = APIRouter(prefix="/nodes", tags=["Nodes"])
 class NodeResponse(BaseModel):
     name: str
     spec: Dict[str, Any]
-    commit_sha: Optional[str] = Field(default=None, description="SHA for OCC")
+    commit_sha: Optional[str] = Field(default=None, description="Version token for OCC")
 
 
 class NodesListResponse(BaseModel):
@@ -81,7 +86,7 @@ class NodesListResponse(BaseModel):
 
 class NodeUpdateRequest(BaseModel):
     spec: Dict[str, Any] = Field(description="Node specification dict")
-    expected_commit_sha: Optional[str] = Field(None, description="SHA for OCC validation")
+    expected_commit_sha: Optional[str] = Field(None, description="Version token for OCC validation")
 
 
 class NodeCodeResponse(BaseModel):
@@ -326,6 +331,7 @@ async def get_node_executions(
     name: str,
     node_svc: NodeServiceDep,
     exec_manager: ExecutionManagerDep,
+    source_path: SourcePathDep,
     skip: int = 0,
     limit: int = 10,
 ) -> ExecutionListResponse:
@@ -335,6 +341,7 @@ async def get_node_executions(
         skip=skip,
         limit=limit,
         node_name=name,
+        workspace=source_path,
     )
     return ExecutionListResponse(
         executions=executions, count=len(executions), total=total, skip=skip, limit=limit

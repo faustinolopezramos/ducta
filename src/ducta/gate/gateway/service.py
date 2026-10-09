@@ -75,12 +75,27 @@ class ConnectionSpec:
             raise IngestionServiceError(f"Invalid port: {self.port}")
 
 
+def _sources_path(workspace: Path) -> str:
+    """Where the project keeps its connections — the engine's answer: a format-2
+    project's ``settings.ingestion.sources_path``, else ``config/sources.yaml``."""
+    project_file = workspace / "ducta.yaml"
+    if project_file.is_file():
+        try:
+            doc = yaml.safe_load(project_file.read_text(encoding="utf-8")) or {}
+            path = ((doc.get("settings") or {}).get("ingestion") or {}).get("sources_path")
+            if isinstance(path, str) and path.strip():
+                return path
+        except (OSError, yaml.YAMLError, AttributeError):
+            pass
+    return "config/sources.yaml"
+
+
 class IngestionService:
     """Manage declarative JDBC connections (``config/sources.yaml`` + ``.env``)."""
 
     def __init__(self, workspace: Path | str = "."):
         self.workspace = Path(workspace)
-        self.config_path = self.workspace / "config" / "sources.yaml"
+        self.config_path = self.workspace / _sources_path(self.workspace)
         self.env_path = self.workspace / ".env"
         self.gitignore_path = self.workspace / ".gitignore"
 

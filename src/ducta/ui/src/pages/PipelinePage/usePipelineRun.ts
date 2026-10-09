@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useExecutionList } from "../../api/queries";
-import { apiErrorMessage, useCancelExecution, useRunNode } from "../../api/mutations";
+import { apiErrorMessage, useCancelExecution, useExecutePipeline, useRunNode } from "../../api/mutations";
 import { useLogsStore } from "../../store/logsStore";
 import { useSourceStore } from "../../store/workspace";
 import { useLogsWebSocket } from "../../hooks/useLogsWebSocket";
 import { useToastStack } from "../../hooks/useModalStack";
 import type { DagCanvasItem } from "../../components/Pipeline/types";
+import type { RunOptions } from "../../components/Execution/RunOptionsDialog";
 
 /**
  * Running things from the pipeline page: a single node, the whole pipeline
@@ -24,6 +25,7 @@ export function usePipelineRun({
   const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
   const { show: showToast } = useToastStack();
   const { mutate: runNode } = useRunNode();
+  const { mutate: executePipeline } = useExecutePipeline();
   const { mutate: cancelExecution } = useCancelExecution();
 
   const [activeExecutionId, setActiveExecutionId] = useState<string | null>(null);
@@ -120,6 +122,117 @@ export function usePipelineRun({
     );
   };
 
+  /** Run part of the pipeline: some nodes, everything from one, or only what is stale. */
+  /** A data breakpoint: the run pauses after this node, its output there to inspect. */
+  const [breakpoint, setBreakpoint] = useState<{ node: string; execId: string | null } | null>(null);
+
+  const runScoped = (scope: "selected" | "from" | "after" | "until" | "stale", nodes?: string[]) => {
+    if (!projectId || !pipelineId) return;
+    const what =
+      scope === "stale" ? "stale nodes"
+        : scope === "from" ? `from ${nodes?.[0]}`
+          : scope === "until" ? `up to ${nodes?.[0]}`
+            : scope === "after" ? `the rest after ${nodes?.[0]}`
+              : (nodes ?? []).join(", ");
+    executePipeline(
+      { projectId, pipelineName: pipelineId, env: activeEnv, scope, nodes },
+      {
+        onSuccess: (data: any) => {
+          showToast(`Running ${what} of ${pipelineId} in ${activeEnv}`, "success");
+          setNodeExecId(data?.id ?? null);
+          setBreakpoint(scope === "until" && nodes?.[0] ? { node: nodes[0], execId: data?.id ?? null } : null);
+          useLogsStore.getState().setLogsOpen(true);
+        },
+        onError: (e: any) => showToast(apiErrorMessage(e, `Could not run ${what}`), "error"),
+      },
+    );
+  };
+
+  /** The node whose last sample run the Sample tab shows, and when it finished. */
+  const [sample, setSample] = useState<{ node: string; execId: string | null; rows: number } | null>(null);
+
+  /** Run one node on the first rows of its inputs; nothing real is written. */
+  const runSample = (nodeId: string, rows = 100) => {
+    if (!projectId) return;
+    const pipelineName = itemById.get(nodeId)?.pipeline ?? pipelineId!;
+    executePipeline(
+      { projectId, pipelineName, env: activeEnv, nodeName: nodeId, sampleRows: rows },
+      {
+        onSuccess: (data: any) => {
+          showToast(`Sample run of ${nodeId} on ${rows} rows started`, "success");
+          setNodeExecId(data?.id ?? null);
+          setSample({ node: nodeId, execId: data?.id ?? null, rows });
+          useLogsStore.getState().setLogsOpen(true);
+        },
+        onError: (e: any) => showToast(apiErrorMessage(e, `Could not run ${nodeId} on a sample`), "error"),
+      },
+    );
+  };
+
+  /** A debug run: it waits for the IDE to attach, then breakpoints there stop it. */
+  const [debugRun, setDebugRun] = useState<{ execId: string | null; node: string | null } | null>(null);
+  const runDebug = (nodeId: string | null) => {
+    if (!projectId || !pipelineId) return;
+    executePipeline(
+      { projectId, pipelineName: pipelineId, env: activeEnv, debug: true, ...(nodeId ? { scope: "selected" as const, nodes: [nodeId] } : {}) },
+      {
+        onSuccess: (data: any) => {
+          setNodeExecId(data?.id ?? null);
+          setDebugRun({ execId: data?.id ?? null, node: nodeId });
+          useLogsStore.getState().setLogsOpen(true);
+        },
+        onError: (e: any) => showToast(apiErrorMessage(e, "Could not start a debug run"), "error"),
+      },
+    );
+  };
+
+  /** The whole pipeline, pausing after *node* until continued or stopped. */
+  const runWithBreakpoint = (node: string) => {
+    if (!projectId || !pipelineId) return;
+    executePipeline(
+      { projectId, pipelineName: pipelineId, env: activeEnv, pauseAfter: [node] },
+      {
+        onSuccess: (data: any) => {
+          showToast(`Running ${pipelineId} in ${activeEnv} — it will pause after ${node}`, "success");
+          setNodeExecId(data?.id ?? null);
+          setBreakpoint({ node, execId: data?.id ?? null });
+          useLogsStore.getState().setLogsOpen(true);
+        },
+        onError: (e: any) => showToast(apiErrorMessage(e, "Could not start the run"), "error"),
+      },
+    );
+  };
+
+  /** A run said in full in the Run-with-options dialog. */
+  const runWithOptions = (o: RunOptions) => {
+    if (!projectId || !pipelineId) return;
+    executePipeline(
+      {
+        projectId,
+        pipelineName: pipelineId,
+        env: activeEnv,
+        dryRun: o.dryRun,
+        ...(o.scope !== "pipeline" ? { scope: o.scope } : {}),
+        ...(o.node ? { nodes: [o.node] } : {}),
+        ...(o.scope === "selected" && o.node && o.sampleRows ? { nodeName: o.node } : {}),
+        ...(o.startDate ? { startDate: o.startDate } : {}),
+        ...(o.endDate ? { endDate: o.endDate } : {}),
+        ...(o.hyperparams ? { hyperparams: o.hyperparams } : {}),
+        ...(o.sampleRows ? { sampleRows: o.sampleRows } : {}),
+        ...(o.pauseAfter ? { pauseAfter: [o.pauseAfter] } : {}),
+      },
+      {
+        onSuccess: (data: any) => {
+          showToast(`Running ${pipelineId} in ${activeEnv}`, "success");
+          setNodeExecId(data?.id ?? null);
+          if (o.pauseAfter) setBreakpoint({ node: o.pauseAfter, execId: data?.id ?? null });
+          useLogsStore.getState().setLogsOpen(true);
+        },
+        onError: (e: any) => showToast(apiErrorMessage(e, "Could not start the run"), "error"),
+      },
+    );
+  };
+
   const handleExecute = () => {
     const btn = document.querySelector('[data-execute-btn]') as HTMLButtonElement;
     btn?.click();
@@ -143,6 +256,10 @@ export function usePipelineRun({
     activeEnv, showToast,
     activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
     logsOpen, setLogsOpen: setLogsOpenSmart, chainStatus,
-    handleRunNode, handleExecute, handleValidate, handleCancel,
+    handleRunNode, handleExecute, handleValidate, handleCancel, runScoped,
+    runSample, sample, sampleExecId: nodeExecId,
+    breakpoint, clearBreakpoint: () => setBreakpoint(null),
+    runDebug, debugRun, clearDebugRun: () => setDebugRun(null),
+    runWithBreakpoint, runWithOptions,
   };
 }

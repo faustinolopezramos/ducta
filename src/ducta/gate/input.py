@@ -32,6 +32,17 @@ from ducta.gate.factories import ReaderFactory
 _ON_MISSING_INPUT = frozenset({"skip", "fail"})
 
 
+def sample(df: Any, rows: int) -> Any:
+    """The first *rows* rows of a Spark or pandas DataFrame; anything else as it is."""
+    if df is None:
+        return df
+    if hasattr(df, "limit") and hasattr(df, "sparkSession"):
+        return df.limit(rows)
+    if hasattr(df, "head") and hasattr(df, "iloc"):
+        return df.head(rows)
+    return df
+
+
 class InputLoader(BaseIO):
     """Unified InputLoader with parallel loading strategy."""
 
@@ -80,7 +91,12 @@ class InputLoader(BaseIO):
                     )
                 raise MissingDependencyError(detail)
 
-        return self._load_inputs_parallel(input_keys, fail_fast, start_date, end_date)
+        loaded = self._load_inputs_parallel(input_keys, fail_fast, start_date, end_date)
+        sample_rows = self._ctx_get("sample_rows")
+        if sample_rows:
+            # A sample run: the node sees the first N rows of each input.
+            loaded = [sample(df, int(sample_rows)) for df in loaded]
+        return loaded
 
     @staticmethod
     def _is_query_format(config: Dict[str, Any]) -> bool:

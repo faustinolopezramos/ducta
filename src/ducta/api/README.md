@@ -43,7 +43,7 @@ Ducta API is the service layer, implementing:
 *   **Execution engine**: an in-memory `ExecutionManager` with a bounded queue, concurrent-run limits, log buffering, and optional DB-backed persistence layered transparently (`execution/`).
 *   **Source resolution with SSRF defense**: per-request local paths are security-validated; Git clones are host-allow-listed and reject internal/non-routable targets (loopback, private, link-local metadata endpoint) (`source/resolver.py`).
 *   **Persistence & repositories**: optional SQLAlchemy-async engine, Alembic-style migrations, and repository/store abstractions for projects, nodes, and execution history (`db/`, `repositories/`, `repository/`).
-*   **Project files**: `repositories/v2_store.py` (`V2ProjectStore`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and commits it; the commit SHA is the optimistic-concurrency token. A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`).
+*   **Project files**: `repositories/v2_store.py` (`V2ProjectStore`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and does **not** commit (committing is the user's call: the Changes panel, or git). The optimistic-concurrency token, still named `commit_sha`, is a hash of the file's content (`content_version` in `utils/git_utils.py`). A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`).
 *   **Middleware**: request-ID tagging, CORS, and configurable per-IP rate limiting (in-memory or Redis) (`middleware/`).
 
 ---
@@ -63,14 +63,17 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `RUNS_DIR` | `~/.ducta/runs` | Where the file-based execution store writes `meta.json` + `logs.jsonl` per run. Empty disables file persistence (memory-only) |
 | `RATE_LIMIT_ENABLED` | `false` | Per-IP rate limiting (`RATE_LIMIT_REQUESTS`, `..._WINDOW_SECONDS`, `RATE_LIMIT_REDIS_URL`) |
 | `MAX_CONCURRENT_EXECUTIONS` | `5` | Parallel pipeline runs |
-| `CORS_ORIGINS` | `["*"]` | Allowed origins |
-| `GIT_CLONE_ALLOWED_HOSTS` | `[]` | Allow-list for Git clone hosts (empty = public hosts only, internal blocked) |
+| `CORS_ORIGINS` | `localhost`/`127.0.0.1` on ports 5173 and 4173 (the Vite dev/preview servers) | Allowed origins. Keep it an explicit list: `*` forces credentials off |
+| `GIT_CLONE_ALLOWED_HOSTS` | `[]` | Allow-list for Git clone hosts. Empty = the well-known public forges outside `development`, any host in `development` |
+| `LSP_COMMAND` / `LSP_MAX_PROCESSES` | `""` / `4` | Python language server for the code editor, one per open editor over stdio. Empty = the first found of `basedpyright-langserver`, `pyright-langserver`, `pylsp`; `off` disables it |
+| `SLA_CHECK_MINUTES` / `SLA_CHECK_ENV` | `0` / `prod` | Check every project's `metadata.sla` this often and send `sla_miss` alerts. `0` = off (`POST /api/projects/{id}/alerts/check` still works) |
 
 **Roles and permissions** (with `AUTH_ENABLED=true`; with auth off every request runs as a local admin):
 
 | Role | Permissions |
 |------|-------------|
 | `admin` | `*` |
+| `operator` | read, plus run pipelines (`pipeline.execute`, `pipeline.execute.protected`), `execution.write` and `quality.run` — runs what is there, including in protected environments, but does not change projects or code |
 | `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete` |
 | `viewer` | read only (`*.read`, including `project.read`) |
 
@@ -79,12 +82,13 @@ Some routes need more than their name suggests:
 - A Git URL as `source` needs `repository.write`, because the server clones it.
 - Promoting a model needs `model.promote`; deleting a version or running gc needs `model.delete`.
 - Testing an unsaved ingestion connection needs `ingestion.write`.
+- Running or retrying in a protected environment (`governance.protected_environments` in `ducta.yaml`, `[prod, production]` by default) needs `pipeline.execute.protected`: operators and admins have it, developers do not.
 
 `GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/api/test_rbac.py` fails if a route that writes is reachable by a viewer.
 
 **Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, and either bind to `127.0.0.1` or place the server behind an authenticating proxy.
 
-**Where execution history lives**: the Execution History page reads from two layers merged together — the in-memory `ExecutionStore` (capped by `max_executions_in_memory`, evicted after `execution_retention_seconds`, lost on restart) and the file-based store at `RUNS_DIR` (persists across restarts). Setting `DATABASE_URL` adds a third, queryable layer used for single-run/log lookups once a record has aged out of both memory and `RUNS_DIR`. To fully clear history, delete `RUNS_DIR` (and the `executions`/`execution_logs` tables if `DATABASE_URL` is set) — restarting the server alone only clears memory. This is independent of Data Quality's storage, which lives under `<output_path>/<environment>/.quality` per pipeline config, not under `RUNS_DIR`.
+**Where execution history lives**: the Execution History page reads from two layers merged together — the in-memory `ExecutionStore` (capped by `max_executions_in_memory`, evicted after `execution_retention_seconds`, lost on restart) and the file-based store at `RUNS_DIR` (persists across restarts). Setting `DATABASE_URL` adds a third, queryable layer used for single-run/log lookups once a record has aged out of both memory and `RUNS_DIR`. To fully clear history, delete `RUNS_DIR` (and the `executions`/`execution_logs` tables if `DATABASE_URL` is set) — restarting the server alone only clears memory. This is independent of Data Quality's storage, which lives under `<output_path>/<environment>/quality` (or `settings.quality.output.base_path`), not under `RUNS_DIR`.
 
 ---
 

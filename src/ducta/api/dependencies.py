@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, Query, Request, WebSocket  # type: ignore
 from fastapi.security import OAuth2PasswordBearer  # type: ignore
@@ -130,6 +130,25 @@ def get_source_path(
 
 
 SourcePathDep = Annotated[Path, Depends(get_source_path)]
+
+
+def get_optional_source_path(
+    request: Request,
+    user: CurrentUserDep,
+    source: Annotated[
+        str | None,
+        Query(description="Source path (local directory or Git URL)"),
+    ] = None,
+) -> Path | None:
+    """``get_source_path`` for routes that also work without one: None when no
+    source was given (and no ``DUCTA_WORKSPACE``) or it does not resolve."""
+    try:
+        return get_source_path(request, user, source)
+    except HTTPException:
+        return None
+
+
+OptionalSourcePathDep = Annotated[Optional[Path], Depends(get_optional_source_path)]
 
 
 # Keep WorkspaceManager creation for routes that still use it (Git operations, etc.)

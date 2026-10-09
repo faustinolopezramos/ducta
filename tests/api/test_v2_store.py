@@ -65,12 +65,17 @@ class TestReads:
 
 
 class TestNodeWrites:
-    def test_update_keeps_comments_and_commits(self, project):
+    def test_update_keeps_comments_and_does_not_commit(self, project):
         store = _store(project)
+        head = git.Repo(project).head.commit.hexsha
         spec = dict(store.nodes()["load"], retry=2)
         sha = store.save_node("load", spec)
 
         assert sha
+        # Saved, not committed: committing is the user's step.
+        repo = git.Repo(project)
+        assert repo.head.commit.hexsha == head
+        assert "pipelines/etl.yaml" in [d.a_path for d in repo.index.diff(None)]
         assert _etl(project)["nodes"]["load"]["retry"] == 2
         assert (
             "# the ETL graph — keep this comment"
@@ -99,7 +104,24 @@ class TestNodeWrites:
         with pytest.raises(ValidationError) as exc:
             store.save_node("load", bad)
         assert any("no_such_dataset" in p for p in exc.value.detail["problems"])
+        # The same problems, split for the UI: which node, which dataset, which file.
+        item = next(i for i in exc.value.detail["items"] if i["dataset"] == "no_such_dataset")
+        assert item["node"] == "load"
+        assert item["file"] == "pipelines/etl.yaml"
+        assert item["code"] == "unknown_dataset"
         assert (project / "pipelines" / "etl.yaml").read_text() == before
+
+    def test_the_returned_version_is_the_next_expected_one(self, project):
+        store = _store(project)
+        v1 = store.save_node("load", dict(store.nodes()["load"], retry=1))
+        # The token the save returned is current: the next save with it passes …
+        v2 = store.save_node("load", dict(store.nodes()["load"], retry=2), expected_sha=v1)
+        assert v2 != v1
+        # … and an edit made outside the API, uncommitted, still makes it stale.
+        etl = project / "pipelines" / "etl.yaml"
+        etl.write_text(etl.read_text() + "\n# edited by hand\n")
+        with pytest.raises(ConcurrencyError):
+            store.save_node("load", dict(store.nodes()["load"], retry=3), expected_sha=v2)
 
     def test_stale_commit_sha_is_a_conflict(self, project):
         store = _store(project)

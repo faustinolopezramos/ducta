@@ -28,16 +28,26 @@ export const useGitStage = () => {
 
 /**
  * POST /git/commit
- * Commits currently staged files. Use after useGitStage.
+ * Commits — `paths` stages exactly those files first; without it, whatever is
+ * already staged. The author goes on the commit only, never into git config.
  */
 export const useGitCommitChanges = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ message, author_name, author_email }: { message?: string; author_name?: string; author_email?: string } = {}) =>
-      client.post("/git/commit", { message, author_name, author_email }).then((r) => r.data),
-    onSuccess: (data: { commit_sha?: string }) => {
+    mutationFn: ({
+      message,
+      author_name,
+      author_email,
+      paths,
+    }: { message?: string; author_name?: string; author_email?: string; paths?: string[] } = {}) =>
+      client.post("/git/commit", { message, author_name, author_email, ...(paths ? { paths } : {}) }).then((r) => r.data),
+    onSuccess: (data: { success?: boolean; commit_hash?: string | null; message?: string }) => {
       queryClient.invalidateQueries({ queryKey: qk.git.all() });
-      const sha = data?.commit_sha ? ` · ${String(data.commit_sha).slice(0, 7)}` : "";
+      if (data?.success === false) {
+        toastStore.getState().show(data.message ?? "Nothing to commit", "info");
+        return;
+      }
+      const sha = data?.commit_hash ? ` · ${String(data.commit_hash).slice(0, 7)}` : "";
       toastStore.getState().show(`Changes committed${sha}`, "success");
     },
     onError: defaultOnError,

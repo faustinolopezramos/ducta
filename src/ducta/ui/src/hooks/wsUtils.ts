@@ -1,6 +1,6 @@
 export const MAX_RECONNECT_ATTEMPTS = 5;
 
-function apiWebSocketUrl(path: string): string {
+export function apiWebSocketUrl(path: string): string {
   const configuredBase = import.meta.env.VITE_API_URL?.trim();
   const browserBase = `${globalThis.location?.protocol === "https:" ? "wss" : "ws"}://${globalThis.location?.host ?? "localhost:5173"}`;
   const apiBase = configuredBase && /^https?:\/\//i.test(configuredBase)

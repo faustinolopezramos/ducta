@@ -52,6 +52,96 @@ class _Strict(BaseModel):
 # ── ducta.yaml ───────────────────────────────────────────────────────────────
 
 
+#: ``metadata`` keys the UI reads (ADR 0001). Checked when present; others pass as-is.
+_SLA = re.compile(
+    r"^(?:(?:hourly|daily|weekly|monthly)(?: \d{1,2}:\d{2})?|\d+[smhd])$", re.IGNORECASE
+)
+
+
+def check_metadata(value: Dict[str, Any]) -> Dict[str, Any]:
+    """Type-check the recognised ``metadata`` keys; free-form keys pass unchanged."""
+    if not isinstance(value, dict):
+        raise ValueError("metadata must be a mapping")
+    owner = value.get("owner")
+    if owner is not None and not (isinstance(owner, str) and owner.strip()):
+        raise ValueError("metadata.owner must be a non-empty string")
+    for key in ("tags", "pii"):
+        items = value.get(key)
+        if items is not None and not (
+            isinstance(items, list) and all(isinstance(i, str) and i for i in items)
+        ):
+            raise ValueError(f"metadata.{key} must be a list of strings")
+    sla = value.get("sla")
+    if sla is not None and not (isinstance(sla, str) and _SLA.match(sla.strip())):
+        raise ValueError(
+            f"metadata.sla '{sla}' is not a cadence ('daily 06:00', 'hourly') or a duration ('6h')"
+        )
+    criticality = value.get("criticality")
+    if criticality is not None and criticality not in ("low", "medium", "high"):
+        raise ValueError("metadata.criticality must be one of: low, medium, high")
+    docs = value.get("docs")
+    if docs is not None and not (isinstance(docs, str) and re.match(r"^https?://", docs)):
+        raise ValueError("metadata.docs must be an http(s) URL")
+    return value
+
+
+#: What an alert rule can be about.
+ALERT_EVENTS = ("failure", "quality_gate", "sla_miss", "slow", "stale")
+
+
+class AlertChannel(_Strict):
+    """Where an alert goes. Secrets are named by environment variable, never written here."""
+
+    type: Literal["slack", "teams", "webhook", "email"]
+    webhook_env: Optional[str] = Field(
+        default=None, description="slack/teams: the variable holding the incoming-webhook URL"
+    )
+    url_env: Optional[str] = Field(
+        default=None, description="webhook: the variable holding the URL"
+    )
+    to: List[str] = Field(default_factory=list, description="email: recipients")
+
+    @model_validator(mode="after")
+    def _has_a_destination(self) -> "AlertChannel":
+        need = {"slack": "webhook_env", "teams": "webhook_env", "webhook": "url_env"}.get(self.type)
+        if need and not getattr(self, need):
+            raise ValueError(f"a {self.type} channel needs '{need}' (an environment variable name)")
+        if self.type == "email" and not self.to:
+            raise ValueError("an email channel needs 'to'")
+        return self
+
+
+class AlertRule(_Strict):
+    # Not `on:` — YAML 1.1 reads that key as the boolean true.
+    when: List[Literal["failure", "quality_gate", "sla_miss", "slow", "stale"]] = Field(
+        ..., min_length=1, description="failure | quality_gate | sla_miss | slow | stale"
+    )
+    pipelines: List[str] = Field(
+        default_factory=lambda: ["*"], description="Pipeline name globs this rule covers"
+    )
+    channels: List[AlertChannel] = Field(..., min_length=1)
+
+
+class GovernanceWarnings(_Strict):
+    missing_owner: bool = Field(
+        default=True, description="Report pipelines and output datasets without metadata.owner"
+    )
+    missing_contract: bool = Field(
+        default=True,
+        description="Report output datasets read by another pipeline with no quality block",
+    )
+
+
+class Governance(_Strict):
+    """Who may do what where, and what the project expects of itself (ADR 0001 §6)."""
+
+    protected_environments: List[str] = Field(
+        default_factory=lambda: ["prod", "production"],
+        description="Running here takes the 'pipeline.execute.protected' permission (operator, admin)",
+    )
+    warnings: GovernanceWarnings = Field(default_factory=GovernanceWarnings)
+
+
 class Paths(_Strict):
     input: str = Field(..., min_length=1, description="Base directory/URI for input data")
     output: str = Field(..., min_length=1, description="Base directory/URI for output data")
@@ -135,6 +225,12 @@ class ProjectFile(_Strict):
     )
     metadata: Dict[str, Any] = Field(
         default_factory=dict, description="Free-form project metadata; not read by Ducta"
+    )
+    governance: Governance = Field(default_factory=Governance)
+    alerts: List[AlertRule] = Field(
+        default_factory=list,
+        description="Who hears about what: failures, quality gates, slow runs, missed SLAs "
+        "(ADR 0001). Read by the API server; the engine ignores it.",
     )
 
     @field_validator("settings")
@@ -334,6 +430,16 @@ class CatalogEntry(_Strict):
         default=None,
         description="Contract: validated whenever a node reads this dataset",
     )
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Free-form; owner, tags, sla, pii, criticality and docs are recognised. "
+        "Not passed to the engine.",
+    )
+
+    @field_validator("metadata")
+    @classmethod
+    def _known_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return check_metadata(value)
 
     @model_validator(mode="after")
     def _extras_are_engine_keys(self) -> "CatalogEntry":
@@ -365,7 +471,15 @@ class _NodeBase(_Strict):
     )
     on_missing_input: Optional[Literal["skip", "fail"]] = None
     fail_fast: Optional[bool] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Free-form; owner, tags, sla, pii, criticality and docs are recognised",
+    )
+
+    @field_validator("metadata")
+    @classmethod
+    def _known_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return check_metadata(value)
 
 
 _REGISTRY_STAGES = ("staging", "production", "archived")
@@ -768,7 +882,10 @@ class PipelineFile(_Strict):
     hyperparams: Optional[Dict[str, Any]] = None
     hyperparams_config: Optional[Union[str, Dict[str, Any]]] = None
     model_version: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Free-form; owner, tags, sla, pii, criticality and docs are recognised",
+    )
     # May be empty: the API creates a pipeline, then adds nodes to it. Running
     # an empty pipeline still fails preflight.
     nodes: Dict[str, Node] = Field(default_factory=dict)
@@ -777,6 +894,11 @@ class PipelineFile(_Strict):
     @classmethod
     def _valid_split(cls, value: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         return _check_split(value)
+
+    @field_validator("metadata")
+    @classmethod
+    def _known_metadata(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        return check_metadata(value)
 
     @field_validator("nodes", mode="before")
     @classmethod
@@ -864,6 +986,25 @@ def _with_check_params(document: Dict[str, Any]) -> Dict[str, Any]:
     return document
 
 
+def _with_node_templates(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """Let a pipeline's node be ``use: <template>`` + ``with``: the loader expands it."""
+    nodes = schema.get("properties", {}).get("nodes")
+    if isinstance(nodes, dict) and isinstance(nodes.get("additionalProperties"), dict):
+        node = nodes["additionalProperties"]
+        nodes["additionalProperties"] = {
+            "if": {"type": "object", "required": ["use"]},
+            "then": {
+                "type": "object",
+                "properties": {
+                    "use": {"type": "string", "description": "A template in templates/nodes/"},
+                    "with": {"type": "object", "description": "The template's parameters"},
+                },
+            },
+            "else": node,
+        }
+    return schema
+
+
 def json_schema() -> Dict[str, Any]:
     """JSON Schema for the file kinds, for editor autocompletion."""
     from ducta.setting.schemas import QualityProfileSchema
@@ -877,7 +1018,44 @@ def json_schema() -> Dict[str, Any]:
                 "type": "object",
                 "additionalProperties": _with_check_params(CatalogEntry.model_json_schema()),
             },
-            "pipeline": _with_check_params(PipelineFile.model_json_schema()),
+            "pipeline": _with_node_templates(_with_check_params(PipelineFile.model_json_schema())),
+            "pipeline_template": {
+                "type": "object",
+                "description": "templates/pipelines/<name>.yaml: a subpipeline, used as "
+                "`use: pipeline:<name>` (ADR 0001 §3)",
+                "required": ["nodes"],
+                "additionalProperties": False,
+                "properties": {
+                    "description": {"type": "string"},
+                    "params": {"type": "object"},
+                    "nodes": {
+                        "type": "object",
+                        "description": "Nodes, names and datasets may use ${params.x}",
+                    },
+                    "catalog": {
+                        "type": "object",
+                        "description": "Entries for the datasets it writes",
+                    },
+                },
+            },
+            "node_template": {
+                "type": "object",
+                "description": "templates/nodes/<name>.yaml: a reusable node (ADR 0001 §3)",
+                "required": ["node"],
+                "additionalProperties": False,
+                "properties": {
+                    "description": {"type": "string"},
+                    "params": {
+                        "type": "object",
+                        "description": "name: default, or {type, default, description}; "
+                        "no default means the instance must set it in 'with'",
+                    },
+                    "node": {
+                        "type": "object",
+                        "description": "The node, with ${params.<name>} placeholders",
+                    },
+                },
+            },
             "profiles": {
                 "type": "object",
                 "description": "quality/profiles.yaml: reusable named sets of checks",

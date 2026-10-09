@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import {
   IconAlertTriangle,
@@ -44,7 +44,13 @@ export function InlineLogs({
   nodes,
   executionStates = {},
   logs: propsLogs,
+  lineLink,
+  highlightId,
 }: {
+  /** A URL to one line (the run page's `?log=`), for each row's link button. */
+  lineLink?: (entry: LogEntry) => string | undefined;
+  /** Scroll to and mark this line. */
+  highlightId?: string;
   isRunning: boolean;
   onClose?: () => void;
   mode?: LogPanelMode;
@@ -53,6 +59,10 @@ export function InlineLogs({
   logs?: LogEntry[];
 }) {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
+  const errorCursor = useRef(-1);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const itemsRef = useRef<FlattenedItem[]>([]);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [dockedHeight, setDockedHeight] = useState(DOCKED_DEFAULT_HEIGHT);
 
@@ -72,12 +82,54 @@ export function InlineLogs({
     filteredLogs,
     t0,
     flattenedItems,
+    searchError,
     levelCounts,
     totalCount,
     anyFilter,
     collapsedSections,
     toggleSection,
   } = useInlineLogsState(propsLogs);
+  useEffect(() => {
+    itemsRef.current = flattenedItems;
+  }, [flattenedItems]);
+  // A link to a line: scroll there once its row exists.
+  const scrolledTo = useRef<string | null>(null);
+  useEffect(() => {
+    if (!highlightId || scrolledTo.current === highlightId) return;
+    const index = flattenedItems.findIndex((it) => it.type === "log" && it.entry.id === highlightId);
+    if (index < 0) return;
+    setAutoScroll(false);
+    // The list may not be mounted on the first pass: try until it is.
+    const timer = setInterval(() => {
+      if (!virtuosoRef.current) return;
+      virtuosoRef.current.scrollToIndex({ index, align: "center" });
+      scrolledTo.current = highlightId;
+      clearInterval(timer);
+    }, 100);
+    return () => clearInterval(timer);
+  }, [highlightId, flattenedItems, setAutoScroll]);
+  // F8 / ⇧F8 while focus is in the panel: next / previous error, as in an
+  // editor's problem list. A native listener: the panel is not a widget.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "F8") return;
+      e.preventDefault();
+      const errors = itemsRef.current
+        .map((item, i) => (item.type === "log" && item.entry.level === "ERROR" ? i : -1))
+        .filter((i) => i >= 0);
+      if (errors.length === 0) return;
+      const next = e.shiftKey
+        ? [...errors].reverse().find((i) => i < errorCursor.current) ?? errors[errors.length - 1]
+        : errors.find((i) => i > errorCursor.current) ?? errors[0];
+      errorCursor.current = next;
+      setAutoScroll(false);
+      virtuosoRef.current?.scrollToIndex({ index: next, align: "center", behavior: "smooth" });
+    };
+    el.addEventListener("keydown", onKey);
+    return () => el.removeEventListener("keydown", onKey);
+  }, [setAutoScroll]);
 
   const hasNodePanel = nodes != null && nodes.length > 0;
 
@@ -122,9 +174,15 @@ export function InlineLogs({
         t0={t0}
       />
     ) : (
-      <LogRow entry={item.entry} searchQuery={searchFilter} t0={t0} />
+      <LogRow
+        entry={item.entry}
+        searchQuery={searchFilter}
+        t0={t0}
+        lineLink={lineLink?.(item.entry)}
+        highlighted={highlightId === item.entry.id}
+      />
     );
-  }, [collapsedSections, searchFilter, nodeFilter, setNodeFilter, t0, toggleSection]);
+  }, [collapsedSections, searchFilter, nodeFilter, setNodeFilter, t0, toggleSection, lineLink, highlightId]);
 
   const rootClass = [
     "ilog",
@@ -176,7 +234,7 @@ export function InlineLogs({
           onClick={() => setIsFullscreen(false)}
         />
       )}
-      <div className={rootClass} style={rootStyle}>
+      <div className={rootClass} style={rootStyle} ref={rootRef}>
         {mode === "docked" && !isFullscreen && (
           <ResizeHandle onResize={handleResize} />
         )}
@@ -279,7 +337,9 @@ export function InlineLogs({
                     value={searchFilter}
                     onChange={(e) => setSearch(e.target.value)}
                     onKeyDown={(e) => e.key === "Escape" && setSearch("")}
-                    placeholder="Search logs..."
+                    placeholder="Search logs…  /regex/"
+                    aria-invalid={!!searchError}
+                    title={searchError ? `Not a valid pattern: ${searchError}` : "Text, or /a regular expression/"}
                     className="ilog__search-input"
                   />
                   {searchFilter && (

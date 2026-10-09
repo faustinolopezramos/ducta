@@ -73,6 +73,9 @@ class LoginRequest(BaseModel):
 
 # Map each role to its set of permissions.
 # "admin" gets the wildcard "*" which matches any permission check.
+# Running in a protected environment (governance.protected_environments, prod
+# by default) takes "pipeline.execute.protected": operators and admins have it,
+# developers do not.
 ROLE_PERMISSIONS: dict[str, List[str]] = {
     "admin": ["*"],
     "developer": [
@@ -104,6 +107,26 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "template.write",
         "model.promote",
         "model.delete",
+    ],
+    # Runs what is there — including in protected environments (prod) — and
+    # handles its runs, but does not change projects or code.
+    "operator": [
+        "workspace.read",
+        "project.read",
+        "config.read",
+        "pipeline.read",
+        "pipeline.execute",
+        "pipeline.execute.protected",
+        "node.read",
+        "dataset.read",
+        "git.read",
+        "repository.read",
+        "execution.read",
+        "execution.write",
+        "quality.read",
+        "quality.run",
+        "ingestion.read",
+        "template.read",
     ],
     "viewer": [
         "workspace.read",

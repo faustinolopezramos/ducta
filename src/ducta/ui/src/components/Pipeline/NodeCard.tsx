@@ -1,3 +1,4 @@
+import { IconMessageCircle } from "@tabler/icons-react";
 import {
   compactDuration,
   humanizeGate,
@@ -25,6 +26,14 @@ interface NodeCardProps {
   /** Upstream context from another pipeline of the chain: quieter, still clickable. */
   context?: boolean;
   onClick: () => void;
+  /** Enter on the selected card: open it (its code). */
+  onOpen?: () => void;
+  /** Design axis — what validation says about the node's configuration and code. */
+  design?: "error" | "warning";
+  /** Freshness — its code (or something upstream) changed since the last good run. */
+  freshness?: "stale" | "never";
+  /** Open comment threads on it. */
+  comments?: number;
 }
 
 const FAILED = new Set(["failed", "error"]);
@@ -50,6 +59,10 @@ export function NodeCard({
   showLayer = true,
   context = false,
   onClick,
+  onOpen,
+  design,
+  freshness,
+  comments = 0,
 }: NodeCardProps) {
   const inputs = node.inputs ?? [];
   const outputs = node.outputs ?? [];
@@ -66,6 +79,9 @@ export function NodeCard({
 
   const label =
     `Node ${name}${execState ? `, ${execState}` : ""}` +
+    (design ? `, has ${design === "error" ? "errors" : "warnings"}` : "") +
+    (freshness === "stale" ? ", stale since its last good run" : "") +
+    (comments > 0 ? `, ${comments} open comment${comments === 1 ? "" : "s"}` : "") +
     `, reads ${inputs.length}, writes ${outputs.length}` +
     (quality?.gate ? `, gate ${humanizeGate(quality.gate)}` : "");
 
@@ -77,7 +93,10 @@ export function NodeCard({
       aria-label={label}
       onClick={onClick}
       onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
+        if (e.key === "Enter" && selected && onOpen) {
+          e.preventDefault();
+          onOpen();
+        } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           onClick();
         }
@@ -90,6 +109,8 @@ export function NodeCard({
         context ? "node-card--context" : "",
         lensDir ? `lens-${lensDir}` : "",
         execState ? `status-${execState}` : "",
+        design ? `design-${design}` : "",
+        freshness ? `fresh-${freshness}` : "",
       ]
         .filter(Boolean)
         .join(" ")}
@@ -115,6 +136,19 @@ export function NodeCard({
             <span className="node-card-swatch" aria-hidden="true" />
           )}
           <span className="node-card-name">{name}</span>
+          {design && (
+            <span className={`node-card-design node-card-design--${design}`} aria-hidden="true" title={design === "error" ? "Has errors — see Problems" : "Has warnings — see Problems"}>
+              {design === "error" ? "✕" : "⚠"}
+            </span>
+          )}
+          {freshness === "stale" && tier !== "shape" && (
+            <span className="node-card-stale" aria-hidden="true" title="Changed since its last successful run">◐</span>
+          )}
+          {comments > 0 && tier !== "shape" && (
+            <span className="node-card-comments" aria-hidden="true" title={`${comments} open comment${comments === 1 ? "" : "s"}`}>
+              <IconMessageCircle size={11} stroke={2} />{comments}
+            </span>
+          )}
           <span className="node-card-run">
             {execState && (
               <span
