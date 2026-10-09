@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { IconEdit, IconPlayerPlay, IconSitemap } from "@tabler/icons-react";
 import type { NodeSchema } from "../../api/queries";
 import { DataTable, type DataTableColumn } from "../ui/DataTable";
@@ -6,6 +7,19 @@ import { compactDuration } from "../../utils/nodePresentation";
 import { formatDate } from "../../utils/formatDate";
 import { ChecksList, DatasetRef, KeyValues, lastRunLine, qualityLine } from "./Focus/parts";
 import { FAILURE_STATUSES } from "../ui/statusMeta";
+
+/**
+ * A dataset name that wraps at its own seams (`bronze.education.student_cost`
+ * breaks after a dot or underscore) instead of mid-word.
+ */
+function breakable(name: string) {
+  return name.split(/(?<=[._])/).map((part, i) => (
+    <Fragment key={i}>
+      {i > 0 && <wbr />}
+      {part}
+    </Fragment>
+  ));
+}
 
 /** One node, as the contract list shows it. */
 export interface ContractRow {
@@ -83,7 +97,7 @@ export function ContractList({
               onSelectDataset(name);
             }}
           >
-            {name}
+            {breakable(name)}
           </button>
         ))}
       </span>

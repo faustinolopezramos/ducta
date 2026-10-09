@@ -46,7 +46,10 @@ export function InlineLogs({
   logs: propsLogs,
   lineLink,
   highlightId,
+  finalStatus,
 }: {
+  /** How the run ended, once it has — the header says so instead of "Idle". */
+  finalStatus?: string;
   /** A URL to one line (the run page's `?log=`), for each row's link button. */
   lineLink?: (entry: LogEntry) => string | undefined;
   /** Scroll to and mark this line. */
@@ -244,8 +247,8 @@ export function InlineLogs({
           <div className="ilog__header-left">
             <IconTerminal2 size={16} color="var(--text-muted)" stroke={1.75} />
             <StatusBadge
-              status={isRunning ? "running" : "idle"}
-              label={isRunning ? "Live" : "Idle"}
+              status={isRunning ? "running" : (finalStatus ?? "idle")}
+              label={isRunning ? "Live" : finalStatus ? undefined : "Idle"}
               size="sm"
             />
 

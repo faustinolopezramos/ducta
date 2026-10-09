@@ -18,11 +18,17 @@ export function RunGraph({
   commit,
   nodeStates,
   onSelectNode,
+  successfulNodes,
 }: {
   projectId: string;
   pipeline: string;
   commit?: string | null;
   nodeStates: Record<string, string>;
+  /**
+   * Without a certificate there are no per-node states; a run that succeeded
+   * still says every node it ran succeeded — these (all nodes when empty).
+   */
+  successfulNodes?: string[] | "all";
   onSelectNode?: (node: string) => void;
 }) {
   // Until someone picks, the version the run used — once the certificate says which.
@@ -42,6 +48,13 @@ export function RunGraph({
   const text = asOf === "run" ? (then.data?.exists ? then.data.content : null) : now.data?.content ?? null;
   const items = useMemo(() => (text ? itemsFromPipelineYaml(text, pipeline) : null), [text, pipeline]);
   const missingThen = asOf === "run" && then.data && !then.data.exists;
+  const states = useMemo(() => {
+    if (!items || !successfulNodes || Object.keys(nodeStates).length > 0) return nodeStates;
+    const ran = successfulNodes === "all" ? null : new Set(successfulNodes);
+    return Object.fromEntries(
+      items.filter((it) => !ran || ran.has(it.id)).map((it) => [it.id, "success"]),
+    );
+  }, [items, nodeStates, successfulNodes]);
 
   return (
     <div className="run-graph">
@@ -63,7 +76,7 @@ export function RunGraph({
         ) : (
           <DagCanvas
             items={items}
-            executionStates={nodeStates}
+            executionStates={states}
             onSelect={(sel) => sel?.kind === "node" && onSelectNode?.(sel.id)}
           />
         )}

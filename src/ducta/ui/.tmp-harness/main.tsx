@@ -5,7 +5,8 @@ import { useGitConfigStore } from "../src/store/gitConfig";
 import "../src/index.css";
 
 const to = new URLSearchParams(location.search).get("to") ?? "/projects";
-localStorage.setItem("ducta:selected-source", "/Users/faustinolopezramos/Desktop/demo_ducta");
+const ws = new URLSearchParams(location.search).get("ws") ?? import.meta.env.VITE_HARNESS_WORKSPACE;
+if (ws) localStorage.setItem("ducta:selected-source", ws);
 useGitConfigStore.getState().markSkipped();
 const payload = btoa(JSON.stringify({ sub: "dev-admin", exp: Math.floor(Date.now() / 1000) + 3600 }));
 useAuthStore.getState().login({ token: "h." + payload + ".s", user: { id: "dev-admin", username: "dev-admin", roles: ["admin"] } as never });

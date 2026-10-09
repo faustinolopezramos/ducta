@@ -22,7 +22,7 @@ export function usePipelineRun({
   pipelineId: string | undefined;
   itemById: Map<string, DagCanvasItem>;
 }) {
-  const activeEnv = useSourceStore((s) => s.activeEnv) ?? "base";
+  const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
   const { show: showToast } = useToastStack();
   const { mutate: runNode } = useRunNode();
   const { mutate: executePipeline } = useExecutePipeline();
@@ -100,6 +100,11 @@ export function usePipelineRun({
     }
     return latest;
   }, [projectRuns]);
+  /** This pipeline's latest recorded run — what the logs bar says before anything runs here. */
+  const lastRun = useMemo(() => {
+    const runs = (projectRuns?.executions ?? []) as Array<{ pipeline_name?: string | null; status: string; started_at?: string | null; finished_at?: string | null }>;
+    return runs.find((run) => run.pipeline_name === pipelineId) ?? null;
+  }, [projectRuns, pipelineId]);
 
   const handleRunNode = (node: { id: string; name?: string }) => {
     // A node drawn from an upstream pipeline of the chain runs in its own pipeline.
@@ -255,7 +260,7 @@ export function usePipelineRun({
   return {
     activeEnv, showToast,
     activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
-    logsOpen, setLogsOpen: setLogsOpenSmart, chainStatus,
+    logsOpen, setLogsOpen: setLogsOpenSmart, chainStatus, lastRun,
     handleRunNode, handleExecute, handleValidate, handleCancel, runScoped,
     runSample, sample, sampleExecId: nodeExecId,
     breakpoint, clearBreakpoint: () => setBreakpoint(null),

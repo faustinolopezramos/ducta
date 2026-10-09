@@ -26,7 +26,7 @@ function metricCard(title: string, value: string) {
   return (
     <div style={{ flex: 1, minWidth: 100, padding: "10px 12px", borderRadius: 6, border: `1px solid ${colors.border}`, background: colors.bg }}>
       <div style={label}>{title}</div>
-      <div style={{ fontSize: 18, fontWeight: 600, color: colors.text, fontFamily: "var(--font-mono)" }}>{value}</div>
+      <div style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: colors.text, fontFamily: "var(--font-mono)" }}>{value}</div>
     </div>
   );
 }
@@ -50,9 +50,9 @@ export function ScoreSection({
     <Panel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconGauge size={16} color={colors.accent} />
-        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
+        <h2 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 600, color: colors.text, flex: 1 }}>
           Pipeline quality score
-          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 400, fontSize: 12, color: colors.textMuted, marginLeft: 8 }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 400, fontSize: "var(--text-xs)", color: colors.textMuted, marginLeft: 8 }}>
             {runId}
           </span>
         </h2>

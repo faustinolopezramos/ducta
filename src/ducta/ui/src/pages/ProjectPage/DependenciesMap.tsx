@@ -80,7 +80,9 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
     for (const [key, datasets] of edgeDatasets) {
       const list = [...datasets];
       if (list.length > 0) {
-        labels.set(key, list.length > 2 ? `${list.slice(0, 2).join(", ")} +${list.length - 2}` : list.join(", "));
+        // The cards already list what each pipeline consumes and publishes; the
+        // edge only needs to say how much flows, short enough not to collide.
+        labels.set(key, list.length === 1 ? (list[0].split(".").pop() ?? list[0]) : `${list.length} datasets`);
       }
     }
     return {
@@ -170,6 +172,7 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
     <div className="project-map">
       <DagCanvas
         items={items}
+        fitMinZoom={0.8}
         orientation={orientation}
         edgeLabel={(from, to) => labels.get(`${from}->${to}`) ?? null}
         edgeClassName={(from, to) => lensEdgeClass(lineage, from, to)}

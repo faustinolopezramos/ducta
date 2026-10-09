@@ -43,12 +43,12 @@ export function ExecutionParamsPanel({
   return (
     <div
       role="group"
-      aria-label="Parámetros de ejecución"
+      aria-label="Run parameters"
       style={{
         position: "absolute",
         top: "calc(100% + 8px)",
         right: 0,
-        zIndex: 100,
+        zIndex: "var(--z-popover)",
         padding: "var(--space-4)",
         backgroundColor: "var(--surface-elevated)",
         border: "1px solid var(--border)",

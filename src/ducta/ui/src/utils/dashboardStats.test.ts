@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextScheduledRun, summarizeRuns, type RunLike } from "./dashboardStats";
+import { nextScheduledRun, summarizeRuns, type RunLike, isStuckQueued } from "./dashboardStats";
 
 // Noon, so "hours ago" never crosses midnight unless a test means it to.
 const NOW = new Date(2026, 8, 15, 12, 0, 0).getTime();
@@ -136,5 +136,24 @@ describe("nextScheduledRun", () => {
 
   it("returns nothing when no schedule is due", () => {
     expect(nextScheduledRun([])).toBeNull();
+  });
+});
+
+describe("isStuckQueued", () => {
+  const now = Date.parse("2026-10-09T12:00:00Z");
+  const run = (status: string, minutesAgo: number) => ({
+    id: "r",
+    pipeline_name: "p",
+    status,
+    started_at: new Date(now - minutesAgo * 60_000).toISOString(),
+  });
+
+  it("flags a run queued longer than the threshold", () => {
+    expect(isStuckQueued(run("pending", 11), now)).toBe(true);
+  });
+
+  it("does not flag a run that just queued, or one that is running", () => {
+    expect(isStuckQueued(run("pending", 2), now)).toBe(false);
+    expect(isStuckQueued(run("running", 60), now)).toBe(false);
   });
 });

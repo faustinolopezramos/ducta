@@ -59,8 +59,14 @@ export function Breadcrumbs() {
   // below its project. The project's own page carries the only breadcrumb
   // handle at that level, so its crumb is synthesized from params.
   const projectPath = params.projectId ? routes.project(params.projectId) : null;
-  if (params.projectId && projectPath && current.pathname.replace(/\/$/, "") !== projectPath) {
+  const isWorkspacePage = current.pathname.startsWith("/workspace/");
+  if (params.projectId && projectPath && !isWorkspacePage && current.pathname.replace(/\/$/, "") !== projectPath) {
     crumbs.push({ pathname: projectPath, label: resolveProject(params.projectId), switchKinds: ["project"] });
+  }
+
+  // A certificate sits under the list of them, which has no project of its own.
+  if (current.pathname.startsWith("/workspace/certificates/")) {
+    crumbs.push({ pathname: "/workspace/certificates", label: "Certificates" });
   }
 
   let label = current.handle.breadcrumb!(current);

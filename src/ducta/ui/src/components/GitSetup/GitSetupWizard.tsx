@@ -47,15 +47,15 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
 
   return (
     <div>
-      <h2 style={{ ...styles.fontSans, fontSize: 18, fontWeight: 700, color: colors.text, margin: "0 0 6px" }}>
+      <h2 style={{ ...styles.fontSans, fontSize: "var(--text-lg)", fontWeight: 700, color: colors.text, margin: "0 0 6px" }}>
         Environment detected
       </h2>
-      <p style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, margin: "0 0 24px" }}>
+      <p style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, margin: "0 0 24px" }}>
         Ducta detected the following runtime environment. Review it before continuing.
       </p>
 
       {isLoading && (
-        <div style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, padding: "24px 0" }}>
+        <div style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, padding: "24px 0" }}>
           Detecting environment…
         </div>
       )}
@@ -68,7 +68,7 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
             border: `1px solid ${colors.redA30}`,
             borderRadius: 8,
             ...styles.fontSans,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             color: colors.red,
             marginBottom: 24,
           }}
@@ -98,11 +98,11 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
                 borderBottom: i < rows.length - 1 ? `1px solid ${colors.border}` : "none",
               }}
             >
-              <span style={{ ...styles.fontSans, fontSize: 12, color: colors.textMuted }}>{row.label}</span>
+              <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted }}>{row.label}</span>
               <span
                 style={{
                   ...styles.fontMono,
-                  fontSize: 12,
+                  fontSize: "var(--text-xs)",
                   color: row.warn ? colors.warningStrong : colors.text,
                   fontWeight: row.warn ? 600 : 400,
                 }}
@@ -122,7 +122,7 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
             border: `1px solid ${colors.amberA30}`,
             borderRadius: 8,
             ...styles.fontSans,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             color: colors.warningStrong,
             marginBottom: 24,
           }}
@@ -196,10 +196,10 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
 
   return (
     <div>
-      <h2 style={{ ...styles.fontSans, fontSize: 18, fontWeight: 700, color: colors.text, margin: "0 0 6px" }}>
+      <h2 style={{ ...styles.fontSans, fontSize: "var(--text-lg)", fontWeight: 700, color: colors.text, margin: "0 0 6px" }}>
         Git identity
       </h2>
-      <p style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, margin: "0 0 24px" }}>
+      <p style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, margin: "0 0 24px" }}>
         Ducta saves your changes as files; you commit them when you choose, from the Changes
         panel. Set your author name and email so those commits are properly attributed.
       </p>
@@ -238,7 +238,7 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
             border: `1px solid ${colors.redA30}`,
             borderRadius: 6,
             ...styles.fontSans,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             color: colors.red,
             marginBottom: 16,
           }}
@@ -261,10 +261,10 @@ function SuccessStep({ onClose }: { onClose: () => void }) {
   return (
     <div style={{ textAlign: "center", padding: "8px 0" }}>
       <div style={{ fontSize: 48, marginBottom: 16 }}>{ICONS.CHECK}</div>
-      <h2 style={{ ...styles.fontSans, fontSize: 20, fontWeight: 700, color: colors.text, margin: "0 0 8px" }}>
+      <h2 style={{ ...styles.fontSans, fontSize: "var(--text-xl)", fontWeight: 700, color: colors.text, margin: "0 0 8px" }}>
         Setup complete
       </h2>
-      <p style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, margin: "0 0 32px" }}>
+      <p style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, margin: "0 0 32px" }}>
         Ducta is ready. Your git identity has been saved to the workspace config.
         You can update it anytime from <strong>Settings → Git</strong>.
       </p>
@@ -321,7 +321,7 @@ export function GitSetupWizard({ onClose }: { onClose?: () => void }) {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 9999,
+        zIndex: "var(--z-modal)",
         backdropFilter: "blur(2px)",
       }}
     >
@@ -340,8 +340,8 @@ export function GitSetupWizard({ onClose }: { onClose?: () => void }) {
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ ...styles.fontMono, fontSize: 18 }}>{ICONS.NODES}</span>
-            <span style={{ ...styles.fontSans, fontSize: 13, fontWeight: 600, color: colors.textMuted }}>
+            <span style={{ ...styles.fontMono, fontSize: "var(--text-lg)" }}>{ICONS.NODES}</span>
+            <span style={{ ...styles.fontSans, fontSize: "var(--text-sm)", fontWeight: 600, color: colors.textMuted }}>
               Ducta · Setup
             </span>
           </div>
@@ -354,7 +354,7 @@ export function GitSetupWizard({ onClose }: { onClose?: () => void }) {
                 border: "none",
                 color: colors.textMuted,
                 cursor: "pointer",
-                fontSize: 12,
+                fontSize: "var(--text-xs)",
                 ...styles.fontSans,
                 padding: "4px 8px",
               }}

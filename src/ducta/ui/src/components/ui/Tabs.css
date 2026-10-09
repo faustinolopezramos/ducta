@@ -59,7 +59,7 @@
 
 .tabs-count {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   line-height: 1;
   padding: 3px 5px;

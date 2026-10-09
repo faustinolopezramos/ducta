@@ -2,6 +2,15 @@ import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { IconChevronUp, IconChevronDown, IconTerminal2 } from "@tabler/icons-react";
 import { useLogsStore, useLogLevelCounts } from "../../store/logsStore";
+import { statusMetaFor } from "../../components/ui/statusMeta";
+import { formatRelative } from "../../utils/timeLabels";
+
+/** The pipeline's latest recorded run, for when nothing ran in this session. */
+export interface LastRunSummary {
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+}
 
 // Persistent 26px strip under the canvas: the last execution's outcome is
 // always visible; clicking it expands the logs layer over the canvas.
@@ -12,6 +21,7 @@ export function LogsStatusBar({
   open,
   onToggle,
   diagnoseHref,
+  lastRun,
 }: {
   execStatus: string | null;
   executionStates: Record<string, string>;
@@ -20,6 +30,7 @@ export function LogsStatusBar({
   onToggle: () => void;
   /** The failed run's page — why it failed and what changed. */
   diagnoseHref?: string;
+  lastRun?: LastRunSummary | null;
 }) {
   const levelCounts = useLogLevelCounts();
   const totalLogs = useLogsStore((s) => s.currentLogs.length);
@@ -36,7 +47,9 @@ export function LogsStatusBar({
   // mono end-to-end, which read "Logs"/"Running" as data instead of chrome.
   let summary: ReactNode = totalLogs > 0
     ? <><span className="sb-mono">{totalLogs}</span> entries</>
-    : "No runs yet";
+    : lastRun
+      ? <>Last run {(statusMetaFor(lastRun.status)?.label ?? lastRun.status).toLowerCase()} · {formatRelative(lastRun.finished_at ?? lastRun.started_at)}</>
+      : "No runs yet";
   if (isRunning) {
     stateClass = "running";
     summary = <>Running · <span className="sb-mono">{doneNodes}/{nodeCount}</span> nodes</>;

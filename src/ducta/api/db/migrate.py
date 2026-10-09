@@ -50,18 +50,15 @@ async def run_migrations(engine: AsyncEngine) -> None:
             # Import here so Alembic is optional unless DB is active
             from alembic.config import Config  # type: ignore
 
-            alembic_ini = Path(__file__).resolve().parents[4] / "alembic.ini"
-            if not alembic_ini.exists():
-                logger.warning(
-                    "alembic.ini not found at {path} — skipping auto-migrate",
-                    path=alembic_ini,
-                )
-                return
-
-            alembic_cfg = Config(str(alembic_ini))
-            # Set absolute path to migrations directory (fixes path resolution when run from different cwd)
-            migrations_dir = alembic_ini.parent / "src" / "ducta" / "api" / "db" / "migrations"
-            alembic_cfg.set_main_option("script_location", str(migrations_dir))
+            # Configured in code, not from an alembic.ini: none ships with the
+            # package (or exists in the repo), so a missing file used to skip
+            # migrating — and a fresh database then failed on its first query
+            # ("no such table: users"). The migrations sit next to this module
+            # in a source checkout and in an installed wheel alike.
+            alembic_cfg = Config()
+            alembic_cfg.set_main_option(
+                "script_location", str(Path(__file__).resolve().parent / "migrations")
+            )
 
             # Override the URL so Alembic always uses the live engine URL
             async with engine.begin() as conn:
@@ -81,4 +78,35 @@ def _apply_migrations(connection, alembic_cfg, url: str) -> None:
     alembic_cfg.set_main_option("sqlalchemy.url", url)
     from alembic import command  # type: ignore
 
+    if _unversioned_but_current(connection):
+        # Created while migrations were being skipped: the tables are already
+        # at head, only the version row is missing. Upgrading would re-create them.
+        logger.info("Database has the current schema but no version — stamping it at head")
+        command.stamp(alembic_cfg, "head")
+        return
     command.upgrade(alembic_cfg, "head")
+
+
+def _unversioned_but_current(connection) -> bool:
+    """Whether the database has every ORM table and column but no ``alembic_version``.
+
+    A database that has some tables but not all of their columns is neither
+    fresh nor current; it is left to ``upgrade`` to fail loudly rather than
+    stamped as something it is not.
+    """
+    from sqlalchemy import inspect
+
+    import ducta.api.db.models  # noqa: F401 — registers the tables on Base.metadata
+    from ducta.api.db.base import Base
+
+    inspector = inspect(connection)
+    existing = set(inspector.get_table_names())
+    if "alembic_version" in existing or not existing & set(Base.metadata.tables):
+        return False
+    for name, table in Base.metadata.tables.items():
+        if name not in existing:
+            return False
+        have = {col["name"] for col in inspector.get_columns(name)}
+        if not {col.name for col in table.columns} <= have:
+            return False
+    return True

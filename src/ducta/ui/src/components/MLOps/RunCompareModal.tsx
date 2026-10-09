@@ -49,7 +49,7 @@ export function RunCompareModal({
     textAlign: "left",
     padding: "6px 10px",
     fontWeight: 600,
-    fontSize: 11,
+    fontSize: "var(--text-2xs)",
     color: colors.textMuted,
     textTransform: "uppercase",
     letterSpacing: "0.04em",
@@ -57,17 +57,17 @@ export function RunCompareModal({
   const td: React.CSSProperties = {
     padding: "6px 10px",
     fontFamily: "var(--font-mono)",
-    fontSize: 12,
+    fontSize: "var(--text-xs)",
     color: colors.text,
   };
 
   const table = (title: string, keys: string[], value: (key: string, runIdx: number) => React.ReactNode) => (
     <div style={{ marginBottom: 20 }}>
-      <h3 style={{ margin: "0 0 8px", fontSize: 12, fontWeight: 600, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: "var(--text-xs)", fontWeight: 600, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.04em" }}>
         {title}
       </h3>
       {keys.length === 0 ? (
-        <p style={{ margin: 0, fontSize: 12, color: colors.textMuted }}>
+        <p style={{ margin: 0, fontSize: "var(--text-xs)", color: colors.textMuted }}>
           {title === "Metrics" ? "No metrics recorded on these runs." : "No differing parameters."}
         </p>
       ) : (
@@ -126,7 +126,7 @@ export function RunCompareModal({
         return v === undefined ? <span style={{ color: colors.textDim }}>—</span> : String(v);
       })}
 
-      <p style={{ margin: 0, fontSize: 11, color: colors.textDim }}>
+      <p style={{ margin: 0, fontSize: "var(--text-2xs)", color: colors.textDim }}>
         Best value per metric is highlighted (metrics matching loss/error/rmse/… count lower as better).
       </p>
     </Modal>

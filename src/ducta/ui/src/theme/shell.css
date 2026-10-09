@@ -53,14 +53,14 @@
 /* Production frames the whole window. */
 .ducta-app-layout { position: relative; }
 .ducta-env-frame {
-  position: fixed; inset: 0; pointer-events: none; z-index: 1000;
+  position: fixed; inset: 0; pointer-events: none; z-index: calc(var(--z-modal) + 1);
   box-shadow: inset 0 0 0 3px var(--env-prod);
 }
 .ducta-env-frame__chip {
   position: absolute; top: 0; left: 50%; transform: translateX(-50%);
   padding: 1px 10px; border-radius: 0 0 6px 6px;
   background: var(--env-prod); color: #fff;
-  font-size: 10px; font-weight: var(--weight-bold); letter-spacing: 0.08em;
+  font-size: var(--text-2xs); font-weight: var(--weight-bold); letter-spacing: 0.08em;
 }
 
 /* ── Status bar ───────────────────────────────────────────────────────────── */
@@ -72,7 +72,7 @@
   border-top: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-muted);
-  font-size: 11px; font-family: var(--font-mono);
+  font-size: var(--text-2xs); font-family: var(--font-mono);
   overflow: hidden;
 }
 .ducta-statusbar__group { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
@@ -109,14 +109,6 @@ button.ducta-statusbar__item:hover, button.ducta-statusbar__item:focus-visible {
 /* ── Editor: the line a node's function starts on ─────────────────────────── */
 .ducta-editor-revealed-line { background: color-mix(in srgb, var(--primary) 12%, transparent); }
 
-/* ── Key hint ─────────────────────────────────────────────────────────────── */
-.key-hint {
-  display: inline-flex; gap: 2px; font-family: var(--font-mono); font-size: 10px; color: var(--text-dim);
-}
-.key-hint kbd {
-  min-width: 16px; padding: 0 4px; border: 1px solid var(--border); border-bottom-width: 2px;
-  border-radius: 3px; background: var(--surface); text-align: center; font: inherit;
-}
 
 @media (prefers-reduced-motion: reduce) {
   .split-handle::after { transition: none; }
@@ -218,7 +210,7 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .pipeline-run-env {
   margin-left: 4px; padding: 0 5px; border-radius: 3px;
   background: color-mix(in srgb, #fff 22%, transparent);
-  font-family: var(--font-mono); font-size: 10px; font-weight: var(--weight-semibold);
+  font-family: var(--font-mono); font-size: var(--text-2xs); font-weight: var(--weight-semibold);
 }
 .pipeline-run-env[data-env-kind="prod"] { background: var(--env-prod); color: #fff; }
 
@@ -237,12 +229,12 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 }
 .pipeline-dock__tab.is-active { color: var(--text); box-shadow: inset 0 -2px 0 var(--primary); }
 .pipeline-dock__tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
-.pipeline-dock__count { padding: 0 6px; border-radius: 999px; font-size: 10px; font-weight: var(--weight-semibold); color: #fff; }
+.pipeline-dock__count { padding: 0 6px; border-radius: 999px; font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: #fff; }
 .pipeline-dock__count.is-bad { background: var(--danger); }
 .pipeline-dock__count.is-warn { background: var(--warning); }
 .pipeline-dock__close {
   margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: var(--radius-sm);
-  background: none; color: var(--text-muted); cursor: pointer; font-size: 16px; line-height: 1;
+  background: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-lg); line-height: 1;
 }
 .pipeline-dock__close:hover, .pipeline-dock__close:focus-visible { background: var(--surface-hover); color: var(--text); }
 .pipeline-dock__body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
@@ -291,10 +283,10 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
    state keeps the status dot. Each also goes into the card's accessible name. */
 .node-card.design-error { box-shadow: 0 0 0 2px var(--danger); }
 .node-card.design-warning { box-shadow: 0 0 0 2px color-mix(in srgb, var(--warning) 70%, transparent); }
-.node-card-design { flex-shrink: 0; font-size: 11px; font-weight: var(--weight-bold); line-height: 1; }
+.node-card-design { flex-shrink: 0; font-size: var(--text-2xs); font-weight: var(--weight-bold); line-height: 1; }
 .node-card-design--error { color: var(--danger); }
 .node-card-design--warning { color: var(--warning); }
-.node-card-stale { flex-shrink: 0; color: var(--warning); font-size: 11px; line-height: 1; }
+.node-card-stale { flex-shrink: 0; color: var(--warning); font-size: var(--text-2xs); line-height: 1; }
 
 /* ▾ beside Run */
 .run-menu { position: relative; display: inline-flex; }
@@ -305,7 +297,7 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 }
 .run-menu__toggle:hover, .run-menu__toggle:focus-visible { color: var(--text); border-color: var(--primary); outline: none; }
 .run-menu__list {
-  position: absolute; right: 0; top: calc(100% + 4px); z-index: 60; min-width: 260px;
+  position: absolute; right: 0; top: calc(100% + 4px); z-index: var(--z-popover); min-width: 260px;
   list-style: none; margin: 0; padding: 4px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md);
 }
@@ -363,7 +355,7 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .inherited-value.is-own { color: var(--text); }
 .inherited-value.is-overridden { color: var(--text); }
 .inherited-value__flag { color: var(--warning); }
-.inherited-value__source { margin-left: 6px; font-family: var(--font-sans); font-size: 10px; color: var(--text-dim); }
+.inherited-value__source { margin-left: 6px; font-family: var(--font-sans); font-size: var(--text-2xs); color: var(--text-dim); }
 .data-preview__pick { display: flex; flex-direction: column; gap: 4px; }
 .data-preview__pick select { padding: 4px 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: var(--text-xs); }
 .data-preview__meta { margin: 0; font-size: var(--text-2xs); color: var(--text-muted); }
@@ -402,7 +394,7 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .breakpoint-banner__icon { color: var(--warning); }
 .breakpoint-banner__btn { height: 24px; padding: 0 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); font-size: var(--text-xs); cursor: pointer; }
 .breakpoint-banner__btn.is-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-.breakpoint-banner__close { border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: 16px; }
+.breakpoint-banner__close { border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-lg); }
 
 /* Run timeline */
 .run-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
@@ -449,7 +441,7 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .entity-chip__link:hover, .entity-chip__link:focus-visible { border-color: var(--primary); color: var(--primary); }
 .entity-chip__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entity-chip[data-kind="dataset"] .entity-chip__link svg { color: var(--info, var(--primary)); }
-.entity-chip__card { position: absolute; top: calc(100% + 6px); left: 0; z-index: 40; display: none; min-width: 200px; max-width: 320px; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised, var(--surface)); box-shadow: var(--shadow-md); font-size: var(--text-xs); color: var(--text); flex-direction: column; gap: 2px; }
+.entity-chip__card { position: absolute; top: calc(100% + 6px); left: 0; z-index: var(--z-popover); display: none; min-width: 200px; max-width: 320px; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-raised, var(--surface)); box-shadow: var(--shadow-md); font-size: var(--text-xs); color: var(--text); flex-direction: column; gap: 2px; }
 .entity-chip:hover .entity-chip__card, .entity-chip:focus-within .entity-chip__card { display: flex; }
 .entity-chip__kind { font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); }
 .entity-chip__label { color: var(--text-muted); }

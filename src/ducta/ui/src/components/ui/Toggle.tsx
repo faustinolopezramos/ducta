@@ -18,7 +18,7 @@ export function Toggle({ label, value, onChange }: ToggleProps) {
         paddingBottom: 10,
         borderBottom: `1px solid ${colors.border}`,
         ...styles.fontSans,
-        fontSize: 13,
+        fontSize: "var(--text-sm)",
         color: colors.text,
       }}
     >

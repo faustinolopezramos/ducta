@@ -131,7 +131,7 @@
 .cert-dirty-chip {
   display: inline-flex;
   font-family: var(--font-sans);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   padding: 1px 6px;
   border-radius: var(--radius-pill);

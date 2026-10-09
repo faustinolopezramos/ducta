@@ -5,6 +5,7 @@ import type { DataTableColumn } from "../../components/ui/DataTable";
 import { useCancelExecution, useRetryExecution } from "../../api/mutations";
 import { formatDuration } from "./helpers";
 import { formatDate } from "../../utils/formatDate";
+import { isStuckQueued } from "../../utils/dashboardStats";
 import "./executionTable.css";
 
 export interface ExecutionListItem {
@@ -152,14 +153,23 @@ export function executionColumns(
   onToggleDetail: (id: string) => void,
   expandedId: string | null,
   sweepStats: Map<string, SweepStats>,
-  { showProject = true }: { showProject?: boolean } = {},
+  { showProject = true, projectName = (id) => id ?? "—" }: { showProject?: boolean; projectName?: (id: string | null | undefined) => string } = {},
 ): DataTableColumn<ExecutionListItem>[] {
   const columns: DataTableColumn<ExecutionListItem>[] = [
     {
       key: "status",
       header: "Status",
       sortable: true,
-      cell: (ex) => <StatusBadge status={ex.status} size="sm" />,
+      cell: (ex) => (
+        <span className="exec-status-cell">
+          <StatusBadge status={ex.status} size="sm" />
+          {isStuckQueued(ex) && (
+            <span className="exec-stuck" title="Queued for more than 10 minutes — its worker may be gone. Cancel it and run again.">
+              stuck
+            </span>
+          )}
+        </span>
+      ),
     },
     {
       key: "pipeline_name",
@@ -193,7 +203,7 @@ export function executionColumns(
       header: "Project",
       sortable: true,
       mono: true,
-      cell: (ex) => ex.project_id ?? "—",
+      cell: (ex) => projectName(ex.project_id),
     },
     {
       key: "env",
@@ -211,7 +221,6 @@ export function executionColumns(
       key: "started_at",
       header: "Started",
       sortable: true,
-      mono: true,
       cell: (ex) => formatDate(ex.started_at),
     },
     {
@@ -261,7 +270,7 @@ export function ExecutionRowDetail({
     <div
       role="presentation"
       onClick={(e) => e.stopPropagation()}
-      style={{ fontFamily: "var(--font-mono)", fontSize: 11, display: "flex", flexDirection: "column", gap: 6 }}
+      style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", display: "flex", flexDirection: "column", gap: 6 }}
     >
       {stats && (
         <div style={{ color: "var(--text-muted)" }}>

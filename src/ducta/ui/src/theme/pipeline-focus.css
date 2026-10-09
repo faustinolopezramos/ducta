@@ -358,7 +358,8 @@
   text-align: left;
   color: var(--text-muted);
   cursor: pointer;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 .contract-ds:hover {
@@ -410,11 +411,21 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 1 1 0;
   min-width: 0;
-  margin: 0 auto 0 var(--space-4);
-  padding: 0;
+  margin: 0 0 0 var(--space-2);
+  padding: 0 var(--space-3);
   overflow-x: auto;
   list-style: none;
+  /* Scrolls with the wheel or a trackpad; no scrollbar strip under the pills. */
+  scrollbar-width: none;
+  mask-image: linear-gradient(to right, transparent, #000 var(--space-3), #000 calc(100% - var(--space-3)), transparent);
+}
+.pipeline-chain::-webkit-scrollbar { display: none; }
+
+/* Too narrow for the strip: the trail's switcher and the canvas's Chain scope cover it. */
+@media (max-width: 1100px) {
+  .pipeline-chain { display: none; }
 }
 
 .pipeline-chain li {
@@ -484,3 +495,28 @@ a.pipeline-chain-pill:hover {
   text-transform: uppercase;
   color: var(--text-muted);
 }
+
+/* The inspector's "⋯": rarer actions (YAML, templates, remove) behind one button. */
+.focus-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.focus-more:hover { color: var(--text); border-color: var(--border-hover); }
+.focus-more:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+/* Six views in a 360px column: compact tabs that scroll rather than clip a label. */
+.pipeline-inspector .tabs {
+  gap: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.pipeline-inspector .tabs::-webkit-scrollbar { display: none; }
+.pipeline-inspector .tabs-tab { padding: 9px 9px; font-size: var(--text-xs); }

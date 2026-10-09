@@ -11,8 +11,8 @@ import {
   IconPlayerPlay,
   IconSettings,
   IconHome,
+  IconCertificate,
 } from "@tabler/icons-react";
-import { SourceSwitcher } from "./SourceSwitcher";
 import { useUIStore } from "../../store/uiStore";
 import { projectIdFromPath, routes } from "../../utils/routes";
 import { useServerProjectPipelines } from "../../api/queries";
@@ -52,6 +52,7 @@ export function railItems(projectId: string | null, opts: { hasModels?: boolean 
     : [];
   const workspace: RailItem[] = [
     { label: "Projects", icon: IconLayoutDashboard, path: "/projects", divideBefore: project.length > 0 },
+    { label: "Certificates", icon: IconCertificate, path: "/workspace/certificates" },
     { label: "Git", icon: IconGitBranch, path: "/workspace/git" },
   ];
   return [...project, ...workspace];
@@ -104,9 +105,9 @@ export function Sidebar() {
         })}
       </nav>
 
+      {/* The workspace is switched from the header, where its name is. */}
       <div className="ducta-rail-footer">
-        <SourceSwitcher compact />
-        <div className="rail-version" title="Ducta v0.2.0">v0.2.0</div>
+        <div className="rail-version" title={`Ducta v${__APP_VERSION__}`}>v{__APP_VERSION__}</div>
       </div>
     </aside>
   );

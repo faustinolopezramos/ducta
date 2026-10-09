@@ -12,8 +12,19 @@ export type Density = "compact" | "comfortable";
 /** What the panel under the canvas shows. */
 export type BottomPanelTab = "logs" | "problems" | "preview";
 
+/** The operating system's light/dark preference, light when it cannot be read. */
+function systemTheme(): "light" | "dark" {
+  try {
+    return globalThis.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+}
+
 interface UIState {
   theme: "light" | "dark";
+  /** Whether the theme was picked here; until then it follows the system. */
+  themeChosen: boolean;
   sidebarCollapsed: boolean;
   /** Top-to-bottom layers by default; left-to-right for people who read a chain that way. */
   pipelineOrientation: PipelineOrientation;
@@ -51,7 +62,8 @@ interface UIState {
 export const useUIStore = create<UIState>()(
   persist(
     (set) => ({
-      theme: "light",
+      theme: systemTheme(),
+      themeChosen: false,
       sidebarCollapsed: false,
       pipelineOrientation: "vertical",
       pipelineLens: "flow",
@@ -65,12 +77,12 @@ export const useUIStore = create<UIState>()(
       density: "compact",
       setTheme: (theme) => {
         document.documentElement.setAttribute("data-theme", theme);
-        set({ theme });
+        set({ theme, themeChosen: true });
       },
       toggleTheme: () => set((state) => {
         const next = state.theme === "light" ? "dark" : "light";
         document.documentElement.setAttribute("data-theme", next);
-        return { theme: next };
+        return { theme: next, themeChosen: true };
       }),
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
@@ -87,6 +99,12 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: "ducta-ui-state",
+      // A theme saved before anyone picked one (the old "light" default) gives
+      // way to the system's; a picked one is kept.
+      merge: (persisted, current) => {
+        const saved = (persisted ?? {}) as Partial<UIState>;
+        return { ...current, ...saved, theme: saved.themeChosen ? (saved.theme ?? current.theme) : current.theme };
+      },
     }
   )
 );

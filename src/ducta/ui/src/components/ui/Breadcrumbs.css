@@ -6,7 +6,7 @@
   padding: 10px 20px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
-  font-size: 12.5px;
+  font-size: var(--text-xs);
   font-family: var(--font-sans);
 }
 

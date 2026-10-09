@@ -214,6 +214,18 @@
   background: var(--surface);
 }
 
+button.context-item {
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 550;
+  cursor: pointer;
+}
+button.context-item:hover { border-color: var(--border-hover); background: var(--surface-hover); }
+button.context-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+button.context-item svg { color: var(--text-dim); flex-shrink: 0; }
+
+.user-menu__name { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text); }
+
 .context-label {
   max-width: 240px;
   white-space: nowrap;
@@ -266,6 +278,8 @@
 }
 
 .user-profile {
+  background: none;
+  border: 1px solid transparent;
   color: var(--text-muted);
   cursor: pointer;
   display: flex;

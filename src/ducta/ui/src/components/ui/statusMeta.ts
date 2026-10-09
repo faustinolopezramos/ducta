@@ -66,7 +66,7 @@ export type StatusTone = "ok" | "warn" | "bad" | "neutral";
 /** Canonical mapping: single source of truth for status presentation across the app. */
 export const STATUS_META: Record<Status, StatusMeta> = {
   idle:            { label: "Idle",            Icon: IconCircle,            glyph: "○", color: colors.textDim,   tone: "neutral" },
-  pending:         { label: "Pending",         Icon: IconClock,             glyph: "○", color: colors.textDim,   tone: "warn" },
+  pending:         { label: "Queued",          Icon: IconClock,             glyph: "○", color: colors.textDim,   tone: "warn" },
   starting:        { label: "Starting",        Icon: IconLoader2,           glyph: "▶", color: colors.blue,      tone: "warn", spin: true },
   running:         { label: "Running",         Icon: IconLoader2,           glyph: "▶", color: colors.accent,    tone: "warn", spin: true },
   success:         { label: "Success",         Icon: IconCircleCheck,       glyph: "✓", color: colors.green,     tone: "ok" },

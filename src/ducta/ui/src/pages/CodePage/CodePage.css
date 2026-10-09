@@ -6,6 +6,7 @@
   flex: 1;
 }
 .code-page__tree { min-height: 0; overflow: hidden; }
+.code-page:has(> .code-page__tree[hidden]) { grid-template-columns: 1fr; }
 .code-page__main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .code-page__tabs {
   display: flex;
@@ -28,7 +29,7 @@
   padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
   cursor: pointer; white-space: nowrap;
 }
-.code-page__tab-dirty { margin-left: 6px; color: var(--warning); font-size: 9px; line-height: 1; }
+.code-page__tab-dirty { margin-left: 6px; color: var(--warning); font-size: var(--text-2xs); line-height: 1; }
 .code-page__tab-close {
   background: none; border: 0; color: var(--text-dim); cursor: pointer;
   display: inline-flex; padding: var(--space-1); margin-right: var(--space-1); border-radius: var(--radius-sm);

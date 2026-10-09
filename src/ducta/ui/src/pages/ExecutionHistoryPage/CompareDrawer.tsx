@@ -52,7 +52,7 @@ export function CompareDrawer({
       onClose={onClose}
       width={width}
       title={
-        <span style={{ ...styles.fontMono, fontSize: 12, fontWeight: 600, color: colors.text }}>
+        <span style={{ ...styles.fontMono, fontSize: "var(--text-xs)", fontWeight: 600, color: colors.text }}>
           Compare {executions.length} executions
         </span>
       }

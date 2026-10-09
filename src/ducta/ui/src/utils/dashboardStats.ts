@@ -94,6 +94,20 @@ export function noActivity(): ProjectActivity {
  * later run of the same pipeline succeeds (or is running again), someone has
  * already dealt with it, and listing it would bury what is still broken.
  */
+/**
+ * A queued run that has waited this long is not "about to start" — its worker
+ * is gone or the queue is wedged. Shown as stuck so it reads as a problem
+ * rather than as activity.
+ */
+export const QUEUED_STUCK_MS = 10 * 60 * 1000;
+
+/** Whether *run* has sat in the queue longer than {@link QUEUED_STUCK_MS}. */
+export function isStuckQueued(run: RunLike, now: number = Date.now()): boolean {
+  if (run.status !== "pending") return false;
+  const t = runTimestamp(run);
+  return t !== null && now - t > QUEUED_STUCK_MS;
+}
+
 export function summarizeRuns(runs: readonly RunLike[], now: number = Date.now()): DashboardStats {
   const timed = runs
     .map((run) => ({ run, t: runTimestamp(run) }))

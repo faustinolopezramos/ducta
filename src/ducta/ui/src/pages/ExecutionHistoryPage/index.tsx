@@ -12,6 +12,7 @@ import { IconPlayerStop, IconClockHour4, IconSearch, IconArrowsLeftRight } from 
 import { CertificateModal } from "../../components/Execution/CertificateModal";
 import { QueueIndicator } from "./QueueIndicator";
 import { FilterBar } from "./FilterBar";
+import { useProjectName } from "../../hooks/useProjects";
 import { LogsDrawer } from "./LogsDrawer";
 import { CompareDrawer } from "./CompareDrawer";
 import { PipelineHealthStrip } from "./PipelineHealthStrip";
@@ -32,6 +33,7 @@ const PAGE_SIZE = 50;
 
 /** `projectId`: under a project, its runs — the filter starts there and stays editable. */
 export function ExecutionHistoryPage({ projectId, header }: { projectId?: string; header?: SectionHeader } = {}) {
+  const projectName = useProjectName();
   const [searchParams, setSearchParams] = useSearchParams();
   const selectedId = searchParams.get("run");
   const selectExecution = (id: string | null) => {
@@ -92,8 +94,6 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
       <PageHeader
         title={header?.title ?? (projectId ? "Runs" : "All runs")}
         description={header?.description ?? (projectId ? undefined : "Every project's runs. Click a row for its logs.")}
-        backTo={projectId ? undefined : "/projects"}
-        backLabel="Projects"
         actions={<QueueIndicator />}
         tabs={header?.tabs}
       />
@@ -149,7 +149,7 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
           (id) => setExpandedId((prev) => (prev === id ? null : id)),
           expandedId,
           sweepStats,
-          { showProject: !projectId },
+          { showProject: !projectId, projectName },
         )}
         rows={executions}
         rowKey={(ex) => ex.id}
@@ -196,7 +196,7 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
             justifyContent: "center",
             gap: 10,
             padding: "10px 0",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             fontFamily: "var(--font-mono)",
             color: "var(--text-dim)",
           }}

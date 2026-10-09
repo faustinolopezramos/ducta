@@ -65,10 +65,10 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
       width={700}
       title={
         <>
-          <span style={{ ...styles.fontMono, fontSize: 12, fontWeight: 600, color: colors.text }}>
+          <span style={{ ...styles.fontMono, fontSize: "var(--text-xs)", fontWeight: 600, color: colors.text }}>
             Execution Logs
           </span>
-          <span style={{ ...styles.fontMono, fontSize: 11, color: colors.textDim, background: colors.grayA12, padding: "1px 6px", borderRadius: 4, flexShrink: 0 }}>
+          <span style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", color: colors.textDim, background: colors.grayA12, padding: "1px 6px", borderRadius: 4, flexShrink: 0 }}>
             {executionId.slice(0, 8)}
           </span>
           {statusData && <StatusBadge status={statusData.status} size="sm" />}
@@ -133,7 +133,7 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
       <StreamingStatusPanel executionId={executionId} isActive={isActive} />
 
       {logsLoading ? (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", ...styles.fontMono, fontSize: 12, color: colors.textDim }}>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", ...styles.fontMono, fontSize: "var(--text-xs)", color: colors.textDim }}>
           Loading execution logs…
         </div>
       ) : (

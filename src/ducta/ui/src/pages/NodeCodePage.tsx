@@ -145,7 +145,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
             border: `1px solid ${colors.border}`,
             borderRadius: 4,
             color: projectId ? colors.text : colors.textMuted,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             fontFamily: "var(--font-sans)",
             padding: "3px 6px",
             cursor: "pointer",
@@ -167,7 +167,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
             border: `1px solid ${colors.border}`,
             borderRadius: 4,
             color: pipelineName ? colors.text : colors.textMuted,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             fontFamily: "var(--font-sans)",
             padding: "3px 6px",
             cursor: projectId ? "pointer" : "not-allowed",
@@ -194,7 +194,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
         {nodeStatus && (
           <span
             style={{
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               ...styles.fontMono,
               color: statusColor,
               border: `1px solid ${statusColor}`,
@@ -216,7 +216,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
               border: `1px solid ${colors.border}`,
               borderRadius: 3,
               color: colors.textMuted,
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               fontFamily: "var(--font-sans)",
               cursor: "pointer",
               padding: "2px 8px",
@@ -241,7 +241,7 @@ function ExecutionBar({ nodeName }: ExecutionBarProps) {
               borderTop: `1px solid ${colors.border}`,
             }}
           >
-            <span style={{ fontSize: 11, color: colors.danger ?? "#ef4444", fontFamily: "var(--font-mono)" }}>
+            <span style={{ fontSize: "var(--text-2xs)", color: colors.danger ?? "#ef4444", fontFamily: "var(--font-mono)" }}>
               Error: {errorMsg}
             </span>
           </div>
@@ -346,18 +346,18 @@ export function NodeCodePage() {
           onClick={() => navigate(returnTo)}
           title="Back"
         />
-        <span style={{ ...styles.fontSans, fontSize: 12, color: colors.border }}>/</span>
-        <span style={{ ...styles.fontMono, fontSize: 13, color: colors.textMuted }}>nodes</span>
-        <span style={{ ...styles.fontSans, fontSize: 12, color: colors.border }}>/</span>
-        <span style={{ ...styles.fontMono, fontSize: 13, color: colors.text }}>{nodeName}</span>
-        <span style={{ ...styles.fontSans, fontSize: 12, color: colors.border }}>/</span>
+        <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.border }}>/</span>
+        <span style={{ ...styles.fontMono, fontSize: "var(--text-sm)", color: colors.textMuted }}>nodes</span>
+        <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.border }}>/</span>
+        <span style={{ ...styles.fontMono, fontSize: "var(--text-sm)", color: colors.text }}>{nodeName}</span>
+        <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.border }}>/</span>
         <span
           style={{
             ...styles.fontMono,
             display: "inline-flex",
             alignItems: "center",
             gap: 5,
-            fontSize: 10,
+            fontSize: "var(--text-2xs)",
             padding: "1px 7px",
             background: colors.accentBg,
             border: `1px solid ${colors.accentA20}`,
@@ -370,7 +370,7 @@ export function NodeCodePage() {
         </span>
 
         {nodeSpec?.module && (
-          <span style={{ ...styles.fontMono, fontSize: 11, color: colors.textDim, marginLeft: 4 }}>
+          <span style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", color: colors.textDim, marginLeft: 4 }}>
             {nodeSpec.module}{nodeSpec.fn ? `.${nodeSpec.fn}` : ""}
           </span>
         )}
@@ -382,7 +382,7 @@ export function NodeCodePage() {
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               fontWeight: 600,
               padding: "2px 8px",
               background: "color-mix(in srgb, var(--warning) 15%, transparent)",
@@ -393,12 +393,12 @@ export function NodeCodePage() {
             }}
             title="Unsaved changes in file — Press Cmd+S to save"
           >
-            <span style={{ fontSize: 14, lineHeight: 1 }}>•</span> Unsaved (Cmd+S)
+            <span style={{ fontSize: "var(--text-base)", lineHeight: 1 }}>•</span> Unsaved (Cmd+S)
           </span>
         )}
 
         {isSaving && (
-          <span style={{ ...styles.fontSans, display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, color: colors.textMuted, marginLeft: "auto" }}>
+          <span style={{ ...styles.fontSans, display: "inline-flex", alignItems: "center", gap: 6, fontSize: "var(--text-2xs)", color: colors.textMuted, marginLeft: "auto" }}>
             <IconLoader2 size={13} className="animate-spin" />
             Saving…
           </span>
@@ -424,11 +424,11 @@ export function NodeCodePage() {
         {/* Editor */}
         <div style={{ minHeight: 0, padding: "12px 16px", display: "flex", flexDirection: "column" }}>
           {fileLoading ? (
-            <div style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, paddingTop: 32, textAlign: "center" }}>
+            <div style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, paddingTop: 32, textAlign: "center" }}>
               Loading…
             </div>
           ) : (
-            <Suspense fallback={<div style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, paddingTop: 32, textAlign: "center" }}>Loading editor...</div>}>
+            <Suspense fallback={<div style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, paddingTop: 32, textAlign: "center" }}>Loading editor...</div>}>
               <CodeEditor
                 value={fileData?.content ?? ""}
                 height="100%"

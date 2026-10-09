@@ -11,7 +11,7 @@ import { routes } from "../../utils/routes";
 
 const label: React.CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--text-2xs)",
   fontWeight: 600,
   color: colors.textMuted,
   textTransform: "uppercase",
@@ -27,7 +27,7 @@ const input: React.CSSProperties = {
   background: colors.bg,
   color: colors.text,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: "var(--text-xs)",
   outline: "none",
 };
 
@@ -113,7 +113,7 @@ export function UseInPipelineModal({
   return (
     <Modal title={`Use '${connectionName}' in a pipeline`} onClose={onClose} width={560}>
       <div style={{ display: "grid", gap: 14 }}>
-        <p style={{ margin: 0, fontSize: 12, color: colors.textMuted }}>
+        <p style={{ margin: 0, fontSize: "var(--text-xs)", color: colors.textMuted }}>
           Creates a declarative <code>type: ingestion</code> node — Ducta owns the JDBC
           connection and Spark read, no Python needed. Wire its <code>output</code> dataset
           later from the node's I/O tab if you want the result persisted.
@@ -163,7 +163,7 @@ export function UseInPipelineModal({
           <span style={label}>Node name</span>
           <input style={input} value={nodeName} onChange={(e) => setNodeName(e.target.value)} />
           {nameError && (
-            <span style={{ fontSize: 11, color: colors.danger }}>{nameError}</span>
+            <span style={{ fontSize: "var(--text-2xs)", color: colors.danger }}>{nameError}</span>
           )}
         </div>
 
@@ -182,7 +182,7 @@ export function UseInPipelineModal({
                   background: mode === m ? `${colors.accent}12` : "transparent",
                   color: mode === m ? colors.accent : colors.textMuted,
                   cursor: "pointer",
-                  fontSize: 11,
+                  fontSize: "var(--text-2xs)",
                   fontWeight: mode === m ? 600 : 400,
                 }}
               >

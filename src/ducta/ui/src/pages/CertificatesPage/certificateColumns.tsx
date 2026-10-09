@@ -6,7 +6,9 @@ import type { Execution } from "../../types/execution";
 
 export type CertificateListItem = Execution & { project_id?: string };
 
-export const certificateColumns: DataTableColumn<CertificateListItem>[] = [
+export const certificateColumns = (
+  projectName: (id: string | null | undefined) => string = (id) => id ?? "—",
+): DataTableColumn<CertificateListItem>[] => [
   {
     key: "status",
     header: "Status",
@@ -14,9 +16,9 @@ export const certificateColumns: DataTableColumn<CertificateListItem>[] = [
     cell: (ex) => <StatusBadge status={ex.status} size="sm" />,
   },
   { key: "pipeline_name", header: "Pipeline", mono: true, sortable: true },
-  { key: "project_id", header: "Project", mono: true, sortable: true, cell: (ex) => ex.project_id ?? "—" },
+  { key: "project_id", header: "Project", sortable: true, cell: (ex) => projectName(ex.project_id) },
   { key: "env", header: "Env", mono: true, sortable: true },
-  { key: "started_at", header: "Started", mono: true, sortable: true, cell: (ex) => formatDate(ex.started_at) },
+  { key: "started_at", header: "Started", sortable: true, cell: (ex) => formatDate(ex.started_at) },
   {
     key: "duration_seconds",
     header: "Duration",

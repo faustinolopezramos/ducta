@@ -15,7 +15,7 @@
 .problem__message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .problem__where { flex-shrink: 0; color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-2xs); }
 .problem__source {
-  flex-shrink: 0; color: var(--text-dim); font-size: 10px; text-transform: uppercase; letter-spacing: var(--tracking-wider);
+  flex-shrink: 0; color: var(--text-dim); font-size: var(--text-2xs); text-transform: uppercase; letter-spacing: var(--tracking-wider);
 }
 .problem__fix {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px; margin-right: var(--space-2);

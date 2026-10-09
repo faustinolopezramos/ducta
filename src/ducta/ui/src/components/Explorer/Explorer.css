@@ -34,8 +34,8 @@
 .explorer__row--leaf .explorer__name { font-family: var(--font-mono); }
 .explorer__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .explorer__count { color: var(--text-dim); font-size: var(--text-2xs); font-family: var(--font-mono); }
-.explorer__node-glyph { color: var(--text-dim); font-size: 10px; }
-.explorer__flag { color: var(--danger); font-size: 9px; }
+.explorer__node-glyph { color: var(--text-dim); font-size: var(--text-2xs); }
+.explorer__flag { color: var(--danger); font-size: var(--text-2xs); }
 .explorer__row[data-layer="bronze"] svg:last-of-type { color: var(--layer-bronze); }
 .explorer__row[data-layer="silver"] svg:last-of-type { color: var(--layer-silver); }
 .explorer__row[data-layer="gold"] svg:last-of-type { color: var(--layer-gold); }

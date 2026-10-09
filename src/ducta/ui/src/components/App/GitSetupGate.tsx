@@ -19,7 +19,9 @@ export function GitSetupGate({ children }: Readonly<{ children: React.ReactNode 
   const navigate = useNavigate();
   const location = useLocation();
 
-  const showWizard = Boolean(selectedSource) && (!setupComplete || location.pathname === "/setup");
+  // `/setup?connect=1` is "connect another workspace": the form, not the wizard.
+  const connecting = location.pathname === "/setup" && new URLSearchParams(location.search).has("connect");
+  const showWizard = Boolean(selectedSource) && !connecting && (!setupComplete || location.pathname === "/setup");
 
   const handleClose = () => {
     if (location.pathname === "/setup") {

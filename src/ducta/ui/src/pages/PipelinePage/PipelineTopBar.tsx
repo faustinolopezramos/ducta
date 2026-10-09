@@ -114,15 +114,22 @@ export function PipelineTopBar({
 }: PipelineTopBarProps) {
   // Chosen once for the whole app, in the header; the Run button names it.
   const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
+  // A long chain scrolls: keep this pipeline's pill in view.
+  const chainRef = useRef<HTMLOListElement>(null);
+  useEffect(() => {
+    chainRef.current
+      ?.querySelector<HTMLElement>('[aria-current="page"]')
+      ?.scrollIntoView?.({ block: "nearest", inline: "center" });
+  }, [pipelineId, chain]);
 
   return (
     <header className="pipeline-topbar">
       <nav className="pipeline-trail" aria-label="Breadcrumb">
-        <Link to="/projects" className="pipeline-trail-link">Projects</Link>
+        <Link to="/projects" className="pipeline-trail-link pipeline-trail-link--root">Projects</Link>
+        <span className="pipeline-trail-sep pipeline-trail-sep--root" aria-hidden="true">/</span>
+        <Link to={routes.project(projectId)} className="pipeline-trail-link pipeline-trail-link--project" title={projectName}>{projectName}</Link>
         <span className="pipeline-trail-sep" aria-hidden="true">/</span>
-        <Link to={routes.project(projectId)} className="pipeline-trail-link">{projectName}</Link>
-        <span className="pipeline-trail-sep" aria-hidden="true">/</span>
-        <span className="pipeline-trail-current" aria-current="page">{pipelineId}</span>
+        <span className="pipeline-trail-current" aria-current="page" title={pipelineId}>{pipelineId}</span>
         <button
           type="button"
           className="ducta-breadcrumbs__switch"
@@ -138,7 +145,7 @@ export function PipelineTopBar({
       </nav>
 
       {chain && chain.length > 1 && (
-        <ol className="pipeline-chain" aria-label="Pipeline chain, in execution order">
+        <ol className="pipeline-chain" aria-label="Pipeline chain, in execution order" ref={chainRef}>
           {chain.map((pipeline, i) => {
             const status = chainStatus?.[pipeline];
             const dot = status ? (

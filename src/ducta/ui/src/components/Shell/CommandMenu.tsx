@@ -35,15 +35,24 @@ const ICON: Record<CommandKind, typeof IconBolt> = {
   run: IconPlayerPlay,
 };
 
+// Named as the rail names them: Schedules live under Runs, Connections under Settings.
 const SECTIONS: [ProjectSection, string][] = [
   ["pipelines", "Pipelines"],
+  ["code", "Code"],
   ["runs", "Runs"],
+  ["schedules", "Runs › Schedules"],
   ["quality", "Quality"],
   ["models", "Models"],
-  ["schedules", "Schedules"],
-  ["connections", "Connections"],
-  ["code", "Code"],
   ["settings", "Settings"],
+  ["connections", "Settings › Connections"],
+];
+
+/** Workspace-wide pages, reachable from any project. */
+const WORKSPACE_PAGES: [string, string][] = [
+  ["/projects", "Projects"],
+  ["/workspace/executions", "All runs"],
+  ["/workspace/certificates", "Certificates"],
+  ["/workspace/git", "Git"],
 ];
 
 /**
@@ -84,6 +93,7 @@ function Menu({ initial, kinds, onClose }: { initial: string; kinds: CommandKind
             to: routes.section(projectId, section),
           }))
         : []),
+      ...WORKSPACE_PAGES.map(([to, label]): CommandEntry => ({ kind: "command", id: `go:${to}`, label: `Go to ${label}`, to })),
       { kind: "command", id: "cmd:explorer", label: "Toggle explorer", hint: "mod+b", run: toggleExplorer },
       {
         kind: "command",

@@ -3,7 +3,11 @@ import type { PipelineSchedule } from "../../api/schedulesApi";
 import { formatRelative, formatUtc } from "../../utils/timeLabels";
 
 interface OpsSummaryProps {
-  activeCount: number;
+  /** Runs executing now. */
+  runningCount: number;
+  /** Runs waiting for a worker, and how many of them have waited too long. */
+  queuedCount: number;
+  stuckCount: number;
   failedLast24h: number;
   next: PipelineSchedule | null;
   loading?: boolean;
@@ -16,7 +20,8 @@ interface OpsSummaryProps {
  * over: the running count while something is live, the failed count while
  * anything failed today.
  */
-export function OpsSummary({ activeCount, failedLast24h, next, loading = false }: OpsSummaryProps) {
+export function OpsSummary({ runningCount, queuedCount, stuckCount, failedLast24h, next, loading = false }: OpsSummaryProps) {
+  const activeCount = runningCount;
   return (
     <dl className="dash-stats" aria-label="Workspace at a glance">
       <div className="dash-stat">
@@ -26,6 +31,13 @@ export function OpsSummary({ activeCount, failedLast24h, next, loading = false }
         </dt>
         <dd className="dash-stat-value" data-tone={activeCount > 0 ? "active" : undefined}>
           {loading ? "–" : activeCount}
+          {!loading && queuedCount > 0 && (
+            <span className="dash-stat-sub" data-tone={stuckCount > 0 ? "warn" : undefined}>
+              {stuckCount > 0
+                ? `${queuedCount} queued · ${stuckCount} stuck`
+                : `${queuedCount} queued`}
+            </span>
+          )}
         </dd>
       </div>
 

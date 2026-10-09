@@ -21,7 +21,7 @@ export function QueueIndicator() {
         background: colors.surface,
         border: `1px solid ${colors.border}`,
         ...styles.fontMono,
-        fontSize: 11,
+        fontSize: "var(--text-2xs)",
         color: colors.textMuted,
       }}
     >

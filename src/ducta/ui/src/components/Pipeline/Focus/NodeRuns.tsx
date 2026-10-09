@@ -25,7 +25,7 @@ export function NodeRuns({
   const { data, isLoading } = useExecutionList({ node_name: nodeName, limit: 15 });
   const runs: Execution[] = data?.executions ?? [];
   const env = useSourceStore((s) => s.activeEnv);
-  const { data: metrics } = useProjectMetrics(projectId ?? "", env && env !== "base" ? env : "dev");
+  const { data: metrics } = useProjectMetrics(projectId ?? "", env || "base");
   const trend = metrics?.nodes.find((n) => n.node === nodeName);
 
   return (

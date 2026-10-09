@@ -10,7 +10,11 @@ import {
   IconTrash,
   IconX,
   IconFlask,
+  IconDots,
+  IconBoxMultiple,
 } from "@tabler/icons-react";
+import { Menu, type MenuItem } from "../../ui/Menu";
+import { usePermission } from "../../../hooks/usePermission";
 import { useNodeCode, type MlPlanNode, type NodeSchema } from "../../../api/queries";
 import { Button } from "../../ui/Button";
 import { PermittedButton } from "../../ui/PermittedButton";
@@ -151,6 +155,25 @@ export function NodeFocus({
   const { data: codeData } = useNodeCode(hasCode ? nodeId : "");
   const { data: commentData } = useComments(projectId ?? "", { node: name }, !!projectId);
   const openComments = (commentData?.threads ?? []).filter((t) => !t.resolved).length;
+  // The everyday actions stay as buttons; the rest — rarer, or about the
+  // project's structure — wait behind one menu instead of a wall of links.
+  const canWrite = usePermission("pipeline.write");
+  const hasChecks = (schema?.quality?.check_count ?? 0) > 0 || (schema?.quality?.checks?.length ?? 0) > 0;
+  const moreActions: MenuItem[] = [
+    ...(hasChecks && onViewQualityReports
+      ? [{ key: "quality", label: "Quality reports", icon: <IconGauge size={14} />, onSelect: () => onViewQualityReports({ dataset: name, pipelineName: pipelineId }) }]
+      : []),
+    ...(onOpenYaml ? [{ key: "yaml", label: "Show in YAML", icon: <IconCode size={14} />, onSelect: onOpenYaml }] : []),
+    ...(onExtractTemplate && canWrite
+      ? [{ key: "template", label: "Make template", hint: "Reuse this node's configuration", icon: <IconTemplate size={14} />, onSelect: onExtractTemplate, divideBefore: true }]
+      : []),
+    ...(onExtractSubpipeline && canWrite
+      ? [{ key: "subpipeline", label: "Make subpipeline", hint: "Reuse this node with others", icon: <IconBoxMultiple size={14} />, onSelect: onExtractSubpipeline }]
+      : []),
+    ...(onRemoveNode && canWrite
+      ? [{ key: "remove", label: "Remove node", hint: "Undoable", icon: <IconTrash size={14} />, tone: "danger" as const, onSelect: onRemoveNode, divideBefore: true }]
+      : []),
+  ];
   const entry = [schema?.module ?? fallback?.module, schema?.fn ?? fallback?.fn].filter(Boolean).join(":");
   const description = schema?.description ?? fallback?.description;
   const status = execState ?? schema?.last_execution_status ?? null;
@@ -160,7 +183,6 @@ export function NodeFocus({
   const outputs = schema?.outputs ?? (fallback?.outputs ?? []).map((p) => ({ ...p, declared: true }));
   const layer = medallionLayer(outputs.map((o) => o.name));
   const isRunningThis = runningNodeId === nodeId;
-  const hasChecks = (schema?.quality?.check_count ?? 0) > 0 || (schema?.quality?.checks?.length ?? 0) > 0;
 
   const runNode = () => onRunNode({ id: nodeId, name });
   const handleRunClick = () => {
@@ -189,14 +211,14 @@ export function NodeFocus({
           projectId={projectId}
           pipeline={pipelineId}
           node={name}
-          env={activeEnv && activeEnv !== "base" ? activeEnv : "dev"}
+          env={activeEnv || "base"}
           onSave={onSetKey ? (q) => onSetKey("quality", q) : undefined}
         />
       ) : tab === "runs" ? (
         <>
           <NodeRuns nodeName={name} projectId={projectId} pipelineId={pipelineId} />
           {/* Tests call a node's function: an ingest has none (its tests and snapshot answer 404). */}
-          {projectId && hasCode && <NodeTests projectId={projectId} node={name} env={activeEnv && activeEnv !== "base" ? activeEnv : "dev"} />}
+          {projectId && hasCode && <NodeTests projectId={projectId} node={name} env={activeEnv || "base"} />}
         </>
       ) : tab === "config" && projectId ? (
         <>
@@ -208,7 +230,7 @@ export function NodeFocus({
           projectId={projectId}
           inputs={inputs.map((i) => i.name)}
           outputs={outputs.map((o) => o.name)}
-          env={activeEnv === "base" ? "dev" : activeEnv}
+          env={activeEnv}
         />
       ) : (
       <>
@@ -369,55 +391,14 @@ export function NodeFocus({
               View logs
             </Button>
           )}
-          {hasChecks && onViewQualityReports && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => onViewQualityReports({ dataset: name, pipelineName: pipelineId })}
-              leftIcon={<IconGauge size={14} />}
-            >
-              Quality reports
-            </Button>
-          )}
-          {onOpenYaml && (
-            <Button variant="ghost" size="sm" onClick={onOpenYaml} leftIcon={<IconCode size={14} />}>
-              YAML
-            </Button>
-          )}
-          {onExtractTemplate && (
-            <PermittedButton
-              permission="pipeline.write"
-              variant="ghost"
-              size="sm"
-              onClick={onExtractTemplate}
-              leftIcon={<IconTemplate size={14} />}
-              title="Move this node's configuration into templates/nodes/ to reuse it"
-            >
-              Make template
-            </PermittedButton>
-          )}
-          {onExtractSubpipeline && (
-            <PermittedButton
-              permission="pipeline.write"
-              variant="ghost"
-              size="sm"
-              onClick={onExtractSubpipeline}
-              title="Move this node and others into templates/pipelines/ to reuse them together"
-            >
-              Make subpipeline
-            </PermittedButton>
-          )}
-          {onRemoveNode && (
-            <PermittedButton
-              permission="pipeline.write"
-              variant="ghost"
-              size="sm"
-              onClick={onRemoveNode}
-              leftIcon={<IconTrash size={14} />}
-              title="Remove the node from its pipeline — undoable"
-            >
-              Remove
-            </PermittedButton>
+          {moreActions.length > 0 && (
+            <Menu
+              triggerClassName="focus-more"
+              triggerLabel="More actions"
+              items={moreActions}
+              align="start"
+              trigger={<IconDots size={16} />}
+            />
           )}
         </div>
       </article>

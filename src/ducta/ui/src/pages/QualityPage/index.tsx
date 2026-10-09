@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { colors } from "../../theme/tokens";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { PageContainer } from "../../components/ui/PageContainer";
@@ -11,7 +11,7 @@ import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { Sparkline } from "../../components/Quality/Sparkline";
 import { useQualitySummary, type QualityDatasetSummary } from "../../api/qualityApi";
-import { useEnvironments, useServerProjects } from "../../api/queries";
+import { useEnvironments, useExecutionList, useServerProjects } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
 import { RunChecksModal } from "../../components/Quality/RunChecksModal";
 import { ValidateConfigModal } from "../../components/Quality/ValidateConfigModal";
@@ -21,8 +21,10 @@ import {
   IconShieldCheck,
   IconDatabase,
 } from "@tabler/icons-react";
-import { input, sectionTitle, scoreColor } from "./shared";
+import { sectionTitle, scoreColor } from "./shared";
 import { formatDate } from "../../utils/formatDate";
+import { formatRelative } from "../../utils/timeLabels";
+import { statusMetaFor } from "../../components/ui/statusMeta";
 import { DatasetDetail } from "./DatasetDetail";
 import { ScoreSection } from "./ScoreSection";
 import { ChecksCard } from "./ChecksCard";
@@ -32,36 +34,21 @@ import { ChecksCard } from "./ChecksCard";
 // ─────────────────────────────────────────────
 
 const ADHOC_LABEL = "Manual run";
+/** `?env=` value for the ad-hoc bucket (reports with no environment). */
+const ADHOC_ENV = "_adhoc";
 
 export default function QualityPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const seeded = useRef(false);
-
-  // Seed the environment filter from the workspace's active environment on a
-  // completely fresh visit (no quality-page params at all) — afterwards the
-  // URL is the single source of truth, so deep links stay authoritative.
-  useEffect(() => {
-    if (seeded.current) return;
-    seeded.current = true;
-    if (
-      !searchParams.has("project") &&
-      !searchParams.has("env") &&
-      !searchParams.has("pipeline_name") &&
-      !searchParams.has("dataset") &&
-      !searchParams.has("run_id")
-    ) {
-      const activeEnv = useSourceStore.getState().activeEnv;
-      if (activeEnv) {
-        const next = new URLSearchParams(searchParams);
-        next.set("env", activeEnv);
-        setSearchParams(next, { replace: true });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Under a project the rail already names it: no second project picker.
+  const { projectId: routeProject } = useParams<{ projectId?: string }>();
+  const activeEnv = useSourceStore((st) => st.activeEnv) || "base";
 
   const project = searchParams.get("project") ?? "";
-  const env = searchParams.get("env") ?? "";
+  // The environment follows the one in the header unless the URL names
+  // another — or the ad-hoc bucket, where "Run checks" reports land.
+  const envParam = searchParams.get("env");
+  const adhoc = envParam === ADHOC_ENV;
+  const env = adhoc ? "" : (envParam ?? activeEnv);
   const pipelineName = searchParams.get("pipeline_name") ?? "";
   const selectedDataset = searchParams.get("dataset") ?? "";
   const scoreRunId = searchParams.get("run_id") ?? "";
@@ -69,6 +56,10 @@ export default function QualityPage() {
   const [showRunModal, setShowRunModal] = useState(false);
   const [showValidateModal, setShowValidateModal] = useState(false);
   const [manualRunId, setManualRunId] = useState("");
+  const { data: recentRunsData } = useExecutionList({ project_id: project || undefined, limit: 20 });
+  const recentRuns = (recentRunsData?.executions ?? []) as Array<{
+    id: string; pipeline_name: string; status: string; env?: string; started_at?: string | null; certificate_run_id?: string | null;
+  }>;
 
   const { data: projectsData } = useServerProjects();
   const projects = projectsData?.projects ?? [];
@@ -106,7 +97,7 @@ export default function QualityPage() {
   };
 
   const handleEnvChange = (value: string) => {
-    setParam({ env: value || undefined, pipeline_name: undefined, dataset: undefined });
+    setParam({ env: value === activeEnv ? undefined : value, pipeline_name: undefined, dataset: undefined });
   };
 
   const selectDataset = (row: { pipeline_name: string; dataset: string }) => {
@@ -160,7 +151,6 @@ export default function QualityPage() {
       key: "created_at",
       header: "Last run",
       sortable: true,
-      mono: true,
       cell: (r) => formatDate(r.created_at),
     },
   ];
@@ -168,8 +158,8 @@ export default function QualityPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Data Quality"
-        description="Dataset health at a glance — drill into reports, run checks, validate node configs"
+        title="Quality"
+        description="Dataset health at a glance — drill into reports, run checks, validate node configs."
         actions={
           <>
             <Button
@@ -207,7 +197,7 @@ export default function QualityPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
           {sectionTitle(<IconDatabase size={16} color={colors.accent} />, "Datasets")}
           <div style={{ flex: 1 }} />
-          <Field label="Project">
+          {!routeProject && <Field label="Project">
             <select
               className="input-field"
               style={{ minWidth: 160 }}
@@ -222,21 +212,21 @@ export default function QualityPage() {
                 </option>
               ))}
             </select>
-          </Field>
+          </Field>}
           <Field label="Environment">
             <select
               className="input-field"
               style={{ minWidth: 160 }}
-              value={env}
+              value={adhoc ? ADHOC_ENV : env}
               onChange={(e) => handleEnvChange(e.target.value)}
               aria-label="Quality reports environment"
             >
-              <option value="">{ADHOC_LABEL}s (ad-hoc)</option>
-              {environments.map((e) => (
+              {["base", ...environments.filter((e) => e !== "base")].map((e) => (
                 <option key={e} value={e}>
-                  {e}
+                  {e}{e === activeEnv ? " (active)" : ""}
                 </option>
               ))}
+              <option value={ADHOC_ENV}>{ADHOC_LABEL}s (ad-hoc)</option>
             </select>
           </Field>
         </div>
@@ -282,29 +272,32 @@ export default function QualityPage() {
       {!scoreRunId && (
         <Panel>
           {sectionTitle(<IconGauge size={16} color={colors.accent} />, "Pipeline quality score")}
-          <p style={{ margin: "0 0 10px", fontSize: 12, color: colors.textMuted }}>
-            Open a score from Execution History (Quality action on a run), or look one up by run id.
+          <p className="quality-score-hint">
+            Pick a recent run to see its composite quality score.
           </p>
-          {/* The page fills the window, but a single id field should not be
-              1500px wide — the measure belongs on the control, not the page. */}
-          <div style={{ display: "flex", gap: 8, alignItems: "flex-end", maxWidth: 520 }}>
-            <div style={{ flex: 1 }}>
-              <Field label="Run ID">
-                <input
-                  style={input}
-                  value={manualRunId}
-                  onChange={(e) => setManualRunId(e.target.value)}
-                  placeholder="e.g. 3f9a2c81"
-                />
-              </Field>
-            </div>
+          <div className="quality-score-pick">
+            <Field label="Run">
+              <select
+                className="input-field"
+                value={manualRunId}
+                onChange={(e) => setManualRunId(e.target.value)}
+                aria-label="Run to score"
+              >
+                <option value="">Choose a run…</option>
+                {recentRuns.map((r) => (
+                  <option key={r.id} value={r.certificate_run_id ?? r.id}>
+                    {r.pipeline_name} · {(statusMetaFor(r.status)?.label ?? r.status).toLowerCase()} · {r.env ?? ""} · {formatRelative(r.started_at) ?? ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <Button
               variant="secondary"
               size="sm"
               onClick={() => setParam({ run_id: manualRunId.trim() })}
               disabled={!manualRunId.trim()}
             >
-              Load
+              Show score
             </Button>
           </div>
         </Panel>
@@ -321,7 +314,7 @@ export default function QualityPage() {
             // own project, in its ad-hoc bucket — clear project/env/pipeline
             // scope so the drill-down looks in the right place.
             if (dataset)
-              setParam({ project: undefined, env: undefined, pipeline_name: undefined, dataset });
+              setParam({ project: routeProject ? project : undefined, env: ADHOC_ENV, pipeline_name: undefined, dataset });
           }}
         />
       )}

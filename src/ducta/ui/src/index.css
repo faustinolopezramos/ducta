@@ -48,16 +48,16 @@
   box-shadow: var(--shadow-sm);
 }
 
-.t-h1 { font-size: 32px; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
-.t-h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
-.t-p { font-size: 16px; color: var(--text-muted); line-height: 1.5; }
+.t-h1 { font-size: var(--text-3xl); font-weight: 700; letter-spacing: -0.02em; margin-bottom: 8px; }
+.t-h2 { font-size: var(--text-2xl); font-weight: 600; letter-spacing: -0.01em; margin-bottom: 6px; }
+.t-p { font-size: var(--text-lg); color: var(--text-muted); line-height: 1.5; }
 
 .t-badge {
   display: inline-flex;
   align-items: center;
   padding: 2px 8px;
   border-radius: 9999px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -148,7 +148,7 @@ select option {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  z-index: 9999;
+  z-index: var(--z-toast);
   pointer-events: none;
 }
 
@@ -181,7 +181,7 @@ select option {
 
   /* Smaller headers */
   h1 {
-    font-size: 22px !important;
+    font-size: var(--text-xl) !important;
   }
 }
 
@@ -195,11 +195,11 @@ select option {
 
   /* Full-width headers */
   h1 {
-    font-size: 20px !important;
+    font-size: var(--text-xl) !important;
   }
 
   h2 {
-    font-size: 18px !important;
+    font-size: var(--text-lg) !important;
   }
 
   /* Stack flex layouts vertically */
@@ -221,7 +221,7 @@ select option {
 
   .MuiButton-root {
     padding: 10px 14px !important;
-    font-size: 14px !important;
+    font-size: var(--text-base) !important;
   }
 
   .MuiIconButton-root {
@@ -284,7 +284,7 @@ input:user-invalid + .error-message,
 textarea:user-invalid + .error-message {
   display: block;
   color: var(--danger);
-  font-size: 11px;
+  font-size: var(--text-2xs);
   margin-top: 4px;
   animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }

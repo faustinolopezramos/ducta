@@ -1,7 +1,6 @@
 import type React from "react";
 import { IconGitBranch } from "@tabler/icons-react";
 import { useGitStatus } from "../../api/queries";
-import { useSourceStore } from "../../store/workspace";
 import { useStatusBarItems } from "./statusBarStore";
 import { useChangesPanel } from "../Git/changesStore";
 import { useUIStore } from "../../store/uiStore";
@@ -18,7 +17,6 @@ function changeCount(status: any): number {
  */
 export function StatusBar() {
   const { data: git } = useGitStatus();
-  const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
   const items = useStatusBarItems();
   const density = useUIStore((s) => s.density);
   const setDensity = useUIStore((s) => s.setDensity);
@@ -44,7 +42,6 @@ export function StatusBar() {
             {changes > 0 ? `${changes} uncommitted` : "nothing to commit"}
           </button>
         )}
-        <span className="ducta-statusbar__item" title="Active environment">env: {activeEnv}</span>
       </div>
       <div className="ducta-statusbar__group">
         {items.map((item) => (
@@ -54,9 +51,10 @@ export function StatusBar() {
           type="button"
           className="ducta-statusbar__item"
           title="Row density — compact fits more, comfortable reads easier"
+          aria-label={`Row density: ${density}. Switch to ${density === "compact" ? "comfortable" : "compact"}`}
           onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
         >
-          {density}
+          Density: {density}
         </button>
       </div>
     </footer>

@@ -50,7 +50,7 @@ export function SlidePanel({
         borderLeft: `1px solid ${colors.border}`,
         display: "flex",
         flexDirection: "column",
-        zIndex: 200,
+        zIndex: "var(--z-drawer)",
         boxShadow: "-4px 0 20px rgba(0,0,0,0.15)",
         animation: "slideInRight 0.2s ease-out",
         outline: "none",
@@ -78,7 +78,7 @@ export function SlidePanel({
               border: "none",
               cursor: "pointer",
               color: colors.textDim,
-              fontSize: 16,
+              fontSize: "var(--text-lg)",
               display: "flex",
               alignItems: "center",
               padding: 4,
@@ -104,7 +104,7 @@ export function SlidePanel({
       <div
         role="presentation"
         onClick={onClose}
-        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: 199 }}
+        style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.35)", zIndex: "calc(var(--z-drawer) - 1)" }}
       />
       {panel}
     </>

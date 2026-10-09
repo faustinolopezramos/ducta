@@ -130,10 +130,11 @@ describe("NodeFocus", () => {
     expect(screen.getByRole("tab", { name: /Comments/ })).toHaveTextContent("Comments1");
   });
 
-  it("makes a template from the node", () => {
+  it("makes a template from the node, from the More actions menu", () => {
     const onExtractTemplate = vi.fn();
     renderFocus({ onExtractTemplate });
-    fireEvent.click(screen.getByRole("button", { name: "Make template" }));
+    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /Make template/ }));
     expect(onExtractTemplate).toHaveBeenCalledTimes(1);
   });
 

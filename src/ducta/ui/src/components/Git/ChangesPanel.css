@@ -7,7 +7,7 @@
 .changes__item input { accent-color: var(--primary); }
 .changes__file { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; border: 0; background: none; color: var(--text); cursor: pointer; text-align: left; padding: 0; }
 .changes__path { font-family: var(--font-mono); font-size: var(--text-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.changes__status { width: 16px; text-align: center; font-family: var(--font-mono); font-size: 10px; font-weight: var(--weight-bold); }
+.changes__status { width: 16px; text-align: center; font-family: var(--font-mono); font-size: var(--text-2xs); font-weight: var(--weight-bold); }
 .changes__status--modified { color: var(--warning); }
 .changes__status--added, .changes__status--untracked { color: var(--success); }
 .changes__status--deleted { color: var(--danger); }

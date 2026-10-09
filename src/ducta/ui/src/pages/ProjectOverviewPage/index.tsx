@@ -6,7 +6,7 @@ import type { Problem } from "../../api/queries/problems";
 import { useProjectList, useProjectPipelines } from "../../hooks/useProjects";
 import { useProjectProblems } from "../../hooks/useProjectProblems";
 import { useSourceStore } from "../../store/workspace";
-import { Button, EmptyState, PageContainer, Skeleton, StatusBadge } from "../../components/ui";
+import { Button, EmptyState, PageContainer, PageHeader, Skeleton, StatusBadge } from "../../components/ui";
 import { ProjectHealth } from "../../components/Dashboard/ProjectHealth";
 import { NewPipelineModal } from "../ProjectPage/NewPipelineModal";
 import { routes } from "../../utils/routes";
@@ -86,7 +86,8 @@ export function ProjectOverviewPage() {
   const project = projects.find((p) => p.id === projectId);
   const { pipelines, raw, isLoading: pipelinesLoading } = useProjectPipelines(projectId);
   const activeEnv = useSourceStore((s) => s.activeEnv);
-  const env = !activeEnv || activeEnv === "base" ? "dev" : activeEnv;
+  // The environment the header shows — never a different one in its place.
+  const env = activeEnv || "base";
 
   const { problems } = useProjectProblems(projectId, null);
   const { data: runsData, isLoading: runsLoading } = useExecutionList({ project_id: projectId, limit: 50 });
@@ -115,11 +116,9 @@ export function ProjectOverviewPage() {
   const empty = !pipelinesLoading && pipelines.length === 0;
 
   return (
-    <PageContainer maxWidth={960}>
-      <header className="overview-head">
-        <h1 className="overview-title">{project.name ?? project.id}</h1>
-        {project.description && <p className="overview-desc">{project.description}</p>}
-      </header>
+    <PageContainer>
+      {/* Same width and header as every other page; the description keeps a reading measure. */}
+      <PageHeader title={project.name ?? project.id} description={project.description?.trim() || undefined} />
 
       {empty ? (
         <EmptyState
@@ -162,7 +161,7 @@ export function ProjectOverviewPage() {
 
           <section className="overview-section" aria-labelledby="overview-recent">
             <div className="overview-h-row">
-              <h2 id="overview-recent" className="overview-h">Recent runs</h2>
+              <h2 id="overview-recent" className="overview-h">Recent runs · all environments</h2>
               {runs.length > 0 && <Link to={routes.runs(projectId)} className="overview-more">All runs</Link>}
             </div>
             {runsLoading ? (

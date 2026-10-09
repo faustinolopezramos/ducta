@@ -11,6 +11,12 @@ import type { Pipeline, ProjectSummary } from "../types";
  * two sources of truth, and an undo history that could "restore" a project
  * the server had already deleted.
  */
+/** A project's display name for its id — the id itself when the project is unknown. */
+export function useProjectName(): (id: string | null | undefined) => string {
+  const { projects } = useProjectList();
+  return (id) => (id ? (projects.find((p) => p.id === id)?.name ?? id) : "—");
+}
+
 export function useProjectList(): { projects: ProjectSummary[]; isLoading: boolean } {
   const { data, isLoading } = useServerProjects();
   const projects = useMemo(() => (data?.projects ?? []).map(toProjectSummary), [data]);

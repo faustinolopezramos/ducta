@@ -87,18 +87,20 @@ export function ProjectPage() {
               variant={isMap ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setView("dependencies")}
+              aria-pressed={isMap}
               title="Cross-pipeline dependency map (explicit deps + shared datasets)"
+              leftIcon={<IconSitemap size={14} />}
             >
-              <IconSitemap size={14} />
               Map
             </Button>
             <Button
               variant={!isMap ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setView("pipelines")}
+              aria-pressed={!isMap}
               title="Pipelines as a list"
+              leftIcon={<IconLayoutGrid size={14} />}
             >
-              <IconLayoutGrid size={14} />
               List
             </Button>
           </div>

@@ -18,7 +18,7 @@ const inputStyle: React.CSSProperties = {
   background: colors.bg,
   color: colors.text,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: "var(--text-xs)",
   outline: "none",
 };
 
@@ -81,7 +81,7 @@ export function FilePickerField({
             background: browsing ? `${colors.accent}12` : colors.bg,
             color: browsing ? colors.accent : colors.textMuted,
             cursor: "pointer",
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             flexShrink: 0,
           }}
         >
@@ -112,7 +112,7 @@ export function FilePickerField({
               borderBottom: `1px solid ${colors.border}`,
               background: colors.surface,
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               color: colors.textMuted,
             }}
           >
@@ -145,7 +145,7 @@ export function FilePickerField({
             </div>
           )}
           {!isLoading && (data?.entries ?? []).length === 0 && (
-            <p style={{ margin: 0, padding: "8px 10px", fontSize: 11, color: colors.textMuted }}>
+            <p style={{ margin: 0, padding: "8px 10px", fontSize: "var(--text-2xs)", color: colors.textMuted }}>
               Empty directory.
             </p>
           )}
@@ -174,7 +174,7 @@ export function FilePickerField({
                   border: "none",
                   cursor: selectable ? "pointer" : "default",
                   fontFamily: "var(--font-mono)",
-                  fontSize: 12,
+                  fontSize: "var(--text-xs)",
                   color: selectable ? colors.text : colors.textDim,
                   textAlign: "left",
                 }}

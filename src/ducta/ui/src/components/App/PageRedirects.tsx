@@ -18,7 +18,7 @@ export function PageLoader() {
       <div
         style={{
           color: colors.textMuted,
-          fontSize: 14,
+          fontSize: "var(--text-base)",
           fontFamily: "var(--font-sans)",
         }}
       >

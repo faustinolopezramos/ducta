@@ -30,3 +30,4 @@ export * from "./InheritedValue";
 export * from "./Sparkline";
 export * from "./EntityChip";
 export * from "./KeyHint";
+export * from "./Menu";

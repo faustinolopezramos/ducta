@@ -37,7 +37,7 @@ export function Toast({ id, message, type = 'info', duration, action, onDismiss 
   const cfg = TOAST_CONFIG[type] || TOAST_CONFIG.info;
   const isErrorToast = type === "error" || type === "warn";
 
-  const cls = ["toast", `toast--${type}`, isErrorToast ? "toast--error" : ""].filter(Boolean).join(" ");
+  const cls = `toast toast--${type}`;
 
   return (
     <div

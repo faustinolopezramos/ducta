@@ -6,7 +6,7 @@ import { toastStore } from "../hooks/useModalStack";
 import { usePermission } from "../hooks/usePermission";
 import { Button, ConfirmDialog, PageContainer, PageHeader } from "./ui";
 import type { ProjectSummary } from "../types";
-import { activityWindowStart, nextScheduledRun, summarizeRuns, type RunLike } from "../utils/dashboardStats";
+import { activityWindowStart, isStuckQueued, nextScheduledRun, summarizeRuns, type RunLike } from "../utils/dashboardStats";
 import { OpsSummary } from "./Dashboard/OpsSummary";
 import { RunsPanel } from "./Dashboard/RunsPanel";
 import { ProjectsBoard } from "./Dashboard/ProjectsBoard";
@@ -14,6 +14,7 @@ import { NewProjectModal } from "./Dashboard/NewProjectModal";
 
 interface ProjectsListProps {
   projects: ProjectSummary[];
+  /** Unused: the header names the workspace. Kept so callers need not change. */
   workspacePath?: string;
 }
 
@@ -25,7 +26,7 @@ interface ProjectsListProps {
  * and when it was created — nothing about whether anything was running, broken
  * or about to run, though every one of those answers was one request away.
  */
-export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
+export function ProjectsList({ projects }: ProjectsListProps) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const deleteProject = useDeleteServerProject();
@@ -71,12 +72,8 @@ export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
   return (
     <PageContainer className="dashboard-page">
       <PageHeader
-        title="Dashboard"
-        description={
-          workspacePath
-            ? `Workspace: ${workspacePath}`
-            : "What is running, what needs attention, and every project in this workspace."
-        }
+        title="Projects"
+        description="What is running, what needs attention, and every project in this workspace."
         actions={
           canWrite && (
             <Button
@@ -92,7 +89,9 @@ export function ProjectsList({ projects, workspacePath }: ProjectsListProps) {
 
       <div className="dash-stack">
         <OpsSummary
-          activeCount={stats.active.length}
+          runningCount={stats.active.filter((r) => r.status !== "pending").length}
+          queuedCount={stats.active.filter((r) => r.status === "pending").length}
+          stuckCount={stats.active.filter((r) => isStuckQueued(r)).length}
           failedLast24h={stats.failedLast24h}
           next={next}
           loading={runsLoading}

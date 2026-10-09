@@ -10,7 +10,7 @@
 .exec-sweep,
 .exec-dry {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   margin-left: var(--space-1);
 }
 
@@ -67,3 +67,13 @@
 
 .exec-action--danger { color: var(--danger); }
 .exec-action--accent { color: var(--primary); }
+
+/* A queued run nothing will pick up: said in words next to its badge. */
+.exec-status-cell { display: inline-flex; align-items: center; gap: var(--space-2); }
+.exec-stuck {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  color: var(--warning);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

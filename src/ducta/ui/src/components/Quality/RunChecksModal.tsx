@@ -23,7 +23,7 @@ import { IconPlayerPlay, IconPlus, IconTrash } from "@tabler/icons-react";
 // label), so they intentionally stay outside `Field`.
 const label: React.CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--text-2xs)",
   fontWeight: 600,
   color: colors.textMuted,
   textTransform: "uppercase",
@@ -39,7 +39,7 @@ const input: React.CSSProperties = {
   background: colors.bg,
   color: colors.text,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: "var(--text-xs)",
   outline: "none",
 };
 
@@ -189,7 +189,7 @@ export function RunChecksModal({
         background: source === key ? `${colors.accent}12` : "transparent",
         color: source === key ? colors.accent : colors.textMuted,
         cursor: "pointer",
-        fontSize: 11,
+        fontSize: "var(--text-2xs)",
         fontWeight: source === key ? 600 : 400,
       }}
     >
@@ -226,7 +226,7 @@ export function RunChecksModal({
             </Field>
           </div>
           <label
-            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: colors.text, paddingBottom: 7 }}
+            style={{ display: "flex", alignItems: "center", gap: 6, fontSize: "var(--text-xs)", color: colors.text, paddingBottom: 7 }}
           >
             <input type="checkbox" checked={failFast} onChange={(e) => setFailFast(e.target.checked)} />
             Fail fast (stop on first failing check)
@@ -244,7 +244,7 @@ export function RunChecksModal({
           {source === "builder" && (
             <div style={{ display: "grid", gap: 8 }}>
               {builderChecks.length === 0 && (
-                <p style={{ margin: 0, fontSize: 12, color: colors.textMuted }}>
+                <p style={{ margin: 0, fontSize: "var(--text-xs)", color: colors.textMuted }}>
                   Pick checks from the registered catalog — parameters are optional for most checks.
                 </p>
               )}
@@ -301,7 +301,7 @@ export function RunChecksModal({
                   </div>
 
                   {infoOf(c.name)?.description && (
-                    <div style={{ fontSize: 11, color: colors.textMuted }}>{infoOf(c.name)?.description}</div>
+                    <div style={{ fontSize: "var(--text-2xs)", color: colors.textMuted }}>{infoOf(c.name)?.description}</div>
                   )}
                   <datalist id={`check-params-${c.id}`}>
                     {Object.entries(infoOf(c.name)?.params ?? {}).map(([name, param]) => (
@@ -361,7 +361,7 @@ export function RunChecksModal({
                         background: "none",
                         border: "none",
                         cursor: "pointer",
-                        fontSize: 11,
+                        fontSize: "var(--text-2xs)",
                         color: colors.accent,
                         padding: 0,
                       }}
@@ -369,7 +369,7 @@ export function RunChecksModal({
                       <IconPlus size={12} /> Add parameter
                     </button>
                     {Object.keys(infoOf(c.name)?.params ?? {}).length > 0 && (
-                      <span style={{ fontSize: 10, color: colors.textDim }}>
+                      <span style={{ fontSize: "var(--text-2xs)", color: colors.textDim }}>
                         params: {Object.keys(infoOf(c.name)?.params ?? {}).join(", ")}
                       </span>
                     )}
@@ -431,7 +431,7 @@ export function RunChecksModal({
             <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
               <StatusBadge status={result.passed ? "success" : "failed"} />
               {typeof result.score === "number" && (
-                <span style={{ fontSize: 12, color: colors.textMuted }}>
+                <span style={{ fontSize: "var(--text-xs)", color: colors.textMuted }}>
                   score {result.score.toFixed(3)}
                 </span>
               )}
@@ -447,7 +447,7 @@ export function RunChecksModal({
             {result.results && result.results.length > 0 ? (
               <CheckResultsList results={result.results} />
             ) : (
-              <p style={{ fontSize: 12, color: colors.textMuted }}>
+              <p style={{ fontSize: "var(--text-xs)", color: colors.textMuted }}>
                 No per-check details in this report.
               </p>
             )}

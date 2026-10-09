@@ -53,7 +53,7 @@ function TestChip({ state }: { state?: TestState }) {
         gap: 4,
         padding: "1px 7px",
         borderRadius: 4,
-        fontSize: 10,
+        fontSize: "var(--text-2xs)",
         fontWeight: 600,
         background: `color-mix(in srgb, ${color} 14%, transparent)`,
         color,
@@ -80,14 +80,14 @@ function ConnectionUsagePanel({ name }: { name: string }) {
   }
   if (!usage.data || usage.data.pipelines.length === 0) {
     return (
-      <p style={{ fontSize: 11, color: colors.textMuted, margin: "6px 0 0" }}>
+      <p style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, margin: "6px 0 0" }}>
         No pipeline node source was found referencing this connection name.
       </p>
     );
   }
   if (usage.data.executions.length === 0) {
     return (
-      <p style={{ fontSize: 11, color: colors.textMuted, margin: "6px 0 0" }}>
+      <p style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, margin: "6px 0 0" }}>
         Referenced by pipeline(s) {usage.data.pipelines.join(", ")}, but no executions recorded yet.
       </p>
     );
@@ -109,7 +109,7 @@ function ConnectionUsagePanel({ name }: { name: string }) {
             padding: "2px 0",
             cursor: e.project_id ? "pointer" : "default",
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             color: colors.textMuted,
             textAlign: "left",
           }}
@@ -144,10 +144,10 @@ function ConnectionRow({
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ fontSize: 13, color: colors.text, fontWeight: 600 }}>{connection.name}</span>
+            <span style={{ fontSize: "var(--text-sm)", color: colors.text, fontWeight: 600 }}>{connection.name}</span>
             <TestChip state={testState} />
           </div>
-          <div style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: colors.textMuted }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: colors.textMuted }}>
             {connection.type} · {connection.host}:{connection.port} · {connection.database}
             {connection.description ? ` — ${connection.description}` : ""}
           </div>

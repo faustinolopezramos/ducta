@@ -460,3 +460,10 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* The running count's queue line sits under the number, not beside it. */
+.dash-stat-value > .dash-stat-sub {
+  display: block;
+  margin-top: var(--space-1);
+}
+.dash-stat-sub[data-tone="warn"] { color: var(--warning); }

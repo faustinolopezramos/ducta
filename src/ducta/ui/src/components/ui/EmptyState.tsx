@@ -40,7 +40,7 @@ export function EmptyState({ icon: Icon, title, description, action, size = "lg"
         {title}
       </div>
       {description && (
-        <div style={{ ...styles.fontSans, fontSize: 13, color: colors.textMuted, maxWidth: 360 }}>
+        <div style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, maxWidth: 360 }}>
           {description}
         </div>
       )}

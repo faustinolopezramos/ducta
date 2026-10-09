@@ -99,7 +99,9 @@ export function CodeEditor({
   const buffer = useEditorBuffer(value, filePath, draft);
   const editedCode = buffer.text;
   const isDirty = buffer.isDirty;
-  const [wordWrap, setWordWrap] = useState(true);
+  // Code is read by its indentation: wrapping Python broke expressions across
+  // lines with no number. Prose-like files (YAML, Markdown) still wrap.
+  const [wordWrap, setWordWrap] = useState(language !== "python" && language !== "sql");
   const [minimap, setMinimap] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, column: 1 });
   const [editorReady, setEditorReady] = useState(false);
@@ -368,7 +370,7 @@ export function CodeEditor({
               style={{
                 color: colors.text,
                 fontFamily: "var(--font-mono)",
-                fontSize: 12,
+                fontSize: "var(--text-xs)",
                 lineHeight: "16px",
                 overflow: "hidden",
                 textOverflow: "ellipsis",
@@ -384,7 +386,7 @@ export function CodeEditor({
                 style={{
                   color: colors.textDim,
                   fontFamily: "var(--font-mono)",
-                  fontSize: 10,
+                  fontSize: "var(--text-2xs)",
                   lineHeight: "12px",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
@@ -477,7 +479,7 @@ export function CodeEditor({
           borderTop: `1px solid ${colors.border}`,
           background: colors.surface,
           color: colors.textMuted,
-          fontSize: 11,
+          fontSize: "var(--text-2xs)",
           fontFamily: "var(--font-mono)",
           flexShrink: 0,
         }}
@@ -544,7 +546,7 @@ function EditorPill({ children, tone }: { children: string; tone: "success" | "w
         border: `1px solid ${tone === "success" ? colors.greenA20 : colors.amberA20}`,
         background,
         color,
-        fontSize: 11,
+        fontSize: "var(--text-2xs)",
         fontWeight: 600,
         fontFamily: "var(--font-sans)",
       }}

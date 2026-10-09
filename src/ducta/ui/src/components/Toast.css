@@ -10,34 +10,36 @@
   animation: slideInRight 0.3s ease;
   min-width: 300px;
   max-width: 500px;
-  color: var(--text);
+  /* Text on a status colour: white on the deep light-theme hues, near-black on
+     the bright dark-theme ones (--text was 2.3:1 on the dark error red). */
+  color: var(--on-accent);
 }
 
 .toast--success { background: var(--success); }
 .toast--error   { background: var(--danger); }
-.toast--warn    { background: var(--warning); }
-.toast--info    { background: var(--success); }
+.toast--warn    { background: var(--warning-strong, var(--warning)); }
+.toast--info    { background: var(--primary); }
 
 .toast__icon {
-  font-size: 18px;
+  font-size: var(--text-lg);
   display: inline-flex;
   align-items: center;
 }
 
 .toast__body {
   flex: 1;
-  font-size: 14px;
+  font-size: var(--text-base);
   font-weight: 500;
 }
 
 .toast__close {
   background: var(--overlay-light);
   border: none;
-  color: var(--text);
+  color: inherit;
   cursor: pointer;
   border-radius: 4px;
   padding: 4px 8px;
-  font-size: 16px;
+  font-size: var(--text-lg);
   line-height: 1;
   transition: background 0.2s;
 }
@@ -52,7 +54,7 @@
   position: fixed;
   bottom: 20px;
   right: 20px;
-  z-index: 5000;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: 8px;

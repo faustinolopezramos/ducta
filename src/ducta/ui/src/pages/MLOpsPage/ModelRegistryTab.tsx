@@ -76,7 +76,7 @@ function PromoteModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 1000,
+        zIndex: "var(--z-modal)",
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -96,11 +96,11 @@ function PromoteModal({
           maxWidth: "90vw",
         }}
       >
-        <h3 style={{ margin: "0 0 16px", color: colors.text, fontSize: 15 }}>
+        <h3 style={{ margin: "0 0 16px", color: colors.text, fontSize: "var(--text-base)" }}>
           Promote {modelName} v{version}
         </h3>
 
-        <label style={{ display: "block", marginBottom: 12, fontSize: 13, color: colors.textMuted }}>
+        <label style={{ display: "block", marginBottom: 12, fontSize: "var(--text-sm)", color: colors.textMuted }}>
           Target stage
           <select
             value={stage}
@@ -114,7 +114,7 @@ function PromoteModal({
               border: `1px solid ${colors.border}`,
               background: colors.bg,
               color: colors.text,
-              fontSize: 13,
+              fontSize: "var(--text-sm)",
             }}
           >
             <option value="staging">Staging</option>
@@ -132,7 +132,7 @@ function PromoteModal({
               background: "color-mix(in srgb, var(--warning) 12%, transparent)",
               border: "1px solid var(--warning)",
               color: "var(--warning)",
-              fontSize: 12,
+              fontSize: "var(--text-xs)",
               display: "flex",
               alignItems: "center",
               gap: 8,
@@ -148,7 +148,7 @@ function PromoteModal({
             display: "flex",
             alignItems: "center",
             gap: 8,
-            fontSize: 13,
+            fontSize: "var(--text-sm)",
             color: colors.textMuted,
             cursor: "pointer",
             marginBottom: 20,
@@ -212,7 +212,7 @@ function GcModal({
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        zIndex: 1000,
+        zIndex: "var(--z-modal)",
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
@@ -232,10 +232,10 @@ function GcModal({
           maxWidth: "90vw",
         }}
       >
-        <h3 style={{ margin: "0 0 8px", color: colors.text, fontSize: 15 }}>
+        <h3 style={{ margin: "0 0 8px", color: colors.text, fontSize: "var(--text-base)" }}>
           Model Garbage Collection
         </h3>
-        <p style={{ margin: "0 0 16px", fontSize: 13, color: colors.textMuted }}>
+        <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: colors.textMuted }}>
           Remove old model versions that are no longer needed.
         </p>
 
@@ -244,7 +244,7 @@ function GcModal({
             display: "flex",
             alignItems: "center",
             gap: 8,
-            fontSize: 13,
+            fontSize: "var(--text-sm)",
             color: colors.textMuted,
             cursor: "pointer",
             marginBottom: 16,
@@ -261,7 +261,7 @@ function GcModal({
               border: `1px solid ${colors.border}`,
               borderRadius: 6,
               padding: 12,
-              fontSize: 12,
+              fontSize: "var(--text-xs)",
               fontFamily: "var(--font-mono)",
               marginBottom: 16,
               color: colors.text,
@@ -342,7 +342,7 @@ function DeleteVersionButton({
 export function ServedBy({ servedBy }: { servedBy: ModelServedBy[] }) {
   if (servedBy.length === 0) {
     return (
-      <div className="mlops-served-by" style={{ marginTop: 6, fontSize: 12, color: colors.textMuted }}>
+      <div className="mlops-served-by" style={{ marginTop: 6, fontSize: "var(--text-xs)", color: colors.textMuted }}>
         Not served by any node of this project.
       </div>
     );
@@ -351,7 +351,7 @@ export function ServedBy({ servedBy }: { servedBy: ModelServedBy[] }) {
     <div
       className="mlops-served-by"
       aria-label="Served by"
-      style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: 12 }}
+      style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", fontSize: "var(--text-xs)" }}
     >
       <span style={{ color: colors.textMuted }}>Served by</span>
       {servedBy.map((s) => (
@@ -360,7 +360,7 @@ export function ServedBy({ servedBy }: { servedBy: ModelServedBy[] }) {
           key={`${s.pipeline}/${s.node}`}
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             padding: "1px 6px",
             borderRadius: 4,
             border: `1px solid ${colors.border}`,
@@ -516,7 +516,7 @@ function ModelCard({
           <Badge color={STAGE_COLOR[model.stage ?? "Staging"] ?? "var(--text-muted)"}>
             {model.stage ?? "Staging"}
           </Badge>
-          <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: "var(--text-xs)", color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
             v{model.latest_version}
           </span>
           <PermittedButton
@@ -531,7 +531,7 @@ function ModelCard({
           </PermittedButton>
         </div>
 
-        <div style={{ display: "flex", gap: 16, fontSize: 12, color: colors.textMuted }}>
+        <div style={{ display: "flex", gap: 16, fontSize: "var(--text-xs)", color: colors.textMuted }}>
           <span>Framework: {model.framework ?? "—"}</span>
           <span>Created: {formatDate(model.created_at, { includeYear: true })}</span>
         </div>
@@ -612,7 +612,7 @@ export function ModelRegistryTab({
           marginBottom: 16,
         }}
       >
-        <span style={{ fontSize: 13, color: colors.textMuted }}>
+        <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
           {models.length} model{models.length !== 1 ? "s" : ""}
         </span>
         <div style={{ display: "flex", gap: 8 }}>
@@ -635,7 +635,7 @@ export function ModelRegistryTab({
         </div>
       )}
       {isError && (
-        <div style={{ color: "var(--danger)", fontSize: 13 }}>
+        <div style={{ color: "var(--danger)", fontSize: "var(--text-sm)" }}>
           Failed to load model registry. Check that MLOps is configured in the workspace.
         </div>
       )}
@@ -652,7 +652,7 @@ export function ModelRegistryTab({
           <div key={stage} style={{ marginBottom: 20 }}>
             <h3
               style={{
-                fontSize: 12,
+                fontSize: "var(--text-xs)",
                 fontWeight: 600,
                 color: STAGE_COLOR[stage] ?? colors.textMuted,
                 textTransform: "uppercase",

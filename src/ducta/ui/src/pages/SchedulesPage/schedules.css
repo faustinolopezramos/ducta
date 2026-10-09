@@ -3,7 +3,7 @@
 
 .schedule-node {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   margin-left: var(--space-1);
   color: var(--text-muted);
 }
@@ -28,7 +28,7 @@
 }
 
 .schedule-cron__desc {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
 }
 
@@ -37,7 +37,7 @@
 }
 
 .schedule-time-relative {
-  font-size: 10px;
+  font-size: var(--text-2xs);
   color: var(--text-dim);
 }
 
@@ -142,7 +142,7 @@
 }
 
 .schedules-status-pill {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   padding: 3px var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -201,7 +201,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   padding: 4px var(--space-2);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -248,7 +248,7 @@
 
 .schedule-weekday-pill {
   width: 40px;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   padding: 6px 0;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -277,7 +277,7 @@
 .schedule-day-cell {
   aspect-ratio: 1;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--text-2xs);
   font-family: var(--font-mono);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);

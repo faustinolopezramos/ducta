@@ -195,7 +195,7 @@ export function ExecutionErrorPanel({
         top: "calc(100% + 8px)",
         left: 0,
         right: 0,
-        zIndex: 100,
+        zIndex: "var(--z-popover)",
         padding: "var(--space-3) var(--space-4)",
         backgroundColor: "var(--status-failed-bg)",
         border: "1px solid var(--status-failed-border)",

@@ -5,12 +5,12 @@ const labels = (items: { label: string }[]) => items.map((i) => i.label);
 
 describe("railItems", () => {
   it("offers one item per concept inside a project", () => {
-    expect(labels(railItems("batch"))).toEqual(["Overview", "Pipelines", "Code", "Runs", "Quality", "Settings", "Projects", "Git"]);
+    expect(labels(railItems("batch"))).toEqual(["Overview", "Pipelines", "Code", "Runs", "Quality", "Settings", "Projects", "Certificates", "Git"]);
     expect(labels(railItems("batch", { hasModels: true }))).toContain("Models");
   });
 
   it("outside a project, only the workspace", () => {
-    expect(labels(railItems(null))).toEqual(["Projects", "Git"]);
+    expect(labels(railItems(null))).toEqual(["Projects", "Certificates", "Git"]);
   });
 
   it("marks the section a page belongs to", () => {

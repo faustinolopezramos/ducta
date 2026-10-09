@@ -124,7 +124,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <h2
               style={{
                 margin: "0 0 8px 0",
-                fontSize: 24,
+                fontSize: "var(--text-2xl)",
                 fontWeight: 700,
                 color: colors.text,
               }}
@@ -136,7 +136,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <p
               style={{
                 margin: "0 0 20px 0",
-                fontSize: 14,
+                fontSize: "var(--text-base)",
                 color: colors.textMuted,
                 lineHeight: 1.6,
               }}
@@ -151,7 +151,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                   background: colors.bg,
                   borderRadius: 4,
                   fontFamily: "var(--font-mono)",
-                  fontSize: 12,
+                  fontSize: "var(--text-xs)",
                   color: colors.accent,
                 }}
               >
@@ -186,7 +186,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                     margin: 0,
                     overflow: "auto",
                     maxHeight: 200,
-                    fontSize: 11,
+                    fontSize: "var(--text-2xs)",
                     color: colors.textMuted,
                     whiteSpace: "pre-wrap",
                     wordBreak: "break-word",
@@ -219,7 +219,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                   color: colors.bgContrast,
                   cursor: "pointer",
                   fontWeight: 600,
-                  fontSize: 14,
+                  fontSize: "var(--text-base)",
                   fontFamily: styles.fontSans.fontFamily,
                   transition: "opacity 0.2s",
                 }}
@@ -238,7 +238,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                   color: colors.text,
                   cursor: "pointer",
                   fontWeight: 600,
-                  fontSize: 14,
+                  fontSize: "var(--text-base)",
                   fontFamily: styles.fontSans.fontFamily,
                   transition: "opacity 0.2s",
                 }}
@@ -257,7 +257,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                   color: colors.textMuted,
                   cursor: "pointer",
                   fontWeight: 600,
-                  fontSize: 14,
+                  fontSize: "var(--text-base)",
                   fontFamily: styles.fontSans.fontFamily,
                   transition: "opacity 0.2s",
                 }}
@@ -272,7 +272,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <p
               style={{
                 margin: "24px 0 0 0",
-                fontSize: 12,
+                fontSize: "var(--text-xs)",
                 color: colors.textMuted,
               }}
             >

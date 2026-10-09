@@ -53,7 +53,7 @@ export function SyntaxErrorDisplay({ errors, onDismiss }: SyntaxErrorDisplayProp
         <span
           style={{
             ...styles.fontSans,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             fontWeight: 600,
             color: errorCount ? colors.red : colors.warningStrong,
             textTransform: "uppercase",
@@ -96,7 +96,7 @@ export function SyntaxErrorDisplay({ errors, onDismiss }: SyntaxErrorDisplayProp
               <span
                 style={{
                   ...styles.fontMono,
-                  fontSize: 13,
+                  fontSize: "var(--text-sm)",
                   color: lvl.text,
                   flexShrink: 0,
                   marginTop: 2,
@@ -109,7 +109,7 @@ export function SyntaxErrorDisplay({ errors, onDismiss }: SyntaxErrorDisplayProp
                 <span
                   style={{
                     ...styles.fontMono,
-                    fontSize: 11,
+                    fontSize: "var(--text-2xs)",
                     color: colors.textMuted,
                     flexShrink: 0,
                     paddingTop: 1,
@@ -123,7 +123,7 @@ export function SyntaxErrorDisplay({ errors, onDismiss }: SyntaxErrorDisplayProp
               <span
                 style={{
                   ...styles.fontSans,
-                  fontSize: 12,
+                  fontSize: "var(--text-xs)",
                   color: colors.text,
                   wordBreak: "break-word",
                   lineHeight: 1.4,

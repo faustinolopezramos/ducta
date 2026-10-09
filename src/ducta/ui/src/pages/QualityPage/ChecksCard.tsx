@@ -23,7 +23,7 @@ export function ChecksCard() {
               title={`${c.class_name} (${c.origin})`}
               style={{
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: "var(--text-2xs)",
                 padding: "2px 8px",
                 borderRadius: 4,
                 border: `1px solid ${colors.border}`,

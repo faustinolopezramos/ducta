@@ -8,6 +8,7 @@ import { useFileSave } from "../../components/Editor/useFileSave";
 import { ConflictBanner } from "../../components/Editor/ConflictBanner";
 import { qk } from "../../api/queryKeys";
 import { FileTree } from "../../components/FileTree";
+import { useUIStore } from "../../store/uiStore";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
@@ -37,10 +38,14 @@ export function CodePage() {
   const line = Number(searchParams.get("line")) || undefined;
 
   const { data: project } = useServerProject(projectId);
+  const explorerOpen = useUIStore((st) => st.explorerOpen);
   const root = project?.root ?? "";
   // Already decoded by react-router: decoding again threw on a "%" in a file name.
   const filePath = splat;
-  const workspacePath = filePath ? joinPath(root, filePath) : "";
+  // Not before the project is known: with its root still "" the path pointed
+  // at the workspace root, 404'd and raised an error toast for a file that
+  // then opened fine.
+  const workspacePath = filePath && project ? joinPath(root, filePath) : "";
 
   const [tabs, setTabs] = useState<string[]>([]);
   const [prevFile, setPrevFile] = useState("");
@@ -146,7 +151,8 @@ export function CodePage() {
 
   return (
     <div className="code-page">
-      <div className="code-page__tree">
+      {/* ⌘B hides the tree here as it hides the explorer on the canvas. */}
+      <div className="code-page__tree" hidden={!explorerOpen}>
         <FileTree
           rootPath={root}
           title={project?.name ?? projectId}
@@ -210,7 +216,7 @@ export function CodePage() {
               language={languageFor(filePath)}
               current={file.content}
               pipeline={pipelineOfFile}
-              env={activeEnv === "base" ? "dev" : activeEnv}
+              env={activeEnv}
             />
           ) : !filePath ? (
             <EmptyState

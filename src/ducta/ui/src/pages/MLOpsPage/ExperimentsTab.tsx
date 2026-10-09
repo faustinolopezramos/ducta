@@ -290,8 +290,8 @@ function ExperimentRow({
         <span style={{ fontWeight: 600, color: colors.text, flex: 1 }}>
           {exp.name ?? exp.experiment_id}
         </span>
-        <span style={{ fontSize: 12, color: colors.textMuted }}>{formatDate(exp.created_at, { includeYear: true })}</span>
-        <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
+        <span style={{ fontSize: "var(--text-xs)", color: colors.textMuted }}>{formatDate(exp.created_at, { includeYear: true })}</span>
+        <span style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
           {String(exp.experiment_id ?? "").slice(0, 8)}
         </span>
       </button>
@@ -365,7 +365,7 @@ export function ExperimentsTab({
           marginBottom: 16,
         }}
       >
-        <span style={{ fontSize: 13, color: colors.textMuted }}>
+        <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
           {experiments.length} experiment{experiments.length !== 1 ? "s" : ""}
           {compareSelection.size > 0 && ` · ${compareSelection.size} run(s) selected`}
         </span>
@@ -396,7 +396,7 @@ export function ExperimentsTab({
         </div>
       )}
       {isError && (
-        <div style={{ color: "var(--danger)", fontSize: 13 }}>
+        <div style={{ color: "var(--danger)", fontSize: "var(--text-sm)" }}>
           Failed to load experiments. Check that MLOps is configured in the workspace.
         </div>
       )}

@@ -33,7 +33,7 @@ export function LoginPage() {
     onError: (err) => {
       const msg = apiErrorMessage(
         err,
-        "Credenciales inválidas. Verifica tus datos e inténtalo de nuevo.",
+        "Invalid username or password. Check them and try again.",
       );
       setFlashMessage({ text: msg, type: "error" });
     },
@@ -46,7 +46,7 @@ export function LoginPage() {
     e.preventDefault();
     setFlashMessage(null);
     if (!username.trim() || !password) {
-      setFlashMessage({ text: "Usuario y contraseña son obligatorios.", type: "error" });
+      setFlashMessage({ text: "Enter your username and password.", type: "error" });
       return;
     }
     loginMutation.mutate({ username: username.trim(), password });

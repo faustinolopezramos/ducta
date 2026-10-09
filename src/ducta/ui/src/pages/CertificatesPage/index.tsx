@@ -5,6 +5,7 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { DataTable } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { useExecutionList } from "../../api/queries";
+import { useProjectName } from "../../hooks/useProjects";
 import { certificateColumns, type CertificateListItem } from "./certificateColumns";
 
 const FETCH_LIMIT = 200;
@@ -18,6 +19,7 @@ const FETCH_LIMIT = 200;
  */
 export function CertificatesPage() {
   const navigate = useNavigate();
+  const projectName = useProjectName();
   const { data, isLoading, error } = useExecutionList({ limit: FETCH_LIMIT });
   const rows: CertificateListItem[] = (data?.executions ?? []).filter(
     (ex: CertificateListItem) => !!ex.certificate_run_id
@@ -28,12 +30,10 @@ export function CertificatesPage() {
       <PageHeader
         title="Certificates"
         description="The proof artifact every terminating run emits — what ran, against which data, with what result."
-        backTo="/projects"
-        backLabel="Dashboard"
       />
 
       <DataTable<CertificateListItem>
-        columns={certificateColumns}
+        columns={certificateColumns(projectName)}
         rows={rows}
         rowKey={(ex) => ex.certificate_run_id!}
         minWidth={720}

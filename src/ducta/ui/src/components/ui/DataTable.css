@@ -115,6 +115,8 @@
 .tui-table__td {
   color: var(--text-muted);
   vertical-align: middle;
+  /* Dates and numbers line up in the sans face; mono is kept for ids. */
+  font-variant-numeric: tabular-nums;
 }
 
 .tui-table__td--right { text-align: right; }

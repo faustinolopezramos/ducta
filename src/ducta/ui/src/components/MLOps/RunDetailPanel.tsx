@@ -5,7 +5,7 @@ import { lastMetricValues, type ExperimentRun } from "../../api/mlopsApi";
 
 const label: React.CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--text-2xs)",
   fontWeight: 600,
   color: colors.textMuted,
   textTransform: "uppercase",
@@ -15,10 +15,10 @@ const label: React.CSSProperties = {
 
 function kvTable(entries: [string, unknown][]) {
   if (entries.length === 0) {
-    return <p style={{ margin: 0, fontSize: 12, color: colors.textMuted }}>None recorded.</p>;
+    return <p style={{ margin: 0, fontSize: "var(--text-xs)", color: colors.textMuted }}>None recorded.</p>;
   }
   return (
-    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-xs)" }}>
       <tbody>
         {entries.map(([k, v]) => (
           <tr key={k} style={{ borderTop: `1px solid ${colors.border}` }}>
@@ -65,20 +65,20 @@ export function RunDetailPanel({ run, onClose }: { run: ExperimentRun; onClose: 
       onClose={onClose}
       width={440}
       title={
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, fontWeight: 600, color: colors.text }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 600, color: colors.text }}>
           Run · {run.name ?? run.run_id.slice(0, 8)}
         </span>
       }
     >
       <div style={{ padding: "0 4px 24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 4 }}>
-          <span style={{ color: statusColor, fontWeight: 600, fontSize: 12 }}>{run.status}</span>
+          <span style={{ color: statusColor, fontWeight: 600, fontSize: "var(--text-xs)" }}>{run.status}</span>
           {run.duration_seconds != null && (
-            <span style={{ fontSize: 12, color: colors.textMuted }}>
+            <span style={{ fontSize: "var(--text-xs)", color: colors.textMuted }}>
               {Number(run.duration_seconds).toFixed(1)}s
             </span>
           )}
-          <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
+          <span style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
             {run.run_id}
           </span>
         </div>
@@ -97,7 +97,7 @@ export function RunDetailPanel({ run, onClose }: { run: ExperimentRun; onClose: 
         {run.artifacts && run.artifacts.length > 0 && (
           <>
             <span style={label}>Artifacts</span>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: colors.text }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: "var(--text-xs)", color: colors.text }}>
               {run.artifacts.map((a) => (
                 <li key={a} style={{ fontFamily: "var(--font-mono)", wordBreak: "break-all" }}>
                   {a}

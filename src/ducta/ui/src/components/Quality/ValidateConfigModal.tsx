@@ -14,7 +14,7 @@ import { IconShieldCheck } from "@tabler/icons-react";
 // distinct from `Field` on purpose.
 const label: CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--text-2xs)",
   fontWeight: 600,
   color: colors.textMuted,
   textTransform: "uppercase",
@@ -62,7 +62,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
           </select>
         </Field>
 
-        <div style={{ fontSize: 11, color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
+        <div style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, fontFamily: "var(--font-mono)" }}>
           {`Checks the node as the ${activeEnv} environment configures it`}
         </div>
 
@@ -90,7 +90,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
             {validate.data.errors.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 <span style={label}>Errors</span>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12, color: colors.danger }}>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: "var(--text-xs)", color: colors.danger }}>
                   {validate.data.errors.map((e, i) => (
                     <li key={i}>{e}</li>
                   ))}
@@ -100,7 +100,7 @@ export function ValidateConfigModal({ onClose }: { onClose: () => void }) {
             {validate.data.warnings.length > 0 && (
               <div style={{ marginTop: 10 }}>
                 <span style={label}>Warnings</span>
-                <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: 12, color: colors.warning }}>
+                <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: "var(--text-xs)", color: colors.warning }}>
                   {validate.data.warnings.map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}

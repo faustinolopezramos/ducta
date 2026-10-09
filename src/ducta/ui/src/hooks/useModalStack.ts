@@ -115,6 +115,10 @@ const useToastStore = create<ToastStore>((set, get) => ({
   toasts: [],
 
   show: (message, type = 'info', duration = 4000, action) => {
+    // The same message already on screen is not news: retries and refetches
+    // used to stack four identical "not found" toasts.
+    const same = get().toasts.find((t) => t.message === message && t.type === type);
+    if (same) return same.id;
     const id = uid();
     const toast: Toast = { id, message, type, createdAt: Date.now(), action };
     set((state) => ({ toasts: [...state.toasts, toast] }));

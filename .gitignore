@@ -32,6 +32,9 @@ src/ducta/ui/dist/
 src/ducta/ui/.storybook-static/
 src/ducta/ui/.design-sync/
 src/ducta/ui/ds-bundle/
+# Local visual-check harness (fake session, machine-specific workspace path)
+src/ducta/ui/.tmp-harness/
+src/ducta/ui/harness.html
 *.tsbuildinfo
 
 # IDE / OS

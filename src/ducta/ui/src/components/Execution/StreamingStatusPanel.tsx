@@ -65,7 +65,7 @@ function PipelineBlock({ pipeline }: { pipeline: StreamingPipelineStatus }) {
   const errors = pipeline.nodes.filter((n) => n.error);
   return (
     <section aria-label={`Stream ${pipeline.pipeline_name ?? pipeline.stream_execution_id}`}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, fontSize: "var(--text-xs)" }}>
         <span style={{ ...styles.fontMono, fontWeight: 600, color: colors.text }}>
           {pipeline.pipeline_name ?? pipeline.stream_execution_id.slice(0, 8)}
         </span>
@@ -82,7 +82,7 @@ function PipelineBlock({ pipeline }: { pipeline: StreamingPipelineStatus }) {
         empty={<span>{pipeline.error ?? "No queries started yet."}</span>}
       />
       {errors.length > 0 && (
-        <ul role="alert" style={{ margin: "6px 0 0", paddingLeft: 16, fontSize: 11, color: "var(--danger)" }}>
+        <ul role="alert" style={{ margin: "6px 0 0", paddingLeft: 16, fontSize: "var(--text-2xs)", color: "var(--danger)" }}>
           {errors.map((n) => (
             <li key={n.node} style={{ wordBreak: "break-word" }}>
               <strong style={styles.fontMono}>{n.node}</strong>: {n.error}
@@ -91,7 +91,7 @@ function PipelineBlock({ pipeline }: { pipeline: StreamingPipelineStatus }) {
         </ul>
       )}
       {pipeline.nodes.length > 0 && pipeline.error && errors.length === 0 && (
-        <div role="alert" style={{ marginTop: 6, fontSize: 11, color: "var(--danger)", wordBreak: "break-word" }}>
+        <div role="alert" style={{ marginTop: 6, fontSize: "var(--text-2xs)", color: "var(--danger)", wordBreak: "break-word" }}>
           {pipeline.error}
         </div>
       )}

@@ -14,7 +14,7 @@
 }
 
 .input-label {
-  font-size: 12px;
+  font-size: var(--text-xs);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -31,7 +31,7 @@
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  font-size: 13px;
+  font-size: var(--text-sm);
   background: var(--surface);
   color: var(--text);
   font-family: var(--font-sans);
@@ -64,11 +64,11 @@
 
 .input-mono {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-xs);
 }
 
 .input-helper {
-  font-size: 11px;
+  font-size: var(--text-2xs);
   color: var(--text-muted);
 }
 

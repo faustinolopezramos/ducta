@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { IconFlask, IconBrain } from "@tabler/icons-react";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { PageHeader } from "../../components/ui/PageHeader";
@@ -32,36 +32,30 @@ const TABS: ReadonlyArray<TabItem<Tab>> = [
 export function MLOpsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("experiments");
   const [searchParams, setSearchParams] = useSearchParams();
-  const seeded = useRef(false);
+  const { projectId: routeProject } = useParams<{ projectId?: string }>();
+  const activeEnv = useSourceStore((st) => st.activeEnv) || "base";
 
-  // Seed the environment filter from the workspace's active environment on a
-  // completely fresh visit — never seed `pipeline`/`project`, there is no
-  // "current pipeline" to default to and the user must pick one explicitly.
-  useEffect(() => {
-    if (seeded.current) return;
-    seeded.current = true;
-    if (!searchParams.has("env") && !searchParams.has("pipeline") && !searchParams.has("project")) {
-      const activeEnv = useSourceStore.getState().activeEnv;
-      if (activeEnv) {
-        const next = new URLSearchParams(searchParams);
-        next.set("env", activeEnv);
-        setSearchParams(next, { replace: true });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const { data: allPipelineOptions, isLoading: pipelinesLoading } = useMlPipelineOptions();
+  // Under a project, only its ML pipelines; the first one is shown until
+  // another is picked, so the page never opens on an empty "pick one" state.
+  const pipelineOptions = useMemo(
+    () => (allPipelineOptions ?? []).filter((p) => !routeProject || p.projectId === routeProject),
+    [allPipelineOptions, routeProject],
+  );
+  const env = searchParams.get("env") ?? activeEnv;
+  const pipeline = searchParams.get("pipeline") ?? pipelineOptions[0]?.pipelineName ?? "";
+  const project =
+    searchParams.get("project") ??
+    pipelineOptions.find((p) => p.pipelineName === pipeline)?.projectId ??
+    routeProject ??
+    "";
 
-  const env = searchParams.get("env") ?? "";
-  const pipeline = searchParams.get("pipeline") ?? "";
-  const project = searchParams.get("project") ?? "";
-
-  const { data: pipelineOptions, isLoading: pipelinesLoading } = useMlPipelineOptions();
   const { data: environmentsData } = useEnvironments(project || undefined);
   const environments: string[] = environmentsData?.environments ?? [];
 
   const handlePipelineChange = (value: string) => {
     const next = new URLSearchParams(searchParams);
-    const opt = (pipelineOptions ?? []).find((p) => p.pipelineName === value);
+    const opt = pipelineOptions.find((p) => p.pipelineName === value);
     if (value && opt) {
       next.set("pipeline", value);
       next.set("project", opt.projectId);
@@ -74,7 +68,7 @@ export function MLOpsPage() {
 
   const handleEnvChange = (value: string) => {
     const next = new URLSearchParams(searchParams);
-    if (value) next.set("env", value);
+    if (value && value !== activeEnv) next.set("env", value);
     else next.delete("env");
     setSearchParams(next, { replace: true });
   };
@@ -82,11 +76,9 @@ export function MLOpsPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="MLOps"
+        title="Models"
         description="Experiment tracking and model registry."
-        backTo="/projects"
-        backLabel="Dashboard"
-        tabs={<Tabs items={TABS} value={activeTab} onChange={setActiveTab} label="MLOps view" />}
+        tabs={<Tabs items={TABS} value={activeTab} onChange={setActiveTab} label="Models view" />}
       />
 
       <Panel>
@@ -102,12 +94,12 @@ export function MLOpsPage() {
               <option value="">
                 {pipelinesLoading ? "Loading pipelines…" : "Select a pipeline…"}
               </option>
-              {!pipelinesLoading && (pipelineOptions ?? []).length === 0 && (
+              {!pipelinesLoading && pipelineOptions.length === 0 && (
                 <option value="" disabled>
                   No ML pipelines found in this workspace
                 </option>
               )}
-              {(pipelineOptions ?? []).map((p) => (
+              {pipelineOptions.map((p) => (
                 <option key={`${p.projectId}/${p.pipelineName}`} value={p.pipelineName}>
                   {p.projectName} / {p.pipelineName}
                 </option>
@@ -122,10 +114,9 @@ export function MLOpsPage() {
               onChange={(e) => handleEnvChange(e.target.value)}
               aria-label="MLOps environment"
             >
-              <option value="">(default)</option>
-              {environments.map((e) => (
+              {["base", ...environments.filter((e) => e !== "base")].map((e) => (
                 <option key={e} value={e}>
-                  {e}
+                  {e}{e === activeEnv ? " (active)" : ""}
                 </option>
               ))}
             </select>

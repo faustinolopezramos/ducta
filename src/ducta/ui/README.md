@@ -35,7 +35,7 @@ flowchart TD
 ### For Non-Technical Users
 Ducta UI is the **app you actually click around in**. It lets you open a project, see your pipelines as a diagram, edit configuration and node code, launch runs and watch their logs stream in live, review data-quality results, and manage models — all in the browser, without touching a terminal.
 
-It is laid out like a code editor: an explorer on the left, the canvas or an editor in the middle, an inspector on the right, a bottom panel for logs and problems, and a status bar showing the active environment. Saving writes the files but does **not** commit them — you review and commit from the Changes panel when you are ready.
+It is laid out like a code editor: an explorer on the left, the canvas or an editor in the middle, an inspector on the right, a bottom panel for logs and problems, and a status bar with the branch, uncommitted changes and what the page reports. The header holds the workspace, the environment everything runs and resolves against, and your account. Saving writes the files but does **not** commit them — you review and commit from the Changes panel when you are ready.
 
 ### For Technical Users
 Ducta UI is the presentation layer, implementing:

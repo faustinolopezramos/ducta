@@ -1,11 +1,9 @@
 import { useCallback } from "react";
 import { useReactFlow } from "@xyflow/react";
+import { FIT_MAX_ZOOM, FIT_PADDING } from "./canvasFit";
 
 /** How long a programmatic viewport move takes, in ms. */
 const PAN_DURATION = 220;
-/** Never zoom past 1:1 when framing — cards are designed at a size. */
-const FIT_MAX_ZOOM = 1;
-const FIT_PADDING = 0.2;
 
 export interface CanvasViewport {
   /**

@@ -152,7 +152,6 @@ export function scheduleColumns(
       key: "last_run_at",
       header: "Last run",
       sortable: true,
-      mono: true,
       cell: (s) => <LastRunCell schedule={s} />,
     },
     {

@@ -1,5 +1,7 @@
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { IconPlayerPlay } from "@tabler/icons-react";
+import { useQuery } from "@tanstack/react-query";
+import client from "../../api/client";
 import { useDiagnosis, useExecutionLogs, useExecutionStatus } from "../../api/queries";
 import { useCertificate, useReproduceCertificate } from "../../api/certificatesApi";
 import { RunOptionsDialog } from "../../components/Execution/RunOptionsDialog";
@@ -41,17 +43,45 @@ export function RunPage() {
     (entry: LogEntry) => `${routes.run(projectId, runId)}?log=${entry.id.split("-").pop()}`,
     [projectId, runId],
   );
-  const { data: run, isLoading } = useExecutionStatus(runId);
+  // The tables show the first 8 characters of an id; a link or a pasted id that
+  // short is looked up by prefix and replaced with the full one.
+  const isShortId = runId.length > 0 && runId.length < 32;
+  const { data: matches, isLoading: matching } = useQuery<{ executions: Array<{ id: string }> }>({
+    queryKey: ["executions", "by-prefix", projectId, runId],
+    queryFn: () =>
+      client
+        .get("/executions", { params: { q: runId, limit: 5, ...(projectId ? { project_id: projectId } : {}) } })
+        .then((r) => r.data),
+    enabled: isShortId,
+    staleTime: 60 * 1000,
+  });
+  const fullId = isShortId
+    ? (matches?.executions ?? []).filter((e) => e.id.startsWith(runId))
+    : [];
+  const { data: run, isLoading } = useExecutionStatus(isShortId ? "" : runId);
   const failed = run?.status === "failed" || run?.status === "gate_blocked";
-  const { data: diagnosis } = useDiagnosis(runId, failed);
+  const { data: diagnosis } = useDiagnosis(isShortId ? "" : runId, failed);
   const { data: certificate } = useCertificate(projectId, run?.certificate_run_id ?? null);
-  const { data: logsData } = useExecutionLogs(runId);
+  const { data: logsData } = useExecutionLogs(isShortId ? "" : runId);
   const { mutate: retry } = useRetryExecution();
   const { mutate: execute } = useExecutePipeline();
   const navigate = useNavigate();
   const { mutate: reproduce } = useReproduceCertificate();
   const [optionsOpen, setOptionsOpen] = useState(false);
 
+  if (isShortId) {
+    if (matching) return <PageContainer><Skeleton variant="block" height="240px" /></PageContainer>;
+    if (fullId.length === 1) return <Navigate to={`${routes.run(projectId, fullId[0].id)}${searchParams.size ? `?${searchParams}` : ""}`} replace />;
+    return (
+      <PageContainer>
+        <EmptyState
+          icon={IconPlayerPlay}
+          title={fullId.length > 1 ? "More than one run starts with that id" : "No such run"}
+          description={fullId.length > 1 ? `Several runs start with ${runId} — open it from Runs.` : runId}
+        />
+      </PageContainer>
+    );
+  }
   if (isLoading) return <PageContainer><Skeleton variant="block" height="240px" /></PageContainer>;
   if (!run) return <PageContainer><EmptyState icon={IconPlayerPlay} title="No such run" description={runId} /></PageContainer>;
 
@@ -124,6 +154,13 @@ export function RunPage() {
           commit={commit}
           nodeStates={Object.fromEntries(((certificate?.nodes as any[]) ?? []).map((n) => [n.name, n.status]))}
           onSelectNode={(node) => navigate(routes.node(projectId, run.pipeline_name, node))}
+          successfulNodes={
+            run.status === "success"
+              ? ((run as { node_names?: string[] | null }).node_names?.length
+                  ? (run as { node_names?: string[] }).node_names
+                  : run.node_name ? [run.node_name] : "all")
+              : undefined
+          }
         />
       </section>
 
@@ -139,6 +176,7 @@ export function RunPage() {
         <div className="run-page__logs-box">
           <InlineLogs
             isRunning={run.status === "running"}
+            finalStatus={run.status === "running" || run.status === "pending" ? undefined : run.status}
             mode="fill"
             logs={logEntries}
             lineLink={lineLink}

@@ -54,6 +54,16 @@
   --tracking-wide:  0.01em;
   --tracking-wider: 0.02em;
 
+  /* ── Layers: every global overlay uses one of these. Small literal values
+     (1–30) stay for stacking inside one panel, like the canvas chrome. ── */
+  --z-raised:   1;    /* above its siblings (a selected row, a sticky header cell) */
+  --z-sticky:   10;   /* sticky bars inside a page or panel */
+  --z-chrome:   40;   /* floating canvas toolbars, the env frame */
+  --z-popover:  100;  /* menus, dropdowns, flyouts */
+  --z-drawer:   500;  /* slide-over panels */
+  --z-modal:    1000; /* dialogs and their backdrop */
+  --z-toast:    2000; /* notifications, above everything */
+
   /* Display font: fall back to the sans stack (no external dependency). */
   --font-display: var(--font-sans);
 

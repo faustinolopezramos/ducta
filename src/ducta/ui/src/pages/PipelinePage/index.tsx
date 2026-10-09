@@ -106,7 +106,7 @@ export function PipelinePage() {
   const {
     activeEnv, showToast,
     activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
-    logsOpen, setLogsOpen, chainStatus,
+    logsOpen, setLogsOpen, chainStatus, lastRun,
     handleRunNode, handleExecute, handleCancel, runScoped, runSample, sample, breakpoint, clearBreakpoint,
     runDebug, debugRun, clearDebugRun, runWithBreakpoint, runWithOptions,
   } = usePipelineRun({ projectId, pipelineId, itemById });
@@ -468,9 +468,11 @@ export function PipelinePage() {
   const onCanvas = lens === "flow";
   // The inspector follows the selection, on the canvas and in the list alike;
   // ⌘I hides it without losing the selection.
-  const inspectorOpen = Boolean(selection) && lens !== "yaml" && !inspectorHidden;
-  const selectedItem = selectedNodeId ? itemById.get(selectedNodeId) : undefined;
   const showCode = codeOpen && Boolean(projectId) && Boolean(selectedNodeId);
+  // With the node's code open the code pane is its inspector (run, sample,
+  // show in graph): a fourth column left the canvas a sliver.
+  const inspectorOpen = Boolean(selection) && lens !== "yaml" && !inspectorHidden && !showCode;
+  const selectedItem = selectedNodeId ? itemById.get(selectedNodeId) : undefined;
 
   /** From the explorer: here when it is drawn here, on its own pipeline otherwise. */
   const exploreNode = (id: string, pipeline: string) => {
@@ -774,6 +776,7 @@ export function PipelinePage() {
               <LogsStatusBar execStatus={execStatus} executionStates={executionStates}
                 nodeCount={pipelineNodes.length} open={logsOpen}
                 onToggle={() => setLogsOpen(!logsOpen)}
+                lastRun={lastRun}
                 diagnoseHref={(execStatus === "failed" || execStatus === "error") && activeExecutionId && projectId
                   ? routes.run(projectId, activeExecutionId) : undefined} />
             </div>
@@ -829,7 +832,7 @@ export function PipelinePage() {
                   ) : bottomPanelTab === "preview" && sample && projectId ? (
                     <SamplePreview projectId={projectId} sample={sample}
                       outputs={(itemById.get(sample.node)?.outputs ?? []).map((o) => o.name)}
-                      env={activeEnv === "base" ? "dev" : activeEnv} />
+                      env={activeEnv} />
                   ) : (
                     <>
                       {activeExecutionId && (

@@ -32,8 +32,21 @@
   display: flex;
   align-items: center;
   gap: 4px;
+  /* Never narrower than its words: the chain strip beside it shrinks instead,
+     and only the project's name truncates inside a capped trail. */
+  flex: 0 0 auto;
+  max-width: 50%;
   min-width: 0;
   font-size: var(--text-sm);
+}
+
+/* The project's name gives way first; the pipeline's — what this page is — last. */
+.pipeline-trail-link--project {
+  flex-shrink: 1;
+  min-width: 3ch;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pipeline-trail-link {
@@ -64,7 +77,8 @@
 }
 
 .pipeline-trail-current {
-  min-width: 0;
+  flex-shrink: 0;
+  max-width: 40vw;
   padding: 2px 4px;
   font-size: var(--text-base);
   font-weight: var(--weight-semibold);
@@ -131,6 +145,7 @@
 
 /* ── Canvas area ────────────────────────────────────────────────────────── */
 .pipeline-canvas-area {
+  container: canvas / inline-size;
   position: relative;
   flex: 1;
   display: flex;
@@ -474,7 +489,7 @@
 .cmdk-overlay {
   position: fixed;
   inset: 0;
-  z-index: 80;
+  z-index: var(--z-modal);
   display: flex;
   justify-content: center;
   align-items: flex-start;
@@ -581,13 +596,18 @@
 }
 
 .cmdk-item-label {
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: var(--text-sm);
   font-weight: var(--weight-semibold);
 }
 
 .cmdk-item-hint {
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 45%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -610,7 +630,7 @@
 .modal-fallback {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -626,8 +646,9 @@
     right: 12px;
   }
 
+  /* Icon-only at this width — except text-only buttons, which have no icon to fall back to. */
   .pipeline-env-label,
-  .canvas-segment span,
+  .canvas-segment span:not(.canvas-segment__keep),
   .canvas-text-btn span {
     display: none;
   }
@@ -640,6 +661,12 @@
   .node-card {
     width: 170px;
   }
+}
+
+@media (max-width: 1200px) {
+  /* "Projects" is one rail click away; the trail keeps the project and pipeline. */
+  .pipeline-trail-link--root,
+  .pipeline-trail-sep--root { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -657,4 +684,16 @@
   .node-card {
     width: 150px;
   }
+}
+
+/* A shortcut is a small key cap at the row's end, never a stretched box. */
+.key-hint.cmdk-item-hint { flex: 0 0 auto; max-width: none; font-family: var(--font-sans); }
+
+/* A canvas squeezed by the code pane or the inspector gets the narrow-window
+   chrome: icon-only buttons, and the filter keeps its search, not its chips. */
+@container canvas (max-width: 760px) {
+  .canvas-segment span:not(.canvas-segment__keep),
+  .canvas-text-btn span { display: none; }
+  .canvas-text-btn { width: 28px; padding: 0; }
+  .canvas-filter__chip { display: none; }
 }

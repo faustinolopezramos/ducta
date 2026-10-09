@@ -23,7 +23,7 @@ export function PipelineHealthStrip({
         alignItems: "center",
         gap: 8,
         padding: "0 0 10px",
-        fontSize: 11,
+        fontSize: "var(--text-2xs)",
         fontFamily: "var(--font-mono)",
         color: colors.textDim,
       }}

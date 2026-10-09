@@ -117,7 +117,7 @@ export function AppContent() {
   if (workspaceLoading) {
     return (
       <div style={{ backgroundColor: colors.bg, height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ color: colors.textMuted, fontSize: 14, fontFamily: "var(--font-sans)" }}>
+        <div style={{ color: colors.textMuted, fontSize: "var(--text-base)", fontFamily: "var(--font-sans)" }}>
           Initializing…
         </div>
       </div>
@@ -144,8 +144,8 @@ function ErrorFallback() {
   return (
     <div style={{ padding: 40, fontFamily: "var(--font-sans)", background: "var(--bg)", minHeight: "100vh", display: "grid", placeItems: "center" }}>
       <div style={{ maxWidth: 600, textAlign: "center" }}>
-        <h1 style={{ fontSize: 20, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Unexpected Application Error</h1>
-        <p style={{ fontSize: 14, color: "var(--text-muted)", marginBottom: 16 }}>Check the browser console for detailed error information.</p>
+        <h1 style={{ fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>Unexpected Application Error</h1>
+        <p style={{ fontSize: "var(--text-base)", color: "var(--text-muted)", marginBottom: 16 }}>Check the browser console for detailed error information.</p>
         <button onClick={() => globalThis.location.reload()} style={{ marginTop: 16, padding: "8px 24px", border: "none", borderRadius: 6, background: "var(--primary)", color: "#fff", cursor: "pointer", fontWeight: 600 }}>Reload</button>
       </div>
     </div>

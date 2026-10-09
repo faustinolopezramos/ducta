@@ -55,7 +55,7 @@ export function RawJson({ data }: { data: unknown }) {
           border: "none",
           padding: 0,
           cursor: "pointer",
-          fontSize: 11,
+          fontSize: "var(--text-2xs)",
           color: colors.textMuted,
         }}
       >
@@ -66,7 +66,7 @@ export function RawJson({ data }: { data: unknown }) {
         <pre
           style={{
             margin: "6px 0 0",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             color: colors.textMuted,
             overflow: "auto",
             maxHeight: 240,
@@ -101,11 +101,11 @@ function CheckResultRowView({ r }: { r: CheckResultRow }) {
     >
       <StatusBadge status={checkStatus(r)} size="sm" />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: colors.text }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: colors.text }}>
           {r.check_name}
         </div>
         {r.message && (
-          <div style={{ fontSize: 11, color: colors.textMuted, marginTop: 2 }}>{r.message}</div>
+          <div style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, marginTop: 2 }}>{r.message}</div>
         )}
         {detailEntries.length > 0 && (
           <div style={{ marginTop: 4 }}>
@@ -119,7 +119,7 @@ function CheckResultRowView({ r }: { r: CheckResultRow }) {
                 border: "none",
                 padding: 0,
                 cursor: "pointer",
-                fontSize: 11,
+                fontSize: "var(--text-2xs)",
                 color: colors.textMuted,
               }}
             >
@@ -138,8 +138,8 @@ function CheckResultRowView({ r }: { r: CheckResultRow }) {
               >
                 {detailEntries.map(([k, v]) => (
                   <React.Fragment key={k}>
-                    <span style={{ fontSize: 11, color: colors.textMuted }}>{k}</span>
-                    <span style={{ fontSize: 11, fontFamily: "var(--font-mono)", color: colors.text }}>
+                    <span style={{ fontSize: "var(--text-2xs)", color: colors.textMuted }}>{k}</span>
+                    <span style={{ fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: colors.text }}>
                       {typeof v === "object" ? JSON.stringify(v) : String(v)}
                     </span>
                   </React.Fragment>

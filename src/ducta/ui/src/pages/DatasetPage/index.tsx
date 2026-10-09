@@ -32,7 +32,7 @@ export function datasetCard(d: ProjectDataset | undefined): [string, string | nu
 export function DatasetPage() {
   const { projectId = "", dataset = "" } = useParams<{ projectId: string; dataset: string }>();
   const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
-  const env = activeEnv === "base" ? "dev" : activeEnv;
+  const env = activeEnv;
   const { data, isLoading } = useProjectDatasets(projectId);
   const { data: quality } = useQualitySummary(env, undefined, projectId);
   const entry = data?.datasets.find((d) => d.name === dataset);
@@ -51,8 +51,6 @@ export function DatasetPage() {
       <PageHeader
         title={dataset}
         description={entry?.description ?? "Dataset"}
-        backTo={routes.project(projectId)}
-        backLabel="Project"
       />
       {isLoading ? (
         <Skeleton variant="block" height="160px" />

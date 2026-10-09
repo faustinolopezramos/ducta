@@ -46,7 +46,7 @@ export function CodeToolbar({
           <span
             style={{
               ...styles.fontMono,
-              fontSize: 12,
+              fontSize: "var(--text-xs)",
               color: colors.text,
               fontWeight: 500,
             }}
@@ -55,14 +55,14 @@ export function CodeToolbar({
           </span>
         )}
         {nodeName && !modulePath && (
-          <span style={{ ...styles.fontMono, fontSize: 12, color: colors.text, fontWeight: 500 }}>
+          <span style={{ ...styles.fontMono, fontSize: "var(--text-xs)", color: colors.text, fontWeight: 500 }}>
             {nodeName}
           </span>
         )}
         <span
           style={{
             ...styles.fontMono,
-            fontSize: 10,
+            fontSize: "var(--text-2xs)",
             padding: "3px 8px",
             background: `color-mix(in srgb, ${colors.blue} 10%, transparent)`,
             border: `1px solid ${colors.blue}20`,
@@ -80,7 +80,7 @@ export function CodeToolbar({
           <span
             style={{
               ...styles.fontSans,
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               color: colors.warningStrong,
               display: "flex",
               alignItems: "center",
@@ -92,7 +92,7 @@ export function CodeToolbar({
             Unsaved
           </span>
         ) : lastSaved ? (
-          <span style={{ ...styles.fontSans, fontSize: 11, color: colors.green, fontWeight: 500 }}>
+          <span style={{ ...styles.fontSans, fontSize: "var(--text-2xs)", color: colors.green, fontWeight: 500 }}>
             ✓ Saved {formatTime(lastSaved)}
           </span>
         ) : null}

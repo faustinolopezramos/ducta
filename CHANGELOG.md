@@ -77,6 +77,19 @@ directly.
   The `Ducta_CERTIFICATE_KEY` spelling of the signing-key variable is no longer read;
   use `DUCTA_CERTIFICATE_KEY`.
 
+### Changed
+
+- **Web app UX pass.** A queued run is "Queued" everywhere (it was "Pending",
+  "queued" and counted as "Running"), and one queued over 10 minutes is marked
+  stuck. The header holds the workspace switcher (its name, not its path) and an
+  account menu with Sign out; Certificates is in the rail and ⌘K. Page titles match
+  the rail (Projects, Quality, Models, Git). On a pipeline the name is never
+  truncated, the chain strip loses its scrollbar and hides when narrow, the
+  inspector's rarer actions move into a "⋯" menu, and the code pane replaces the
+  inspector instead of squeezing the canvas. The project map is readable (min zoom,
+  short edge labels). Font sizes come from the type scale (11px minimum), overlays
+  from a z-index scale, and the theme follows the system until one is picked.
+
 ### Added
 
 - **The web app is laid out like a code editor**: explorer, canvas or editor,
@@ -217,6 +230,20 @@ directly.
   `available_now` / `once`.
 
 ### Fixed
+
+- **A fresh execution database no longer stops the server from starting.** No
+  `alembic.ini` ships (or exists in the repo), so startup migrations were skipped
+  and the first query failed with "no such table: users". Alembic is now configured
+  in code; a database created while they were skipped is stamped at head, not
+  rebuilt.
+- **Web app: what you see is in the environment the header shows.** The overview,
+  data previews, node tests, node runs and the dataset page silently showed `dev`
+  while `base` was selected; Quality and Models had their own environment pickers
+  that ignored it.
+- **Web app:** opening a file by its URL raised a false "is not a file in this
+  workspace" error; an 8-character run id (as the tables show it) said "No such
+  run" and stacked four identical error toasts; a finished run's logs said "Idle";
+  the pipeline's logs bar said "No runs yet" for a pipeline with runs.
 
 - **Output checks that compare with another dataset never got it inside a run.**
   `referential_integrity` and `dataset_completeness` with a `reference_dataset`

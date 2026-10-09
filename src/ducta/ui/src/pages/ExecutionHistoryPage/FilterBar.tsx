@@ -1,31 +1,9 @@
-import { useRef, useState, type CSSProperties } from "react";
-import { colors, styles } from "../../theme/tokens";
+import { useRef, useState } from "react";
 import { type ExecutionListFilters, useEnvironments, useServerProjects } from "../../api/queries";
-import { IconFilter, IconSearch, IconX } from "@tabler/icons-react";
+import { IconSearch, IconX } from "@tabler/icons-react";
 import { DATE_PRESETS, datePresetSince } from "./helpers";
-import { EXECUTION_STATUSES } from "../../components/ui/statusMeta";
-
-const dateInputStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  padding: "3px 6px",
-  borderRadius: 4,
-  border: "1px solid var(--border)",
-  background: "var(--surface)",
-  color: "var(--text)",
-  cursor: "pointer",
-};
-
-const selectStyle: CSSProperties = {
-  ...styles.fontMono,
-  fontSize: 11,
-  padding: "3px 6px",
-  borderRadius: 4,
-  border: `1px solid ${colors.border}`,
-  background: colors.surface,
-  color: colors.text,
-  cursor: "pointer",
-};
+import { EXECUTION_STATUSES, STATUS_META } from "../../components/ui/statusMeta";
+import "./FilterBar.css";
 
 export function FilterBar({
   filters,
@@ -67,75 +45,41 @@ export function FilterBar({
     setSearch(filters.q ?? "");
   }
 
+  const presetActive = (days: number) => filters.since === datePresetSince(days) && !filters.until;
+
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        flexWrap: "wrap",
-        padding: "10px 0",
-        marginBottom: 8,
-      }}
-    >
-      <div style={{ position: "relative", minWidth: 180 }}>
-        <IconSearch
-          size={12}
-          color={colors.textMuted}
-          style={{ position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)" }}
-        />
+    <div className="run-filters" role="search" aria-label="Filter runs">
+      <label className="run-filters__search">
+        <IconSearch size={13} aria-hidden="true" />
         <input
-          type="text"
+          type="search"
           value={search}
           onChange={(e) => commitSearch(e.target.value)}
           placeholder="Search id, pipeline, error…"
           aria-label="Search executions"
-          style={{
-            ...styles.fontMono,
-            fontSize: 11,
-            padding: "4px 8px 4px 26px",
-            borderRadius: 4,
-            border: `1px solid ${colors.border}`,
-            background: colors.surface,
-            color: colors.text,
-            width: "100%",
-          }}
         />
-      </div>
+      </label>
 
-      <IconFilter size={14} color={colors.textMuted} />
-
-      {/* Status pills */}
-      <div style={{ display: "flex", gap: 4 }}>
+      <div className="run-filters__group" role="group" aria-label="Status">
         {EXECUTION_STATUSES.map((s) => (
           <button
             key={s}
+            type="button"
+            className="run-filters__chip"
             onClick={() => onChange({ ...filters, status: filters.status === s ? undefined : s })}
             aria-pressed={filters.status === s}
-            style={{
-              ...styles.fontMono,
-              fontSize: 10,
-              padding: "3px 8px",
-              borderRadius: 4,
-              border: `1px solid ${filters.status === s ? colors.accent : colors.border}`,
-              background: filters.status === s ? colors.accentBg : "transparent",
-              color: filters.status === s ? colors.accent : colors.textMuted,
-              cursor: "pointer",
-              textTransform: "capitalize",
-            }}
           >
-            {s}
+            {STATUS_META[s].label}
           </button>
         ))}
       </div>
 
-      {/* Pipeline filter */}
       {pipelines.length > 0 && (
         <select
+          className="run-filters__select"
           value={filters.pipeline_name ?? ""}
           onChange={(e) => onChange({ ...filters, pipeline_name: e.target.value || undefined })}
           aria-label="Filter by pipeline"
-          style={selectStyle}
         >
           <option value="">All pipelines</option>
           {pipelines.map((p) => (
@@ -144,13 +88,12 @@ export function FilterBar({
         </select>
       )}
 
-      {/* Environment filter — the type has long supported `env`, this just exposes it */}
       {envs.length > 0 && (
         <select
+          className="run-filters__select"
           value={filters.env ?? ""}
           onChange={(e) => onChange({ ...filters, env: e.target.value || undefined })}
           aria-label="Filter by environment"
-          style={selectStyle}
         >
           <option value="">All environments</option>
           {envs.map((env) => (
@@ -159,13 +102,12 @@ export function FilterBar({
         </select>
       )}
 
-      {/* Project filter */}
       {!lockedProject && projects.length > 0 && (
         <select
+          className="run-filters__select"
           value={filters.project_id ?? ""}
           onChange={(e) => onChange({ ...filters, project_id: e.target.value || undefined })}
           aria-label="Filter by project"
-          style={selectStyle}
         >
           <option value="">All projects</option>
           {projects.map((p) => (
@@ -174,66 +116,46 @@ export function FilterBar({
         </select>
       )}
 
-      {/* Date range (filters by start date) */}
-      <input
-        type="date"
-        value={filters.since ?? ""}
-        onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
-        aria-label="From date"
-        title="From date"
-        style={dateInputStyle}
-      />
-      <span style={{ color: colors.textDim, fontSize: 11 }}>→</span>
-      <input
-        type="date"
-        value={filters.until ?? ""}
-        onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
-        aria-label="To date"
-        title="To date"
-        style={dateInputStyle}
-      />
-      <div style={{ display: "flex", gap: 4 }}>
+      {/* Start-date range: the presets and the two dates are one control. */}
+      <div className="run-filters__group" role="group" aria-label="Started">
         {DATE_PRESETS.map(({ label, days }) => (
           <button
             key={label}
-            onClick={() =>
-              onChange({ ...filters, since: datePresetSince(days), until: undefined })
-            }
+            type="button"
+            className="run-filters__chip"
+            aria-pressed={presetActive(days)}
+            onClick={() => onChange({ ...filters, since: datePresetSince(days), until: undefined })}
             title={`Since ${label === "Today" ? "today" : `${label} ago`}`}
-            style={{
-              ...styles.fontMono,
-              fontSize: 10,
-              padding: "3px 7px",
-              borderRadius: 4,
-              border: `1px solid ${colors.border}`,
-              background: "transparent",
-              color: colors.textMuted,
-              cursor: "pointer",
-            }}
           >
             {label}
           </button>
         ))}
+        <input
+          type="date"
+          className="run-filters__date"
+          value={filters.since ?? ""}
+          onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
+          aria-label="From date"
+          title="From date"
+        />
+        <span className="run-filters__sep" aria-hidden="true">→</span>
+        <input
+          type="date"
+          className="run-filters__date"
+          value={filters.until ?? ""}
+          onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
+          aria-label="To date"
+          title="To date"
+        />
       </div>
 
       {hasFilters && (
         <button
+          type="button"
+          className="run-filters__clear"
           onClick={() => onChange(lockedProject ? { project_id: lockedProject } : {})}
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            ...styles.fontSans,
-            fontSize: 11,
-            padding: "3px 8px",
-            borderRadius: 4,
-            border: `1px solid ${colors.border}`,
-            background: "transparent",
-            color: colors.textMuted,
-            cursor: "pointer",
-          }}
         >
-          <IconX size={10} /> Clear
+          <IconX size={12} aria-hidden="true" /> Clear
         </button>
       )}
     </div>

@@ -8,6 +8,7 @@ import {
   ViewportPortal,
   useReactFlow,
   useStore,
+  useStoreApi,
   type Edge,
   type Node,
   type NodeChange,
@@ -22,6 +23,7 @@ import type { Strata } from "../../utils/strata";
 import { DuctaNode, type DuctaNodeData } from "./DuctaNode";
 import { RoutedEdge, type RoutedEdgeData } from "./RoutedEdge";
 import { useCanvasViewport, type CanvasViewport } from "./useCanvasViewport";
+import { FIT_MAX_ZOOM, FIT_PADDING, FIT_TOP_PX } from "./canvasFit";
 import type { CanvasDataset, CanvasSelection, DagCanvasItem } from "./types";
 
 export type { DagCanvasItem } from "./types";
@@ -69,6 +71,11 @@ interface DagCanvasProps {
   orientation?: "vertical" | "horizontal";
   /** Draw a pipeline chain as bands, one per pipeline, in execution order. */
   strata?: Strata | null;
+  /**
+   * Never frame the graph smaller than this: a tall graph is shown from its
+   * top, readable, to be panned — instead of whole and illegible.
+   */
+  fitMinZoom?: number;
 }
 
 function notFresh(state: "fresh" | "stale" | "never" | undefined): "stale" | "never" | undefined {
@@ -86,9 +93,6 @@ const NODE_WIDTH = 208;
 /** The card is a single line now; React Flow's measurement replaces this. */
 const NODE_HEIGHT_ESTIMATE = 42;
 const CANVAS_PADDING = 56;
-const FIT_PADDING = 0.2;
-/** Never zoom past 1:1 — the cards are designed at a size, not scaled up to fill. */
-const FIT_MAX_ZOOM = 1;
 /** How far a band reaches past its first and last cards, into the gap between bands. */
 const BAND_INSET = 40;
 
@@ -194,6 +198,7 @@ function DagCanvasInner({
   showMinimap = false,
   orientation = "vertical",
   strata = null,
+  fitMinZoom,
 }: DagCanvasProps) {
   /**
    * Card sizes, fed back from React Flow's own measurement into the layout.
@@ -419,7 +424,8 @@ function DagCanvasInner({
    * so it happens once per drawing and never yanks the viewport away from a
    * user who has panned.
    */
-  const { fitView } = useReactFlow();
+  const { fitView, getViewport, setViewport, getNodesBounds, getNodes } = useReactFlow();
+  const flowStore = useStoreApi();
   const itemsKey = useMemo(() => dedupedItems.map((it) => it.id).join("|"), [dedupedItems]);
   const fitKey = `${itemsKey}#${orientation}#${strata?.bands.length ?? 0}`;
   const measured = dedupedItems.length > 0 && dedupedItems.every((it) => sizes.has(it.id));
@@ -427,8 +433,18 @@ function DagCanvasInner({
   useEffect(() => {
     if (!measured || fittedFor.current === fitKey) return;
     fittedFor.current = fitKey;
-    fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM });
-  }, [measured, fitKey, fitView, layout]);
+    void fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM }).then(() => {
+      if (!fitMinZoom || getViewport().zoom >= fitMinZoom) return;
+      // Too small to read whole: show it from the top, centred across.
+      const bounds = getNodesBounds(getNodes());
+      const { width } = flowStore.getState();
+      setViewport({
+        zoom: fitMinZoom,
+        x: (width - bounds.width * fitMinZoom) / 2 - bounds.x * fitMinZoom,
+        y: FIT_TOP_PX - bounds.y * fitMinZoom,
+      });
+    });
+  }, [measured, fitKey, fitView, layout, fitMinZoom, getViewport, setViewport, getNodesBounds, getNodes, flowStore]);
 
   /**
    * Pick up React Flow's measurements and re-run the layout with real sizes.
@@ -498,7 +514,7 @@ function DagCanvasInner({
         }
         connectionRadius={36}
         elementsSelectable
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1} color="var(--canvas-dot)" />
         <StrataBands layout={layout} strata={strata} orientation={orientation} />

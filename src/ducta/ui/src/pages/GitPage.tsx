@@ -23,7 +23,7 @@ import type { SectionTitleProps } from "../types/pages";
 
 function SectionTitle({ children }: SectionTitleProps) {
   return (
-    <h2 style={{ ...styles.fontSans, margin: "0 0 14px", fontSize: 13, fontWeight: 600, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>
+    <h2 style={{ ...styles.fontSans, margin: "0 0 14px", fontSize: "var(--text-sm)", fontWeight: 600, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>
       {children}
     </h2>
   );
@@ -33,12 +33,12 @@ function FileList({ label, files, color }: { label: string; files: string[]; col
   if (files.length === 0) return null;
   return (
     <div style={{ marginBottom: 10 }}>
-      <div style={{ ...styles.fontSans, fontSize: 11, fontWeight: 600, color, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+      <div style={{ ...styles.fontSans, fontSize: "var(--text-2xs)", fontWeight: 600, color, marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>
         {label} ({files.length})
       </div>
       <div style={{ background: colors.bg, border: `1px solid ${colors.border}`, borderRadius: 6, padding: "6px 10px" }}>
         {files.map((f) => (
-          <div key={f} style={{ ...styles.fontMono, fontSize: 11, color: colors.text, padding: "2px 0" }}>
+          <div key={f} style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", color: colors.text, padding: "2px 0" }}>
             {f}
           </div>
         ))}
@@ -87,10 +87,8 @@ export function GitPage() {
   return (
     <PageContainer>
       <PageHeader
-        title="Git &amp; Repository"
+        title="Git"
         description="Stage, commit, and push your workspace changes."
-        backTo="/projects"
-        backLabel="Dashboard"
       />
 
       <div className="git-page-grid">
@@ -132,7 +130,7 @@ export function GitPage() {
           <div>
             <SectionTitle>{ICONS.STREAM_LOG} Commit</SectionTitle>
             <Panel className={staged.length > 0 ? "git-commit-panel--armed" : undefined}>
-              <div style={{ ...styles.fontSans, fontSize: 12, color: colors.textMuted, marginBottom: 8 }}>
+              <div style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, marginBottom: 8 }}>
                 {staged.length > 0
                   ? `${staged.length} file${staged.length !== 1 ? "s" : ""} staged`
                   : "Stage files above before committing."}
@@ -153,7 +151,7 @@ export function GitPage() {
                   border: `1px solid ${colors.border}`,
                   borderRadius: 6,
                   padding: "8px 10px",
-                  fontSize: 13,
+                  fontSize: "var(--text-sm)",
                   outline: "none",
                   marginBottom: 10,
                   opacity: staged.length === 0 ? 0.5 : 1,
@@ -176,7 +174,7 @@ export function GitPage() {
             <SectionTitle>
               {ICONS.HISTORY ?? ICONS.SCHEDULE} Commit history
               {browsePath && (
-                <span style={{ ...styles.fontMono, fontSize: 11, fontWeight: 400, color: colors.accent, textTransform: "none", letterSpacing: 0, marginLeft: 8 }}>
+                <span style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", fontWeight: 400, color: colors.accent, textTransform: "none", letterSpacing: 0, marginLeft: 8 }}>
                   {browsePath}{" "}
                   <button
                     onClick={() => setBrowsePath("")}
@@ -218,16 +216,16 @@ export function GitPage() {
                       borderBottom: i < gitLog.commits.length - 1 ? `1px solid ${colors.border}` : "none",
                     }}
                   >
-                    <code style={{ ...styles.fontMono, fontSize: 11, color: colors.accent }}>
+                    <code style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", color: colors.accent }}>
                       {commit.short_sha ?? commit.sha?.slice(0, 7)}
                     </code>
-                    <div style={{ ...styles.fontSans, fontSize: 12, color: colors.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {commit.message}
                     </div>
-                    <div style={{ ...styles.fontSans, fontSize: 11, color: colors.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    <div style={{ ...styles.fontSans, fontSize: "var(--text-2xs)", color: colors.textMuted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {commit.author}
                     </div>
-                    <div style={{ ...styles.fontMono, fontSize: 11, color: colors.textMuted, textAlign: "right" }}>
+                    <div style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", color: colors.textMuted, textAlign: "right" }}>
                       {formatCommitTime(commit.timestamp)}
                     </div>
                   </div>
@@ -257,7 +255,7 @@ export function GitPage() {
             <Panel flush className="git-filetree-panel">
               <FileTree activePath={browsePath} onSelectFile={setBrowsePath} />
             </Panel>
-            <p style={{ ...styles.fontSans, fontSize: 11, color: colors.textMuted, margin: "6px 2px 0" }}>
+            <p style={{ ...styles.fontSans, fontSize: "var(--text-2xs)", color: colors.textMuted, margin: "6px 2px 0" }}>
               Select a file to filter the commit history.
             </p>
           </div>

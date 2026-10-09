@@ -120,7 +120,7 @@ export function HUDToolbar({
                 title="Only this pipeline's nodes"
                 onClick={() => onScopeChange("pipeline")}
               >
-                <span>Pipeline</span>
+                <span className="canvas-segment__keep">Pipeline</span>
               </button>
               <button
                 type="button"
@@ -129,7 +129,7 @@ export function HUDToolbar({
                 title="With the upstream pipelines a run executes first, one band each"
                 onClick={() => onScopeChange("chain")}
               >
-                <span>Chain</span>
+                <span className="canvas-segment__keep">Chain</span>
               </button>
             </div>
           </>

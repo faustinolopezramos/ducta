@@ -126,7 +126,7 @@ export function ConnectionModal({
           background: "var(--surface)",
           border: "1px solid var(--border)",
           borderRadius: 6,
-          fontSize: 12,
+          fontSize: "var(--text-xs)",
           fontWeight: 600,
         }}
       >
@@ -152,7 +152,7 @@ export function ConnectionModal({
               color: "#fff",
               display: "grid",
               placeItems: "center",
-              fontSize: 10,
+              fontSize: "var(--text-2xs)",
             }}
           >
             1
@@ -182,7 +182,7 @@ export function ConnectionModal({
               color: "#fff",
               display: "grid",
               placeItems: "center",
-              fontSize: 10,
+              fontSize: "var(--text-2xs)",
             }}
           >
             2
@@ -245,7 +245,7 @@ export function ConnectionModal({
           />
         </Field>
       </div>
-      <p style={{ fontSize: 11, color: colors.textMuted, marginTop: 12 }}>
+      <p style={{ fontSize: "var(--text-2xs)", color: colors.textMuted, marginTop: 12 }}>
         Credentials are written to the workspace <code>.env</code> (force-added to{" "}
         <code>.gitignore</code>) and never returned by the API.
       </p>

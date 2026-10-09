@@ -35,8 +35,12 @@ export function ConnectWorkspaceForm() {
       {
         onSuccess: (data: { source?: { path?: string } }) => {
           const resolvedPath = data?.source?.path ?? trimmed;
+          const switching = Boolean(StorageService.getSource());
           updateSource(resolvedPath);
-          navigate("/projects", { replace: true });
+          // Switching from another workspace: every cached query belongs to the
+          // old one, so start the app over rather than show its data.
+          if (switching) globalThis.location.assign("/projects");
+          else navigate("/projects", { replace: true });
         },
       },
     );
@@ -57,7 +61,7 @@ export function ConnectWorkspaceForm() {
           <h1>Connect a workspace</h1>
           <p>
             Browse for a project folder on this machine, or paste the URL of a Git
-            repository. You can switch workspaces later from the sidebar.
+            repository. You can switch workspaces later from the header.
           </p>
         </div>
 

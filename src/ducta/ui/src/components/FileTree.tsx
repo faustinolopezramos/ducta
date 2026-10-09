@@ -4,7 +4,10 @@ import {
   IconChevronRight,
   IconBrandPython,
   IconFile,
-  IconFileTypeTxt,
+  IconFileSettings,
+  IconFileCode,
+  IconMarkdown,
+  IconFileTypeSql,
   IconFolder,
   IconFolderOpen,
   IconPlus,
@@ -25,9 +28,16 @@ interface FileTreeProps {
   newFileDir?: string;
 }
 
+/** Operating-system and tooling litter nobody opens on purpose. */
+const NOISE = new Set([".DS_Store", "Thumbs.db", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".ipynb_checkpoints"]);
+const visible = <T extends { name: string }>(entries: T[] | undefined): T[] => (entries ?? []).filter((e) => !NOISE.has(e.name));
+
 function FileIcon({ name }: { name: string }) {
   if (name.endsWith(".py")) return <IconBrandPython size={15} stroke={1.8} color={colors.accent} />;
-  if (name.endsWith(".yaml") || name.endsWith(".yml")) return <IconFileTypeTxt size={15} stroke={1.8} color={colors.warning ?? "#f59e0b"} />;
+  if (/\.(ya?ml|toml|ini|cfg)$/.test(name)) return <IconFileSettings size={15} stroke={1.8} color={colors.warning} />;
+  if (name.endsWith(".json")) return <IconFileCode size={15} stroke={1.8} color={colors.warning} />;
+  if (name.endsWith(".md")) return <IconMarkdown size={15} stroke={1.8} color={colors.textMuted} />;
+  if (name.endsWith(".sql")) return <IconFileTypeSql size={15} stroke={1.8} color={colors.accent} />;
   return <IconFile size={15} stroke={1.8} color={colors.textDim} />;
 }
 
@@ -70,7 +80,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
             minHeight: "var(--row-height)",
             padding: `4px 8px 4px ${indent}px`,
             color: colors.textMuted,
-            fontSize: 12,
+            fontSize: "var(--text-xs)",
             ...styles.fontMono,
             userSelect: "none",
           }}
@@ -88,7 +98,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
           </span>
           <span style={{ color: colors.textMuted }}>{entry.name}</span>
         </button>
-        {expanded && data?.entries?.map(child => (
+        {expanded && visible(data?.entries).map(child => (
           <TreeNode
             key={child.path}
             entry={child}
@@ -116,7 +126,7 @@ function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
         padding: `4px 8px 4px ${indent}px`,
         background: isActive ? colors.accentBg : "transparent",
         borderLeft: isActive ? `2px solid ${colors.accent}` : "2px solid transparent",
-        fontSize: 12,
+        fontSize: "var(--text-xs)",
         ...styles.fontMono,
         color: isActive ? colors.text : colors.textMuted,
         userSelect: "none",
@@ -161,7 +171,7 @@ function NewFileRow({ onConfirm, onCancel }: NewFileRowProps) {
           border: `1px solid ${colors.accent}`,
           borderRadius: 3,
           color: colors.text,
-          fontSize: 12,
+          fontSize: "var(--text-xs)",
           fontFamily: "var(--font-mono)",
           padding: "2px 5px",
           outline: "none",
@@ -169,11 +179,11 @@ function NewFileRow({ onConfirm, onCancel }: NewFileRowProps) {
       />
       <button
         onClick={() => onConfirm(name.trim())}
-        style={{ background: "none", border: "none", color: colors.accent, cursor: "pointer", fontSize: 13, padding: 0 }}
+        style={{ background: "none", border: "none", color: colors.accent, cursor: "pointer", fontSize: "var(--text-sm)", padding: 0 }}
       >✓</button>
       <button
         onClick={onCancel}
-        style={{ background: "none", border: "none", color: colors.textMuted, cursor: "pointer", fontSize: 13, padding: 0 }}
+        style={{ background: "none", border: "none", color: colors.textMuted, cursor: "pointer", fontSize: "var(--text-sm)", padding: 0 }}
       >✕</button>
     </div>
   );
@@ -221,7 +231,7 @@ export function FileTree({
           alignItems: "center",
           justifyContent: "space-between",
           gap: 8,
-          fontSize: 11,
+          fontSize: "var(--text-2xs)",
           ...styles.fontSans,
           color: colors.textDim,
           textTransform: "uppercase",
@@ -260,11 +270,11 @@ export function FileTree({
             <SkeletonText lines={4} />
           </div>
         ) : !data?.entries?.length ? (
-          <div style={{ padding: "14px 12px", fontSize: 12, color: colors.textDim, lineHeight: 1.5 }}>
+          <div style={{ padding: "14px 12px", fontSize: "var(--text-xs)", color: colors.textDim, lineHeight: 1.5 }}>
             No files found in this workspace.
           </div>
         ) : (
-          data?.entries?.map(entry => (
+          visible(data?.entries).map(entry => (
             <TreeNode
               key={entry.path}
               entry={entry}
@@ -286,7 +296,7 @@ export function FileTree({
             style={{
               padding: "7px 10px",
               color: colors.textDim,
-              fontSize: 10,
+              fontSize: "var(--text-2xs)",
               ...styles.fontMono,
               whiteSpace: "nowrap",
               overflow: "hidden",

@@ -7,7 +7,7 @@ import { colors } from "../../theme/tokens";
 
 export const label: React.CSSProperties = {
   display: "block",
-  fontSize: 11,
+  fontSize: "var(--text-2xs)",
   fontWeight: 600,
   color: colors.textMuted,
   textTransform: "uppercase",
@@ -23,7 +23,7 @@ export const input: React.CSSProperties = {
   background: colors.bg,
   color: colors.text,
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: "var(--text-xs)",
   outline: "none",
 };
 
@@ -31,7 +31,7 @@ export function sectionTitle(icon: React.ReactNode, text: string) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
       {icon}
-      <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text }}>{text}</h2>
+      <h2 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 600, color: colors.text }}>{text}</h2>
     </div>
   );
 }

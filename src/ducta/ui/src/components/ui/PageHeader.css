@@ -30,7 +30,7 @@
 
 .page-header__title {
   font-family: var(--font-sans);
-  font-size: 26px;
+  font-size: var(--text-2xl);
   font-weight: var(--weight-bold);
   letter-spacing: var(--tracking-tight);
   line-height: var(--leading-tight);
@@ -72,7 +72,7 @@
   }
 
   .page-header__title {
-    font-size: 22px;
+    font-size: var(--text-xl);
   }
 
   .page-header__actions {

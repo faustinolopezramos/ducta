@@ -88,7 +88,7 @@ function RunHistoryRow({
           padding: 0,
           cursor: "pointer",
           fontFamily: "var(--font-mono)",
-          fontSize: 12,
+          fontSize: "var(--text-xs)",
           fontWeight: selected ? 700 : 400,
           color: selected ? colors.accent : colors.text,
         }}
@@ -152,7 +152,7 @@ export function DatasetDetail({
     <Panel>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconDatabase size={16} color={colors.accent} />
-        <h2 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: colors.text, flex: 1 }}>
+        <h2 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 600, color: colors.text, flex: 1 }}>
           {pipelineName && pipelineName !== "_adhoc" ? `${pipelineName} / ${dataset}` : dataset}
         </h2>
         <Button variant="ghost" size="sm" onClick={onClose} leftIcon={<IconX size={14} />}>
@@ -188,7 +188,7 @@ export function DatasetDetail({
               status={(report.data as QualityReportData).passed ? "success" : "failed"}
             />
             {typeof (report.data as QualityReportData).score === "number" && (
-              <span style={{ fontSize: 12, color: colors.textMuted }}>
+              <span style={{ fontSize: "var(--text-xs)", color: colors.textMuted }}>
                 score {(report.data as QualityReportData).score!.toFixed(3)}
               </span>
             )}

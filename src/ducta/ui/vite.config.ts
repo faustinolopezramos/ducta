@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,8 +11,13 @@ const __dirname = path.dirname(__filename);
 // backend runs somewhere else.
 const API_TARGET = process.env.DUCTA_API_TARGET ?? "http://127.0.0.1:8000";
 
+const pkg = JSON.parse(readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "package.json"), "utf-8"));
+
 export default defineConfig({
   plugins: [react()],
+
+  // The rail shows the version it was built as, not a string typed into a component.
+  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
 
   // The README has always documented this ("Dev server (proxies /api to the
   // backend)") but the config did not do it, so `npm run dev` served /api from

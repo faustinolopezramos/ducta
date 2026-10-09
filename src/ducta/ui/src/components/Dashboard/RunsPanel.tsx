@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { IconCircleCheck } from "@tabler/icons-react";
-import type { AttentionItem, RunLike } from "../../utils/dashboardStats";
+import { isStuckQueued, type AttentionItem, type RunLike } from "../../utils/dashboardStats";
 import { formatRelative } from "../../utils/timeLabels";
 import { statusMetaFor } from "../ui/statusMeta";
 
@@ -35,7 +35,11 @@ export function RunsPanel({ active, attention, projectName, loading = false }: R
         .filter(Boolean)
         .join(" · "),
     })),
-    ...active.map((run) => ({ run, meta: run.status === "pending" ? "queued" : "running" })),
+    ...active.map((run) => {
+      const since = formatRelative(run.started_at ?? run.finished_at);
+      if (run.status !== "pending") return { run, meta: `running · started ${since}` };
+      return { run, meta: isStuckQueued(run) ? `stuck in queue · ${since}` : `queued · ${since}` };
+    }),
   ].slice(0, MAX_ROWS);
 
   const overflow = attention.length + active.length - rows.length;

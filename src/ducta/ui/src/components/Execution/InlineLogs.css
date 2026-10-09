@@ -42,7 +42,7 @@
 .ilog--fullscreen {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: var(--z-drawer);
   height: auto;
   max-height: none;
   border-radius: 0 !important;
@@ -61,7 +61,7 @@
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 299;
+  z-index: calc(var(--z-drawer) - 1);
   animation: ilog-fade-in 0.2s ease-out;
 }
 
