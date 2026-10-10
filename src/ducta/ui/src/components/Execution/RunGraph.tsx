@@ -7,6 +7,31 @@ import { Skeleton } from "../ui/Skeleton";
 import { joinPath } from "../../pages/CodePage/paths";
 import { itemsFromPipelineYaml } from "./pipelineGraph";
 
+/** Rows in the longest chain of *items* — how tall the graph is drawn. */
+export function graphDepth(items: { id: string; dependsOn?: string[] }[]): number {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  const memo = new Map<string, number>();
+  const depth = (id: string, seen: Set<string>): number => {
+    if (memo.has(id)) return memo.get(id)!;
+    if (seen.has(id)) return 1; // a cycle is drawn, not followed
+    seen.add(id);
+    const deps = (byId.get(id)?.dependsOn ?? []).filter((d) => byId.has(d));
+    const d = 1 + Math.max(0, ...deps.map((dep) => depth(dep, seen)));
+    memo.set(id, d);
+    return d;
+  };
+  return Math.max(0, ...items.map((it) => depth(it.id, new Set())));
+}
+
+/**
+ * A canvas sized to the graph — one row of nodes does not need the room of
+ * five. The floor keeps the framing's toolbar padding (~184px) plus a row.
+ */
+function graphHeight(items: { id: string; dependsOn?: string[] }[] | null): number | null {
+  if (!items || items.length === 0) return null;
+  return Math.min(480, Math.max(260, 140 + graphDepth(items) * 120));
+}
+
 /**
  * The run on its graph: each node in the state the run left it — drawn as the
  * pipeline was at the run's commit, so a node renamed or removed since is
@@ -48,6 +73,7 @@ export function RunGraph({
   const text = asOf === "run" ? (then.data?.exists ? then.data.content : null) : now.data?.content ?? null;
   const items = useMemo(() => (text ? itemsFromPipelineYaml(text, pipeline) : null), [text, pipeline]);
   const missingThen = asOf === "run" && then.data && !then.data.exists;
+  const height = graphHeight(items);
   const states = useMemo(() => {
     if (!items || !successfulNodes || Object.keys(nodeStates).length > 0) return nodeStates;
     const ran = successfulNodes === "all" ? null : new Set(successfulNodes);
@@ -68,7 +94,7 @@ export function RunGraph({
           </button>
         </div>
       )}
-      <div className="run-graph__canvas">
+      <div className="run-graph__canvas" style={height ? { height } : undefined}>
         {missingThen ? (
           <p className="focus-empty">The pipeline file did not exist at {commit?.slice(0, 8)}.</p>
         ) : !items ? (

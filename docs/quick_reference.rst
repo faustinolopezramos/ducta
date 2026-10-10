@@ -37,6 +37,11 @@ Core CLI Commands
      - Checks DAG integrity and configuration without running code.
    * - ``ducta quality run``
      - Runs data quality checks on a specific file or dataset.
+   * - ``ducta experiment list|runs|show|compare``
+     - Lists experiments and their runs, shows one run, or compares runs side by side
+       (``--output-format json`` for scripts).
+   * - ``ducta model promote|gc``
+     - Moves a registered model version to a stage, or removes old versions.
    * - ``ducta server start``
      - Launches the Ducta API server.
    * - ``ducta --version``

@@ -44,6 +44,20 @@ def ran_in(execution: ExecutionResponse, workspace: Path) -> bool:
     return ran == here or ran.is_relative_to(here) or here.is_relative_to(ran)
 
 
+def _fill_missing(
+    record: ExecutionResponse, meta: Optional[ExecutionResponse]
+) -> ExecutionResponse:
+    """*record* with every field it leaves empty taken from *meta*; its own values win."""
+    if meta is None:
+        return record
+    gaps = {
+        name: value
+        for name, value in meta.model_dump().items()
+        if value is not None and getattr(record, name, None) is None
+    }
+    return record.model_copy(update=gaps) if gaps else record
+
+
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     """Parse an ISO-8601 date/datetime string, returning None on empty/invalid.
 
@@ -255,16 +269,23 @@ class _ReadsMixin:
         return []
 
     async def _load_persisted_record(self, execution_id: str) -> Optional[ExecutionResponse]:
-        """Look up a record in the database, then on disk. None when neither has it."""
+        """Look up a record in the database, then on disk. None when neither has it.
+
+        The database row does not carry every field ``meta.json`` does (project,
+        certificate, workspace), so a row found there is completed from the file:
+        otherwise a run's own page showed less than the history row linking to it.
+        """
+        meta = (
+            self._file_log_store.read_meta(execution_id)
+            if self._file_log_store is not None
+            else None
+        )
         if self._db_store is not None:
             try:
                 record = await self._db_store.peek(execution_id)
                 if record is not None:
-                    return record
+                    return _fill_missing(record, meta)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("DB record read failed for {id}: {exc}", id=execution_id, exc=exc)
 
-        if self._file_log_store is not None:
-            return self._file_log_store.read_meta(execution_id)
-
-        return None
+        return meta

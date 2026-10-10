@@ -6,16 +6,14 @@ import {
   IconBox,
   IconFlask,
   IconShieldCheck,
-  IconSitemap,
   IconCode,
   IconPlayerPlay,
   IconSettings,
-  IconHome,
   IconCertificate,
 } from "@tabler/icons-react";
 import { useUIStore } from "../../store/uiStore";
 import { projectIdFromPath, routes } from "../../utils/routes";
-import { useServerProjectPipelines } from "../../api/queries";
+import { useServerProjectPipelines, useServerProjects } from "../../api/queries";
 
 interface RailItem {
   label: string;
@@ -29,39 +27,71 @@ interface RailItem {
 }
 
 /**
- * What the rail offers: the open project's sections, then the workspace's.
- * One item per concept — Schedules live in Runs, Connections in Settings — and
- * Models only for a project that has a machine-learning pipeline.
+ * What the rail offers: Projects (drill-down entry for Pipelines & Nodes),
+ * followed by project tools (Code, Runs, Quality...) and workspace tools.
+ * One item per concept — Schedules live in Runs, Connections in Settings.
  */
 export function railItems(projectId: string | null, opts: { hasModels?: boolean } = {}): RailItem[] {
-  const project: RailItem[] = projectId
+  const projectItems: RailItem[] = projectId
     ? [
-        { label: "Overview", icon: IconHome, path: routes.project(projectId), exact: true },
-        {
-          label: "Pipelines",
-          icon: IconSitemap,
-          path: routes.pipelines(projectId),
-          also: [`/p/${encodeURIComponent(projectId)}/datasets`],
-        },
         { label: "Code", icon: IconCode, path: routes.code(projectId) },
-        { label: "Runs", icon: IconPlayerPlay, path: routes.runs(projectId), also: [routes.section(projectId, "schedules")] },
-        { label: "Quality", icon: IconShieldCheck, path: routes.section(projectId, "quality") },
-        ...(opts.hasModels ? [{ label: "Models", icon: IconFlask, path: routes.section(projectId, "models") }] : []),
-        { label: "Settings", icon: IconSettings, path: routes.section(projectId, "settings") },
+        {
+          label: "Runs",
+          icon: IconPlayerPlay,
+          path: routes.runs(projectId),
+          also: [routes.section(projectId, "schedules"), "/workspace/executions", "/workspace/schedules"],
+        },
+        {
+          label: "Quality",
+          icon: IconShieldCheck,
+          path: routes.section(projectId, "quality"),
+          also: ["/workspace/quality"],
+        },
+        ...(opts.hasModels ? [{ label: "Models", icon: IconFlask, path: routes.section(projectId, "models"), also: ["/workspace/mlops"] }] : []),
+        { label: "Certificates", icon: IconCertificate, path: "/workspace/certificates", also: ["/verify-certificate"] },
+        { label: "Git", icon: IconGitBranch, path: "/workspace/git" },
+        { label: "Settings", icon: IconSettings, path: routes.section(projectId, "settings"), divideBefore: true },
       ]
-    : [];
-  const workspace: RailItem[] = [
-    { label: "Projects", icon: IconLayoutDashboard, path: "/projects", divideBefore: project.length > 0 },
-    { label: "Certificates", icon: IconCertificate, path: "/workspace/certificates" },
-    { label: "Git", icon: IconGitBranch, path: "/workspace/git" },
+    : [
+        { label: "Code", icon: IconCode, path: "/projects" },
+        {
+          label: "Runs",
+          icon: IconPlayerPlay,
+          path: "/workspace/executions",
+          also: ["/workspace/schedules"],
+        },
+        { label: "Quality", icon: IconShieldCheck, path: "/workspace/quality" },
+        ...(opts.hasModels ? [{ label: "Models", icon: IconFlask, path: "/workspace/mlops" }] : []),
+        { label: "Certificates", icon: IconCertificate, path: "/workspace/certificates", also: ["/verify-certificate"] },
+        { label: "Git", icon: IconGitBranch, path: "/workspace/git" },
+        { label: "Settings", icon: IconSettings, path: "/projects", divideBefore: true },
+      ];
+
+  return [
+    {
+      label: "Projects",
+      icon: IconLayoutDashboard,
+      path: "/projects",
+      also: projectId
+        ? [
+            routes.project(projectId),
+            routes.pipelines(projectId),
+            `/p/${encodeURIComponent(projectId)}/datasets`,
+          ]
+        : [],
+    },
+    ...projectItems,
   ];
-  return [...project, ...workspace];
 }
 
 /** Whether *pathname* is *item*'s page or under it. */
 export function isRailItemActive(item: RailItem, pathname: string): boolean {
   if (item.exact) return pathname === item.path;
-  return [item.path, ...(item.also ?? [])].some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  return [item.path, ...(item.also ?? [])].some((p) => {
+    // If an 'also' path is a project root like /p/batch, match exact so child sections (runs, code...) stay distinct
+    if (/^\/p\/[^/]+$/.test(p)) return pathname === p;
+    return pathname === p || pathname.startsWith(`${p}/`);
+  });
 }
 
 /**
@@ -73,7 +103,9 @@ export function isRailItemActive(item: RailItem, pathname: string): boolean {
 export function Sidebar() {
   const location = useLocation();
   const lastProjectId = useUIStore((s) => s.lastProjectId);
-  const projectId = projectIdFromPath(location.pathname) ?? lastProjectId;
+  const { data: serverProjects } = useServerProjects();
+  const firstProjectId = serverProjects?.projects?.[0]?.id ?? null;
+  const projectId = projectIdFromPath(location.pathname) ?? lastProjectId ?? firstProjectId;
   const { data: pipelines } = useServerProjectPipelines(projectId ?? "");
   const specs = Object.values((pipelines?.pipelines ?? {}) as Record<string, { type?: string } | undefined>);
   const onModels = Boolean(projectId) && location.pathname.startsWith(routes.section(projectId ?? "", "models"));
@@ -89,7 +121,7 @@ export function Sidebar() {
         {items.map((item) => {
           const isActive = isRailItemActive(item, location.pathname);
           return (
-            <React.Fragment key={item.path}>
+            <React.Fragment key={item.label}>
               {item.divideBefore && <span className="rail-divider" aria-hidden="true" />}
               <Link
                 to={item.path}

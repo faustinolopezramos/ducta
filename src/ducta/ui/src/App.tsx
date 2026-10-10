@@ -20,7 +20,6 @@ import { ProtectedRoute } from "./components/Auth/ProtectedRoute";
 import { RequireWorkspace } from "./components/Auth/RequireWorkspace";
 import { ProjectsList } from "./components/ProjectsList";
 import { ProjectPage } from "./pages/ProjectPage";
-import { ProjectOverviewPage } from "./pages/ProjectOverviewPage";
 import { RunsTabs } from "./components/App/SectionTabs";
 import { PipelinePage } from "./pages/PipelinePage";
 import { useExecutionNotifications } from "./hooks/useExecutionNotifications";
@@ -186,7 +185,7 @@ export default function App() {
                   path: "p/:projectId",
                   element: <ProjectScope />,
                   children: [
-                    { index: true, handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectOverviewPage /> },
+                    { index: true, handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectPage /> },
                     { path: "pipelines", handle: { breadcrumb: () => "Pipelines" }, element: <ProjectPage /> },
                     { path: "pipelines/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline", hideTrail: true }, element: <PipelinePage /> },
                     { path: "datasets/:dataset", handle: { breadcrumb: (d: any) => `Dataset: ${d?.params?.dataset}` }, element: <DatasetPage /> },
@@ -195,7 +194,7 @@ export default function App() {
                     { path: "runs/:runId", handle: { breadcrumb: (d: any) => `Run ${d?.params?.runId?.slice(0, 8)}`, hideTrail: true }, element: <RunPage /> },
                     { path: "quality", handle: { breadcrumb: () => "Quality" }, element: <WithProjectParam><QualityPage /></WithProjectParam> },
                     { path: "models", handle: { breadcrumb: () => "Models" }, element: <WithProjectParam><MLOpsPage /></WithProjectParam> },
-                    { path: "schedules", handle: { breadcrumb: () => "Schedules" }, element: <ProjectSchedulesRoute /> },
+                    { path: "schedules", handle: { breadcrumb: () => "Runs · Schedules" }, element: <ProjectSchedulesRoute /> },
                     // Connections moved into Settings.
                     { path: "connections", element: <LegacyRedirect to={(p) => routes.section(p.projectId!, "settings", "connections")} /> },
                     { path: "settings", handle: { breadcrumb: () => "Settings" }, element: <ProjectSettingsPage /> },

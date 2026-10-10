@@ -1,0 +1,16 @@
+.env-hint {
+  margin: var(--space-3) 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.env-hint__switch {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.env-hint__switch:hover { text-decoration: underline; }

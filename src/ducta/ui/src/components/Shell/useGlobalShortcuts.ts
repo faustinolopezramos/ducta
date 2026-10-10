@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useUIStore } from "../../store/uiStore";
 import { useLogsStore } from "../../store/logsStore";
 import { useCommandMenu } from "./commandStore";
+import { useShortcutsModal } from "./shortcutsStore";
 
 /** Typing in a field must not toggle panels. */
 export function isTypingTarget(target: EventTarget | null): boolean {
@@ -12,14 +13,28 @@ export function isTypingTarget(target: EventTarget | null): boolean {
 }
 
 /**
- * Shell-wide keys: ⌘K command menu, ⌘B explorer, ⌘J bottom panel. Pages
- * add their own (the pipeline page: ⌘I inspector…).
+ * Shell-wide keys: ⌘K command menu, ⌘B explorer, ⌘J bottom panel, ? cheat sheet.
+ * Pages add their own (the pipeline page: ⌘I inspector…).
  */
 export function useGlobalShortcuts() {
   const toggleExplorer = useUIStore((s) => s.toggleExplorer);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // ? (Shift + /) cheat sheet — only outside inputs and editors
+      if (
+        (e.key === "?" || (e.key === "/" && e.shiftKey)) &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !isTypingTarget(e.target) &&
+        !(e.target as HTMLElement | null)?.closest?.(".monaco-editor")
+      ) {
+        e.preventDefault();
+        useShortcutsModal.getState().toggle();
+        return;
+      }
+
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       // ⌘K: the command menu — from anywhere except inside an editor, where
       // Monaco uses ⌘K as the start of its own chords.

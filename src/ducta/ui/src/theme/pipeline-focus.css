@@ -419,7 +419,8 @@
   list-style: none;
   /* Scrolls with the wheel or a trackpad; no scrollbar strip under the pills. */
   scrollbar-width: none;
-  mask-image: linear-gradient(to right, transparent, #000 var(--space-3), #000 calc(100% - var(--space-3)), transparent);
+  /* A wider fade on the right reads as "more this way" when the chain overflows. */
+  mask-image: linear-gradient(to right, transparent, #000 var(--space-3), #000 calc(100% - 40px), transparent);
 }
 .pipeline-chain::-webkit-scrollbar { display: none; }
 

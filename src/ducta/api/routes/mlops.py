@@ -304,6 +304,68 @@ def resolve_served_models(
 MLOpsScopeDep = Annotated[MLOpsScope, Depends()]
 
 
+# ── Status endpoint ──────────────────────────────────────────────────────────
+
+# Directories the tracker and registry own inside the storage path; anything else
+# holding a ``latest.txt`` is a model persisted without a registry.
+_RESERVED_STORAGE_DIRS = {DEFAULT_TRACKING_PATH, DEFAULT_REGISTRY_PATH}
+
+
+def unregistered_models(storage_path: str) -> List[Dict[str, Any]]:
+    """Models written as plain files (``<name>/<stamp>/model.*`` + ``latest.txt``).
+
+    That is what ``persist_model`` falls back to when MLOps is off for a run: the
+    model exists and can be served, but has no experiment and no registry entry,
+    so neither tab can list it.
+    """
+    from datetime import datetime, timezone
+
+    root = Path(storage_path)
+    if not root.is_dir():
+        return []
+    found: List[Dict[str, Any]] = []
+    for entry in sorted(root.iterdir()):
+        pointer = entry / "latest.txt"
+        if entry.name in _RESERVED_STORAGE_DIRS or not entry.is_dir() or not pointer.is_file():
+            continue
+        stamps = [d for d in entry.iterdir() if d.is_dir()]
+        found.append(
+            {
+                "name": entry.name,
+                "versions": len(stamps),
+                "latest": pointer.read_text(encoding="utf-8").strip() or None,
+                "updated_at": datetime.fromtimestamp(
+                    max((d.stat().st_mtime for d in stamps), default=pointer.stat().st_mtime),
+                    tz=timezone.utc,
+                ).isoformat(),
+            }
+        )
+    return found
+
+
+@router.get("/status", dependencies=[Depends(require_permission("execution.read"))])
+async def mlops_status(scope: MLOpsScopeDep) -> Dict[str, Any]:
+    """Why the experiments / registry views are empty, or that they are not.
+
+    ``mlops_enabled`` is the setting runs of this environment use; the tracker and
+    registry only exist on disk once a run with it on has written to them.
+    """
+    from ducta.core.settings import CoreSettings
+
+    def _run() -> Dict[str, Any]:
+        gs = scope.global_config
+        storage = Path(scope.storage)
+        return {
+            "storage_path": scope.storage,
+            "mlops_enabled": CoreSettings._resolve_mlops_enabled(gs, gs.get("mlops") or {}),
+            "tracking_present": (storage / DEFAULT_TRACKING_PATH).is_dir(),
+            "registry_present": (storage / DEFAULT_REGISTRY_PATH).is_dir(),
+            "unregistered_models": unregistered_models(scope.storage),
+        }
+
+    return await run_in_threadpool(_run)
+
+
 # ── Experiment endpoints ─────────────────────────────────────────────────────
 
 

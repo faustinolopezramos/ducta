@@ -4,6 +4,7 @@ import type { Diagnosis } from "../../api/queries/executions";
 import { routes } from "../../utils/routes";
 import { formatRelative } from "../../utils/timeLabels";
 import { QualityGateRows } from "./QualityGateRows";
+import { Menu, type MenuItem } from "../ui/Menu";
 
 const KIND_LABEL: Record<string, string> = {
   code: "Code",
@@ -44,6 +45,16 @@ export function DiagnosePanel({
   env?: string;
 }) {
   const changed = diagnosis.what_changed;
+  // The rarer ways to try again, kept out of the way of the two that fix most failures.
+  const more: MenuItem[] = [
+    ...(diagnosis.node && onRunNodeOnly
+      ? [{ key: "only", label: `Run only ${diagnosis.node}`, onSelect: () => onRunNodeOnly(diagnosis.node!) }]
+      : []),
+    ...(onRetryWithOptions ? [{ key: "options", label: "Retry with other options…", onSelect: onRetryWithOptions }] : []),
+    ...(onReproduce
+      ? [{ key: "reproduce", label: "Reproduce", hint: "Run it again as recorded, to see if it fails the same way", onSelect: onReproduce }]
+      : []),
+  ];
   return (
     <section className="diagnose" aria-label="Diagnosis" data-kind={diagnosis.kind}>
       <header className="diagnose__head">
@@ -113,30 +124,29 @@ export function DiagnosePanel({
             Retry from {diagnosis.node}
           </button>
         )}
-        {diagnosis.node && onRunNodeOnly && (
-          <button type="button" className="diagnose__btn" onClick={() => onRunNodeOnly(diagnosis.node!)}>
-            Run only {diagnosis.node}
-          </button>
-        )}
         {onRetry && (
-          <button type="button" className="diagnose__btn" onClick={onRetry}>
+          <button type="button" className={`diagnose__btn${diagnosis.node && onRetryFromNode ? "" : " is-primary"}`} onClick={onRetry}>
             Retry the whole run
           </button>
         )}
-        {onRetryWithOptions && (
-          <button type="button" className="diagnose__btn" onClick={onRetryWithOptions}>
-            Retry with other options…
-          </button>
-        )}
-        {onReproduce && (
-          <button type="button" className="diagnose__btn" onClick={onReproduce} title="Run it again as recorded, to see if it fails the same way">
-            Reproduce
-          </button>
+        {diagnosis.kind === "quality_gate" && (
+          <Link
+            className="diagnose__btn"
+            to={`${routes.section(projectId, "quality")}?${new URLSearchParams({
+              ...(pipeline ? { pipeline_name: pipeline } : {}),
+              ...(env ? { env } : {}),
+            })}`}
+          >
+            Open the quality report
+          </Link>
         )}
         {diagnosis.frame && (
           <Link className="diagnose__btn" to={routes.code(projectId, diagnosis.frame.file, diagnosis.frame.line)}>
             Open the code
           </Link>
+        )}
+        {more.length > 0 && (
+          <Menu trigger="More" triggerLabel="More ways to retry" triggerClassName="diagnose__btn" items={more} align="start" />
         )}
       </div>
     </section>

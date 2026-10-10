@@ -20,9 +20,10 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -40,6 +41,71 @@ def _serialize(model: Any, path: Path) -> str:
         with open(path, "wb") as handle:
             pickle.dump(model, handle)
         return "pickle"
+
+
+#: Values a context carries when nothing named a version (``MLNodeCommand`` falls back to
+#: ``"unknown"``). They are not versions, so they must never name a directory.
+_PLACEHOLDER_VERSIONS = frozenset({"", "none", "unknown"})
+
+
+def _usable(value: Any) -> bool:
+    return value is not None and str(value).strip().lower() not in _PLACEHOLDER_VERSIONS
+
+
+def _safe_segment(value: Any) -> str:
+    """``value`` as one path segment: anything outside ``[A-Za-z0-9._-]`` becomes ``_``."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", str(value).strip())
+
+
+def _version_stamp(run_id: Any, model_version: Any) -> str:
+    """The directory name a locally persisted model gets, unique for every call.
+
+    A run id names the run that produced the model. A ``model_version`` is only a label the
+    user chose, so it is suffixed with the time: a fixed ``v1`` would otherwise overwrite
+    itself on every run, which is the bug this replaces (``models/<name>/unknown/``).
+    """
+    now = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    if _usable(run_id):
+        return _safe_segment(run_id)
+    if _usable(model_version):
+        return f"{_safe_segment(model_version)}-{now}"
+    return now
+
+
+#: Frameworks whose own file format can be written, and its suffix. A model saved this way
+#: loads without unpickling anything, so scoring it needs no ``trust_artifact``.
+_NATIVE_SUFFIX = {"xgboost": ".json", "lightgbm": ".txt"}
+
+
+def _save_native(model: Any, framework: str, path: Path) -> bool:
+    """Write ``model`` in its framework's own format; ``False`` when it has none to write."""
+    if framework == "xgboost" and hasattr(model, "save_model"):
+        model.save_model(str(path))
+        return True
+    if framework == "lightgbm":
+        booster = getattr(model, "booster_", model)  # LGBMClassifier wraps a Booster
+        if hasattr(booster, "save_model"):
+            booster.save_model(str(path))
+            return True
+    return False
+
+
+def _write_artifact(
+    model: Any, framework: str, native: bool, directory: Path, stem: str
+) -> Tuple[Path, str, str]:
+    """``(file, artifact_type, how)`` — native when asked for and available, else pickled."""
+    fw = (framework or "").lower()
+    if native and fw in _NATIVE_SUFFIX:
+        path = directory / f"{stem}{_NATIVE_SUFFIX[fw]}"
+        if _save_native(model, fw, path):
+            return path, fw, "native"
+        logger.warning(
+            "native=True, but {} has no {} save_model(); persisting it as a pickle",
+            type(model).__name__,
+            fw,
+        )
+    path = directory / f"{stem}.pkl"
+    return path, "pickle", _serialize(model, path)
 
 
 def _ctx_get(ml_context: Any, key: str, default: Any = None) -> Any:
@@ -84,14 +150,22 @@ def persist_model(
     y: Any = None,
     input_schema: Optional[Dict[str, str]] = None,
     output_schema: Optional[Dict[str, str]] = None,
+    native: bool = False,
 ) -> Dict[str, Any]:
-    """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``."""
+    """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``.
+
+    ``native=True`` writes an xgboost or lightgbm model in the framework's own format
+    (``.json`` / ``.txt``) instead of a pickle, so it can be scored without
+    ``model.trust_artifact``. The scored model is then the framework's ``Booster``: for
+    ``binary:logistic`` its ``predict`` returns probabilities, not the labels an sklearn
+    wrapper's ``predict`` returns. Hence it is opt-in; any other model is pickled as before.
+    """
     mlops_context = _ctx_get(ml_context, "mlops_context")
     run_id = _ctx_get(ml_context, "mlops_run_id")
     model_version = _ctx_get(ml_context, "model_version")
     registry = getattr(mlops_context, "model_registry", None) if mlops_context else None
 
-    stamp = str(run_id or model_version or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"))
+    stamp = _version_stamp(run_id, model_version)
 
     resolved_input_schema = input_schema if input_schema is not None else infer_schema(X)
     resolved_output_schema = output_schema if output_schema is not None else infer_schema(y)
@@ -107,13 +181,12 @@ def persist_model(
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
-            artifact = Path(tmp) / f"{name}.pkl"
-            _serialize(model, artifact)
+            artifact, artifact_type, _ = _write_artifact(model, framework, native, Path(tmp), name)
             try:
                 version = registry.register_model(
                     name=name,
                     artifact_path=str(artifact),
-                    artifact_type="pickle",
+                    artifact_type=artifact_type,
                     framework=framework,
                     description=description,
                     hyperparameters=hyperparameters,
@@ -138,8 +211,7 @@ def persist_model(
 
     dest_dir = Path(base_dir) / name / stamp
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / "model.pkl"
-    serializer = _serialize(model, dest)
+    dest, _, serializer = _write_artifact(model, framework, native, dest_dir, "model")
 
     pointer = Path(base_dir) / name / "latest.txt"
     pointer.write_text(str(dest.resolve()), encoding="utf-8")

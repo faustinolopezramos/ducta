@@ -210,3 +210,35 @@ class TestMetaIsValidJson:
         raw = json.loads((tmp_path / record.id / "meta.json").read_text(encoding="utf-8"))
         assert raw["id"] == "run-json"
         assert raw["pipeline_name"] == "train"
+
+
+class TestDatabaseRowCompletedFromMeta:
+    """The DB row lacks fields meta.json carries; the run page read only the row,
+    so a run listed with its certificate opened without one."""
+
+    def test_missing_fields_come_from_meta_and_the_row_wins_elsewhere(self, store):
+        on_disk = _record(
+            "run-db", project_id="batch", certificate_run_id="cert-1", status=ExecutionStatus.FAILED
+        )
+        store.start_run(on_disk)
+        store.finish_run(on_disk)
+        row = _record("run-db", status=ExecutionStatus.SUCCESS)
+
+        class _Db:
+            async def peek(self, _id):
+                return row
+
+        class _EmptyStore:
+            def get(self, _id):
+                raise ExecutionNotFoundError("gone")
+
+        mgr = object.__new__(ExecutionManager)
+        mgr._db_store = _Db()
+        mgr._file_log_store = store
+        mgr._store = _EmptyStore()
+
+        got = asyncio.run(mgr.load_execution("run-db"))
+
+        assert got.project_id == "batch"
+        assert got.certificate_run_id == "cert-1"
+        assert got.status == ExecutionStatus.SUCCESS

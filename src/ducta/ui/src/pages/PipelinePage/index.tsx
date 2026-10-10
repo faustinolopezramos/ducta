@@ -284,6 +284,12 @@ export function PipelinePage() {
     [dagItems, canvasFilter, designStates, freshness, nodeStates],
   );
 
+  // Only the medallion layers this graph has get a filter chip.
+  const presentLayers = useMemo(
+    () => new Set(dagItems.map((item) => medallionLayer((item.outputs ?? []).map((o) => o.name))).filter(Boolean) as string[]),
+    [dagItems],
+  );
+
   // ── Canvas edits: small ops on the pipeline file, undoable ──
   const editing = useCanvasEditing({
     projectId, pipelineId, version: pipelinesData?.commit_sha, itemById, parentsMap,
@@ -750,6 +756,7 @@ export function PipelinePage() {
                   {onCanvas && (
                     <CanvasFilterBar ref={filterInputRef} value={canvasFilter} onChange={setCanvasFilter}
                       matches={highlight ? highlight.size : null}
+                      layers={presentLayers}
                       groups={{
                         count: canvasGroups.size,
                         collapsed: collapsedGroups.size,

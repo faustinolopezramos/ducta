@@ -5,6 +5,7 @@ import { useQualitySummary } from "../../api/qualityApi";
 import { EmptyState, EntityChip, PageContainer, PageHeader, Skeleton, Sparkline } from "../../components/ui";
 import { KeyValues } from "../../components/Pipeline/Focus/parts";
 import { DataPreview } from "../../components/Pipeline/Focus/DataPreview";
+import { EnvHint } from "../../components/Shell/EnvHint";
 import { useSourceStore } from "../../store/workspace";
 import { datasetLineage } from "../../utils/datasetLineage";
 import { routes } from "../../utils/routes";
@@ -116,6 +117,7 @@ export function DatasetPage() {
 
           <section className="dataset-page__section" aria-labelledby="ds-preview">
             <h2 id="ds-preview" className="dataset-page__h">Data in {env}</h2>
+            <EnvHint projectId={projectId} />
             <DataPreview projectId={projectId} inputs={[]} outputs={[dataset]} env={env} />
           </section>
         </>

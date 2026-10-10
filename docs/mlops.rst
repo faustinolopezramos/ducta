@@ -125,7 +125,7 @@ Without ``mlops_path``, each pipeline keeps its tracking next to its data, in
 
 **Tuning knobs, through the environment.** The retention, buffering, retry and
 backend options of the MLOps module are read from environment variables by
-``ducta mlops ...`` and the API, not from the project file:
+``ducta experiment``, ``ducta model`` and the API, not from the project file:
 
 .. list-table::
    :widths: 38 20 42
@@ -139,7 +139,7 @@ backend options of the MLOps module are read from environment variables by
      - ``local``, ``databricks`` or ``distributed``.
    * - ``Ducta_MLOPS_PATH``
      - ``./mlops_data``
-     - Root of experiments, registry and artifacts for the ``ducta mlops`` commands.
+     - Root of experiments, registry and artifacts for ``ducta experiment`` and ``ducta model``.
    * - ``Ducta_MLOPS_MODEL_RETENTION_DAYS``
      - ``90``
      - Days to keep archived model versions before GC.
@@ -453,6 +453,116 @@ log — no ``init``/``get_context`` calls:
    lifecycle. :doc:`tutorials/mlops` builds a complete pipeline around a node
    like this one.
 
+Training in One Call
+--------------------
+
+Every training node repeats the same six steps: take the declared split, search the
+declared hyperparameter space, evaluate on the held-out rows, compare with a trivial
+baseline, log the metrics, register the model. ``ducta.mlrun.train_with_search`` is those
+steps, so the node is only the model:
+
+.. code-block:: python
+
+   from sklearn.ensemble import RandomForestClassifier
+   from ducta.mlrun import train_with_search
+
+
+   def train(features, ml_context=None):
+       df = features.toPandas()
+       result = train_with_search(
+           RandomForestClassifier(),
+           df.drop(columns="churned"),
+           df["churned"],
+           ml_context,
+           task="classification",
+           scoring="roc_auc",
+           baseline_metric="auc_roc",       # the gate: beat the trivial predictor...
+           min_delta=0.05,                  # ...by at least this much
+           extra_baselines={"baseline_auc_roc": 0.5},
+           name="churn_model",              # registers the model; leave out to skip
+       )
+       return result.metrics_frame()
+
+What comes from the pipeline file, and what an argument overrides:
+
+.. list-table::
+   :widths: 28 72
+   :header-rows: 1
+
+   * - Value
+     - Where it comes from
+   * - The split
+     - ``ml_context.split``. Inside a Ducta run it is required: falling back to a plain
+       random split would silently drop a declared stratification, so a missing one is an
+       error. Outside a run it falls back to a random 80/20.
+   * - The search space
+     - ``ml_context.hyperparams_config`` (``algorithm: grid`` or ``random``), or the
+       ``param_grid`` argument. With neither, the estimator is fitted once with
+       ``ml_context.hyperparams``. A ``bayesian`` search drives whole runs; use
+       ``ducta start --search`` for it.
+   * - Folds and seed
+     - ``ml_context.cv_folds`` and ``ml_context.node_seed`` (deterministic per node).
+   * - The scorer
+     - ``scoring``, or the objective's ``metric`` in the search configuration. It is an
+       sklearn scorer name, so a loss is written ``neg_mean_squared_error``.
+
+The metrics are ``accuracy``, ``f1``, ``precision``, ``recall`` and, for a binary target
+with ``predict_proba``, ``auc_roc`` (classification), or ``rmse``, ``mae`` and ``r2``
+(regression), measured on the held-out rows. The search's own score is logged as
+``best_cv_score`` and under the objective's ``metric`` name — the name a ``--sweep`` or
+``--search`` reads. A gate that fails raises ``ValueError`` before anything is registered.
+
+``result.partition_frame(frame)`` adds a column saying which rows trained the model and
+which did not; see ``tag_partitions`` below.
+
+Which Rows Did the Model See?
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A table of predictions over a whole dataset mixes rows the model trained on with rows it
+never saw, and a score computed over all of them is not a held-out score.
+``ducta.mlrun.tag_partitions`` labels each row with the partition it fell in:
+
+.. code-block:: python
+
+   from ducta.mlrun import split_dataframe, tag_partitions
+
+   train, test = split_dataframe(df, ml_context.split, ml_context=ml_context)
+   scored = tag_partitions(df.assign(prediction=model.predict(X)), train, test)
+   scored.groupby("split")["prediction"].mean()
+
+Rows are matched by index label, which the pandas split keeps, so the index must be
+unique. ``names=`` and ``column=`` rename the labels (default ``train``/``test``, or
+``train``/``val``/``test`` for three partitions).
+
+Where a Model Is Saved
+----------------------
+
+``persist_model`` registers the model in the registry when the run is tracked. With
+tracking off (``mlops_enabled: false``) it writes a local file instead:
+``models/<name>/<version>/model.pkl``, with ``models/<name>/latest.txt`` pointing at the
+newest. ``<version>`` is the run id; when there is none it is the ``model_version`` label
+followed by a UTC timestamp, or the timestamp alone. Every call gets its own directory, so
+iterating in a ``dev`` environment never overwrites the model you trained a minute ago.
+
+A model is pickled by default, and a pickle needs ``trust_artifact: true`` to be scored.
+``persist_model(..., framework="xgboost", native=True)`` (or ``"lightgbm"``) writes the
+framework's own format — ``.json`` or ``.txt`` — which loads without executing anything,
+so it needs no trust. The model that is scored is then the framework's ``Booster``: for
+``binary:logistic`` its ``predict`` returns probabilities, where an sklearn wrapper's
+``predict`` returns labels. That difference is why ``native`` is opt-in.
+
+Comparing Runs
+--------------
+
+.. code-block:: bash
+
+   ducta experiment list --env dev --pipeline ml.churn
+   ducta experiment runs <experiment_id> --env dev --pipeline ml.churn
+   ducta experiment compare <run_id> <run_id> --env dev --pipeline ml.churn
+
+``compare`` lays the parameters and final metrics of the runs side by side, so the
+effect of a hyperparameter is a column you read. See :doc:`cli_usage` for every flag.
+
 Model Registry
 --------------
 
@@ -476,7 +586,8 @@ The Ducta registry provides version-controlled model management. Newly registere
 .. code-block:: bash
 
    # ducta model promote <name> <version> <staging|production|archived>
-   ducta model promote sales_predictor 1.2.0 production
+   # <version> is the whole number the registry assigned (3 or v3), not a semantic version
+   ducta model promote sales_predictor 3 production
 
    # Clean up old versions past the retention window
    ducta model gc --dry-run

@@ -303,3 +303,38 @@ def test_a_joblib_sklearn_model_registers_with_validation(tmp_path):
         trust_artifact_source=True,
     )
     assert mv.version == 1
+
+
+class TestNativeXgboostNeedsNoTrust:
+    """A model persisted with ``native=True`` is a ``.json`` booster: loading it executes
+    nothing, so a node scores it with ``trust_artifact`` left at its default (false)."""
+
+    def test_register_then_score_without_trust_artifact(self, registry, tmp_path):
+        xgb = pytest.importorskip("xgboost")
+        from types import SimpleNamespace
+
+        from ducta.mlrun.persistence import persist_model
+
+        df = _frame()
+        model = xgb.XGBClassifier(n_estimators=5).fit(df[["x"]], df["y"])
+        context = SimpleNamespace(
+            mlops_context=SimpleNamespace(model_registry=registry),
+            mlops_run_id="run1",
+            model_version=None,
+        )
+
+        out = persist_model(
+            model, context, "native_clf", framework="xgboost", X=df[["x"]], native=True
+        )
+        registry.promote_model("native_clf", out["version"], ModelStage.PRODUCTION)
+
+        served = prepare_model(
+            _ref(name="native_clf", trust_artifact=False),
+            registry=registry,
+            mlflow_client=None,
+            workdir=tmp_path,
+        )
+        scored = score(df, served)
+        assert served.model.__class__.__name__ == "Booster"
+        assert scored["prediction"].between(0, 1).all()
+        assert scored["prediction"].iloc[-1] > 0.5 > scored["prediction"].iloc[0]

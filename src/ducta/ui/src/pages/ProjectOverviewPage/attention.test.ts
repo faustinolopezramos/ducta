@@ -42,4 +42,19 @@ describe("attentionItems", () => {
   it("is empty when all is well", () => {
     expect(attentionItems("batch", [], [run("r1", "a", "success")], [])).toEqual([]);
   });
+
+  it("groups runs stuck in the queue by pipeline", () => {
+    const now = Date.parse("2026-10-09T12:00:00Z");
+    const queued = (id: string, at: string) => ({ id, pipeline_name: "silver.clean", status: "pending", started_at: at }) as never;
+    const items = attentionItems(
+      "batch",
+      [],
+      [run("r9", "silver.clean", "success"), queued("q1", "2026-10-08T12:00:00Z"), queued("q2", "2026-10-08T11:00:00Z"), queued("q3", "2026-10-09T11:58:00Z")],
+      [],
+      now,
+    );
+    expect(items).toEqual([
+      expect.objectContaining({ tone: "warning", text: "2 runs of silver.clean stuck in the queue", to: "/p/batch/runs?pipeline=silver.clean" }),
+    ]);
+  });
 });

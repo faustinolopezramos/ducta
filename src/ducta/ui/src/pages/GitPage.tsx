@@ -98,7 +98,7 @@ export function GitPage() {
 
           {/* Working tree status */}
           <div>
-            <SectionTitle>{ICONS.STREAM_LOG} Working tree</SectionTitle>
+            <SectionTitle>{ICONS.GIT} Working tree</SectionTitle>
             <Panel>
               {statusLoading ? (
                 <SkeletonText lines={3} />
@@ -128,12 +128,16 @@ export function GitPage() {
 
           {/* Commit */}
           <div>
-            <SectionTitle>{ICONS.STREAM_LOG} Commit</SectionTitle>
+            <SectionTitle>
+              <IconGitCommit size={18} stroke={1.5} style={{ verticalAlign: "middle", marginRight: 4 }} /> Commit
+            </SectionTitle>
             <Panel className={staged.length > 0 ? "git-commit-panel--armed" : undefined}>
               <div style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, marginBottom: 8 }}>
                 {staged.length > 0
                   ? `${staged.length} file${staged.length !== 1 ? "s" : ""} staged`
-                  : "Stage files above before committing."}
+                  : totalChanged > 0
+                    ? "Stage files above before committing."
+                    : "Nothing to commit."}
               </div>
               <textarea
                 value={commitMsg}
@@ -239,6 +243,11 @@ export function GitPage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div>
             <SectionTitle>{ICONS.CONNECTIONS} Remote</SectionTitle>
+            {sourceType !== "git" && (
+              <p style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, margin: "8px 2px 0", lineHeight: 1.5 }}>
+                This workspace is a local folder, so pull and push from a terminal. Open it from a Git URL to do both here.
+              </p>
+            )}
             {sourceType === "git" && (
               <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                 <PermittedButton permission="git.write" variant="ghost" size="sm" onClick={() => pullLatest(undefined)} disabled={isPulling} style={{ flex: 1 }}>

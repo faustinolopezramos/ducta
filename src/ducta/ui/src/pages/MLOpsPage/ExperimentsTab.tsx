@@ -10,6 +10,7 @@ import { Skeleton } from "../../components/ui/Skeleton";
 import {
   useMlopsExperiments,
   useMlopsExperiment,
+  useMlopsStatus,
   useCloseMlopsRun,
   useDeleteMlopsRun,
   lastMetricValues,
@@ -30,6 +31,7 @@ import {
   IconArrowsDiff,
 } from "@tabler/icons-react";
 import { findProjectForPipeline } from "./shared";
+import { MlopsEmptyState } from "./MlopsDiagnosis";
 import { formatDate } from "../../utils/formatDate";
 import { routes } from "../../utils/routes";
 
@@ -332,6 +334,7 @@ export function ExperimentsTab({
 }) {
   const { data, isLoading, isError, refetch } = useMlopsExperiments(env, pipeline, project);
   const experiments = data ?? [];
+  const { data: status } = useMlopsStatus(env, pipeline, project);
   const [compareSelection, setCompareSelection] = useState<Map<string, ExperimentRun>>(new Map());
   const [openRun, setOpenRun] = useState<ExperimentRun | null>(null);
   const [showCompare, setShowCompare] = useState(false);
@@ -401,11 +404,7 @@ export function ExperimentsTab({
         </div>
       )}
       {!isLoading && !isError && experiments.length === 0 && (
-        <EmptyState
-          icon={IconFlask}
-          title="No experiments yet"
-          description="Run a pipeline with mlops_enabled: true to start tracking experiments."
-        />
+        <MlopsEmptyState status={status} env={env} what="experiments" icon={IconFlask} />
       )}
       {experiments.map((exp) => (
         <ExperimentRow

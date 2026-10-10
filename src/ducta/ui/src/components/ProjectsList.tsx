@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { IconPlus } from "@tabler/icons-react";
 import { useDeleteServerProject, useExecutionList } from "../api/queries";
+import { useBulkCancelExecutions } from "../api/mutations";
 import { useSchedules } from "../api/schedulesApi";
 import { toastStore } from "../hooks/useModalStack";
 import { usePermission } from "../hooks/usePermission";
@@ -30,6 +31,7 @@ export function ProjectsList({ projects }: ProjectsListProps) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const deleteProject = useDeleteServerProject();
+  const { mutate: bulkCancel } = useBulkCancelExecutions();
 
   // Fixed for the life of the page so the query key does not change every render.
   const [since] = useState(activityWindowStart);
@@ -102,6 +104,7 @@ export function ProjectsList({ projects }: ProjectsListProps) {
           attention={stats.attention}
           projectName={projectName}
           loading={runsLoading}
+          onCancelStuck={canWrite ? (ids) => bulkCancel(ids) : undefined}
         />
 
         <ProjectsBoard

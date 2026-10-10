@@ -6,7 +6,7 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { Panel } from "../../components/ui/Panel";
 import { Field } from "../../components/ui/Field";
 import { Tabs, TabPanel, type TabItem } from "../../components/ui/Tabs";
-import { useEnvironments } from "../../api/queries";
+import { EnvHint } from "../../components/Shell/EnvHint";
 import { useSourceStore } from "../../store/workspace";
 import { useMlPipelineOptions } from "./shared";
 import { ExperimentsTab } from "./ExperimentsTab";
@@ -50,9 +50,6 @@ export function MLOpsPage() {
     routeProject ??
     "";
 
-  const { data: environmentsData } = useEnvironments(project || undefined);
-  const environments: string[] = environmentsData?.environments ?? [];
-
   const handlePipelineChange = (value: string) => {
     const next = new URLSearchParams(searchParams);
     const opt = pipelineOptions.find((p) => p.pipelineName === value);
@@ -63,13 +60,6 @@ export function MLOpsPage() {
       next.delete("pipeline");
       next.delete("project");
     }
-    setSearchParams(next, { replace: true });
-  };
-
-  const handleEnvChange = (value: string) => {
-    const next = new URLSearchParams(searchParams);
-    if (value && value !== activeEnv) next.set("env", value);
-    else next.delete("env");
     setSearchParams(next, { replace: true });
   };
 
@@ -106,24 +96,10 @@ export function MLOpsPage() {
               ))}
             </select>
           </Field>
-          <Field label="Environment">
-            <select
-              className="input-field"
-              style={{ minWidth: 160 }}
-              value={env}
-              onChange={(e) => handleEnvChange(e.target.value)}
-              aria-label="MLOps environment"
-            >
-              {["base", ...environments.filter((e) => e !== "base")].map((e) => (
-                <option key={e} value={e}>
-                  {e}{e === activeEnv ? " (active)" : ""}
-                </option>
-              ))}
-            </select>
-          </Field>
         </div>
       </Panel>
 
+      {project && <EnvHint projectId={project} />}
       <TabPanel id={activeTab}>
         {activeTab === "experiments" && (
           <ExperimentsTab env={env || undefined} pipeline={pipeline || undefined} project={project || undefined} />

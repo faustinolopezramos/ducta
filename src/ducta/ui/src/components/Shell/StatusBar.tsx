@@ -1,5 +1,5 @@
 import type React from "react";
-import { IconGitBranch } from "@tabler/icons-react";
+import { IconGitBranch, IconLayoutList } from "@tabler/icons-react";
 import { useGitStatus } from "../../api/queries";
 import { useStatusBarItems } from "./statusBarStore";
 import { useChangesPanel } from "../Git/changesStore";
@@ -54,7 +54,8 @@ export function StatusBar() {
           aria-label={`Row density: ${density}. Switch to ${density === "compact" ? "comfortable" : "compact"}`}
           onClick={() => setDensity(density === "compact" ? "comfortable" : "compact")}
         >
-          Density: {density}
+          <IconLayoutList size={13} stroke={1.75} aria-hidden="true" />
+          {density === "compact" ? "Compact rows" : "Comfortable rows"}
         </button>
       </div>
     </footer>

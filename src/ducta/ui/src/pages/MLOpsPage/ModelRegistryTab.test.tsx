@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { ModelInfo, ModelVersion } from "../../api/mlopsApi";
+import type { MlopsStatus, ModelInfo, ModelVersion } from "../../api/mlopsApi";
 
 const models: ModelInfo[] = [
   {
@@ -14,6 +14,16 @@ const models: ModelInfo[] = [
     ],
   },
 ];
+let currentModels: ModelInfo[] = models;
+const status: MlopsStatus = {
+  storage_path: "/w/models",
+  mlops_enabled: false,
+  tracking_present: false,
+  registry_present: false,
+  unregistered_models: [
+    { name: "risk_model", versions: 3, latest: "/w/models/risk_model/20261010/model.pkl", updated_at: "2026-10-10T02:50:32+00:00" },
+  ],
+};
 const versions: ModelVersion[] = [
   {
     version: 2,
@@ -26,7 +36,8 @@ const versions: ModelVersion[] = [
 ];
 
 vi.mock("../../api/mlopsApi", () => ({
-  useMlopsModels: () => ({ data: models, isLoading: false, isError: false, refetch: vi.fn() }),
+  useMlopsStatus: () => ({ data: status }),
+  useMlopsModels: () => ({ data: currentModels, isLoading: false, isError: false, refetch: vi.fn() }),
   useMlopsModelVersions: (name: string) => ({ data: name ? versions : undefined, isLoading: false }),
   usePromoteModel: () => ({ mutate: vi.fn(), isPending: false }),
   useRunMlopsGc: () => ({ mutate: vi.fn(), isPending: false }),
@@ -47,6 +58,17 @@ vi.mock("../../components/ui/PermittedButton", () => ({
 import { ModelRegistryTab } from "./ModelRegistryTab";
 
 describe("ModelRegistryTab", () => {
+  it("says why it is empty and lists models saved without tracking", () => {
+    currentModels = [];
+    try {
+      render(<ModelRegistryTab env="dev" pipeline="score" />);
+      expect(screen.getByText("MLOps tracking is off in 'dev'")).toBeInTheDocument();
+      expect(screen.getByText("risk_model")).toBeInTheDocument();
+    } finally {
+      currentModels = models;
+    }
+  });
+
   it("says which project nodes serve each model, and what they ask for", () => {
     render(<ModelRegistryTab pipeline="score" />);
     const served = screen.getByLabelText("Served by");

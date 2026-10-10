@@ -137,7 +137,7 @@ def validate_quality_arguments(args: argparse.Namespace) -> None:
 
 def validate_experiment_arguments(args: argparse.Namespace) -> None:
     if not getattr(args, "experiment_command", None):
-        raise ValidationError("An experiment subcommand is required (e.g., list)")
+        raise ValidationError("An experiment subcommand is required (list, runs, show or compare)")
 
 
 def validate_model_arguments(args: argparse.Namespace) -> None:
@@ -259,20 +259,52 @@ class UnifiedCLI:
         except ValidationError as e:
             from ducta.console.ux.error_analyzer import try_format_error
 
-            if not try_format_error(e, "argument validation"):
+            if not try_format_error(e, "", scope=None):
                 logger.error("Invalid arguments: {}", e)
             return ExitCode.VALIDATION_ERROR.value
 
     def _handle_experiment_command(self, parsed_args: argparse.Namespace) -> int:
-        from ducta.console.mlops_commands import experiment_list
+        from ducta.console.mlops_commands import (
+            experiment_compare,
+            experiment_list,
+            experiment_runs,
+            experiment_show,
+        )
 
         cmd = getattr(parsed_args, "experiment_command", None)
+        where = {
+            "env": getattr(parsed_args, "env", None),
+            "pipeline_name": getattr(parsed_args, "pipeline", None),
+        }
+        output_format = getattr(parsed_args, "output_format", "rich")
         if cmd == "list":
             return experiment_list(
                 parsed_args.storage_path,
-                env=getattr(parsed_args, "env", None),
                 limit=getattr(parsed_args, "limit", None),
-                pipeline_name=getattr(parsed_args, "pipeline", None),
+                **where,
+            )
+        if cmd == "runs":
+            return experiment_runs(
+                parsed_args.experiment_id,
+                parsed_args.storage_path,
+                limit=getattr(parsed_args, "limit", None),
+                status=getattr(parsed_args, "status", None),
+                output_format=output_format,
+                **where,
+            )
+        if cmd == "show":
+            return experiment_show(
+                parsed_args.run_id,
+                parsed_args.storage_path,
+                output_format=output_format,
+                **where,
+            )
+        if cmd == "compare":
+            return experiment_compare(
+                parsed_args.run_ids,
+                parsed_args.storage_path,
+                output_format=output_format,
+                **where,
             )
         logger.error("Unknown experiment command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value

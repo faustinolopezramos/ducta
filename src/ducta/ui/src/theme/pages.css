@@ -342,3 +342,71 @@
 .quality-score-pick { display: flex; align-items: flex-end; gap: var(--space-2); max-width: 560px; }
 .quality-score-pick > :first-child { flex: 1; min-width: 0; }
 .quality-score-pick select { width: 100%; }
+
+/* ── Unified Project Page Attention Strip & Health ────────────────────────── */
+.project-attention-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3, 12px);
+  padding: 8px 24px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+
+.project-attention-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--warning-strong, #8A4F09);
+  white-space: nowrap;
+}
+
+.project-attention-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.project-attention-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  transition: background 0.15s ease;
+}
+
+.project-attention-link:hover {
+  background: var(--surface-hover);
+}
+
+.project-attention-more-btn {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.project-health-pane {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+  overflow-y: auto;
+}

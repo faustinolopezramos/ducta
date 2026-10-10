@@ -89,6 +89,25 @@ export const lastMetricValues = (run: ExperimentRun): Record<string, number> => 
   return out;
 };
 
+/** A model persisted as plain files (MLOps was off for the run): servable, but
+ *  with no experiment and no registry entry. */
+export interface UnregisteredModel {
+  name: string;
+  versions: number;
+  latest: string | null;
+  updated_at: string;
+}
+
+/** Why the experiments / registry views are empty (GET /mlops/status). */
+export interface MlopsStatus {
+  storage_path: string;
+  /** The setting runs of this environment use. */
+  mlops_enabled: boolean;
+  tracking_present: boolean;
+  registry_present: boolean;
+  unregistered_models: UnregisteredModel[];
+}
+
 type ModelStage = "staging" | "production" | "archived";
 
 interface MlopsScope {
@@ -125,6 +144,17 @@ const scopeParams = ({ env, pipelineName, project }: MlopsScope) => ({
 });
 
 // ─── MLOps query hooks ────────────────────────────────────────────────────────
+
+export const useMlopsStatus = (env?: string, pipelineName?: string, project?: string) =>
+  useQuery<MlopsStatus>({
+    queryKey: qk.mlops.status({ env, pipelineName, project }),
+    queryFn: () =>
+      client
+        .get("/mlops/status", { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    enabled: !!pipelineName,
+    staleTime: 30 * 1000,
+  });
 
 export const useMlopsExperiments = (env?: string, pipelineName?: string, project?: string) =>
   useQuery<ExperimentSummary[]>({

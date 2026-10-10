@@ -5,13 +5,14 @@ import { PageHeader } from "../../components/ui/PageHeader";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { EnvHint } from "../../components/Shell/EnvHint";
 import { Panel } from "../../components/ui/Panel";
 import { Field } from "../../components/ui/Field";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { Sparkline } from "../../components/Quality/Sparkline";
 import { useQualitySummary, type QualityDatasetSummary } from "../../api/qualityApi";
-import { useEnvironments, useExecutionList, useServerProjects } from "../../api/queries";
+import { useExecutionList, useServerProjects } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
 import { RunChecksModal } from "../../components/Quality/RunChecksModal";
 import { ValidateConfigModal } from "../../components/Quality/ValidateConfigModal";
@@ -64,8 +65,6 @@ export default function QualityPage() {
   const { data: projectsData } = useServerProjects();
   const projects = projectsData?.projects ?? [];
 
-  const { data: environmentsData } = useEnvironments(project || undefined);
-  const environments: string[] = environmentsData?.environments ?? [];
 
   const summary = useQualitySummary(env || undefined, undefined, project || undefined);
   const datasets = useMemo(
@@ -213,24 +212,23 @@ export default function QualityPage() {
               ))}
             </select>
           </Field>}
-          <Field label="Environment">
+          {/* The environment is the header's; this only picks pipeline runs vs ad-hoc checks. */}
+          <Field label="Reports">
             <select
               className="input-field"
               style={{ minWidth: 160 }}
               value={adhoc ? ADHOC_ENV : env}
               onChange={(e) => handleEnvChange(e.target.value)}
-              aria-label="Quality reports environment"
+              aria-label="Quality reports source"
             >
-              {["base", ...environments.filter((e) => e !== "base")].map((e) => (
-                <option key={e} value={e}>
-                  {e}{e === activeEnv ? " (active)" : ""}
-                </option>
-              ))}
+              <option value={activeEnv}>Runs in {activeEnv}</option>
+              {!adhoc && env !== activeEnv && <option value={env}>Runs in {env}</option>}
               <option value={ADHOC_ENV}>{ADHOC_LABEL}s (ad-hoc)</option>
             </select>
           </Field>
         </div>
 
+        {project && !adhoc && datasets.length === 0 && !summary.isLoading && <EnvHint projectId={project} />}
         <DataTable<QualityDatasetSummary>
           columns={columns}
           rows={datasets}
@@ -245,7 +243,7 @@ export default function QualityPage() {
               title={env ? "No quality reports in this environment" : "No quality reports yet"}
               description={
                 env
-                  ? "Try another environment above, or run a pipeline with sanity_checks / data_quality enabled on its nodes."
+                  ? "Switch the environment in the header, or run a pipeline with sanity_checks / data_quality enabled on its nodes."
                   : "Run checks on a data file, or execute a pipeline with sanity_checks / data_quality enabled on its nodes."
               }
               action={

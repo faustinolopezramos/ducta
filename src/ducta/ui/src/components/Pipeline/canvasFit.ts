@@ -9,3 +9,8 @@ export const FIT_PADDING = { top: "72px", right: "40px", bottom: "112px", left: 
 export const FIT_TOP_PX = 72;
 /** Never zoom past 1:1 when framing — the cards are designed at a size. */
 export const FIT_MAX_ZOOM = 1;
+/**
+ * A band's label sits above its first card, outside the bounds the fit measures
+ * (nodes only) — without this room the top band's label landed under the toolbar.
+ */
+export const FIT_BAND_LABEL_PX = 40;

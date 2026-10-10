@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useMemo, useState } from "react";
 import { useProjectList, useProjectPipelines } from "../../hooks/useProjects";
 import { useDeletePipeline } from "../../api/mutations";
@@ -7,7 +7,15 @@ import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { RunPipelineModal } from "../../components/Pipeline/RunPipelineModal";
-import { IconFolderOff, IconPlus, IconLayoutGrid, IconSitemap } from "@tabler/icons-react";
+import {
+  IconFolderOff,
+  IconPlus,
+  IconList,
+  IconSitemap,
+  IconActivity,
+  IconAlertCircle,
+  IconArrowRight,
+} from "@tabler/icons-react";
 import { ProjectDependenciesView } from "./DependenciesMap";
 import { NewPipelineModal } from "./NewPipelineModal";
 import { PipelinesView, type PipelineSpecLike } from "./PipelinesTable";
@@ -15,6 +23,15 @@ import { routes } from "../../utils/routes";
 import { useProjectProblems } from "../../hooks/useProjectProblems";
 import { useApplyFix } from "../../hooks/useApplyFix";
 import { ProjectConfigErrors } from "../../components/Problems/ProjectConfigErrors";
+import { attentionItems } from "../ProjectOverviewPage";
+import { useExecutionList, useStaleness } from "../../api/queries";
+import { useSourceStore } from "../../store/workspace";
+import { ProjectHealth } from "../../components/Dashboard/ProjectHealth";
+import { StatusBadge } from "../../components/ui/StatusBadge";
+import { formatDuration } from "../../utils/formatDuration";
+import { formatRelative } from "../../utils/timeLabels";
+import type { Execution } from "../../types";
+import "../ProjectOverviewPage/ProjectOverviewPage.css";
 
 export function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -22,7 +39,7 @@ export function ProjectPage() {
   const { projects, isLoading: projectsLoading } = useProjectList();
 
   const [showCreate, setShowCreate] = useState(false);
-  const [view, setView] = useState<"pipelines" | "dependencies">("dependencies");
+  const [view, setView] = useState<"pipelines" | "dependencies" | "health">("dependencies");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runPipelineId, setRunPipelineId] = useState<string | null>(null);
   const { mutate: deletePipeline, isPending: isDeleting } = useDeletePipeline();
@@ -94,14 +111,24 @@ export function ProjectPage() {
               Map
             </Button>
             <Button
-              variant={!isMap ? "secondary" : "ghost"}
+              variant={view === "pipelines" ? "secondary" : "ghost"}
               size="sm"
               onClick={() => setView("pipelines")}
-              aria-pressed={!isMap}
+              aria-pressed={view === "pipelines"}
               title="Pipelines as a list"
-              leftIcon={<IconLayoutGrid size={14} />}
+              leftIcon={<IconList size={14} />}
             >
               List
+            </Button>
+            <Button
+              variant={view === "health" ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setView("health")}
+              aria-pressed={view === "health"}
+              title="Pipeline health, SLA and recent runs"
+              leftIcon={<IconActivity size={14} />}
+            >
+              Health
             </Button>
           </div>
           <Button
@@ -115,9 +142,11 @@ export function ProjectPage() {
         </div>
       </div>
 
+      {!isMap && <ProjectAttentionStrip projectId={projectId!} />}
+
       {isMap && <ProjectDependenciesView projectId={projectId!} />}
 
-      {!isMap && (
+      {view === "pipelines" && (
         <PipelinesView
           projectId={projectId!}
           project={currentProject}
@@ -129,6 +158,8 @@ export function ProjectPage() {
           onCreate={() => setShowCreate(true)}
         />
       )}
+
+      {view === "health" && <ProjectHealthPane projectId={projectId!} />}
 
       {showCreate && projectId && (
         <NewPipelineModal
@@ -176,5 +207,77 @@ function BrokenProject({ projectId }: { projectId: string }) {
       isChecking={isChecking}
       onFix={(p) => void applyFix(projectId, p).catch(() => undefined)}
     />
+  );
+}
+
+function ProjectAttentionStrip({ projectId }: { projectId: string }) {
+  const activeEnv = useSourceStore((s) => s.activeEnv);
+  const env = activeEnv || "base";
+  const { problems } = useProjectProblems(projectId, null);
+  const { data: runsData } = useExecutionList({ project_id: projectId, limit: 50 });
+  const runs = useMemo(() => (runsData?.executions ?? []) as Execution[], [runsData]);
+  const { data: stale } = useStaleness(projectId, env);
+  const attention = useMemo(
+    () => attentionItems(projectId, problems, runs, stale ?? []),
+    [projectId, problems, runs, stale],
+  );
+
+  if (attention.length === 0) return null;
+
+  return (
+    <aside className="project-attention-banner" aria-label="Project issues needing attention">
+      <span className="project-attention-title">
+        <IconAlertCircle size={15} /> Needs attention ({attention.length}):
+      </span>
+      <div className="project-attention-links">
+        {attention.slice(0, 3).map((a) => (
+          <Link key={a.key} to={a.to} className={`project-attention-link tone-${a.tone}`}>
+            <span className="overview-dot" aria-hidden="true" />
+            <span>{a.text}</span>
+            <IconArrowRight size={13} aria-hidden="true" />
+          </Link>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function ProjectHealthPane({ projectId }: { projectId: string }) {
+  const activeEnv = useSourceStore((s) => s.activeEnv);
+  const env = activeEnv || "base";
+  const { data: runsData, isLoading: runsLoading } = useExecutionList({ project_id: projectId, limit: 50 });
+  const runs = useMemo(() => (runsData?.executions ?? []) as Execution[], [runsData]);
+
+  return (
+    <div className="project-health-pane">
+      <ProjectHealth projectId={projectId} env={env} />
+      <section className="overview-section" style={{ marginTop: "var(--space-6, 24px)" }}>
+        <div className="overview-h-row">
+          <h2 className="overview-h">Recent runs · all environments</h2>
+          {runs.length > 0 && <Link to={routes.runs(projectId)} className="overview-more">All runs</Link>}
+        </div>
+        {runsLoading ? (
+          <Skeleton variant="block" height="120px" />
+        ) : runs.length === 0 ? (
+          <p className="overview-muted">No runs yet. Open a pipeline and run it to see it here.</p>
+        ) : (
+          <ul className="overview-list">
+            {runs.slice(0, 8).map((r) => (
+              <li key={r.id}>
+                <Link to={routes.run(projectId, r.id)} className="overview-row">
+                  <StatusBadge status={r.status} size="sm" variant="dot" />
+                  <span className="overview-row-text mono">{r.pipeline_name}</span>
+                  <span className="overview-muted">{r.env}</span>
+                  <span className="overview-muted overview-num">
+                    {r.duration_seconds != null ? formatDuration(r.duration_seconds) : ""}
+                  </span>
+                  <span className="overview-muted overview-when">{formatRelative(r.started_at) ?? ""}</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+    </div>
   );
 }

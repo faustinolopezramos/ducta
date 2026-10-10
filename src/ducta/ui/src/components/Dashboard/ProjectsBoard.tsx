@@ -5,7 +5,7 @@ import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { StatusBadge } from "../ui/StatusBadge";
 import type { ProjectSummary } from "../../types";
-import { runTimestamp, type ProjectActivity } from "../../utils/dashboardStats";
+import { ACTIVITY_DAYS, runTimestamp, type ProjectActivity } from "../../utils/dashboardStats";
 import { FAILURE_STATUSES } from "../ui/statusMeta";
 import { formatRelative } from "../../utils/timeLabels";
 import { routes } from "../../utils/routes";
@@ -89,7 +89,7 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
                       {formatRelative(lastRun.started_at ?? lastRun.finished_at)}
                     </>
                   ) : (
-                    <span className="dash-stat-empty">No runs yet</span>
+                    <span className="dash-stat-empty">No runs in {ACTIVITY_DAYS} days</span>
                   )}
                 </div>
               </Link>

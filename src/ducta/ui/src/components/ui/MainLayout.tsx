@@ -9,6 +9,7 @@ import { useUIStore } from "../../store/uiStore";
 import { useGlobalShortcuts } from "../Shell/useGlobalShortcuts";
 import { ChangesPanel } from "../Git/ChangesPanel";
 import { CommandMenu } from "../Shell/CommandMenu";
+import { KeyboardShortcutsModal } from "../Shell/KeyboardShortcutsModal";
 
 interface MainLayoutProps {
   children: React.ReactNode;
@@ -37,6 +38,7 @@ export function MainLayout({ children }: MainLayoutProps) {
       </div>
       <ChangesPanel />
       <CommandMenu />
+      <KeyboardShortcutsModal />
       {kind === "prod" && (
         <div className="ducta-env-frame" aria-hidden="true">
           <span className="ducta-env-frame__chip">PROD · {activeEnv}</span>

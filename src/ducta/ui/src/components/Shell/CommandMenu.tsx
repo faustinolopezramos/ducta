@@ -24,6 +24,7 @@ import { projectIdFromPath, routes, type ProjectSection } from "../../utils/rout
 import { KeyHint } from "../ui/KeyHint";
 import { buildCommandIndex, searchCommands, type CommandEntry, type CommandKind } from "./commandIndex";
 import { useCommandMenu } from "./commandStore";
+import { useShortcutsModal } from "./shortcutsStore";
 
 const ICON: Record<CommandKind, typeof IconBolt> = {
   command: IconBolt,
@@ -108,6 +109,13 @@ function Menu({ initial, kinds, onClose }: { initial: string; kinds: CommandKind
         id: "cmd:density",
         label: density === "compact" ? "Use comfortable density" : "Use compact density",
         run: () => setDensity(density === "compact" ? "comfortable" : "compact"),
+      },
+      {
+        kind: "command",
+        id: "cmd:shortcuts",
+        label: "Keyboard shortcuts",
+        hint: "?",
+        run: () => useShortcutsModal.getState().show(),
       },
     ];
     return buildCommandIndex({

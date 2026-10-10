@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
@@ -110,6 +110,15 @@ class ExecutionResponse(BaseModel):
             "None on records written before it existed."
         ),
     )
+
+    @field_validator("started_at", "finished_at", mode="after")
+    @classmethod
+    def _assume_utc(cls, value: Optional[datetime]) -> Optional[datetime]:
+        # Run records store naive UTC; without an offset a browser reads them as
+        # local time ("started in 6h").
+        if value is not None and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 
 class LogEntry(BaseModel):

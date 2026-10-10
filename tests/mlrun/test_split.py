@@ -5,7 +5,13 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from ducta.mlrun.split import SplitError, cross_validate, kfold_splits, split_dataframe
+from ducta.mlrun.split import (
+    SplitError,
+    cross_validate,
+    kfold_splits,
+    split_dataframe,
+    tag_partitions,
+)
 
 
 @pytest.fixture
@@ -160,6 +166,74 @@ class TestErrors:
             split_dataframe(
                 df, {"method": "temporal", "time_col": "ts", "test_size": 0.5, "val_size": -0.2}
             )
+
+
+class TestTagPartitions:
+    """Predictions over a whole dataset mix rows the model trained on with rows it never
+    saw; without a tag nobody can tell a held-out score from a memorised one."""
+
+    @staticmethod
+    def _cfg(**extra):
+        return {"method": "random", "test_size": 0.2, **extra}
+
+    def test_every_row_says_which_partition_it_came_from(self, df):
+        train, test = split_dataframe(df, self._cfg(), default_seed=1)
+
+        tagged = tag_partitions(df, train, test)
+
+        assert set(tagged.loc[train.index, "split"]) == {"train"}
+        assert set(tagged.loc[test.index, "split"]) == {"test"}
+        assert tagged["split"].notna().all()
+
+    def test_three_partitions_use_train_val_test(self, df):
+        parts = split_dataframe(df, self._cfg(val_size=0.2), default_seed=1)
+
+        tagged = tag_partitions(df, *parts)
+
+        assert set(tagged["split"]) == {"train", "val", "test"}
+
+    def test_input_is_not_modified(self, df):
+        train, test = split_dataframe(df, self._cfg(), default_seed=1)
+        before = df.copy()
+
+        tag_partitions(df, train, test)
+
+        pd.testing.assert_frame_equal(df, before)
+
+    def test_custom_names_and_column(self, df):
+        train, test = split_dataframe(df, self._cfg(), default_seed=1)
+
+        tagged = tag_partitions(df, train, test, names=("fit", "holdout"), column="part")
+
+        assert set(tagged["part"]) == {"fit", "holdout"}
+
+    def test_row_in_no_partition_is_none(self, df):
+        train, test = split_dataframe(df, self._cfg(), default_seed=1)
+
+        tagged = tag_partitions(df, train.iloc[:-1], test)
+
+        assert tagged["split"].isna().sum() == 1
+
+    def test_duplicate_index_is_an_error(self, df):
+        dup = pd.concat([df, df.iloc[:1]])
+        train, test = df.iloc[:80], df.iloc[80:]
+
+        with pytest.raises(SplitError, match="duplicates"):
+            tag_partitions(dup, train, test)
+
+    def test_overlapping_partitions_are_an_error(self, df):
+        with pytest.raises(SplitError, match="overlaps"):
+            tag_partitions(df, df.iloc[:60], df.iloc[40:])
+
+    def test_existing_column_is_an_error(self, df):
+        train, test = split_dataframe(df, self._cfg(), default_seed=1)
+
+        with pytest.raises(SplitError, match="already exists"):
+            tag_partitions(df, train, test, column="label")
+
+    def test_needs_names_for_four_partitions(self, df):
+        with pytest.raises(SplitError, match="names"):
+            tag_partitions(df, df.iloc[:25], df.iloc[25:50], df.iloc[50:75], df.iloc[75:])
 
 
 class TestCrossValidate:

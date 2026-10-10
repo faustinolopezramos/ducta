@@ -124,7 +124,10 @@ export function FilterBar({
             type="button"
             className="run-filters__chip"
             aria-pressed={presetActive(days)}
-            onClick={() => onChange({ ...filters, since: datePresetSince(days), until: undefined })}
+            onClick={() => {
+              const nextSince = presetActive(days) ? undefined : datePresetSince(days);
+              onChange({ ...filters, since: nextSince, until: undefined });
+            }}
             title={`Since ${label === "Today" ? "today" : `${label} ago`}`}
           >
             {label}

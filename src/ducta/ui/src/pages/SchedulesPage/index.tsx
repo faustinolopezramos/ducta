@@ -43,8 +43,8 @@ export function SchedulesPage({ projectId, header }: { projectId?: string; heade
         description={header?.description ?? "Pipelines that run on their own. Times are UTC."}
         tabs={header?.tabs}
         actions={
-          <PermittedButton permission="execution.write" variant="primary" onClick={() => setShowCreateModal(true)}>
-            <IconPlus size={16} /> New Schedule
+          <PermittedButton permission="execution.write" variant="primary" leftIcon={<IconPlus size={16} />} onClick={() => setShowCreateModal(true)}>
+            New schedule
           </PermittedButton>
         }
       />
@@ -62,8 +62,8 @@ export function SchedulesPage({ projectId, header }: { projectId?: string; heade
           title="No automated schedules"
           description="Set up cron expressions to automatically run data pipelines at scheduled intervals."
           action={
-            <PermittedButton permission="execution.write" variant="primary" onClick={() => setShowCreateModal(true)}>
-              <IconPlus size={16} /> Create First Schedule
+            <PermittedButton permission="execution.write" variant="primary" leftIcon={<IconPlus size={16} />} onClick={() => setShowCreateModal(true)}>
+              Create first schedule
             </PermittedButton>
           }
         />

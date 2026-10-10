@@ -383,8 +383,18 @@ def _render_context(console: Console, context: Dict[str, Any]) -> None:
 
 
 def print_error_report(
-    analysis: Dict[str, Any], node_name: str, console: Optional[Console] = None
+    analysis: Dict[str, Any],
+    node_name: str,
+    console: Optional[Console] = None,
+    scope: Optional[str] = "node",
 ) -> None:
+    """Render a classified error.
+
+    ``scope`` says what ``node_name`` names: the heading reads ``<type> in <scope>
+    '<name>'``. Errors that are not about a node — a bad command-line argument, a project
+    that does not initialise — pass another scope, or ``None`` to leave the name out of the
+    heading, so a missing ``--pipeline`` is not reported as a failure "in node".
+    """
     if console is None:
         console = Console()
     etype = analysis["error_type"]
@@ -398,9 +408,8 @@ def print_error_report(
 
     sev_emoji = {"critical": "🚨", "high": "❌", "medium": "⚠️", "low": "ℹ️"}
     console.print()
-    console.print(
-        f"{sev_emoji.get(severity, '❌')} {etype} in node '{node_name}'", style=f"bold {color}"
-    )
+    where = f" in {scope} '{node_name}'" if scope else ""
+    console.print(f"{sev_emoji.get(severity, '❌')} {etype}{where}", style=f"bold {color}")
     console.print(f"  ERROR: {message}", style="bold bright_white")
     if location:
         console.print(
@@ -437,12 +446,13 @@ def format_error_for_developer(
     error: Exception,
     node_name: str,
     console: Optional[Console] = None,
+    scope: Optional[str] = "node",
 ) -> None:
     analysis = classify_error(str(error), error)
-    print_error_report(analysis, node_name, console)
+    print_error_report(analysis, node_name, console, scope)
 
 
-def try_format_error(error: Exception, label: str) -> bool:
+def try_format_error(error: Exception, label: str, scope: Optional[str] = "node") -> bool:
     """Attempt to render *error* via :func:`format_error_for_developer` on the
     active Rich console. Returns whether it succeeded, so callers can fall
     back to their own logging without duplicating the try/except/import
@@ -450,7 +460,7 @@ def try_format_error(error: Exception, label: str) -> bool:
     try:
         from ducta.console.ux.rich_logger import RichLoggerManager
 
-        format_error_for_developer(error, label, RichLoggerManager.get_console())
+        format_error_for_developer(error, label, RichLoggerManager.get_console(), scope)
         return True
     except Exception:
         return False

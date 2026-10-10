@@ -11,6 +11,8 @@ const FACETS: { id: CanvasFacet; label: string }[] = [
   { id: "gold", label: "Gold" },
 ];
 
+const LAYERS = new Set<CanvasFacet>(["bronze", "silver", "gold"]);
+
 /**
  * Find on the canvas (`/`): a query and facet chips. What does not match is
  * dimmed, never removed, so the graph keeps its shape.
@@ -19,9 +21,11 @@ export const CanvasFilterBar = forwardRef<HTMLInputElement, {
   value: CanvasFilterState;
   onChange: (next: CanvasFilterState) => void;
   matches: number | null;
+  /** Medallion layers present on the graph; a layer chip shows only for these (all when omitted). */
+  layers?: ReadonlySet<string>;
   /** Namespaces that can collapse into one box, and whether any is collapsed. */
   groups?: { count: number; collapsed: number; onCollapseAll: () => void; onExpandAll: () => void };
-}>(function CanvasFilterBar({ value, onChange, matches, groups }, ref) {
+}>(function CanvasFilterBar({ value, onChange, matches, layers, groups }, ref) {
   const toggle = (f: CanvasFacet) =>
     onChange({ ...value, facets: value.facets.includes(f) ? value.facets.filter((x) => x !== f) : [...value.facets, f] });
   const active = value.query || value.facets.length > 0;
@@ -44,7 +48,7 @@ export const CanvasFilterBar = forwardRef<HTMLInputElement, {
           aria-label="Find nodes on the canvas"
         />
       </label>
-      {FACETS.map((f) => (
+      {FACETS.filter((f) => !LAYERS.has(f.id) || !layers || layers.has(f.id) || value.facets.includes(f.id)).map((f) => (
         <button
           key={f.id}
           type="button"

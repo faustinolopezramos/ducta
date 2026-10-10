@@ -60,6 +60,7 @@ vi.mock("../api/queries", () => ({
   }),
   // The list view shows each pipeline's last run.
   useExecutionList: () => ({ data: { executions: [] }, isLoading: false, isError: false }),
+  useStaleness: () => ({ data: [] }),
   // `ingest` lands bronze.raw from outside and hands silver.clean to `enrich`,
   // which turns it into gold.report. That is the shape the boundary is read
   // from: consumed-from-elsewhere on one side, published-for-others on the other.
@@ -114,6 +115,10 @@ vi.mock("../hooks/useProjects", () => ({
     isLoading: false,
     error: null,
   }),
+}));
+
+vi.mock("../hooks/useProjectProblems", () => ({
+  useProjectProblems: () => ({ problems: [], isChecking: false }),
 }));
 
 // Imported after the mocks so the component picks them up.

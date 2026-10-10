@@ -157,6 +157,7 @@ export function CodePage() {
           rootPath={root}
           title={project?.name ?? projectId}
           newFileDir="src"
+          generated={["logs", "data", "models", ".ducta"]}
           activePath={treeActive}
           onSelectFile={(path) => open(root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path)}
         />

@@ -155,3 +155,68 @@ class TestProjectProblemsAreConfigurationErrors:
         )
         (tmp_path / "pipelines" / "etl.yaml").write_text("nodes:\n  a: {run: 'm:f', timout: 1}\n")
         assert run_in(tmp_path, *argv) == ExitCode.CONFIGURATION_ERROR.value
+
+
+class TestOptionNames:
+    """`-e` is --env everywhere; one spelling for the output format."""
+
+    @staticmethod
+    def _parse(*argv):
+        from ducta.console.parser import UnifiedArgumentParser
+
+        return UnifiedArgumentParser.create().parse_args(list(argv))
+
+    def test_short_e_is_env_on_stream_commands(self):
+        status = self._parse("stream", "status", "-e", "dev")
+        stop = self._parse("stream", "stop", "-e", "dev", "-i", "abc")
+
+        assert status.env == "dev" and status.execution_id is None
+        assert stop.env == "dev" and stop.execution_id == "abc"
+
+    def test_execution_id_keeps_its_long_name(self):
+        args = self._parse("stream", "stop", "--execution-id", "abc")
+
+        assert args.execution_id == "abc"
+
+    @pytest.mark.parametrize(
+        "argv,attr",
+        [
+            (("stream", "status", "--output-format", "json"), "format"),
+            (("config", "list-pipelines", "--output-format", "json"), "output_format"),
+        ],
+    )
+    def test_output_format_is_the_same_flag(self, argv, attr):
+        assert getattr(self._parse(*argv), attr) == "json"
+
+    @pytest.mark.parametrize(
+        "argv,attr",
+        [
+            (("stream", "status", "--format", "json"), "format"),
+            (("stream", "status", "-f", "json"), "format"),
+            (("config", "list-pipelines", "--format", "list"), "output_format"),
+        ],
+    )
+    def test_the_old_spelling_still_works_and_says_it_is_deprecated(self, argv, attr, capsys):
+        args = self._parse(*argv)
+
+        assert getattr(args, attr) in ("json", "list")
+        err = capsys.readouterr().err
+        if "--format" in argv:
+            assert "--format is deprecated" in err and "--output-format" in err
+        else:
+            assert err == ""
+
+    @pytest.mark.parametrize(
+        "argv,suggestion",
+        [
+            (["strat"], "start"),
+            (["config", "valdiate"], "validate"),
+            (["model", "promot"], "promote"),
+        ],
+    )
+    def test_a_mistyped_command_names_the_closest_one(self, argv, suggestion, capsys):
+        with pytest.raises(SystemExit) as exit_info:
+            self._parse(*argv)
+
+        assert exit_info.value.code == 2
+        assert f"Did you mean '{suggestion}'?" in capsys.readouterr().err

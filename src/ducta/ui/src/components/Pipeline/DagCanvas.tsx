@@ -23,7 +23,7 @@ import type { Strata } from "../../utils/strata";
 import { DuctaNode, type DuctaNodeData } from "./DuctaNode";
 import { RoutedEdge, type RoutedEdgeData } from "./RoutedEdge";
 import { useCanvasViewport, type CanvasViewport } from "./useCanvasViewport";
-import { FIT_MAX_ZOOM, FIT_PADDING, FIT_TOP_PX } from "./canvasFit";
+import { FIT_BAND_LABEL_PX, FIT_MAX_ZOOM, FIT_PADDING, FIT_TOP_PX } from "./canvasFit";
 import type { CanvasDataset, CanvasSelection, DagCanvasItem } from "./types";
 
 export type { DagCanvasItem } from "./types";
@@ -433,7 +433,9 @@ function DagCanvasInner({
   useEffect(() => {
     if (!measured || fittedFor.current === fitKey) return;
     fittedFor.current = fitKey;
-    void fitView({ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM }).then(() => {
+    const bandRoom = strata?.bands.length ? FIT_BAND_LABEL_PX : 0;
+    const padding = { ...FIT_PADDING, top: `${parseInt(FIT_PADDING.top, 10) + bandRoom}px` as `${number}px` };
+    void fitView({ padding, maxZoom: FIT_MAX_ZOOM }).then(() => {
       if (!fitMinZoom || getViewport().zoom >= fitMinZoom) return;
       // Too small to read whole: show it from the top, centred across.
       const bounds = getNodesBounds(getNodes());
@@ -441,10 +443,10 @@ function DagCanvasInner({
       setViewport({
         zoom: fitMinZoom,
         x: (width - bounds.width * fitMinZoom) / 2 - bounds.x * fitMinZoom,
-        y: FIT_TOP_PX - bounds.y * fitMinZoom,
+        y: FIT_TOP_PX + bandRoom - bounds.y * fitMinZoom,
       });
     });
-  }, [measured, fitKey, fitView, layout, fitMinZoom, getViewport, setViewport, getNodesBounds, getNodes, flowStore]);
+  }, [measured, fitKey, fitView, layout, fitMinZoom, getViewport, setViewport, getNodesBounds, getNodes, flowStore, strata?.bands.length]);
 
   /**
    * Pick up React Flow's measurements and re-run the layout with real sizes.

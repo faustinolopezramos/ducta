@@ -162,6 +162,30 @@
   background: var(--danger);
 }
 
+.dash-attention-row[data-status="stuck"] .dash-dot {
+  background: var(--warning);
+}
+
+.dash-attention-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.dash-attention-item .dash-attention-row { flex: 1; min-width: 0; }
+
+.dash-attention-action {
+  flex: none;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+.dash-attention-action:hover { border-color: var(--text-muted); }
+
 .dash-attention-row[data-status="running"] .dash-dot,
 .dash-attention-row[data-status="pending"] .dash-dot {
   background: var(--primary);

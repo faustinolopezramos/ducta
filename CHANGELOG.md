@@ -35,6 +35,12 @@ directly.
 
 ### Changed (breaking)
 
+- **`-e` is `--env` on every command.** On `ducta stream status` and `ducta stream stop`
+  it used to mean `--execution-id`, so the same letter named different things depending
+  on the subcommand. `--execution-id` now has the short form `-i`. A script that ran
+  `ducta stream stop -e <id>` now fails with "--execution-id is required" instead of
+  stopping anything; write `--execution-id <id>` (or `-i <id>`).
+
 - **Saving from the web app or the API no longer commits.** Every write is still
   validated against every environment before it is kept, but committing is now the
   user's call — the web app's Changes panel, or git itself. The optimistic-concurrency
@@ -92,6 +98,25 @@ directly.
 
 ### Added
 
+- **A mistyped command names the closest one** (`ducta strat` → "Did you mean 'start'?",
+  and the same for `ducta config valdiate`). Argument errors are no longer reported as
+  failures "in node 'argument validation'".
+- **One spelling for the output format: `--output-format`.** `stream status` and
+  `config list-pipelines` took `--format` while `quality` and `experiment` took
+  `--output-format`. `--format` still works on those two and prints a deprecation
+  warning to stderr.
+- **`ducta experiment runs | show | compare`**: list the runs of an experiment, read
+  one run's parameters, final metrics and artifacts, and compare runs side by side
+  (`--output-format json` for scripts; `show` and `compare` accept a unique prefix of a
+  run id). Until now `ducta experiment` could only list experiments, so two runs could
+  not be compared without opening the tracker's files.
+- **`ducta.mlrun.train_with_search`** does the part of a training node that is the same
+  for every model: the declared split, the declared search space (`grid` or `random`),
+  evaluation on the held-out rows, the baseline gate, metric logging and registration.
+- **`ducta.mlrun.tag_partitions`** adds a column that says which partition each row of a
+  predictions table fell in.
+- **`persist_model(..., native=True)`** writes an xgboost or lightgbm model in the
+  framework's own format, which loads without `trust_artifact`.
 - **The web app is laid out like a code editor**: explorer, canvas or editor,
   an inspector for the selected node or dataset (effective config per environment,
   data preview, quality, runs, tests, connection), a bottom panel for logs and
@@ -229,8 +254,27 @@ directly.
 - Stream triggers accept an interval (`trigger: 10s`, `5 minutes`) or
   `available_now` / `once`.
 
+### Changed
+
+- **Every `ducta` command starts about 0.3 s faster, and no longer prints a line of
+  MLflow log output.** MLflow was imported on startup — by `ducta.mlrun`'s package
+  `__init__` and by `ducta.mlrun.mlflow` — although nothing needs it until a run is
+  tracked. Both now load on first use; `from ducta.mlrun import X` is unchanged.
+
 ### Fixed
 
+- **`ducta model promote <name> 1.2.0 …` — the example in the docs — crashed with
+  `invalid literal for int()` and exit code 1.** Registry versions are whole numbers.
+  The command accepts `3` or `v3`, refuses anything else with a validation error (exit
+  code 3) that says so, and the documentation now shows `3`.
+- **A model persisted with tracking off no longer overwrites the previous one.** With
+  `mlops_enabled: false` the context carries no run id and `model_version == "unknown"`,
+  so `persist_model` wrote `models/<name>/unknown/model.pkl` on every run. The directory
+  is now the run id, or the version label followed by a UTC timestamp, or the timestamp.
+- **`docs/mlops.rst` documented a `settings.mlops` block that no run reads.**
+  `storage_path`, `backend_type` and the rest were accepted without an error and ignored;
+  only `mlops_path`, `mlops_enabled` (or `mlops.enabled`) and `mlops_required` take
+  effect in a pipeline run. The page now says so.
 - **A fresh execution database no longer stops the server from starting.** No
   `alembic.ini` ships (or exists in the repo), so startup migrations were skipped
   and the first query failed with "no such table: users". Alembic is now configured

@@ -74,7 +74,14 @@ from ducta.console.execution import (
 # ---------------------------------------------------------------------------
 # MLOps commands
 # ---------------------------------------------------------------------------
-from ducta.console.mlops_commands import experiment_list, model_gc, model_promote
+from ducta.console.mlops_commands import (
+    experiment_compare,
+    experiment_list,
+    experiment_runs,
+    experiment_show,
+    model_gc,
+    model_promote,
+)
 
 # ---------------------------------------------------------------------------
 # Parser
@@ -159,7 +166,10 @@ __all__ = [
     "TemplateType",
     "handle_template_command",
     "launch_ui",
+    "experiment_compare",
     "experiment_list",
+    "experiment_runs",
+    "experiment_show",
     "model_gc",
     "model_promote",
     "UnifiedCLI",

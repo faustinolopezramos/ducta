@@ -99,6 +99,57 @@ def split_dataframe(
     return parts
 
 
+_DEFAULT_PART_NAMES = {2: ("train", "test"), 3: ("train", "val", "test")}
+
+
+def tag_partitions(
+    df: Any,
+    *parts: Any,
+    names: Optional[Tuple[str, ...]] = None,
+    column: str = "split",
+) -> Any:
+    """``df`` plus a ``column`` that says which partition each row fell in.
+
+    ``parts`` are the frames :func:`split_dataframe` returned, in the same order, and
+    ``names`` label them (``train``/``test``, or ``train``/``val``/``test`` for three).
+    A table of predictions made over the whole dataset is only auditable when each row
+    says whether the model had seen it, so the tag travels with the result::
+
+        train, test = split_dataframe(df, ml_context.split, ml_context=ml_context)
+        scored = tag_partitions(df.assign(pred=model.predict(X)), train, test)
+
+    Rows are matched by index label, which the pandas split keeps, so the index of ``df``
+    must be unique. A row in no partition is tagged ``None``. The input is not changed.
+    """
+    _require_pandas(df, "tag_partitions")
+    if len(parts) < 2:
+        raise SplitError("tag_partitions needs the partitions split_dataframe returned (2 or 3)")
+    if names is None:
+        names = _DEFAULT_PART_NAMES.get(len(parts))
+        if names is None:
+            raise SplitError(f"Pass names= for {len(parts)} partitions")
+    if len(names) != len(parts):
+        raise SplitError(f"{len(parts)} partitions but {len(names)} names")
+    if column in df.columns:
+        raise SplitError(f"Column '{column}' already exists in the DataFrame")
+    if not df.index.is_unique:
+        raise SplitError(
+            "tag_partitions matches rows by index label, but the DataFrame's index has "
+            "duplicates; reset_index(drop=True) before splitting."
+        )
+
+    out = df.copy()
+    out[column] = None
+    for part, name in zip(parts, names):
+        _require_pandas(part, "tag_partitions")
+        if not part.index.isin(df.index).all():
+            raise SplitError(f"Partition '{name}' has rows that are not in the DataFrame")
+        if out.loc[part.index, column].notna().any():
+            raise SplitError(f"Partition '{name}' overlaps another partition")
+        out.loc[part.index, column] = name
+    return out
+
+
 def _is_spark(df: Any) -> bool:
     type_name = f"{type(df).__module__}.{type(df).__name__}"
     return "pyspark" in type_name or (hasattr(df, "sparkSession") and hasattr(df, "schema"))

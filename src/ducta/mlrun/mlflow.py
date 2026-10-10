@@ -18,6 +18,8 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import importlib
+import importlib.util
 import os
 import threading
 import time
@@ -31,13 +33,43 @@ from loguru import logger
 
 from ducta.mlrun.config import TrackingURIResolver
 
-MLFLOW_AVAILABLE = False
-try:
-    import mlflow  # type: ignore
-    from mlflow.tracking import MlflowClient  # type: ignore
 
-    MLFLOW_AVAILABLE = True
-except ImportError:
+class _LazyModule:
+    """An optional module, imported the first time one of its attributes is used.
+
+    ``import mlflow`` costs about 0.3 s and writes a line of its own to the log, and this
+    module is imported by every ``ducta`` command, ``--help`` included. Nothing here needs
+    MLflow until a run is tracked, so the import waits for that.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.__dict__["_name"] = name
+        self.__dict__["_module"] = None
+
+    def _load(self) -> Any:
+        if self.__dict__["_module"] is None:
+            self.__dict__["_module"] = importlib.import_module(self.__dict__["_name"])
+        return self.__dict__["_module"]
+
+    def __getattr__(self, attribute: str) -> Any:
+        return getattr(self._load(), attribute)
+
+
+class _LazyClass:
+    """A class from an optional module, resolved when it is first called."""
+
+    def __init__(self, module: str, attribute: str) -> None:
+        self._module, self._attribute = module, attribute
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        return getattr(importlib.import_module(self._module), self._attribute)(*args, **kwargs)
+
+
+MLFLOW_AVAILABLE = importlib.util.find_spec("mlflow") is not None
+if MLFLOW_AVAILABLE:
+    mlflow = _LazyModule("mlflow")  # type: ignore[assignment]
+    MlflowClient = _LazyClass("mlflow.tracking", "MlflowClient")  # type: ignore[assignment]
+else:
     logger.debug("MLflow not installed. Install with: pip install mlflow")
     mlflow = None  # type: ignore
     MlflowClient = None  # type: ignore

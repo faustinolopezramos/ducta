@@ -19,6 +19,10 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import argparse
+import difflib
+import re
+import sys
+from typing import NoReturn
 
 HELP_BASE_PATH = (
     "Project directory (default: the current directory or its nearest parent holding ducta.yaml)"
@@ -32,13 +36,51 @@ HELP_CONFIG_FILE = (
 )
 
 
+_INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
+
+
+def _renamed_option(old: str, new: str):
+    """An action for an option that was renamed: ``old`` still works and says so on stderr."""
+
+    class _Renamed(argparse.Action):
+        def __call__(self, parser, namespace, values, option_string=None):
+            if option_string == old:
+                print(
+                    f"warning: {old} is deprecated and will be removed; use {new}",
+                    file=sys.stderr,
+                )
+            setattr(namespace, self.dest, values)
+
+    return _Renamed
+
+
+class _SuggestingParser(argparse.ArgumentParser):
+    """``ArgumentParser`` that answers a mistyped subcommand with the one it is closest to.
+
+    argparse's own message lists every choice, which for ``ducta`` is twelve names and
+    leaves the reader to find the typo. Subparsers are created with their parent's class,
+    so ``ducta config valdiate`` is covered too.
+    """
+
+    def error(self, message: str) -> NoReturn:
+        found = _INVALID_CHOICE.search(message)
+        if found:
+            typed = found.group(1)
+            choices = re.findall(r"'([^']*)'", found.group(2))
+            close = difflib.get_close_matches(typed, choices, n=1, cutoff=0.6)
+            if close:
+                message = f"unknown command '{typed}'. Did you mean '{close[0]}'?"
+        self.print_usage(sys.stderr)
+        self.exit(2, f"{self.prog}: error: {message}\n")
+
+
 class UnifiedArgumentParser:
     """Unified argument parser for all Ducta CLI commands."""
 
     @staticmethod
     def create() -> argparse.ArgumentParser:
         """Create configured argument parser with subcommands."""
-        parser = argparse.ArgumentParser(
+        parser = _SuggestingParser(
             prog="ducta",
             description="Ducta - Data Pipeline Framework",
             epilog="""
@@ -276,16 +318,23 @@ class UnifiedArgumentParser:
             "status", help="Check streaming pipeline status"
         )
         status_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
-        status_parser.add_argument("--env", default="base", help="Execution environment")
-        status_parser.add_argument("--execution-id", "-e", help="Specific execution ID to check")
+        status_parser.add_argument("--env", "-e", default="base", help="Execution environment")
+        status_parser.add_argument("--execution-id", "-i", help="Specific execution ID to check")
         status_parser.add_argument(
-            "--format", "-f", default="table", choices=["table", "json"], help="Output format"
+            "--output-format",
+            "--format",
+            "-f",
+            dest="format",
+            default="table",
+            choices=["table", "json"],
+            action=_renamed_option("--format", "--output-format"),
+            help="Output format",
         )
 
         stop_parser = stream_subparsers.add_parser("stop", help="Stop streaming pipeline")
         stop_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
-        stop_parser.add_argument("--env", default="base", help="Execution environment")
-        stop_parser.add_argument("--execution-id", "-e", required=True, help="Execution ID to stop")
+        stop_parser.add_argument("--env", "-e", default="base", help="Execution environment")
+        stop_parser.add_argument("--execution-id", "-i", required=True, help="Execution ID to stop")
         stop_parser.add_argument("--timeout", "-t", type=int, default=60, help=HELP_TIMEOUT_SECONDS)
 
     @staticmethod
@@ -355,10 +404,12 @@ class UnifiedArgumentParser:
             help="Filter pipelines by name (case-insensitive substring match)",
         )
         list_pipelines_parser.add_argument(
+            "--output-format",
             "--format",
             dest="output_format",
             choices=["table", "json", "list"],
             default="table",
+            action=_renamed_option("--format", "--output-format"),
             help="Output format: table (default), json, or list",
         )
 
@@ -716,7 +767,7 @@ class UnifiedArgumentParser:
         exp_parser = subparsers.add_parser(
             "experiment",
             help="Manage MLOps experiments",
-            description="List and inspect MLOps experiment tracking data",
+            description="List, inspect and compare MLOps experiment tracking data",
         )
         exp_sub = exp_parser.add_subparsers(
             dest="experiment_command", help="Experiment commands", required=True
@@ -736,6 +787,41 @@ class UnifiedArgumentParser:
             default=None,
         )
 
+        pipeline_help = (
+            "Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — "
+            "matches how a real run resolves its own path when no global 'mlops_path' "
+            "override is set."
+        )
+        runs_p = exp_sub.add_parser("runs", help="List the runs of one experiment")
+        runs_p.add_argument("experiment_id", help="Experiment id (see `experiment list`)")
+        UnifiedArgumentParser._add_mlops_resolution_args(runs_p, pipeline_help=pipeline_help)
+        runs_p.add_argument(
+            "--status",
+            choices=["running", "completed", "failed", "scheduled"],
+            help="Only runs in this status",
+            default=None,
+        )
+        runs_p.add_argument(
+            "--limit", type=int, help="Maximum number of runs (newest first)", default=None
+        )
+        UnifiedArgumentParser._add_output_format_arg(
+            runs_p, "Output format: a text table or JSON (default: rich)"
+        )
+
+        show_p = exp_sub.add_parser("show", help="Show one run: parameters, metrics, artifacts")
+        show_p.add_argument("run_id", help="Run id, or a unique prefix of it")
+        UnifiedArgumentParser._add_mlops_resolution_args(show_p, pipeline_help=pipeline_help)
+        UnifiedArgumentParser._add_output_format_arg(
+            show_p, "Output format: text or JSON (default: rich)"
+        )
+
+        cmp_p = exp_sub.add_parser("compare", help="Compare the parameters and metrics of runs")
+        cmp_p.add_argument("run_ids", nargs="+", help="Two or more run ids (or unique prefixes)")
+        UnifiedArgumentParser._add_mlops_resolution_args(cmp_p, pipeline_help=pipeline_help)
+        UnifiedArgumentParser._add_output_format_arg(
+            cmp_p, "Output format: a text table or JSON (default: rich)"
+        )
+
     @staticmethod
     def _add_model_subcommand(subparsers):
         mod_parser = subparsers.add_parser(
@@ -749,7 +835,9 @@ class UnifiedArgumentParser:
 
         prom_p = mod_sub.add_parser("promote", help="Promote a model version to a new stage")
         prom_p.add_argument("name", help="Model name")
-        prom_p.add_argument("version", help="Model version")
+        prom_p.add_argument(
+            "version", help="Model version: the whole number the registry assigned (3 or v3)"
+        )
         prom_p.add_argument(
             "stage", choices=["staging", "production", "archived"], help="Target stage"
         )

@@ -21,7 +21,10 @@ vi.mock("../api/templatesApi", () => ({
   useTemplates: () => ({ data: [] }),
   useGenerateFromTemplate: () => ({ mutate: vi.fn(), isPending: false }),
 }));
-vi.mock("../api/mutations", () => ({ apiErrorMessage: (_e: unknown, f: string) => f }));
+vi.mock("../api/mutations", () => ({
+  apiErrorMessage: (_e: unknown, f: string) => f,
+  useBulkCancelExecutions: () => ({ mutate: vi.fn() }),
+}));
 
 const projects: ProjectSummary[] = [{ id: "batch", name: "batch", pipelineCount: 6 }];
 

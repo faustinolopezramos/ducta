@@ -215,8 +215,7 @@ async def get_execution_diagnosis(
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> dict:
     from ducta.api.services.diagnosis import diagnose
-    from ducta.api.services.run_certificates import candidate_runs_dirs, latest_successful
-    from ducta.core.certificate import find_certificate_dir, load_certificate
+    from ducta.api.services.run_certificates import latest_successful, load_run_certificate
 
     user_id = current_user.id if current_user else None
     # Memory first, then the persisted run: a diagnosis must survive a restart.
@@ -237,6 +236,28 @@ async def get_execution_diagnosis(
             }
         )
 
+    def _last_good_from_history(project_root):
+        before = record.started_at
+        candidates = [
+            e
+            for e in exec_manager.list_executions()
+            if e.project_id == record.project_id
+            and e.pipeline_name == record.pipeline_name
+            and e.env == record.env
+            and e.status.value == "success"
+            and e.certificate_run_id
+            and e.started_at is not None
+            and (before is None or e.started_at < before)
+        ]
+        for e in sorted(candidates, key=lambda e: e.started_at, reverse=True):
+            try:
+                found = load_run_certificate(project_root, e.certificate_run_id, record.env)
+            except Exception:  # noqa: BLE001 — an unreadable baseline is no baseline
+                found = None
+            if found is not None:
+                return found
+        return None
+
     def compute() -> dict:
         project_root = None
         certificate = None
@@ -244,11 +265,9 @@ async def get_execution_diagnosis(
         if record.project_id:
             project_root = manager.for_project(record.project_id).root
             if record.certificate_run_id:
-                for _env, runs_dir in candidate_runs_dirs(project_root, record.env):
-                    run_dir = find_certificate_dir(runs_dir, record.certificate_run_id)
-                    if run_dir is not None:
-                        certificate = load_certificate(run_dir / "certificate.json")
-                        break
+                certificate = load_run_certificate(
+                    project_root, record.certificate_run_id, record.env
+                )
             ok = latest_successful(project_root, record.env).get(record.pipeline_name)
             # The last good run before this one, not this one (a later success is no baseline).
             if ok and (
@@ -256,6 +275,10 @@ async def get_execution_diagnosis(
                 or (ok.get("started_at") or "") < (certificate.get("started_at") or "")
             ):
                 last_ok = ok
+            else:
+                # The project's own copies can be gone (older storage layout);
+                # the run history still names the last good run's certificate.
+                last_ok = _last_good_from_history(project_root)
         return diagnose(record.model_dump(mode="json"), errors, project_root, certificate, last_ok)
 
     return await run_in_threadpool(compute)

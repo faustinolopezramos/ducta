@@ -165,3 +165,45 @@ class TestListCertificates:
         resp = client.get("/api/projects/batch/certificates?env=staging")
 
         assert [row["run_id"] for row in resp.json()] == ["run-staging"]
+
+
+class TestMirroredCertificate:
+    """Certificates written before the storage convention moved survive only in
+    the StorageBackend mirror; the history links them, so they must open."""
+
+    @pytest.fixture()
+    def mirror(self, tmp_path: Path, monkeypatch):
+        from ducta.core.storage.base import LocalStorageBackend
+
+        backend = LocalStorageBackend(tmp_path / "mirror")
+        monkeypatch.setattr("ducta.core.storage.get_storage_backend", lambda *a, **k: backend)
+        return backend
+
+    def _mirror(self, backend, pipeline: str = "golden.transformation", env: str = "dev"):
+        payload = {
+            "run_id": RUN_ID,
+            "pipeline": pipeline,
+            "status": "success",
+            "environment_name": env,
+        }
+        backend.put_object(f"certificates/{RUN_ID}/certificate.json", json.dumps(payload).encode())
+
+    def test_a_mirrored_certificate_of_this_project_opens(self, client, project, mirror):
+        _write(project / "pipelines" / "golden.transformation.yaml", "nodes: []\n")
+        self._mirror(mirror)
+
+        resp = client.get(f"/api/projects/batch/certificates/{RUN_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["pipeline"] == "golden.transformation"
+
+    def test_a_mirrored_certificate_of_another_project_stays_404(self, client, project, mirror):
+        self._mirror(mirror, pipeline="someone.elses")
+
+        assert client.get(f"/api/projects/batch/certificates/{RUN_ID}").status_code == 404
+
+    def test_the_env_filter_applies_to_the_mirror(self, client, project, mirror):
+        _write(project / "pipelines" / "golden.transformation.yaml", "nodes: []\n")
+        self._mirror(mirror, env="dev")
+
+        assert client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=prod").status_code == 404

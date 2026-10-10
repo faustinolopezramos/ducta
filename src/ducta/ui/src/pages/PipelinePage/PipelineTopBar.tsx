@@ -140,7 +140,7 @@ export function PipelineTopBar({
           <IconChevronDown size={12} stroke={1.8} aria-hidden="true" />
         </button>
         <span className="pipeline-type-tag" title="Pipeline type — change it in the YAML lens">
-          {pipelineType}
+          {pipelineType.toLowerCase() === "ml" ? "ML" : pipelineType}
         </span>
       </nav>
 

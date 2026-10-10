@@ -74,6 +74,12 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes("/node_modules/")) {
+            // Monaco Editor and its workers: isolated so pages without code editors
+            // (login, projects list, certificates) do not pay the multi-megabyte cost.
+            if (id.includes("monaco-editor") || id.includes("@monaco-editor") || id.includes("monaco-yaml")) {
+              return "vendor-monaco";
+            }
+            if (id.includes("@tabler/icons-react")) return "vendor-icons";
             // Before vendor-react, or the `/react/` test swallows @xyflow/react
             // and buries the canvas library in the chunk every page loads.
             // Isolated, it only costs the two routes that draw a DAG.

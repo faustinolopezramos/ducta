@@ -35,14 +35,14 @@ from ducta.api.dependencies import (
 )
 from ducta.api.models.execution import ExecutionResponse
 from ducta.api.services.run_certificates import candidate_runs_dirs as _candidate_runs_dirs
+from ducta.api.services.run_certificates import load_run_certificate as _load_run_certificate
 from ducta.api.workspace.manager import WorkspaceManager
 from ducta.core.certificate import (
     diff_certificates,
-    find_certificate_dir,
     iter_certificate_dirs,
     load_certificate,
     resolve_signing_key_from_dir,
-    verify_certificate,
+    verify_certificate_data,
 )
 
 router = APIRouter(prefix="/projects", tags=["certificates"])
@@ -153,27 +153,21 @@ class ReproduceRequest(BaseModel):
     end_date: Optional[str] = None
 
 
-def _read_certificate(path: Path) -> Dict[str, Any]:
-    """Load a certificate the caller has already located; a file that exists
-    but cannot be parsed is a server-side fault (500)."""
-    try:
-        return load_certificate(path)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}") from exc
-
-
 def _project_dir(root: Path, project_id: str) -> Path:
     """The directory a project's runs execute from (same rule as execute/reproduce)."""
     return WorkspaceManager(root).for_project(project_id).root
 
 
-def _certificate_path(root: Path, project_id: str, run_id: str, env: Optional[str] = None) -> Path:
-    for dir_env, runs_dir in _candidate_runs_dirs(_project_dir(root, project_id), env):
-        # An environment's own directory already is that environment; only the
-        # legacy tree can hold several, so only it is filtered by *env*.
-        run_dir = find_certificate_dir(runs_dir, run_id, env=env if dir_env is None else None)
-        if run_dir is not None:
-            return run_dir / "certificate.json"
+def _certificate(
+    root: Path, project_id: str, run_id: str, env: Optional[str] = None
+) -> Dict[str, Any]:
+    """The run's certificate — the project's copy, else the StorageBackend mirror; 404 when neither."""
+    try:
+        data = _load_run_certificate(_project_dir(root, project_id), run_id, env)
+    except Exception as exc:  # noqa: BLE001 — found but unparseable is a server-side fault
+        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}") from exc
+    if data is not None:
+        return data
     raise HTTPException(
         status_code=404,
         detail=f"No certificate found for run '{run_id}' in project '{project_id}'"
@@ -235,8 +229,7 @@ async def get_certificate(
     manager: WorkspaceManagerDep,
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> Dict[str, Any]:
-    path = _certificate_path(manager.root, project_id, run_id, env=env)
-    return _read_certificate(path)
+    return _certificate(manager.root, project_id, run_id, env=env)
 
 
 @router.post(
@@ -252,9 +245,9 @@ async def verify_certificate_endpoint(
     manager: WorkspaceManagerDep,
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> CertificateVerifyResponse:
-    path = _certificate_path(manager.root, project_id, run_id, env=env)
+    data = _certificate(manager.root, project_id, run_id, env=env)
     signing_root = _project_dir(manager.root, project_id)
-    result = verify_certificate(path, signing_key=resolve_signing_key_from_dir(signing_root))
+    result = verify_certificate_data(data, signing_key=resolve_signing_key_from_dir(signing_root))
     return CertificateVerifyResponse(
         ok=result.ok,
         run_id=result.run_id,
@@ -281,10 +274,8 @@ async def diff_certificates_endpoint(
         None, description="Environment both runs were recorded under (default: search all)"
     ),
 ) -> CertificateDiffResponse:
-    path_a = _certificate_path(manager.root, project_id, run_id, env=env)
-    path_b = _certificate_path(manager.root, project_id, other_run_id, env=env)
-    cert_a = _read_certificate(path_a)
-    cert_b = _read_certificate(path_b)
+    cert_a = _certificate(manager.root, project_id, run_id, env=env)
+    cert_b = _certificate(manager.root, project_id, other_run_id, env=env)
     return CertificateDiffResponse(**diff_certificates(cert_a, cert_b))
 
 
@@ -312,8 +303,7 @@ async def reproduce_certificate(
     current_user: CurrentUserDep,
     env: Optional[str] = Query(None, description="Environment the run was recorded under"),
 ) -> ExecutionResponse:
-    path = _certificate_path(manager.root, project_id, run_id, env=env)
-    cert = _read_certificate(path)
+    cert = _certificate(manager.root, project_id, run_id, env=env)
 
     pipeline = cert.get("pipeline")
     if not pipeline:

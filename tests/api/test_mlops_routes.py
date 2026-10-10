@@ -95,3 +95,28 @@ class TestResolveGlobalConfigSharedWithPromotionPolicy:
 
     def test_no_env_and_no_files_returns_empty_dict(self, tmp_path):
         assert mlops_routes._resolve_global_config(tmp_path, env=None) == {}
+
+
+class TestUnregisteredModels:
+    def test_lists_models_persisted_as_plain_files(self, tmp_path):
+        run = tmp_path / "risk_model" / "20261010T020000Z"
+        run.mkdir(parents=True)
+        (run / "model.pkl").write_bytes(b"x")
+        (tmp_path / "risk_model" / "latest.txt").write_text(str(run / "model.pkl"))
+
+        (found,) = mlops_routes.unregistered_models(str(tmp_path))
+
+        assert found["name"] == "risk_model"
+        assert found["versions"] == 1
+        assert found["latest"] == str(run / "model.pkl")
+
+    def test_ignores_the_trackers_and_registrys_own_directories(self, tmp_path):
+        for reserved in ("experiment_tracking", "model_registry"):
+            (tmp_path / reserved).mkdir()
+            (tmp_path / reserved / "latest.txt").write_text("x")
+        (tmp_path / "scratch").mkdir()  # no pointer: not a persisted model
+
+        assert mlops_routes.unregistered_models(str(tmp_path)) == []
+
+    def test_missing_storage_is_empty_not_an_error(self, tmp_path):
+        assert mlops_routes.unregistered_models(str(tmp_path / "nope")) == []

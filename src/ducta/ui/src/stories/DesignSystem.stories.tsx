@@ -12,7 +12,7 @@ type Story = StoryObj<any>;
 
 /**
  * Color palette for the Ducta UI
- * Modern indigo/teal/cyan design system
+ * Blueprint design system — Petrol accent on cool paper / deep petrol
  */
 export const ColorPalette: Story = {
   render: () => (
@@ -21,19 +21,32 @@ export const ColorPalette: Story = {
         Ducta Design System - Color Palette
       </h1>
 
-      {/* Primary Colors */}
+      {/* Primary & Brand Colors */}
       <section style={{ marginBottom: 40 }}>
         <h2 style={{ color: "var(--text)", fontSize: 20, marginBottom: 20 }}>
-          Primary Colors
+          Primary & Brand Colors
         </h2>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
-          <ColorSwatch name="Accent (Indigo)" variable="--accent" />
+          <ColorSwatch name="Primary (Petrol)" variable="--primary" />
+          <ColorSwatch name="Accent" variable="--accent" />
           <ColorSwatch name="Accent Dim" variable="--accent-dim" />
           <ColorSwatch name="Accent BG" variable="--accent-bg" />
         </div>
       </section>
 
-      {/* Success Colors */}
+      {/* Medallion Architecture Layers */}
+      <section style={{ marginBottom: 40 }}>
+        <h2 style={{ color: "var(--text)", fontSize: 20, marginBottom: 20 }}>
+          Medallion Layers
+        </h2>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16 }}>
+          <ColorSwatch name="Bronze Layer" variable="--layer-bronze" />
+          <ColorSwatch name="Silver Layer" variable="--layer-silver" />
+          <ColorSwatch name="Gold Layer" variable="--layer-gold" />
+        </div>
+      </section>
+
+      {/* Status Colors */}
       <section style={{ marginBottom: 40 }}>
         <h2 style={{ color: "var(--text)", fontSize: 20, marginBottom: 20 }}>
           Status Colors

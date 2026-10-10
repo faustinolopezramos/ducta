@@ -18,14 +18,20 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Dict, Optional
+import json
+from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
 from ducta.console.core import ExitCode
 from ducta.mlrun.config import DEFAULT_REGISTRY_PATH, DEFAULT_STORAGE_PATH, DEFAULT_TRACKING_PATH
-from ducta.mlrun.exceptions import ModelNotFoundError, PromotionGateError
-from ducta.mlrun.experiment_tracking import ExperimentTracker
+from ducta.mlrun.exceptions import (
+    ExperimentNotFoundError,
+    ModelNotFoundError,
+    PromotionGateError,
+    RunNotFoundError,
+)
+from ducta.mlrun.experiment_tracking import ExperimentTracker, RunStatus
 from ducta.mlrun.model_registry import ModelRegistry, ModelStage, PromotionPolicy
 from ducta.mlrun.storage import LocalStorageBackend
 
@@ -144,6 +150,166 @@ def experiment_list(
         return 1
 
 
+def _tracker_for(
+    storage_path: Optional[str], env: Optional[str], pipeline_name: Optional[str]
+) -> "tuple[ExperimentTracker, str]":
+    """The tracker a command reads, and the path it was resolved to."""
+    resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
+    return _build_tracker(_build_storage(resolved_path)), resolved_path
+
+
+def _resolve_run_id(tracker: ExperimentTracker, run_id: str) -> str:
+    """``run_id`` as typed, or the one run it is a unique prefix of (run ids are UUIDs)."""
+    try:
+        tracker.get_run(run_id)
+        return run_id
+    except RunNotFoundError:
+        known = [str(r) for r in tracker._load_runs_index()["run_id"]]
+        matches = [r for r in known if r.startswith(run_id)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(f"'{run_id}' matches {len(matches)} runs; give more characters")
+        raise
+
+
+def _lookup_failed(error: Exception, resolved_path: str) -> int:
+    """One exit-code policy for the read-only experiment commands."""
+    if isinstance(error, (RunNotFoundError, ExperimentNotFoundError, ValueError)):
+        logger.error(f"{error} (searched {resolved_path}; use --env/--pipeline or --storage-path)")
+        return ExitCode.VALIDATION_ERROR.value
+    logger.error(f"Experiment command failed: {error}")
+    return ExitCode.GENERAL_ERROR.value
+
+
+def _latest_metrics(run: Any) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key in run.metrics:
+        latest = run.metric_index.get_latest(key)
+        if latest is not None:
+            out[key] = latest.value
+    return out
+
+
+def experiment_runs(
+    experiment_id: str,
+    storage_path: Optional[str],
+    env: Optional[str] = None,
+    limit: Optional[int] = None,
+    pipeline_name: Optional[str] = None,
+    status: Optional[str] = None,
+    output_format: str = "rich",
+) -> int:
+    """List the runs of one experiment, newest first."""
+    tracker, resolved_path = _tracker_for(storage_path, env, pipeline_name)
+    try:
+        status_filter = RunStatus(status.upper()) if status else None
+        runs: List[Dict[str, Any]] = tracker.list_runs(experiment_id, status_filter=status_filter)
+        runs.sort(key=lambda r: str(r.get("created_at", "")), reverse=True)
+        if limit is not None:
+            runs = runs[:limit]
+        if output_format == "json":
+            print(json.dumps(runs, indent=2, default=str))
+            return 0
+        print(f"\nRuns of experiment {experiment_id} (Storage: {resolved_path})")
+        print("-" * 60)
+        if not runs:
+            print("No runs found. `ducta experiment list` shows the experiment ids.")
+            return 0
+        for run in runs:
+            duration = run.get("duration_seconds")
+            print(
+                f"{run['run_id']} | {run['status']:<9} | {run.get('created_at', 'N/A')} | "
+                f"{'-' if duration is None else f'{duration:.1f}s'} | {run.get('name', '')}"
+            )
+        print("-" * 60)
+        return 0
+    except Exception as e:  # noqa: BLE001 — mapped to an exit code
+        return _lookup_failed(e, resolved_path)
+
+
+def experiment_show(
+    run_id: str,
+    storage_path: Optional[str],
+    env: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+    output_format: str = "rich",
+) -> int:
+    """Everything one run recorded: parameters, final metrics, tags, artifacts."""
+    tracker, resolved_path = _tracker_for(storage_path, env, pipeline_name)
+    try:
+        run = tracker.get_run(_resolve_run_id(tracker, run_id))
+        if output_format == "json":
+            print(json.dumps(run.to_dict(), indent=2, default=str))
+            return 0
+        print(f"\nRun {run.run_id} (Storage: {resolved_path})")
+        print("-" * 60)
+        print(f"Name:        {run.name}")
+        print(f"Experiment:  {run.experiment_id}")
+        print(f"Status:      {run.status.value}")
+        print(f"Created:     {run.created_at}")
+        if run.duration_seconds is not None:
+            print(f"Duration:    {run.duration_seconds:.1f}s")
+        for title, values in (
+            ("Parameters", run.parameters),
+            ("Metrics (latest)", _latest_metrics(run)),
+            ("Tags", run.tags),
+        ):
+            print(f"\n{title}:")
+            if values:
+                width = max(len(str(k)) for k in values)
+                for key, value in values.items():
+                    print(f"  {str(key):<{width}}  {value}")
+            else:
+                print("  (none)")
+        print(f"\nArtifacts: {len(run.artifacts)}")
+        for artifact in run.artifacts:
+            print(f"  {artifact}")
+        return 0
+    except Exception as e:  # noqa: BLE001 — mapped to an exit code
+        return _lookup_failed(e, resolved_path)
+
+
+def experiment_compare(
+    run_ids: List[str],
+    storage_path: Optional[str],
+    env: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+    output_format: str = "rich",
+) -> int:
+    """Parameters and final metrics of several runs side by side."""
+    if len(run_ids) < 2:
+        logger.error("compare needs at least two run ids")
+        return ExitCode.VALIDATION_ERROR.value
+    tracker, resolved_path = _tracker_for(storage_path, env, pipeline_name)
+    try:
+        frame = tracker.compare_runs([_resolve_run_id(tracker, r) for r in run_ids])
+        if output_format == "json":
+            print(frame.to_json(orient="records", indent=2))
+            return 0
+        print(f"\nComparison of {len(frame)} runs (Storage: {resolved_path})")
+        print("-" * 60)
+        # One row per run is wide; one row per field reads better in a terminal.
+        print(frame.set_index("run_id").T.to_string(na_rep="-"))
+        return 0
+    except Exception as e:  # noqa: BLE001 — mapped to an exit code
+        return _lookup_failed(e, resolved_path)
+
+
+def _parse_model_version(text: Any) -> int:
+    """``3`` or ``v3`` as 3. A registry version is the integer it was assigned at
+    registration, not a semantic version, so ``1.2.0`` is refused with that explanation
+    instead of ``invalid literal for int()``."""
+    value = str(text).strip().lower()
+    number = value[1:] if value.startswith("v") else value
+    if not number.isdigit():
+        raise ValueError(
+            f"'{text}' is not a model version. Registry versions are whole numbers "
+            "(1, 2, 3, ... or v1, v2, ...), assigned when the model is registered."
+        )
+    return int(number)
+
+
 def model_promote(
     model_name: str,
     version: str,
@@ -160,6 +326,11 @@ def model_promote(
     except ValueError:
         logger.error(f"Invalid stage '{stage}'. Valid: staging, production, archived")
         return ExitCode.VALIDATION_ERROR.value
+    try:
+        version_number = _parse_model_version(version)
+    except ValueError as e:
+        logger.error(str(e))
+        return ExitCode.VALIDATION_ERROR.value
 
     try:
         registry = _build_registry(_build_storage(resolved_path))
@@ -172,7 +343,7 @@ def model_promote(
 
         registry.promote_model(
             model_name,
-            int(version),
+            version_number,
             target_stage,
             policy=policy,
             force=force,

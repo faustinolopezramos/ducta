@@ -171,7 +171,7 @@ comments).
 .. code-block:: bash
 
    ducta config validate [--env ENV] [--pipeline NAME]
-   ducta config list-pipelines [--env ENV] [--filter TEXT] [--format table|json|list]
+   ducta config list-pipelines [--env ENV] [--filter TEXT] [--output-format table|json|list]
    ducta config pipeline-info --pipeline NAME [--env ENV]
    ducta config schema [--out DIR]
    ducta config show [--env ENV] [--pipeline NAME] [--format yaml|toml|json] [--engine | --ml]
@@ -202,8 +202,8 @@ comments).
 .. code-block:: bash
 
    ducta stream run --pipeline events [--env ENV] [--mode async|sync]
-   ducta stream status [--execution-id ID] [--format table|json]
-   ducta stream stop --execution-id ID [--timeout SECONDS]
+   ducta stream status [--env ENV] [--execution-id ID] [--output-format table|json]
+   ducta stream stop --execution-id ID [--env ENV] [--timeout SECONDS]
 
 Run from inside the project, or point ``--config`` at its ``ducta.yaml``.
 ``--transforms-module MODULE`` imports modules that register transforms before
@@ -255,8 +255,23 @@ See :doc:`quality`.
 .. code-block:: bash
 
    ducta experiment list --env dev [--pipeline NAME] [--limit 20]
-   ducta model promote churn_model 1.2.0 production --env prod
+   ducta experiment runs <experiment_id> --env dev [--status completed] [--limit 10]
+   ducta experiment show <run_id> --env dev
+   ducta experiment compare <run_id> <run_id> [<run_id> ...] --env dev
+   ducta model promote churn_model 3 production --env prod
    ducta model gc --env prod --dry-run
+
+``experiment list`` shows the experiments, ``runs`` the runs of one of them (newest
+first), ``show`` one run's parameters, final metrics, tags and artifacts, and
+``compare`` several runs side by side — their parameters (``param_*``) and final
+metrics (``metric_*``). ``show`` and ``compare`` accept a unique prefix of a run id,
+and all three take ``--output-format json`` for scripts.
+
+The commands read the tracking directory of the pipeline. Pass ``--pipeline
+schema.name`` (the name of the pipeline that ran) or ``--storage-path`` when the
+project does not set ``mlops_path``; without them the default directory is
+``./mlops_data``, which is rarely where a pipeline wrote. A run id that does not
+exist is a validation error (exit code 3) and names the directory it searched.
 
 Promotion goes through the promotion policy; ``--force`` bypasses it and the
 bypass is audit-logged. See :doc:`mlops`.

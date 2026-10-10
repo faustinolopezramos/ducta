@@ -8,6 +8,7 @@ import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import { EmptyState } from "../../components/ui/EmptyState";
 import {
   useMlopsModels,
+  useMlopsStatus,
   useMlopsModelVersions,
   usePromoteModel,
   useRunMlopsGc,
@@ -26,6 +27,7 @@ import {
   IconAlertTriangle,
 } from "@tabler/icons-react";
 import { STAGE_COLOR } from "./shared";
+import { MlopsEmptyState } from "./MlopsDiagnosis";
 import { formatDate } from "../../utils/formatDate";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { Badge } from "../../components/ui/Badge";
@@ -577,6 +579,7 @@ export function ModelRegistryTab({
   project?: string;
 }) {
   const { data, isLoading, isError, refetch } = useMlopsModels(env, pipeline, project);
+  const { data: status } = useMlopsStatus(env, pipeline, project);
   const [showGc, setShowGc] = useState(false);
   const models = data ?? [];
 
@@ -640,11 +643,7 @@ export function ModelRegistryTab({
         </div>
       )}
       {!isLoading && !isError && models.length === 0 && (
-        <EmptyState
-          icon={IconBrain}
-          title="No models registered"
-          description="Register a model with persist_model: true in an ML pipeline node."
-        />
+        <MlopsEmptyState status={status} env={env} what="models" icon={IconBrain} />
       )}
 
       {(["Production", "Staging", "Archived"] as const).map((stage) =>

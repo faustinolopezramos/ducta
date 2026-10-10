@@ -179,7 +179,7 @@ export function executionColumns(
         const stats = ex.sweep_id ? sweepStats.get(ex.sweep_id) : undefined;
         return (
           <span className="exec-pipeline">
-            {ex.pipeline_name}
+            <span className="mono">{ex.pipeline_name}</span>
             {ex.node_name && <span className="exec-node">[{ex.node_name}]</span>}
             {ex.sweep_id && (
               <button

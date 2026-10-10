@@ -26,6 +26,8 @@ interface FileTreeProps {
   title?: string;
   /** Where "New file" puts a file, relative to `rootPath`. */
   newFileDir?: string;
+  /** Top-level directories a run writes (logs, data…), folded away until asked for. */
+  generated?: string[];
 }
 
 /** Operating-system and tooling litter nobody opens on purpose. */
@@ -195,9 +197,17 @@ export function FileTree({
   rootPath = "",
   title = "Workspace",
   newFileDir = "nodes",
+  generated = [],
 }: FileTreeProps) {
   const [addingFile, setAddingFile] = useState(false);
+  const [showGenerated, setShowGenerated] = useState(false);
   const { data, isLoading } = useWorkspaceFiles(rootPath);
+  const rootEntries = visible(data?.entries);
+  const generatedHere = rootEntries.filter((e) => e.type === "dir" && generated.includes(e.name));
+  // A file opened inside a folded directory unfolds it rather than hiding what is open.
+  const relActive = activePath && rootPath && activePath.startsWith(`${rootPath}/`) ? activePath.slice(rootPath.length + 1) : activePath ?? "";
+  const unfold = showGenerated || generatedHere.some((e) => relActive.startsWith(`${e.name}/`));
+  const shownEntries = unfold ? rootEntries : rootEntries.filter((e) => !generatedHere.includes(e));
   const { mutate: writeFile } = useWriteWorkspaceFile();
 
   const handleCreate = (name: string) => {
@@ -274,15 +284,38 @@ export function FileTree({
             No files found in this workspace.
           </div>
         ) : (
-          visible(data?.entries).map(entry => (
-            <TreeNode
-              key={entry.path}
-              entry={entry}
-              activePath={activePath}
-              depth={0}
-              onSelectFile={onSelectFile}
-            />
-          ))
+          <>
+            {shownEntries.map(entry => (
+              <TreeNode
+                key={entry.path}
+                entry={entry}
+                activePath={activePath}
+                depth={0}
+                onSelectFile={onSelectFile}
+              />
+            ))}
+            {generatedHere.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowGenerated(!unfold)}
+                title={generatedHere.map((e) => e.name).join(", ")}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  padding: "8px 12px",
+                  border: "none",
+                  background: "transparent",
+                  textAlign: "left",
+                  color: colors.textDim,
+                  fontSize: "var(--text-xs)",
+                  cursor: "pointer",
+                  ...styles.fontSans,
+                }}
+              >
+                {unfold ? "Hide generated folders" : `Show generated folders (${generatedHere.length})`}
+              </button>
+            )}
+          </>
         )}
       </div>
 

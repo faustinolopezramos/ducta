@@ -130,7 +130,7 @@ class ContextInitializer:
             # Invalid format-2 files: the message already names file and line.
             raise ConfigurationError(str(e))
         except Exception as e:
-            try_format_error(e, f"INIT:{env}")
+            try_format_error(e, str(env), scope="environment")
             raise ConfigurationError(f"Context initialization failed: {e}")
 
 

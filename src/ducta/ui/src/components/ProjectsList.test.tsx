@@ -10,6 +10,7 @@ const inHours = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString(
 const mocks = vi.hoisted(() => ({
   deleteProject: vi.fn(),
   createProject: vi.fn(),
+  bulkCancel: vi.fn(),
   generateTemplate: vi.fn(),
   runs: [] as unknown[],
   schedules: [] as unknown[],
@@ -45,6 +46,7 @@ vi.mock("../api/templatesApi", () => ({
 
 vi.mock("../api/mutations", () => ({
   apiErrorMessage: (_err: unknown, fallback: string) => fallback,
+  useBulkCancelExecutions: () => ({ mutate: mocks.bulkCancel }),
 }));
 
 const projects: ProjectSummary[] = [
@@ -107,6 +109,21 @@ describe("Needs attention", () => {
     expect(row.textContent).toContain("failed");
   });
 
+  it("folds a pipeline's stuck queue into one row that can cancel them all", () => {
+    mocks.runs = [
+      { id: "q1", pipeline_name: "silver.clean", project_id: "batch", status: "pending", started_at: hoursAgo(20) },
+      { id: "q2", pipeline_name: "silver.clean", project_id: "batch", status: "pending", started_at: hoursAgo(21) },
+      { id: "q3", pipeline_name: "silver.clean", project_id: "batch", status: "pending", started_at: hoursAgo(22) },
+    ];
+    renderDashboard();
+
+    const row = screen.getByRole("link", { name: /silver.clean/ });
+    expect(row.textContent).toContain("3 runs stuck in queue");
+    expect(row).toHaveAttribute("href", "/p/batch/runs?pipeline=silver.clean");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel all" }));
+    expect(mocks.bulkCancel).toHaveBeenCalledWith(["q1", "q2", "q3"]);
+  });
+
   it("says so in one quiet line when nothing needs a look, instead of showing nothing", () => {
     mocks.runs = [
       { id: "r-ok", pipeline_name: "events", project_id: "streaming", status: "success", started_at: hoursAgo(2) },
@@ -139,7 +156,7 @@ describe("Projects", () => {
     expect(card.closest(".dash-project-card")).toHaveAttribute("data-health", "failing");
 
     const quiet = cardLinks.find((l) => l.textContent?.startsWith("streaming"))!;
-    expect(within(quiet).getByText("No runs yet")).toBeInTheDocument();
+    expect(within(quiet).getByText("No runs in 7 days")).toBeInTheDocument();
     expect(quiet.closest(".dash-project-card")).not.toHaveAttribute("data-health");
 
     // No search, no sort, no view toggle — one grid of cards, always.

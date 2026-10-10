@@ -6,7 +6,8 @@ import { useDiagnosis, useExecutionLogs, useExecutionStatus } from "../../api/qu
 import { useCertificate, useReproduceCertificate } from "../../api/certificatesApi";
 import { RunOptionsDialog } from "../../components/Execution/RunOptionsDialog";
 import { useCallback, useState } from "react";
-import { useExecutePipeline, useRetryExecution } from "../../api/mutations";
+import { useCancelExecution, useExecutePipeline, useRetryExecution } from "../../api/mutations";
+import { isStuckQueued, type RunLike } from "../../utils/dashboardStats";
 import { PageContainer, PageHeader, Skeleton, StatusBadge, EmptyState } from "../../components/ui";
 import { DiagnosePanel } from "../../components/Execution/DiagnosePanel";
 import { RunTimeline } from "../../components/Execution/RunTimeline";
@@ -64,6 +65,7 @@ export function RunPage() {
   const { data: certificate } = useCertificate(projectId, run?.certificate_run_id ?? null);
   const { data: logsData } = useExecutionLogs(isShortId ? "" : runId);
   const { mutate: retry } = useRetryExecution();
+  const { mutate: cancel, isPending: cancelling } = useCancelExecution();
   const { mutate: execute } = useExecutePipeline();
   const navigate = useNavigate();
   const { mutate: reproduce } = useReproduceCertificate();
@@ -88,6 +90,11 @@ export function RunPage() {
   const rawLogs = Array.isArray(logsData) ? logsData : logsData?.logs ?? [];
   const logEntries = rawLogs.map(toLogEntry);
   const commit = certificate?.environment?.git_commit;
+  const stuck = isStuckQueued(run as RunLike);
+  // Without a certificate the diagnosis still names the node that failed.
+  const certStates: Record<string, string> = Object.fromEntries(((certificate?.nodes as any[]) ?? []).map((n) => [n.name, n.status]));
+  const nodeStates =
+    Object.keys(certStates).length === 0 && failed && diagnosis?.node ? { [diagnosis.node]: "failed" } : certStates;
   const retryFrom = (node: string) =>
     execute({ projectId, pipelineName: run.pipeline_name, env: run.env, scope: "from", nodes: [node] });
 
@@ -99,13 +106,26 @@ export function RunPage() {
         backTo={routes.runs(projectId)}
         backLabel="Runs"
         actions={
-          <Link className="run-page__open" to={routes.pipeline(projectId, run.pipeline_name)}>
-            Open the pipeline
-          </Link>
+          <div className="run-page__actions">
+            {(run.status === "pending" || run.status === "running") && (
+              <button type="button" className="diagnose__btn" onClick={() => cancel(run.id)} disabled={cancelling}>
+                {cancelling ? "Cancelling…" : "Cancel run"}
+              </button>
+            )}
+            <Link className="run-page__open" to={routes.pipeline(projectId, run.pipeline_name)}>
+              Open the pipeline
+            </Link>
+          </div>
         }
       />
       <dl className="run-page__facts">
-        <div><dt>Status</dt><dd><StatusBadge status={run.status} size="sm" /></dd></div>
+        <div>
+          <dt>Status</dt>
+          <dd className="run-page__status">
+            <StatusBadge status={run.status} size="sm" />
+            {stuck && <span className="run-page__stuck" title="Queued for over 10 minutes — its worker is gone or the queue is wedged">Stuck in queue</span>}
+          </dd>
+        </div>
         <div><dt>Environment</dt><dd className="mono">{run.env}</dd></div>
         <div><dt>Started</dt><dd>{formatRelative(run.started_at) ?? "—"}</dd></div>
         <div><dt>Duration</dt><dd>{run.duration_seconds != null ? formatDuration(run.duration_seconds) : "—"}</dd></div>
@@ -152,7 +172,7 @@ export function RunPage() {
           projectId={projectId}
           pipeline={run.pipeline_name}
           commit={commit}
-          nodeStates={Object.fromEntries(((certificate?.nodes as any[]) ?? []).map((n) => [n.name, n.status]))}
+          nodeStates={nodeStates}
           onSelectNode={(node) => navigate(routes.node(projectId, run.pipeline_name, node))}
           successfulNodes={
             run.status === "success"

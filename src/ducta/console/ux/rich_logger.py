@@ -31,7 +31,7 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.traceback import install as install_rich_traceback
 
-PRIMARY = "bright_white"  # Color principal: Blanco brillante
+PRIMARY = "bright_white"  # Main text: Bright white
 BOLD_WHITE = "bold bright_white"
 PRIMARY_BOLD = BOLD_WHITE
 DIM_WHITE = "dim white"
@@ -42,14 +42,14 @@ WARNING = "bold bright_yellow"
 ERROR = "bold bright_red"
 INFO = "bold bright_blue"
 
-ACCENT = "bold bright_cyan"  # Énfasis para "Ducta"
-NEUTRAL = DIM_WHITE  # Texto secundario
-MUTED = "dim"  # Muy atenuado
+ACCENT = "bold bright_cyan"  # Accent emphasis for DUCTA
+NEUTRAL = DIM_WHITE  # Secondary text
+MUTED = "dim"  # Muted text
 
-TEXT_DEFAULT = BOLD_WHITE  # Texto principal
-TEXT_SECONDARY = "white"  # Texto secundario
+TEXT_DEFAULT = BOLD_WHITE  # Primary text
+TEXT_SECONDARY = "white"  # Secondary text
 
-Ducta_THEME = Theme(
+DUCTA_THEME = Theme(
     {
         "logging.level.debug": DIM_WHITE,
         "logging.level.info": INFO,
@@ -62,6 +62,7 @@ Ducta_THEME = Theme(
         "success": SUCCESS,
         "debug": DIM_WHITE,
         "Ducta": ACCENT,
+        "ducta": ACCENT,
         "pipeline": PRIMARY,
         "node": PRIMARY,
         "metric": "bright_magenta",
@@ -70,6 +71,7 @@ Ducta_THEME = Theme(
         "accent": ACCENT,
     }
 )
+Ducta_THEME = DUCTA_THEME
 
 ICONS = {
     "success": "✓",

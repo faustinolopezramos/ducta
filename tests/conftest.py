@@ -66,6 +66,12 @@ _REAL_MODULES = (
     # needs a genuine JVM-backed session — could be handed the fakes.
     "pyspark",
     "pyspark.sql",
+    # MLflow inspects whatever is in sys.modules (a stub `pyspark`/`polars`) while it
+    # imports, and fails with "cannot import name 'EvaluationDataset'". ducta.mlrun used
+    # to import it eagerly, which made this import happen here, before any stub existed;
+    # it is lazy now (the CLI no longer pays 0.3 s for it), so it is imported here.
+    "mlflow",
+    "mlflow.tracking",
 )
 for _name in _REAL_MODULES:
     try:

@@ -24,6 +24,7 @@ last successful run.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
@@ -31,7 +32,7 @@ from loguru import logger
 
 from ducta.api.execution.runner import normalize_execution_context_paths, select_execution_cwd
 from ducta.api.workspace.manager import WorkspaceManager
-from ducta.core.certificate import iter_certificate_dirs, load_certificate
+from ducta.core.certificate import find_certificate_dir, iter_certificate_dirs, load_certificate
 from ducta.core.settings import CoreSettings
 from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
@@ -108,3 +109,45 @@ def latest_successful(project_dir: Path, env: Optional[str]) -> Dict[str, Dict[s
         ):
             out[pipeline] = data
     return out
+
+
+def _owns_pipeline(project_dir: Path, pipeline: str) -> bool:
+    """Whether *project_dir* declares a pipeline called *pipeline*."""
+    pipelines = project_dir / "pipelines"
+    return (
+        bool(pipeline)
+        and pipelines.is_dir()
+        and any(p.stem == pipeline for p in pipelines.rglob("*") if p.suffix in (".yaml", ".yml"))
+    )
+
+
+def mirrored_certificate(project_dir: Path, run_id: str) -> Optional[Dict[str, Any]]:
+    """The copy of *run_id*'s certificate that ``write_certificate`` mirrors to the
+    StorageBackend, when it belongs to this project — or None.
+
+    Read-only fallback for runs whose project-side ``certificate.json`` is gone
+    (written before the storage convention moved run_certificate_dir): the
+    history still links them, so they must not open as "no certificate".
+    """
+    try:
+        from ducta.core.storage import get_storage_backend
+
+        raw = get_storage_backend().get_object(f"certificates/{run_id}/certificate.json")
+        data: Dict[str, Any] = json.loads(raw.decode("utf-8"))
+    except Exception:  # noqa: BLE001 — absent or unreadable mirror: nothing to offer
+        return None
+    return data if _owns_pipeline(project_dir, str(data.get("pipeline") or "")) else None
+
+
+def load_run_certificate(
+    project_dir: Path, run_id: str, env: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """*run_id*'s certificate: the project's own copy first, then the mirror."""
+    for dir_env, runs_dir in candidate_runs_dirs(project_dir, env):
+        run_dir = find_certificate_dir(runs_dir, run_id, env=env if dir_env is None else None)
+        if run_dir is not None:
+            return load_certificate(run_dir / "certificate.json")
+    data = mirrored_certificate(project_dir, run_id)
+    if data is not None and env is not None and data.get("environment_name") not in (None, env):
+        return None
+    return data

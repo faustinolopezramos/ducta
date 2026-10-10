@@ -125,6 +125,7 @@ export const qk = {
     experiments: (s: ScopeKey) => ["mlops", sourceKey(), "experiments", ...scope(s)] as const,
     experiment: (experimentId: string, s: ScopeKey) =>
       ["mlops", sourceKey(), "experiments", experimentId, ...scope(s)] as const,
+    status: (s: ScopeKey) => ["mlops", sourceKey(), "status", ...scope(s)] as const,
     models: (s: ScopeKey) => ["mlops", sourceKey(), "models", ...scope(s)] as const,
     modelVersions: (name: string, s: ScopeKey) =>
       ["mlops", sourceKey(), "models", name, ...scope(s)] as const,

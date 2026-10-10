@@ -10,6 +10,7 @@ import {
   IconPlus,
   IconLogout,
   IconCertificate,
+  IconKeyboard,
 } from "@tabler/icons-react";
 import { useWorkspaceSelection } from "../../hooks/useWorkspaceSelection";
 import { useUIStore } from "../../store/uiStore";
@@ -18,6 +19,7 @@ import { EnvSwitcher } from "../Shell/EnvSwitcher";
 import { projectIdFromPath } from "../../utils/routes";
 import { StorageService } from "../../utils/storage";
 import { sourceLabel } from "../../utils/sourceLabel";
+import { useShortcutsModal } from "../Shell/shortcutsStore";
 import client from "../../api/client";
 import { Menu, type MenuItem } from "./Menu";
 
@@ -109,6 +111,13 @@ function UserMenu() {
           label: "Verify a certificate",
           icon: <IconCertificate size={14} />,
           onSelect: () => navigate("/verify-certificate"),
+        },
+        {
+          key: "shortcuts",
+          label: "Keyboard shortcuts",
+          hint: "?",
+          icon: <IconKeyboard size={14} />,
+          onSelect: () => useShortcutsModal.getState().show(),
         },
         {
           key: "signout",

@@ -61,7 +61,9 @@ export function VerifyCertificatePage() {
   return (
     <PageContainer maxWidth={860}>
       <PageHeader
-        title="Verify a Run Certificate"
+        title="Verify a run certificate"
+        backTo="/workspace/certificates"
+        backLabel="Certificates"
         description="Paste or upload a certificate JSON to check its integrity and, if you hold the signing key, its authenticity — no account or access to this Ducta instance required."
       />
 

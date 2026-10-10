@@ -4,6 +4,7 @@ import { IconDownload } from "@tabler/icons-react";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Button } from "../../components/ui/Button";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToastStack } from "../../hooks/useModalStack";
 import { useExecutionStatus } from "../../api/queries";
@@ -50,6 +51,7 @@ export function CertificateDetailPage() {
 
   const { mutate: reproduce, isPending: startingReproduce } = useReproduceCertificate();
   const [reproduceExecId, setReproduceExecId] = useState<string | null>(null);
+  const [confirmReproduceOpen, setConfirmReproduceOpen] = useState(false);
   const { data: reproduceExec } = useExecutionStatus(reproduceExecId ?? "");
   const reproduceTerminal = !!reproduceExec && !["pending", "running"].includes(reproduceExec.status);
   const newCertRunId = reproduceTerminal ? (reproduceExec as { certificate_run_id?: string }).certificate_run_id : undefined;
@@ -83,7 +85,7 @@ export function CertificateDetailPage() {
   return (
     <PageContainer maxWidth={960}>
       <PageHeader
-        title="Run Certificate"
+        title="Run certificate"
         description={cert ? `${cert.pipeline} · ${cert.environment_name} · ${runId.slice(0, 12)}` : runId.slice(0, 12)}
         backTo="/workspace/certificates"
         backLabel="Certificates"
@@ -147,19 +149,32 @@ export function CertificateDetailPage() {
             onVerify={() => verify({ projectId, runId })}
             reproduce={reproduceState}
             reproducing={startingReproduce}
-            onReproduce={() =>
-              reproduce(
-                { projectId, runId },
-                {
-                  onSuccess: (exec) => {
-                    setReproduceExecId(exec.id);
-                    show("Reproduction run started — this can take a while", "info");
-                  },
-                  onError: () => show("Could not start reproduction run", "error"),
-                }
-              )
-            }
+            onReproduce={() => setConfirmReproduceOpen(true)}
           />
+
+          {confirmReproduceOpen && (
+            <ConfirmDialog
+              open={confirmReproduceOpen}
+              title="Reproduce this pipeline run?"
+              description="This will start a fresh execution of this pipeline in the current environment to compare new outputs with the certified fingerprints and verify reproducibility."
+              confirmLabel="Reproduce run"
+              tone="default"
+              onConfirm={() => {
+                setConfirmReproduceOpen(false);
+                reproduce(
+                  { projectId, runId },
+                  {
+                    onSuccess: (exec) => {
+                      setReproduceExecId(exec.id);
+                      show("Reproduction run started — this can take a while", "info");
+                    },
+                    onError: () => show("Could not start reproduction run", "error"),
+                  }
+                );
+              }}
+              onCancel={() => setConfirmReproduceOpen(false)}
+            />
+          )}
 
           <div className="cert-detail__compare">
             <label htmlFor="compare-run-id" className="cert-detail__compare-label">

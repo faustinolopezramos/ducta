@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from ducta.mlrun.persistence import infer_schema, persist_model
 
 
@@ -106,3 +108,126 @@ class TestPersistModel:
         dest_dir = base_dir / "my_model" / "run789"
         assert (dest_dir / "model.pkl").exists()
         assert result["version"] == "run789"
+
+
+class TestLocalVersionIsUnique:
+    """With tracking off a context carries no run id and ``model_version == "unknown"``."""
+
+    @staticmethod
+    def _persist(base_dir, **context):
+        ml_context = SimpleNamespace(mlops_context=None, **context)
+        return persist_model({"w": 1}, ml_context, "my_model", base_dir=str(base_dir))
+
+    def test_unknown_version_never_names_the_directory(self, tmp_path):
+        result = self._persist(tmp_path, mlops_run_id=None, model_version="unknown")
+
+        assert result["version"] != "unknown"
+        assert not (tmp_path / "my_model" / "unknown").exists()
+        assert (tmp_path / "my_model" / result["version"] / "model.pkl").exists()
+
+    def test_two_runs_keep_two_models_and_latest_points_to_the_newer(self, tmp_path):
+        first = self._persist(tmp_path, mlops_run_id=None, model_version="unknown")
+        second = self._persist(tmp_path, mlops_run_id=None, model_version="unknown")
+
+        assert first["version"] != second["version"]
+        assert (tmp_path / "my_model" / first["version"] / "model.pkl").exists()
+        assert (tmp_path / "my_model" / second["version"] / "model.pkl").exists()
+        pointer = (tmp_path / "my_model" / "latest.txt").read_text().strip()
+        assert Path(pointer).parent.name == second["version"]
+
+    def test_a_fixed_label_is_suffixed_so_it_cannot_overwrite_itself(self, tmp_path):
+        first = self._persist(tmp_path, mlops_run_id=None, model_version="v1")
+        second = self._persist(tmp_path, mlops_run_id=None, model_version="v1")
+
+        assert first["version"].startswith("v1-")
+        assert first["version"] != second["version"]
+
+    def test_placeholder_run_id_is_ignored(self, tmp_path):
+        result = self._persist(tmp_path, mlops_run_id="None", model_version=None)
+
+        assert result["version"].lower() != "none"
+
+    def test_path_separators_in_a_label_do_not_escape_the_model_directory(self, tmp_path):
+        result = self._persist(tmp_path, mlops_run_id="../evil/run", model_version=None)
+
+        assert "/" not in result["version"] and ".." not in Path(result["version"]).parts
+        assert (tmp_path / "my_model" / result["version"] / "model.pkl").exists()
+
+
+class TestNativeFormat:
+    """``native=True`` writes xgboost/lightgbm in their own format, which loads without
+    unpickling anything — so scoring it does not need ``model.trust_artifact``."""
+
+    @staticmethod
+    def _context(**extra):
+        return SimpleNamespace(mlops_context=None, mlops_run_id="run1", model_version=None, **extra)
+
+    def test_default_is_still_a_pickle(self, tmp_path):
+        xgb = pytest.importorskip("xgboost")
+        model = xgb.XGBClassifier(n_estimators=2).fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
+
+        persist_model(model, self._context(), "m", framework="xgboost", base_dir=str(tmp_path))
+
+        assert (tmp_path / "m" / "run1" / "model.pkl").exists()
+        assert not (tmp_path / "m" / "run1" / "model.json").exists()
+
+    def test_xgboost_native_round_trips_through_a_booster(self, tmp_path):
+        xgb = pytest.importorskip("xgboost")
+        X, y = [[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1]
+        model = xgb.XGBClassifier(n_estimators=3).fit(X, y)
+
+        result = persist_model(
+            model, self._context(), "m", framework="xgboost", base_dir=str(tmp_path), native=True
+        )
+
+        artifact = tmp_path / "m" / "run1" / "model.json"
+        assert artifact.exists() and not (tmp_path / "m" / "run1" / "model.pkl").exists()
+        assert result["artifact_uri"] == artifact.resolve().as_uri()
+        assert Path((tmp_path / "m" / "latest.txt").read_text()) == artifact.resolve()
+        booster = xgb.Booster()
+        booster.load_model(str(artifact))
+        assert list(booster.predict(xgb.DMatrix([[0.0], [3.0]]))) == pytest.approx(
+            list(model.predict_proba([[0.0], [3.0]])[:, 1]), abs=1e-6
+        )
+
+    def test_lightgbm_native_saves_the_wrapped_booster(self, tmp_path):
+        class _Booster:
+            def save_model(self, path):
+                Path(path).write_text("tree\n")
+
+        wrapper = SimpleNamespace(booster_=_Booster())
+
+        persist_model(
+            wrapper, self._context(), "m", framework="lightgbm", base_dir=str(tmp_path), native=True
+        )
+
+        assert (tmp_path / "m" / "run1" / "model.txt").read_text() == "tree\n"
+
+    def test_native_for_a_framework_without_one_falls_back_to_a_pickle(self, tmp_path):
+        persist_model(
+            {"w": 1}, self._context(), "m", framework="sklearn", base_dir=str(tmp_path), native=True
+        )
+
+        assert (tmp_path / "m" / "run1" / "model.pkl").exists()
+
+    def test_registry_receives_the_native_file_and_its_type(self, tmp_path):
+        xgb = pytest.importorskip("xgboost")
+        model = xgb.XGBClassifier(n_estimators=2).fit([[0.0], [1.0], [2.0], [3.0]], [0, 0, 1, 1])
+        seen = {}
+
+        class _Registry:
+            def register_model(self, **kwargs):
+                seen.update(kwargs, existed=Path(kwargs["artifact_path"]).exists())
+                return SimpleNamespace(version=1, artifact_uri="x://m/1")
+
+        context = SimpleNamespace(
+            mlops_context=SimpleNamespace(model_registry=_Registry()),
+            mlops_run_id="run1",
+            model_version=None,
+        )
+
+        persist_model(model, context, "m", framework="xgboost", native=True)
+
+        assert seen["artifact_path"].endswith("m.json")
+        assert seen["artifact_type"] == "xgboost"
+        assert seen["existed"] is True

@@ -23,6 +23,7 @@ from ducta.console.ux.rich_logger import (
     ACCENT,
     BOLD_WHITE,
     DIM_WHITE,
+    DUCTA_THEME,
     ERROR,
     ICONS,
     INFO,
@@ -48,6 +49,7 @@ from ducta.console.ux.schema_formatter import print_pandas_schema, print_spark_s
 __all__ = [
     # rich_logger
     "RichLoggerManager",
+    "DUCTA_THEME",
     "Ducta_THEME",
     "PRIMARY",
     "BOLD_WHITE",

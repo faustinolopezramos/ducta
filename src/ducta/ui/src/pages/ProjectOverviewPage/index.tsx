@@ -13,6 +13,8 @@ import { routes } from "../../utils/routes";
 import { formatRelative } from "../../utils/timeLabels";
 import { formatDuration } from "../../utils/formatDuration";
 import type { Execution } from "../../types";
+import { isStuckQueued, type RunLike } from "../../utils/dashboardStats";
+import { EnvHint } from "../../components/Shell/EnvHint";
 import "./ProjectOverviewPage.css";
 
 const FAILED = new Set(["failed", "gate_blocked", "timeout", "cancelled"]);
@@ -35,6 +37,7 @@ export function attentionItems(
   problems: Problem[],
   runs: Pick<Execution, "id" | "pipeline_name" | "status" | "started_at">[],
   stale: { node: string; pipeline?: string | null; state: string }[],
+  now: number = Date.now(),
 ): Attention[] {
   const out: Attention[] = [];
 
@@ -59,6 +62,18 @@ export function attentionItems(
       tone: "danger",
       text: `${r.pipeline_name} ${r.status === "gate_blocked" ? "was blocked by a quality gate" : String(r.status)} ${formatRelative(r.started_at) ?? ""}`.trim(),
       to: routes.run(projectId, r.id),
+    });
+  }
+
+  // Runs wedged in the queue, one line per pipeline: they never start on their own.
+  const stuckByPipeline = new Map<string, number>();
+  for (const r of runs) if (isStuckQueued(r as RunLike, now)) stuckByPipeline.set(r.pipeline_name, (stuckByPipeline.get(r.pipeline_name) ?? 0) + 1);
+  for (const [pipeline, count] of stuckByPipeline) {
+    out.push({
+      key: `stuck:${pipeline}`,
+      tone: "warning",
+      text: `${count} run${count === 1 ? "" : "s"} of ${pipeline} stuck in the queue`,
+      to: routes.runs(projectId, { pipeline }),
     });
   }
 
@@ -137,7 +152,7 @@ export function ProjectOverviewPage() {
             <h2 id="overview-attention" className="overview-h">Needs attention</h2>
             {attention.length === 0 ? (
               <p className="overview-clear">
-                <IconCircleCheck size={16} aria-hidden="true" /> Nothing right now — no failed runs, errors or stale pipelines in {env}.
+                <IconCircleCheck size={16} aria-hidden="true" /> Nothing right now — every pipeline's latest run is fine, and nothing is stale in {env}.
               </p>
             ) : (
               <ul className="overview-list">
@@ -156,6 +171,7 @@ export function ProjectOverviewPage() {
 
           <section className="overview-section" aria-label="Pipelines">
             {/* Every pipeline, run or not: last run, success rate, timing and freshness. */}
+            <EnvHint projectId={projectId} />
             <ProjectHealth projectId={projectId} env={env} />
           </section>
 
