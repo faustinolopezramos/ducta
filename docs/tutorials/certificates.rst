@@ -140,19 +140,72 @@ Configuring certification
 
 In ``ducta.yaml``:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings:
-     evidence_level: record              # off | record (default) | required | signed
-     enable_data_fingerprinting: true
-     fingerprint_mode: auto              # auto (default) | exact | exact_crypto | sample | schema
-   environments:
-     prod:
-       settings: {evidence_level: signed}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         evidence_level = "record"
+         enable_data_fingerprinting = true
+         fingerprint_mode = "auto"
+
+         [environments.prod.settings]
+         evidence_level = "signed"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings:
+           evidence_level: record              # off | record (default) | required | signed
+           enable_data_fingerprinting: true
+           fingerprint_mode: auto              # auto (default) | exact | exact_crypto | sample | schema
+         environments:
+           prod:
+             settings: {evidence_level: signed}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "evidence_level": "record",
+             "enable_data_fingerprinting": true,
+             "fingerprint_mode": "auto"
+           },
+           "environments": {
+             "prod": {
+               "settings": {
+                 "evidence_level": "signed"
+               }
+             }
+           }
+         }
 
 Certificates are written to ``<paths.output>/<env>/.ducta/runs/<run_id>/``
 (``run_certificate_dir`` overrides it).

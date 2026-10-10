@@ -201,7 +201,168 @@ ducta start --env dev --pipeline sales_daily \
 Ducta reads `raw_sales`, runs `clean_sales`, validates the output, writes
 `sales_clean`, and records a run certificate — all from that configuration.
 
-### 5. Prefer a visual workspace?
+### 5. Write the configuration in YAML, TOML or JSON
+
+The format is only syntax: `ducta.*`, `catalog.*` and each file under `pipelines/`
+can be YAML, TOML or JSON, and a project may mix them (`pipelines/etl.yaml` next
+to `pipelines/report.toml`). All three mean the same thing — `ducta config show
+--engine` prints identical documents for them.
+
+```bash
+ducta template --template medallion_basic --project-name orders --format toml
+ducta config convert --to json --out ../orders-json     # rewrite a project in another format
+```
+
+The same pipeline, `pipelines/etl`:
+
+<details open>
+<summary><b>YAML</b> — <code>pipelines/etl.yaml</code> (comments, the most compact)</summary>
+
+```yaml
+description: "Orders: land, clean, aggregate"
+type: batch
+requires_dates: false
+
+nodes:
+  extract:
+    run: pipelines.etl:extract
+    inputs: {source_data: source_data}
+    outputs: [bronze.etl.raw_data]
+
+  transform:
+    run: pipelines.etl:transform
+    inputs: {raw_data: bronze.etl.raw_data}
+    outputs: [silver.etl.clean_data]
+    quality:
+      null_rate: {columns: [amount], threshold: 0.0}
+      range: {column: amount, min: 0}
+      gate: {max_errors: 0, on_fail: skip_downstream}
+
+  load:
+    run: pipelines.etl:load
+    inputs: {clean_data: silver.etl.clean_data}
+    outputs: [gold.etl.final_output]
+```
+
+</details>
+
+<details>
+<summary><b>TOML</b> — <code>pipelines/etl.toml</code></summary>
+
+```toml
+#:schema ../.ducta/schema/pipeline.json
+description = "Orders: land, clean, aggregate"
+type = "batch"
+requires_dates = false
+
+[nodes.extract]
+run = "pipelines.etl:extract"
+outputs = [
+    "bronze.etl.raw_data",
+]
+
+[nodes.extract.inputs]
+source_data = "source_data"
+
+[nodes.transform]
+run = "pipelines.etl:transform"
+outputs = [
+    "silver.etl.clean_data",
+]
+
+[nodes.transform.inputs]
+raw_data = "bronze.etl.raw_data"
+
+[nodes.transform.quality.null_rate]
+columns = [
+    "amount",
+]
+threshold = 0.0
+
+[nodes.transform.quality.range]
+column = "amount"
+min = 0
+
+[nodes.transform.quality.gate]
+max_errors = 0
+on_fail = "skip_downstream"
+
+[nodes.load]
+run = "pipelines.etl:load"
+outputs = [
+    "gold.etl.final_output",
+]
+
+[nodes.load.inputs]
+clean_data = "silver.etl.clean_data"
+```
+
+</details>
+
+<details>
+<summary><b>JSON</b> — <code>pipelines/etl.json</code> (for files written by tools; no comments)</summary>
+
+```json
+{
+  "$schema": "../.ducta/schema/pipeline.json",
+  "description": "Orders: land, clean, aggregate",
+  "type": "batch",
+  "requires_dates": false,
+  "nodes": {
+    "extract": {
+      "run": "pipelines.etl:extract",
+      "inputs": {
+        "source_data": "source_data"
+      },
+      "outputs": [
+        "bronze.etl.raw_data"
+      ]
+    },
+    "transform": {
+      "run": "pipelines.etl:transform",
+      "inputs": {
+        "raw_data": "bronze.etl.raw_data"
+      },
+      "outputs": [
+        "silver.etl.clean_data"
+      ],
+      "quality": {
+        "null_rate": {
+          "columns": [
+            "amount"
+          ],
+          "threshold": 0.0
+        },
+        "range": {
+          "column": "amount",
+          "min": 0
+        },
+        "gate": {
+          "max_errors": 0,
+          "on_fail": "skip_downstream"
+        }
+      }
+    },
+    "load": {
+      "run": "pipelines.etl:load",
+      "inputs": {
+        "clean_data": "silver.etl.clean_data"
+      },
+      "outputs": [
+        "gold.etl.final_output"
+      ]
+    }
+  }
+}
+```
+
+</details>
+
+Pick YAML for pipelines you read and explain in comments, TOML for flat settings,
+JSON for generated files. `ducta config validate` reports errors with file and line
+in all three. Details: [File formats](https://github.com/faustinolopezramos/ducta/blob/main/docs/configuration.rst).
+
+### 6. Prefer a visual workspace?
 
 ```bash
 ducta server start --port 8000     # web app & API docs at http://localhost:8000

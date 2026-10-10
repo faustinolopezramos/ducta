@@ -29,51 +29,202 @@ Step 1: Generate the project
 Step 2: Read the pipeline
 -------------------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/events_stream.yaml
-   description: Ingest a file stream, clean it, and land it as Parquet
-   type: streaming
-   requires_dates: false
-   nodes:
-     ingest_events:
-       description: "Bronze: land the raw event stream exactly as it arrives"
-       kind: stream
-       stream:
-         input:
-           format: file_stream
-           file_format: json
-           options: {path: "${paths.input}/events", maxFilesPerTrigger: 1}
-           schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
-         output:
-           format: parquet
-           path: ${paths.output}/${env}/bronze/events
-         streaming:
-           checkpoint_location: ${paths.output}/${env}/_ckpt/ingest_events
-           output_mode: append
-           trigger: {type: processing_time, interval: 5 seconds}
+   .. tab-item:: TOML
+      :sync: toml
 
-     clean_events:
-       description: "Silver: drop incomplete events and stamp an ingest time"
-       kind: stream
-       after: [ingest_events]
-       stream:
-         input:
-           format: file_stream
-           file_format: parquet
-           options: {path: "${paths.output}/${env}/bronze/events"}
-           schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
-         transform:
-           key: clean_events
-           module: pipelines.transforms
-           params: {min_amount: 0.0}
-         output:
-           format: parquet
-           path: ${paths.output}/${env}/silver/events
-         streaming:
-           checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
-           output_mode: append
-           trigger: {type: processing_time, interval: 5 seconds}
+      .. code-block:: toml
+
+         # pipelines/events_stream.toml
+         description = "Ingest a file stream, clean it, and land it as Parquet"
+         type = "streaming"
+         requires_dates = false
+
+         [nodes.ingest_events]
+         description = "Bronze: land the raw event stream exactly as it arrives"
+         kind = "stream"
+
+         [nodes.ingest_events.stream.input]
+         format = "file_stream"
+         file_format = "json"
+         schema = "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
+
+         [nodes.ingest_events.stream.input.options]
+         path = "${paths.input}/events"
+         maxFilesPerTrigger = 1
+
+         [nodes.ingest_events.stream.output]
+         format = "parquet"
+         path = "${paths.output}/${env}/bronze/events"
+
+         [nodes.ingest_events.stream.streaming]
+         checkpoint_location = "${paths.output}/${env}/_ckpt/ingest_events"
+         output_mode = "append"
+
+         [nodes.ingest_events.stream.streaming.trigger]
+         type = "processing_time"
+         interval = "5 seconds"
+
+         [nodes.clean_events]
+         description = "Silver: drop incomplete events and stamp an ingest time"
+         kind = "stream"
+         after = [
+             "ingest_events",
+         ]
+
+         [nodes.clean_events.stream.input]
+         format = "file_stream"
+         file_format = "parquet"
+         schema = "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
+
+         [nodes.clean_events.stream.input.options]
+         path = "${paths.output}/${env}/bronze/events"
+
+         [nodes.clean_events.stream.transform]
+         key = "clean_events"
+         module = "pipelines.transforms"
+
+         [nodes.clean_events.stream.transform.params]
+         min_amount = 0.0
+
+         [nodes.clean_events.stream.output]
+         format = "parquet"
+         path = "${paths.output}/${env}/silver/events"
+
+         [nodes.clean_events.stream.streaming]
+         checkpoint_location = "${paths.output}/${env}/_ckpt/clean_events"
+         output_mode = "append"
+
+         [nodes.clean_events.stream.streaming.trigger]
+         type = "processing_time"
+         interval = "5 seconds"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/events_stream.yaml
+         description: Ingest a file stream, clean it, and land it as Parquet
+         type: streaming
+         requires_dates: false
+         nodes:
+           ingest_events:
+             description: "Bronze: land the raw event stream exactly as it arrives"
+             kind: stream
+             stream:
+               input:
+                 format: file_stream
+                 file_format: json
+                 options: {path: "${paths.input}/events", maxFilesPerTrigger: 1}
+                 schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+               output:
+                 format: parquet
+                 path: ${paths.output}/${env}/bronze/events
+               streaming:
+                 checkpoint_location: ${paths.output}/${env}/_ckpt/ingest_events
+                 output_mode: append
+                 trigger: {type: processing_time, interval: 5 seconds}
+
+           clean_events:
+             description: "Silver: drop incomplete events and stamp an ingest time"
+             kind: stream
+             after: [ingest_events]
+             stream:
+               input:
+                 format: file_stream
+                 file_format: parquet
+                 options: {path: "${paths.output}/${env}/bronze/events"}
+                 schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+               transform:
+                 key: clean_events
+                 module: pipelines.transforms
+                 params: {min_amount: 0.0}
+               output:
+                 format: parquet
+                 path: ${paths.output}/${env}/silver/events
+               streaming:
+                 checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+                 output_mode: append
+                 trigger: {type: processing_time, interval: 5 seconds}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Ingest a file stream, clean it, and land it as Parquet",
+           "type": "streaming",
+           "requires_dates": false,
+           "nodes": {
+             "ingest_events": {
+               "description": "Bronze: land the raw event stream exactly as it arrives",
+               "kind": "stream",
+               "stream": {
+                 "input": {
+                   "format": "file_stream",
+                   "file_format": "json",
+                   "options": {
+                     "path": "${paths.input}/events",
+                     "maxFilesPerTrigger": 1
+                   },
+                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
+                 },
+                 "output": {
+                   "format": "parquet",
+                   "path": "${paths.output}/${env}/bronze/events"
+                 },
+                 "streaming": {
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/ingest_events",
+                   "output_mode": "append",
+                   "trigger": {
+                     "type": "processing_time",
+                     "interval": "5 seconds"
+                   }
+                 }
+               }
+             },
+             "clean_events": {
+               "description": "Silver: drop incomplete events and stamp an ingest time",
+               "kind": "stream",
+               "after": [
+                 "ingest_events"
+               ],
+               "stream": {
+                 "input": {
+                   "format": "file_stream",
+                   "file_format": "parquet",
+                   "options": {
+                     "path": "${paths.output}/${env}/bronze/events"
+                   },
+                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
+                 },
+                 "transform": {
+                   "key": "clean_events",
+                   "module": "pipelines.transforms",
+                   "params": {
+                     "min_amount": 0.0
+                   }
+                 },
+                 "output": {
+                   "format": "parquet",
+                   "path": "${paths.output}/${env}/silver/events"
+                 },
+                 "streaming": {
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/clean_events",
+                   "output_mode": "append",
+                   "trigger": {
+                     "type": "processing_time",
+                     "interval": "5 seconds"
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 - Each node reads a stream, optionally transforms it, and writes a stream.
 - ``after`` orders the nodes: stream inputs and outputs are paths, not catalog
@@ -125,16 +276,65 @@ Step 4: Run it as a finite job
 For a backfill, a test or CI, you want a run that processes what exists and
 ends. Give the nodes a terminating trigger in one environment only:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: events
-   paths: {input: data, output: data}
-   environments:
-     sandbox:
-       pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger: {type: available_now}
-       pipelines.events_stream.nodes.clean_events.stream.streaming.trigger: {type: available_now}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "events"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [environments.sandbox."pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger"]
+         type = "available_now"
+
+         [environments.sandbox."pipelines.events_stream.nodes.clean_events.stream.streaming.trigger"]
+         type = "available_now"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: events
+         paths: {input: data, output: data}
+         environments:
+           sandbox:
+             pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger: {type: available_now}
+             pipelines.events_stream.nodes.clean_events.stream.streaming.trigger: {type: available_now}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "events",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "environments": {
+             "sandbox": {
+               "pipelines.events_stream.nodes.ingest_events.stream.streaming.trigger": {
+                 "type": "available_now"
+               },
+               "pipelines.events_stream.nodes.clean_events.stream.streaming.trigger": {
+                 "type": "available_now"
+               }
+             }
+           }
+         }
 
 .. code-block:: bash
 
@@ -151,29 +351,118 @@ Step 5: Kafka in, Delta out
 Production streams usually come from Kafka and land in Delta. Only the node's
 ``input``, ``output`` and transform change:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/orders_stream.yaml
-   type: streaming
-   requires_dates: false
-   nodes:
-     orders_to_bronze:
-       kind: stream
-       stream:
-         input:
-           format: kafka
-           options:
-             kafka.bootstrap.servers: broker:9092
-             subscribe: orders
-             startingOffsets: latest
-         transform: {key: parse_orders, module: pipelines.transforms}
-         output:
-           format: delta
-           path: ${paths.output}/${env}/bronze/orders
-         streaming:
-           checkpoint_location: ${paths.output}/${env}/_ckpt/orders_to_bronze
-           trigger: {type: processing_time, interval: 30 seconds}
-           watermark: {column: event_time, delay: 10 minutes}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/orders_stream.toml
+         type = "streaming"
+         requires_dates = false
+
+         [nodes.orders_to_bronze]
+         kind = "stream"
+
+         [nodes.orders_to_bronze.stream.input]
+         format = "kafka"
+
+         [nodes.orders_to_bronze.stream.input.options]
+         "kafka.bootstrap.servers" = "broker:9092"
+         subscribe = "orders"
+         startingOffsets = "latest"
+
+         [nodes.orders_to_bronze.stream.transform]
+         key = "parse_orders"
+         module = "pipelines.transforms"
+
+         [nodes.orders_to_bronze.stream.output]
+         format = "delta"
+         path = "${paths.output}/${env}/bronze/orders"
+
+         [nodes.orders_to_bronze.stream.streaming]
+         checkpoint_location = "${paths.output}/${env}/_ckpt/orders_to_bronze"
+
+         [nodes.orders_to_bronze.stream.streaming.trigger]
+         type = "processing_time"
+         interval = "30 seconds"
+
+         [nodes.orders_to_bronze.stream.streaming.watermark]
+         column = "event_time"
+         delay = "10 minutes"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/orders_stream.yaml
+         type: streaming
+         requires_dates: false
+         nodes:
+           orders_to_bronze:
+             kind: stream
+             stream:
+               input:
+                 format: kafka
+                 options:
+                   kafka.bootstrap.servers: broker:9092
+                   subscribe: orders
+                   startingOffsets: latest
+               transform: {key: parse_orders, module: pipelines.transforms}
+               output:
+                 format: delta
+                 path: ${paths.output}/${env}/bronze/orders
+               streaming:
+                 checkpoint_location: ${paths.output}/${env}/_ckpt/orders_to_bronze
+                 trigger: {type: processing_time, interval: 30 seconds}
+                 watermark: {column: event_time, delay: 10 minutes}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "type": "streaming",
+           "requires_dates": false,
+           "nodes": {
+             "orders_to_bronze": {
+               "kind": "stream",
+               "stream": {
+                 "input": {
+                   "format": "kafka",
+                   "options": {
+                     "kafka.bootstrap.servers": "broker:9092",
+                     "subscribe": "orders",
+                     "startingOffsets": "latest"
+                   }
+                 },
+                 "transform": {
+                   "key": "parse_orders",
+                   "module": "pipelines.transforms"
+                 },
+                 "output": {
+                   "format": "delta",
+                   "path": "${paths.output}/${env}/bronze/orders"
+                 },
+                 "streaming": {
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/orders_to_bronze",
+                   "trigger": {
+                     "type": "processing_time",
+                     "interval": "30 seconds"
+                   },
+                   "watermark": {
+                     "column": "event_time",
+                     "delay": "10 minutes"
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 Kafka delivers ``key`` and ``value`` as bytes, so the transform parses them:
 

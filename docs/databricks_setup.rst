@@ -43,19 +43,76 @@ Set ``mode: databricks`` and point ``paths`` at your data — Unity Catalog
 Volumes paths work well. Usually only production runs on Databricks, so put it
 in that environment's overrides and keep local development local:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings: {mode: local}
-   environments:
-     prod:
-       settings: {mode: databricks}
-       paths:
-         input: /Volumes/main/sales/input
-         output: /Volumes/main/sales/output
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         mode = "local"
+
+         [environments.prod.settings]
+         mode = "databricks"
+
+         [environments.prod.paths]
+         input = "/Volumes/main/sales/input"
+         output = "/Volumes/main/sales/output"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings: {mode: local}
+         environments:
+           prod:
+             settings: {mode: databricks}
+             paths:
+               input: /Volumes/main/sales/input
+               output: /Volumes/main/sales/output
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "mode": "local"
+           },
+           "environments": {
+             "prod": {
+               "settings": {
+                 "mode": "databricks"
+               },
+               "paths": {
+                 "input": "/Volumes/main/sales/input",
+                 "output": "/Volumes/main/sales/output"
+               }
+             }
+           }
+         }
 
 These are Ducta's own settings, independent of the Databricks credentials
 above, which come only from the environment.
@@ -77,17 +134,67 @@ Ducta reads and writes Delta through paths (``.load()``/``.save()``), so a
 dataset's ``path`` is a filesystem-style location — a Volumes path, a
 ``dbfs:/`` path or a cloud URI — not a ``catalog.schema.table`` identifier:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   customers:
-     format: delta
-     path: /Volumes/main/crm/customers
-   silver.crm.customers_clean:              # no path: <paths.output>/<env>/silver/crm/customers_clean
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [customer_id]}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [customers]
+         format = "delta"
+         path = "/Volumes/main/crm/customers"
+
+         ["silver.crm.customers_clean"]
+         format = "delta"
+
+         ["silver.crm.customers_clean".write]
+         mode = "merge"
+
+         ["silver.crm.customers_clean".write.merge]
+         keys = [
+             "customer_id",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         customers:
+           format: delta
+           path: /Volumes/main/crm/customers
+         silver.crm.customers_clean:              # no path: <paths.output>/<env>/silver/crm/customers_clean
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [customer_id]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "customers": {
+             "format": "delta",
+             "path": "/Volumes/main/crm/customers"
+           },
+           "silver.crm.customers_clean": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "customer_id"
+                 ]
+               }
+             }
+           }
+         }
 
 **Registering outputs in Unity Catalog**
 
@@ -96,13 +203,43 @@ registered as ``<catalog_name>.<schema>.<table>``, where schema and table come
 from its three-part name (``silver.crm.customers`` → schema ``silver``, table
 ``customers``). ``{environment}`` in ``catalog_name`` keeps environments apart:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   silver.crm.customers:
-     format: unity_catalog
-     catalog_name: "main_{environment}"
-     uc_table_mode: external                # external (data at the path) or managed
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         ["silver.crm.customers"]
+         format = "unity_catalog"
+         catalog_name = "main_{environment}"
+         uc_table_mode = "external"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         silver.crm.customers:
+           format: unity_catalog
+           catalog_name: "main_{environment}"
+           uc_table_mode: external                # external (data at the path) or managed
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "silver.crm.customers": {
+             "format": "unity_catalog",
+             "catalog_name": "main_{environment}",
+             "uc_table_mode": "external"
+           }
+         }
 
 **Running on a specific cluster**
 

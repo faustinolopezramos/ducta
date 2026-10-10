@@ -20,32 +20,150 @@ Read a CSV, keep adults, write Parquet.
        ├── people.yaml
        └── people.py
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: hello
-   paths: {input: data, output: data}
+   .. tab-item:: TOML
+      :sync: toml
 
-.. code-block:: yaml
+      .. code-block:: toml
 
-   # catalog.yaml
-   users:
-     format: csv
-     path: ${paths.input}/users.csv
-     options: {header: true, inferSchema: true}
-   silver.people.adults:
-     format: parquet
+         # ducta.toml
+         version = 2
+         project = "hello"
 
-.. code-block:: yaml
+         [paths]
+         input = "data"
+         output = "data"
 
-   # pipelines/people.yaml
-   requires_dates: false
-   nodes:
-     keep_adults:
-       run: pipelines.people:keep_adults
-       inputs: {users: users}
-       outputs: [silver.people.adults]
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: hello
+         paths: {input: data, output: data}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "hello",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           }
+         }
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [users]
+         format = "csv"
+         path = "${paths.input}/users.csv"
+
+         [users.options]
+         header = true
+         inferSchema = true
+
+         ["silver.people.adults"]
+         format = "parquet"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         users:
+           format: csv
+           path: ${paths.input}/users.csv
+           options: {header: true, inferSchema: true}
+         silver.people.adults:
+           format: parquet
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "users": {
+             "format": "csv",
+             "path": "${paths.input}/users.csv",
+             "options": {
+               "header": true,
+               "inferSchema": true
+             }
+           },
+           "silver.people.adults": {
+             "format": "parquet"
+           }
+         }
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/people.toml
+         requires_dates = false
+
+         [nodes.keep_adults]
+         run = "pipelines.people:keep_adults"
+         outputs = [
+             "silver.people.adults",
+         ]
+
+         [nodes.keep_adults.inputs]
+         users = "users"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/people.yaml
+         requires_dates: false
+         nodes:
+           keep_adults:
+             run: pipelines.people:keep_adults
+             inputs: {users: users}
+             outputs: [silver.people.adults]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "requires_dates": false,
+           "nodes": {
+             "keep_adults": {
+               "run": "pipelines.people:keep_adults",
+               "inputs": {
+                 "users": "users"
+               },
+               "outputs": [
+                 "silver.people.adults"
+               ]
+             }
+           }
+         }
 
 .. code-block:: python
 
@@ -79,15 +197,60 @@ Two inputs, one output
 
 Each input is passed to the function parameter it is mapped to:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/orders.yaml
-   requires_dates: false
-   nodes:
-     enrich:
-       run: pipelines.orders:enrich
-       inputs: {orders: orders_raw, customers: customers_raw}
-       outputs: [silver.sales.orders_enriched]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/orders.toml
+         requires_dates = false
+
+         [nodes.enrich]
+         run = "pipelines.orders:enrich"
+         outputs = [
+             "silver.sales.orders_enriched",
+         ]
+
+         [nodes.enrich.inputs]
+         orders = "orders_raw"
+         customers = "customers_raw"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/orders.yaml
+         requires_dates: false
+         nodes:
+           enrich:
+             run: pipelines.orders:enrich
+             inputs: {orders: orders_raw, customers: customers_raw}
+             outputs: [silver.sales.orders_enriched]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "requires_dates": false,
+           "nodes": {
+             "enrich": {
+               "run": "pipelines.orders:enrich",
+               "inputs": {
+                 "orders": "orders_raw",
+                 "customers": "customers_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders_enriched"
+               ]
+             }
+           }
+         }
 
 .. code-block:: python
 
@@ -103,25 +266,110 @@ Steps that depend on each other
 
 A node that reads what another writes runs after it — no ordering to declare:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/daily.yaml
-   requires_dates: false
-   nodes:
-     clean:
-       run: pipelines.daily:clean
-       inputs: {orders: orders_raw}
-       outputs: [silver.sales.orders]
-     totals:
-       run: pipelines.daily:totals
-       inputs: {orders: silver.sales.orders}   # runs after `clean`
-       outputs: [gold.sales.daily_totals]
-     notify:
-       run: pipelines.daily:notify
-       inputs: {totals: gold.sales.daily_totals}
-     audit:
-       run: pipelines.daily:audit
-       after: [clean]                          # no data between them: order it explicitly
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/daily.toml
+         requires_dates = false
+
+         [nodes.clean]
+         run = "pipelines.daily:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         orders = "orders_raw"
+
+         [nodes.totals]
+         run = "pipelines.daily:totals"
+         outputs = [
+             "gold.sales.daily_totals",
+         ]
+
+         [nodes.totals.inputs]
+         orders = "silver.sales.orders"
+
+         [nodes.notify]
+         run = "pipelines.daily:notify"
+
+         [nodes.notify.inputs]
+         totals = "gold.sales.daily_totals"
+
+         [nodes.audit]
+         run = "pipelines.daily:audit"
+         after = [
+             "clean",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/daily.yaml
+         requires_dates: false
+         nodes:
+           clean:
+             run: pipelines.daily:clean
+             inputs: {orders: orders_raw}
+             outputs: [silver.sales.orders]
+           totals:
+             run: pipelines.daily:totals
+             inputs: {orders: silver.sales.orders}   # runs after `clean`
+             outputs: [gold.sales.daily_totals]
+           notify:
+             run: pipelines.daily:notify
+             inputs: {totals: gold.sales.daily_totals}
+           audit:
+             run: pipelines.daily:audit
+             after: [clean]                          # no data between them: order it explicitly
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "requires_dates": false,
+           "nodes": {
+             "clean": {
+               "run": "pipelines.daily:clean",
+               "inputs": {
+                 "orders": "orders_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ]
+             },
+             "totals": {
+               "run": "pipelines.daily:totals",
+               "inputs": {
+                 "orders": "silver.sales.orders"
+               },
+               "outputs": [
+                 "gold.sales.daily_totals"
+               ]
+             },
+             "notify": {
+               "run": "pipelines.daily:notify",
+               "inputs": {
+                 "totals": "gold.sales.daily_totals"
+               }
+             },
+             "audit": {
+               "run": "pipelines.daily:audit",
+               "after": [
+                 "clean"
+               ]
+             }
+           }
+         }
 
 Pipelines that depend on each other
 -----------------------------------
@@ -130,16 +378,65 @@ Pipelines that depend on each other
 upstream whose outputs are still valid for the same inputs, dates, code and
 configuration is not recomputed:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/reporting.yaml
-   depends_on: [daily]
-   requires_dates: false
-   nodes:
-     report:
-       run: pipelines.reporting:report
-       inputs: {totals: gold.sales.daily_totals}
-       outputs: [gold.sales.report]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/reporting.toml
+         depends_on = [
+             "daily",
+         ]
+         requires_dates = false
+
+         [nodes.report]
+         run = "pipelines.reporting:report"
+         outputs = [
+             "gold.sales.report",
+         ]
+
+         [nodes.report.inputs]
+         totals = "gold.sales.daily_totals"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/reporting.yaml
+         depends_on: [daily]
+         requires_dates: false
+         nodes:
+           report:
+             run: pipelines.reporting:report
+             inputs: {totals: gold.sales.daily_totals}
+             outputs: [gold.sales.report]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "depends_on": [
+             "daily"
+           ],
+           "requires_dates": false,
+           "nodes": {
+             "report": {
+               "run": "pipelines.reporting:report",
+               "inputs": {
+                 "totals": "gold.sales.daily_totals"
+               },
+               "outputs": [
+                 "gold.sales.report"
+               ]
+             }
+           }
+         }
 
 .. code-block:: bash
 
@@ -151,13 +448,47 @@ A date window
 With ``requires_dates: true`` (the default) a run takes a window, and an
 ``incremental`` dataset is read — and fingerprinted — only inside it:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   events:
-     format: parquet
-     path: ${paths.input}/events
-     incremental: {column: event_date}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [events]
+         format = "parquet"
+         path = "${paths.input}/events"
+
+         [events.incremental]
+         column = "event_date"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         events:
+           format: parquet
+           path: ${paths.input}/events
+           incremental: {column: event_date}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "events": {
+             "format": "parquet",
+             "path": "${paths.input}/events",
+             "incremental": {
+               "column": "event_date"
+             }
+           }
+         }
 
 .. code-block:: bash
 
@@ -166,20 +497,91 @@ With ``requires_dates: true`` (the default) a run takes a window, and an
 A check that stops bad data
 ---------------------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/people.yaml
-   requires_dates: false
-   nodes:
-     keep_adults:
-       run: pipelines.people:keep_adults
-       inputs: {users: users}
-       outputs: [silver.people.adults]
-       quality:
-         checks:
-           null_rate: {columns: [id], threshold: 0}
-           row_count: {min: 1}
-         gate: {on_fail: stop_all}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/people.toml
+         requires_dates = false
+
+         [nodes.keep_adults]
+         run = "pipelines.people:keep_adults"
+         outputs = [
+             "silver.people.adults",
+         ]
+
+         [nodes.keep_adults.inputs]
+         users = "users"
+
+         [nodes.keep_adults.quality.checks.null_rate]
+         columns = [
+             "id",
+         ]
+         threshold = 0
+
+         [nodes.keep_adults.quality.checks.row_count]
+         min = 1
+
+         [nodes.keep_adults.quality.gate]
+         on_fail = "stop_all"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/people.yaml
+         requires_dates: false
+         nodes:
+           keep_adults:
+             run: pipelines.people:keep_adults
+             inputs: {users: users}
+             outputs: [silver.people.adults]
+             quality:
+               checks:
+                 null_rate: {columns: [id], threshold: 0}
+                 row_count: {min: 1}
+               gate: {on_fail: stop_all}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "requires_dates": false,
+           "nodes": {
+             "keep_adults": {
+               "run": "pipelines.people:keep_adults",
+               "inputs": {
+                 "users": "users"
+               },
+               "outputs": [
+                 "silver.people.adults"
+               ],
+               "quality": {
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "id"
+                     ],
+                     "threshold": 0
+                   },
+                   "row_count": {
+                     "min": 1
+                   }
+                 },
+                 "gate": {
+                   "on_fail": "stop_all"
+                 }
+               }
+             }
+           }
+         }
 
 If the output has a null ``id`` or no rows, the run stops and fails, and the
 Run Certificate records which check blocked it. See :doc:`../quality`.

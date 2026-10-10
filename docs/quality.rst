@@ -38,18 +38,80 @@ Input checks: before a node runs
 A contract belongs to the dataset, so it protects every consumer — the right
 place for data another team or system produces:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   orders_raw:
-     format: csv
-     path: ${paths.input}/orders.csv
-     options: {header: true}
-     quality:
-       fail_fast: true               # stop checking at the first failure
-       empty_dataset: true
-       schema: {expected_columns: [order_id, amount, order_date]}
-       row_count: {min: 1000}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [orders_raw]
+         format = "csv"
+         path = "${paths.input}/orders.csv"
+
+         [orders_raw.options]
+         header = true
+
+         [orders_raw.quality]
+         fail_fast = true
+         empty_dataset = true
+
+         [orders_raw.quality.schema]
+         expected_columns = [
+             "order_id",
+             "amount",
+             "order_date",
+         ]
+
+         [orders_raw.quality.row_count]
+         min = 1000
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         orders_raw:
+           format: csv
+           path: ${paths.input}/orders.csv
+           options: {header: true}
+           quality:
+             fail_fast: true               # stop checking at the first failure
+             empty_dataset: true
+             schema: {expected_columns: [order_id, amount, order_date]}
+             row_count: {min: 1000}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "orders_raw": {
+             "format": "csv",
+             "path": "${paths.input}/orders.csv",
+             "options": {
+               "header": true
+             },
+             "quality": {
+               "fail_fast": true,
+               "empty_dataset": true,
+               "schema": {
+                 "expected_columns": [
+                   "order_id",
+                   "amount",
+                   "order_date"
+                 ]
+               },
+               "row_count": {
+                 "min": 1000
+               }
+             }
+           }
+         }
 
 When a contract fails, the node does not run. What happens to the rest of the
 pipeline is the gate's decision (below; by default the node's dependants are
@@ -58,22 +120,106 @@ skipped).
 Output checks: after a node runs
 --------------------------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/etl.yaml
-   nodes:
-     clean:
-       run: pipelines.etl:clean
-       inputs: {raw: orders_raw}
-       outputs: [silver.sales.orders]
-       quality:
-         checks:
-           null_rate: {columns: [order_id], threshold: 0}
-           duplicates: {columns: [order_id]}
-           range: {column: amount, min: 0, max: 1000000}
-         gate:
-           max_errors: 0
-           on_fail: stop_all
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/etl.toml
+         [nodes.clean]
+         run = "pipelines.etl:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         raw = "orders_raw"
+
+         [nodes.clean.quality.checks.null_rate]
+         columns = [
+             "order_id",
+         ]
+         threshold = 0
+
+         [nodes.clean.quality.checks.duplicates]
+         columns = [
+             "order_id",
+         ]
+
+         [nodes.clean.quality.checks.range]
+         column = "amount"
+         min = 0
+         max = 1000000
+
+         [nodes.clean.quality.gate]
+         max_errors = 0
+         on_fail = "stop_all"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/etl.yaml
+         nodes:
+           clean:
+             run: pipelines.etl:clean
+             inputs: {raw: orders_raw}
+             outputs: [silver.sales.orders]
+             quality:
+               checks:
+                 null_rate: {columns: [order_id], threshold: 0}
+                 duplicates: {columns: [order_id]}
+                 range: {column: amount, min: 0, max: 1000000}
+               gate:
+                 max_errors: 0
+                 on_fail: stop_all
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "nodes": {
+             "clean": {
+               "run": "pipelines.etl:clean",
+               "inputs": {
+                 "raw": "orders_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ],
+               "quality": {
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "order_id"
+                     ],
+                     "threshold": 0
+                   },
+                   "duplicates": {
+                     "columns": [
+                       "order_id"
+                     ]
+                   },
+                   "range": {
+                     "column": "amount",
+                     "min": 0,
+                     "max": 1000000
+                   }
+                 },
+                 "gate": {
+                   "max_errors": 0,
+                   "on_fail": "stop_all"
+                 }
+               }
+             }
+           }
+         }
 
 ``check_name: true`` enables a check with its defaults; ``false`` disables it
 (useful to switch off one check of a profile). With several outputs,
@@ -116,16 +262,59 @@ gates a run passed.
 
 Gates can be stricter in production only:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   environments:
-     prod:
-       pipelines.etl.nodes.clean.quality.gate.on_fail: stop_all
-       pipelines.etl.nodes.clean.quality.gate.max_errors: 0
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [environments.prod]
+         "pipelines.etl.nodes.clean.quality.gate.on_fail" = "stop_all"
+         "pipelines.etl.nodes.clean.quality.gate.max_errors" = 0
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         environments:
+           prod:
+             pipelines.etl.nodes.clean.quality.gate.on_fail: stop_all
+             pipelines.etl.nodes.clean.quality.gate.max_errors: 0
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "environments": {
+             "prod": {
+               "pipelines.etl.nodes.clean.quality.gate.on_fail": "stop_all",
+               "pipelines.etl.nodes.clean.quality.gate.max_errors": 0
+             }
+           }
+         }
 
 Profiles
 --------
@@ -135,32 +324,151 @@ A profile is a named set of checks, defined once in ``ducta.yaml`` (or in
 :ref:`profiles-file`) and used by any block with ``profile:``. The block's own ``checks`` are merged on top, and
 a profile name that does not exist is an error, not a silent no-op:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings:
-     quality:
-       profiles:
-         keyed:
-           checks:
-             empty_dataset: {enabled: true}
-             duplicates: {columns: [id]}
+   .. tab-item:: TOML
+      :sync: toml
 
-.. code-block:: yaml
+      .. code-block:: toml
 
-   # pipelines/customers.yaml
-   nodes:
-     dedupe:
-       run: pipelines.customers:dedupe
-       inputs: {raw: customers_raw}
-       outputs: [silver.crm.customers]
-       quality:
-         profile: keyed
-         checks:
-           null_rate: {columns: [email], threshold: 0.05}
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings.quality.profiles.keyed.checks.empty_dataset]
+         enabled = true
+
+         [settings.quality.profiles.keyed.checks.duplicates]
+         columns = [
+             "id",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings:
+           quality:
+             profiles:
+               keyed:
+                 checks:
+                   empty_dataset: {enabled: true}
+                   duplicates: {columns: [id]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "quality": {
+               "profiles": {
+                 "keyed": {
+                   "checks": {
+                     "empty_dataset": {
+                       "enabled": true
+                     },
+                     "duplicates": {
+                       "columns": [
+                         "id"
+                       ]
+                     }
+                   }
+                 }
+               }
+             }
+           }
+         }
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/customers.toml
+         [nodes.dedupe]
+         run = "pipelines.customers:dedupe"
+         outputs = [
+             "silver.crm.customers",
+         ]
+
+         [nodes.dedupe.inputs]
+         raw = "customers_raw"
+
+         [nodes.dedupe.quality]
+         profile = "keyed"
+
+         [nodes.dedupe.quality.checks.null_rate]
+         columns = [
+             "email",
+         ]
+         threshold = 0.05
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/customers.yaml
+         nodes:
+           dedupe:
+             run: pipelines.customers:dedupe
+             inputs: {raw: customers_raw}
+             outputs: [silver.crm.customers]
+             quality:
+               profile: keyed
+               checks:
+                 null_rate: {columns: [email], threshold: 0.05}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "nodes": {
+             "dedupe": {
+               "run": "pipelines.customers:dedupe",
+               "inputs": {
+                 "raw": "customers_raw"
+               },
+               "outputs": [
+                 "silver.crm.customers"
+               ],
+               "quality": {
+                 "profile": "keyed",
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "email"
+                     ],
+                     "threshold": 0.05
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 Available checks
 ----------------
@@ -209,20 +517,107 @@ Checking a model's predictions
 A serving node's output is a prediction column. Data checks ask whether data is
 well formed; these ask whether the model is behaving:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   score:
-     ml_stage: serving
-     model: {name: churn, stage: production, method: predict_proba, output_col: churn_score}
-     inputs: [new_customers]
-     outputs: [gold.churn.scores]
-     quality:
-       prediction_contract: {column: churn_score, min: 0, max: 1}
-       # A model that suddenly flags everyone, or no one, has a broken input.
-       prediction_rate: {column: churn_score, threshold: 0.5, min: 0.05, max: 0.6}
-       # Scores distributed as on the set the model was validated on.
-       prediction_drift: {column: churn_score, reference: gold.churn.validation_scores}
-       gate: {max_errors: 0}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         [score]
+         ml_stage = "serving"
+         inputs = [
+             "new_customers",
+         ]
+         outputs = [
+             "gold.churn.scores",
+         ]
+
+         [score.model]
+         name = "churn"
+         stage = "production"
+         method = "predict_proba"
+         output_col = "churn_score"
+
+         [score.quality.prediction_contract]
+         column = "churn_score"
+         min = 0
+         max = 1
+
+         [score.quality.prediction_rate]
+         column = "churn_score"
+         threshold = 0.5
+         min = 0.05
+         max = 0.6
+
+         [score.quality.prediction_drift]
+         column = "churn_score"
+         reference = "gold.churn.validation_scores"
+
+         [score.quality.gate]
+         max_errors = 0
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         score:
+           ml_stage: serving
+           model: {name: churn, stage: production, method: predict_proba, output_col: churn_score}
+           inputs: [new_customers]
+           outputs: [gold.churn.scores]
+           quality:
+             prediction_contract: {column: churn_score, min: 0, max: 1}
+             # A model that suddenly flags everyone, or no one, has a broken input.
+             prediction_rate: {column: churn_score, threshold: 0.5, min: 0.05, max: 0.6}
+             # Scores distributed as on the set the model was validated on.
+             prediction_drift: {column: churn_score, reference: gold.churn.validation_scores}
+             gate: {max_errors: 0}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "score": {
+             "ml_stage": "serving",
+             "model": {
+               "name": "churn",
+               "stage": "production",
+               "method": "predict_proba",
+               "output_col": "churn_score"
+             },
+             "inputs": [
+               "new_customers"
+             ],
+             "outputs": [
+               "gold.churn.scores"
+             ],
+             "quality": {
+               "prediction_contract": {
+                 "column": "churn_score",
+                 "min": 0,
+                 "max": 1
+               },
+               "prediction_rate": {
+                 "column": "churn_score",
+                 "threshold": 0.5,
+                 "min": 0.05,
+                 "max": 0.6
+               },
+               "prediction_drift": {
+                 "column": "churn_score",
+                 "reference": "gold.churn.validation_scores"
+               },
+               "gate": {
+                 "max_errors": 0
+               }
+             }
+           }
+         }
 
 ``prediction_drift`` compares the statistic itself with ``threshold`` (PSI 0.2
 or KS 0.1 by default), not a p-value: on large data every difference is
@@ -258,15 +653,60 @@ Custom checks
 
 Register the module in ``ducta.yaml`` and use the check like a built-in one:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings:
-     quality:
-       extensions: [pipelines.quality_checks]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings.quality]
+         extensions = [
+             "pipelines.quality_checks",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings:
+           quality:
+             extensions: [pipelines.quality_checks]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "quality": {
+               "extensions": [
+                 "pipelines.quality_checks"
+               ]
+             }
+           }
+         }
 
 An exception inside ``_run_impl`` becomes a failed result, not a crashed run.
 The API server does not import extension modules (it never runs code from a

@@ -48,16 +48,70 @@ with the writer.
 **Put contracts on data you do not control.** ``quality`` on a catalog entry runs
 before every node that reads it:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   orders_raw:
-     format: csv
-     path: ${paths.input}/orders.csv
-     options: {header: true}
-     quality:
-       empty_dataset: true
-       schema: {expected_columns: [order_id, amount, order_date]}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [orders_raw]
+         format = "csv"
+         path = "${paths.input}/orders.csv"
+
+         [orders_raw.options]
+         header = true
+
+         [orders_raw.quality]
+         empty_dataset = true
+
+         [orders_raw.quality.schema]
+         expected_columns = [
+             "order_id",
+             "amount",
+             "order_date",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         orders_raw:
+           format: csv
+           path: ${paths.input}/orders.csv
+           options: {header: true}
+           quality:
+             empty_dataset: true
+             schema: {expected_columns: [order_id, amount, order_date]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "orders_raw": {
+             "format": "csv",
+             "path": "${paths.input}/orders.csv",
+             "options": {
+               "header": true
+             },
+             "quality": {
+               "empty_dataset": true,
+               "schema": {
+                 "expected_columns": [
+                   "order_id",
+                   "amount",
+                   "order_date"
+                 ]
+               }
+             }
+           }
+         }
 
 **Make large inputs incremental.** ``incremental: {column: …}`` reads — and
 fingerprints — only the run's ``--start-date``/``--end-date`` window, so a daily
@@ -116,22 +170,101 @@ Environments
 Keep ``environments`` blocks to what really differs — paths, parallelism,
 strictness:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings: {max_parallel_nodes: 4, evidence_level: record}
-   environments:
-     dev:
-       settings: {max_parallel_nodes: 1, log_level: DEBUG}
-     prod:
-       paths: {input: s3://lake/raw, output: s3://lake/curated}
-       settings:
-         max_parallel_nodes: 16
-         evidence_level: signed
-         run_lock: {backend: storage, on_conflict: fail}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         max_parallel_nodes = 4
+         evidence_level = "record"
+
+         [environments.dev.settings]
+         max_parallel_nodes = 1
+         log_level = "DEBUG"
+
+         [environments.prod.paths]
+         input = "s3://lake/raw"
+         output = "s3://lake/curated"
+
+         [environments.prod.settings]
+         max_parallel_nodes = 16
+         evidence_level = "signed"
+
+         [environments.prod.settings.run_lock]
+         backend = "storage"
+         on_conflict = "fail"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings: {max_parallel_nodes: 4, evidence_level: record}
+         environments:
+           dev:
+             settings: {max_parallel_nodes: 1, log_level: DEBUG}
+           prod:
+             paths: {input: s3://lake/raw, output: s3://lake/curated}
+             settings:
+               max_parallel_nodes: 16
+               evidence_level: signed
+               run_lock: {backend: storage, on_conflict: fail}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "max_parallel_nodes": 4,
+             "evidence_level": "record"
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "max_parallel_nodes": 1,
+                 "log_level": "DEBUG"
+               }
+             },
+             "prod": {
+               "paths": {
+                 "input": "s3://lake/raw",
+                 "output": "s3://lake/curated"
+               },
+               "settings": {
+                 "max_parallel_nodes": 16,
+                 "evidence_level": "signed",
+                 "run_lock": {
+                   "backend": "storage",
+                   "on_conflict": "fail"
+                 }
+               }
+             }
+           }
+         }
 
 - ``sandbox_<name>`` gives each developer their own data and checkpoints,
   falling back to ``sandbox``'s settings.

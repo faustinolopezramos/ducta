@@ -14,9 +14,9 @@ Core Capabilities
 Configuration
 -------------
 
-Configure MLOps under ``settings.mlops`` in ``ducta.yaml``.
 Ducta turns tracking on automatically for ``ml``-type pipelines — you don't call
-any setup function in your code.
+any setup function in your code. Three keys under ``settings`` in ``ducta.yaml``
+steer it:
 
 .. list-table::
    :widths: 30 15 55
@@ -25,47 +25,141 @@ any setup function in your code.
    * - Key
      - Default
      - Description
-   * - ``backend_type``
-     - ``"local"``
-     - Storage backend: ``local``, ``databricks``, or ``distributed``.
-   * - ``storage_path``
-     - ``"./mlops_data"``
-     - Root directory for experiments, registry, and artifacts.
-   * - ``catalog``
-     - ``"main"``
-     - Databricks Unity Catalog name (if applicable).
-   * - ``schema``
-     - ``"ml_tracking"``
-     - Databricks Schema name (if applicable).
-   * - ``model_retention_days``
+   * - ``mlops_enabled``
+     - auto
+     - ``true`` or ``false`` forces tracking on or off. Left out, tracking is on
+       when the pipeline being run has an ML node. ``settings.mlops.enabled`` is
+       the same switch; when both are written, the nested one wins.
+   * - ``mlops_required``
+     - ``false``
+     - ``true`` aborts the run if tracking cannot start; ``false`` logs a warning
+       and runs without it.
+   * - ``mlops_path``
+     - see below
+     - Directory that holds the experiments and the model registry.
+
+Without ``mlops_path``, each pipeline keeps its tracking next to its data, in
+``<paths.output>/<env>/<schema>/<folder>/experiment_tracking`` and
+``.../model_registry`` — for the pipeline ``ml.student_risk``, that is
+``data/dev/ml/student_risk/``.
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "churn"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         mlops_path = "models"
+         mlops_required = false
+
+         [environments.dev.settings]
+         mlops_enabled = false
+
+         [environments.prod.settings]
+         mlops_required = true
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: churn
+         paths: {input: data, output: data}
+         settings:
+           mlops_path: models           # one registry for every pipeline of the project
+           mlops_required: false
+         environments:
+           dev:
+             settings: {mlops_enabled: false}      # fast iteration, no tracking
+           prod:
+             settings: {mlops_required: true}      # no tracking, no run
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "churn",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "mlops_path": "models",
+             "mlops_required": false
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "mlops_enabled": false
+               }
+             },
+             "prod": {
+               "settings": {
+                 "mlops_required": true
+               }
+             }
+           }
+         }
+
+.. note::
+
+   Only the keys above are read from ``ducta.yaml``. A ``settings.mlops`` block
+   with other keys (``storage_path``, ``backend_type``, ...) is accepted without
+   an error and **has no effect** on a pipeline run.
+
+**Tuning knobs, through the environment.** The retention, buffering, retry and
+backend options of the MLOps module are read from environment variables by
+``ducta mlops ...`` and the API, not from the project file:
+
+.. list-table::
+   :widths: 38 20 42
+   :header-rows: 1
+
+   * - Variable
+     - Default
+     - Meaning
+   * - ``Ducta_MLOPS_BACKEND``
+     - ``local``
+     - ``local``, ``databricks`` or ``distributed``.
+   * - ``Ducta_MLOPS_PATH``
+     - ``./mlops_data``
+     - Root of experiments, registry and artifacts for the ``ducta mlops`` commands.
+   * - ``Ducta_MLOPS_MODEL_RETENTION_DAYS``
      - ``90``
      - Days to keep archived model versions before GC.
-   * - ``metric_buffer_size``
+   * - ``Ducta_MLOPS_MAX_VERSIONS``
+     - ``100``
+     - Versions kept per model.
+   * - ``Ducta_MLOPS_METRIC_BUFFER_SIZE``
      - ``100``
      - Metrics buffered in memory before flushing to disk.
-   * - ``auto_flush_metrics``
+   * - ``Ducta_MLOPS_AUTO_FLUSH``
      - ``true``
-     - Automatically flush metric buffers at end of run.
-   * - ``enable_circuit_breaker``
+     - Flush metric buffers at the end of a run.
+   * - ``Ducta_MLOPS_CIRCUIT_BREAKER``
      - ``false``
      - Protect the system during backend outages.
+   * - ``DATABRICKS_CATALOG`` / ``DATABRICKS_SCHEMA`` / ``DATABRICKS_VOLUME``
+     - ``main`` / ``ml_tracking`` / ``mlops_artifacts``
+     - Unity Catalog location for the Databricks backend.
 
-.. code-block:: yaml
-
-   # ducta.yaml
-   version: 2
-   project: churn
-   paths: {input: data, output: data}
-   settings:
-     mlops:
-       backend_type: local
-       storage_path: ./mlops_data
-       model_retention_days: 90
-       metric_buffer_size: 200
-       auto_flush_metrics: true
-   environments:
-     prod:
-       settings.mlops.backend_type: databricks
+The upper-case spelling (``DUCTA_MLOPS_PATH``) is accepted as well.
 
 MLflow tracking (optional)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -73,17 +167,62 @@ MLflow tracking (optional)
 With the ``mlops`` extra installed, ``settings.mlflow`` also records every run, node,
 metric and model in MLflow (version 3.15 or later):
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: churn
-   paths: {input: data, output: data}
-   settings:
-     mlflow:
-       enabled: true
-       experiment_name: churn
-       tracking_uri: sqlite:////srv/mlflow/mlflow.db   # or http://mlflow.internal:5000
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "churn"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings.mlflow]
+         enabled = true
+         experiment_name = "churn"
+         tracking_uri = "sqlite:////srv/mlflow/mlflow.db"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: churn
+         paths: {input: data, output: data}
+         settings:
+           mlflow:
+             enabled: true
+             experiment_name: churn
+             tracking_uri: sqlite:////srv/mlflow/mlflow.db   # or http://mlflow.internal:5000
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "churn",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "mlflow": {
+               "enabled": true,
+               "experiment_name": "churn",
+               "tracking_uri": "sqlite:////srv/mlflow/mlflow.db"
+             }
+           }
+         }
 
 Use a database or a tracking server for ``tracking_uri``. MLflow 3 keeps the local
 folder store (``tracking_uri: mlruns``, ``file://...``) only in maintenance mode and
@@ -101,26 +240,121 @@ The split, the hyperparameters and the model version live in the pipeline file, 
 data scientist changes an experiment without touching Python — and Ducta makes sure
 the Python actually uses them.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/churn.yaml
-   type: ml
-   requires_dates: false
-   model_version: "1.0"
-   hyperparams: {n_estimators: 200, max_depth: 8}
-   split: {method: stratified, stratify_col: churned, test_size: 0.2, seed: 42}
-   nodes:
-     build_features:
-       run: churn.features:build_features
-       ml_stage: feature_engineering
-       inputs: {customers: silver.crm.customers}
-       outputs: [ml.churn.features]
-     train:
-       run: churn.model:train
-       ml_stage: training                 # bound to apply the split above
-       hyperparams: {max_depth: 6}        # merged over the pipeline's
-       inputs: {features: ml.churn.features}
-       outputs: [ml.churn.metrics]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/churn.toml
+         type = "ml"
+         requires_dates = false
+         model_version = "1.0"
+
+         [hyperparams]
+         n_estimators = 200
+         max_depth = 8
+
+         [split]
+         method = "stratified"
+         stratify_col = "churned"
+         test_size = 0.2
+         seed = 42
+
+         [nodes.build_features]
+         run = "churn.features:build_features"
+         ml_stage = "feature_engineering"
+         outputs = [
+             "ml.churn.features",
+         ]
+
+         [nodes.build_features.inputs]
+         customers = "silver.crm.customers"
+
+         [nodes.train]
+         run = "churn.model:train"
+         ml_stage = "training"
+         outputs = [
+             "ml.churn.metrics",
+         ]
+
+         [nodes.train.hyperparams]
+         max_depth = 6
+
+         [nodes.train.inputs]
+         features = "ml.churn.features"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/churn.yaml
+         type: ml
+         requires_dates: false
+         model_version: "1.0"
+         hyperparams: {n_estimators: 200, max_depth: 8}
+         split: {method: stratified, stratify_col: churned, test_size: 0.2, seed: 42}
+         nodes:
+           build_features:
+             run: churn.features:build_features
+             ml_stage: feature_engineering
+             inputs: {customers: silver.crm.customers}
+             outputs: [ml.churn.features]
+           train:
+             run: churn.model:train
+             ml_stage: training                 # bound to apply the split above
+             hyperparams: {max_depth: 6}        # merged over the pipeline's
+             inputs: {features: ml.churn.features}
+             outputs: [ml.churn.metrics]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "type": "ml",
+           "requires_dates": false,
+           "model_version": "1.0",
+           "hyperparams": {
+             "n_estimators": 200,
+             "max_depth": 8
+           },
+           "split": {
+             "method": "stratified",
+             "stratify_col": "churned",
+             "test_size": 0.2,
+             "seed": 42
+           },
+           "nodes": {
+             "build_features": {
+               "run": "churn.features:build_features",
+               "ml_stage": "feature_engineering",
+               "inputs": {
+                 "customers": "silver.crm.customers"
+               },
+               "outputs": [
+                 "ml.churn.features"
+               ]
+             },
+             "train": {
+               "run": "churn.model:train",
+               "ml_stage": "training",
+               "hyperparams": {
+                 "max_depth": 6
+               },
+               "inputs": {
+                 "features": "ml.churn.features"
+               },
+               "outputs": [
+                 "ml.churn.metrics"
+               ]
+             }
+           }
+         }
 
 .. code-block:: python
 
@@ -257,23 +491,90 @@ Serving a Model
 A node with ``ml_stage: serving`` scores data with a registered model. It names the
 model; Ducta resolves it, verifies it and hands it over loaded:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/score.yaml
-   type: ml
-   requires_dates: false
-   nodes:
-     score:
-       ml_stage: serving
-       model:
-         name: churn_clf
-         stage: production           # or version: 3
-         trust_artifact: true        # required for a pickle/joblib (sklearn) model
-         features: [tenure, spend]   # default: the model's registered input schema
-         output_col: churn_score     # default: prediction
-         method: predict_proba       # predict | predict_proba | decision_function | score_samples
-       inputs: {customers: silver.crm.customers}
-       outputs: [gold.crm.churn_scores]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/score.toml
+         type = "ml"
+         requires_dates = false
+
+         [nodes.score]
+         ml_stage = "serving"
+         outputs = [
+             "gold.crm.churn_scores",
+         ]
+
+         [nodes.score.model]
+         name = "churn_clf"
+         stage = "production"
+         trust_artifact = true
+         features = [
+             "tenure",
+             "spend",
+         ]
+         output_col = "churn_score"
+         method = "predict_proba"
+
+         [nodes.score.inputs]
+         customers = "silver.crm.customers"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/score.yaml
+         type: ml
+         requires_dates: false
+         nodes:
+           score:
+             ml_stage: serving
+             model:
+               name: churn_clf
+               stage: production           # or version: 3
+               trust_artifact: true        # required for a pickle/joblib (sklearn) model
+               features: [tenure, spend]   # default: the model's registered input schema
+               output_col: churn_score     # default: prediction
+               method: predict_proba       # predict | predict_proba | decision_function | score_samples
+             inputs: {customers: silver.crm.customers}
+             outputs: [gold.crm.churn_scores]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "type": "ml",
+           "requires_dates": false,
+           "nodes": {
+             "score": {
+               "ml_stage": "serving",
+               "model": {
+                 "name": "churn_clf",
+                 "stage": "production",
+                 "trust_artifact": true,
+                 "features": [
+                   "tenure",
+                   "spend"
+                 ],
+                 "output_col": "churn_score",
+                 "method": "predict_proba"
+               },
+               "inputs": {
+                 "customers": "silver.crm.customers"
+               },
+               "outputs": [
+                 "gold.crm.churn_scores"
+               ]
+             }
+           }
+         }
 
 Without ``run``, the built-in scorer applies the model to the node's single input
 and adds ``output_col`` — on a pandas or a Spark DataFrame (``mapInPandas``; on

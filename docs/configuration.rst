@@ -68,22 +68,93 @@ Free-form data you want to keep with the project goes under ``metadata:``
 ducta.yaml
 ----------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   description: Orders to daily revenue
-   paths: {input: data, output: data}
-   settings:
-     max_parallel_nodes: 4
-     evidence_level: record
-     run_lock: {backend: local}
-   environments:
-     prod:
-       settings: {max_parallel_nodes: 16, evidence_level: signed}
-       paths: {output: s3://lake/prod}
-       pipelines.etl.nodes.clean.quality.gate.max_errors: 0
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+         description = "Orders to daily revenue"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         max_parallel_nodes = 4
+         evidence_level = "record"
+
+         [settings.run_lock]
+         backend = "local"
+
+         [environments.prod]
+         "pipelines.etl.nodes.clean.quality.gate.max_errors" = 0
+
+         [environments.prod.settings]
+         max_parallel_nodes = 16
+         evidence_level = "signed"
+
+         [environments.prod.paths]
+         output = "s3://lake/prod"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         description: Orders to daily revenue
+         paths: {input: data, output: data}
+         settings:
+           max_parallel_nodes: 4
+           evidence_level: record
+           run_lock: {backend: local}
+         environments:
+           prod:
+             settings: {max_parallel_nodes: 16, evidence_level: signed}
+             paths: {output: s3://lake/prod}
+             pipelines.etl.nodes.clean.quality.gate.max_errors: 0
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "description": "Orders to daily revenue",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "max_parallel_nodes": 4,
+             "evidence_level": "record",
+             "run_lock": {
+               "backend": "local"
+             }
+           },
+           "environments": {
+             "prod": {
+               "settings": {
+                 "max_parallel_nodes": 16,
+                 "evidence_level": "signed"
+               },
+               "paths": {
+                 "output": "s3://lake/prod"
+               },
+               "pipelines.etl.nodes.clean.quality.gate.max_errors": 0
+             }
+           }
+         }
 
 .. list-table::
    :widths: 22 78
@@ -157,27 +228,131 @@ catalog.yaml
 Every dataset the project reads or writes, declared **once**. A node refers to
 a dataset by its name; the catalog says where it is and how to handle it.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   orders_raw:
-     description: Orders as exported by the shop
-     format: csv
-     path: ${paths.input}/orders.csv
-     options: {header: true}
-     incremental: {column: order_date}      # read + fingerprint only the run's window
-     quality:                               # contract: checked wherever it is read
-       empty_dataset: true
-       schema: {expected_columns: [order_id, amount, order_date]}
-   silver.sales.orders:                     # no path: <output>/<env>/silver/sales/orders
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [order_id]}
-   gold.sales.daily:
-     format: parquet
-     path: ${paths.output}/${env}/gold/daily
-     write: {mode: overwrite, partition: [order_date]}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [orders_raw]
+         description = "Orders as exported by the shop"
+         format = "csv"
+         path = "${paths.input}/orders.csv"
+
+         [orders_raw.options]
+         header = true
+
+         [orders_raw.incremental]
+         column = "order_date"
+
+         [orders_raw.quality]
+         empty_dataset = true
+
+         [orders_raw.quality.schema]
+         expected_columns = [
+             "order_id",
+             "amount",
+             "order_date",
+         ]
+
+         ["silver.sales.orders"]
+         format = "delta"
+
+         ["silver.sales.orders".write]
+         mode = "merge"
+
+         ["silver.sales.orders".write.merge]
+         keys = [
+             "order_id",
+         ]
+
+         ["gold.sales.daily"]
+         format = "parquet"
+         path = "${paths.output}/${env}/gold/daily"
+
+         ["gold.sales.daily".write]
+         mode = "overwrite"
+         partition = [
+             "order_date",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         orders_raw:
+           description: Orders as exported by the shop
+           format: csv
+           path: ${paths.input}/orders.csv
+           options: {header: true}
+           incremental: {column: order_date}      # read + fingerprint only the run's window
+           quality:                               # contract: checked wherever it is read
+             empty_dataset: true
+             schema: {expected_columns: [order_id, amount, order_date]}
+         silver.sales.orders:                     # no path: <output>/<env>/silver/sales/orders
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [order_id]}
+         gold.sales.daily:
+           format: parquet
+           path: ${paths.output}/${env}/gold/daily
+           write: {mode: overwrite, partition: [order_date]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "orders_raw": {
+             "description": "Orders as exported by the shop",
+             "format": "csv",
+             "path": "${paths.input}/orders.csv",
+             "options": {
+               "header": true
+             },
+             "incremental": {
+               "column": "order_date"
+             },
+             "quality": {
+               "empty_dataset": true,
+               "schema": {
+                 "expected_columns": [
+                   "order_id",
+                   "amount",
+                   "order_date"
+                 ]
+               }
+             }
+           },
+           "silver.sales.orders": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "order_id"
+                 ]
+               }
+             }
+           },
+           "gold.sales.daily": {
+             "format": "parquet",
+             "path": "${paths.output}/${env}/gold/daily",
+             "write": {
+               "mode": "overwrite",
+               "partition": [
+                 "order_date"
+               ]
+             }
+           }
+         }
 
 .. list-table::
    :widths: 20 80
@@ -225,20 +400,76 @@ environments apart without writing a single path: ``silver.sales.orders`` is
 Writing
 ~~~~~~~
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   silver.sales.customers:
-     format: delta
-     write:
-       mode: merge
-       merge:
-         keys: [customer_id]
-         when_matched: update_all          # update_all | ignore | {update: [cols]}
-         when_not_matched: insert_all      # insert_all | ignore
-         delete_when: "src._deleted = true"
-         schema_evolution: false
-       partition: [country]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         ["silver.sales.customers"]
+         format = "delta"
+
+         ["silver.sales.customers".write]
+         mode = "merge"
+         partition = [
+             "country",
+         ]
+
+         ["silver.sales.customers".write.merge]
+         keys = [
+             "customer_id",
+         ]
+         when_matched = "update_all"
+         when_not_matched = "insert_all"
+         delete_when = "src._deleted = true"
+         schema_evolution = false
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         silver.sales.customers:
+           format: delta
+           write:
+             mode: merge
+             merge:
+               keys: [customer_id]
+               when_matched: update_all          # update_all | ignore | {update: [cols]}
+               when_not_matched: insert_all      # insert_all | ignore
+               delete_when: "src._deleted = true"
+               schema_evolution: false
+             partition: [country]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "silver.sales.customers": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "customer_id"
+                 ],
+                 "when_matched": "update_all",
+                 "when_not_matched": "insert_all",
+                 "delete_when": "src._deleted = true",
+                 "schema_evolution": false
+               },
+               "partition": [
+                 "country"
+               ]
+             }
+           }
+         }
 
 ``mode`` is ``overwrite`` (default), ``append``, ``ignore``, ``error`` or
 ``merge``. ``merge`` is an upsert on ``keys`` for Delta outputs; a batch with
@@ -265,19 +496,95 @@ datasets, and together they are the catalog.
    ├── silver.yaml
    └── gold.yaml
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog/silver.yaml
-   silver.sales.orders:
-     description: Orders, deduplicated and typed
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [order_id]}
-     quality:
-       null_rate: {columns: [order_id], threshold: 0.0}
-       duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
-       gate: {max_errors: 0}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog/silver.toml
+         ["silver.sales.orders"]
+         description = "Orders, deduplicated and typed"
+         format = "delta"
+
+         ["silver.sales.orders".write]
+         mode = "merge"
+
+         ["silver.sales.orders".write.merge]
+         keys = [
+             "order_id",
+         ]
+
+         ["silver.sales.orders".quality.null_rate]
+         columns = [
+             "order_id",
+         ]
+         threshold = 0.0
+
+         ["silver.sales.orders".quality.duplicates]
+         columns = [
+             "order_id",
+         ]
+         max_duplicate_rate = 0.0
+
+         ["silver.sales.orders".quality.gate]
+         max_errors = 0
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog/silver.yaml
+         silver.sales.orders:
+           description: Orders, deduplicated and typed
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [order_id]}
+           quality:
+             null_rate: {columns: [order_id], threshold: 0.0}
+             duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
+             gate: {max_errors: 0}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "silver.sales.orders": {
+             "description": "Orders, deduplicated and typed",
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "order_id"
+                 ]
+               }
+             },
+             "quality": {
+               "null_rate": {
+                 "columns": [
+                   "order_id"
+                 ],
+                 "threshold": 0.0
+               },
+               "duplicates": {
+                 "columns": [
+                   "order_id"
+                 ],
+                 "max_duplicate_rate": 0.0
+               },
+               "gate": {
+                 "max_errors": 0
+               }
+             }
+           }
+         }
 
 Two rules keep it unambiguous. A project keeps its datasets in **one place**:
 ``catalog.yaml`` next to a ``catalog/`` folder is an error. And a dataset is
@@ -294,27 +601,128 @@ pipelines/<name>.yaml
 
 One file per pipeline; the file's name is the pipeline's name.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/etl.yaml
-   description: Orders to daily totals
-   requires_dates: true
-   nodes:
-     clean:
-       run: pipelines.etl:clean              # module:function
-       inputs: {raw: orders_raw}             # parameter → dataset
-       outputs: [silver.sales.orders]
-       quality:
-         checks:
-           null_rate: {columns: [order_id], threshold: 0}
-           duplicates: {columns: [order_id]}
-         gate: {max_errors: 0, on_fail: skip_downstream}
-     daily:
-       run: pipelines.etl:daily
-       inputs: [silver.sales.orders]         # depends on `clean`: inferred from the data
-       outputs: [gold.sales.daily]
-       timeout_seconds: 600
-       retry: 1
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/etl.toml
+         description = "Orders to daily totals"
+         requires_dates = true
+
+         [nodes.clean]
+         run = "pipelines.etl:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         raw = "orders_raw"
+
+         [nodes.clean.quality.checks.null_rate]
+         columns = [
+             "order_id",
+         ]
+         threshold = 0
+
+         [nodes.clean.quality.checks.duplicates]
+         columns = [
+             "order_id",
+         ]
+
+         [nodes.clean.quality.gate]
+         max_errors = 0
+         on_fail = "skip_downstream"
+
+         [nodes.daily]
+         run = "pipelines.etl:daily"
+         inputs = [
+             "silver.sales.orders",
+         ]
+         outputs = [
+             "gold.sales.daily",
+         ]
+         timeout_seconds = 600
+         retry = 1
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/etl.yaml
+         description: Orders to daily totals
+         requires_dates: true
+         nodes:
+           clean:
+             run: pipelines.etl:clean              # module:function
+             inputs: {raw: orders_raw}             # parameter → dataset
+             outputs: [silver.sales.orders]
+             quality:
+               checks:
+                 null_rate: {columns: [order_id], threshold: 0}
+                 duplicates: {columns: [order_id]}
+               gate: {max_errors: 0, on_fail: skip_downstream}
+           daily:
+             run: pipelines.etl:daily
+             inputs: [silver.sales.orders]         # depends on `clean`: inferred from the data
+             outputs: [gold.sales.daily]
+             timeout_seconds: 600
+             retry: 1
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Orders to daily totals",
+           "requires_dates": true,
+           "nodes": {
+             "clean": {
+               "run": "pipelines.etl:clean",
+               "inputs": {
+                 "raw": "orders_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ],
+               "quality": {
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "order_id"
+                     ],
+                     "threshold": 0
+                   },
+                   "duplicates": {
+                     "columns": [
+                       "order_id"
+                     ]
+                   }
+                 },
+                 "gate": {
+                   "max_errors": 0,
+                   "on_fail": "skip_downstream"
+                 }
+               }
+             },
+             "daily": {
+               "run": "pipelines.etl:daily",
+               "inputs": [
+                 "silver.sales.orders"
+               ],
+               "outputs": [
+                 "gold.sales.daily"
+               ],
+               "timeout_seconds": 600,
+               "retry": 1
+             }
+           }
+         }
 
 Pipeline keys
 ~~~~~~~~~~~~~
@@ -415,45 +823,185 @@ Node kinds
 ``kind: transform`` is the default and runs your function. Two other kinds need
 no code:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/landing.yaml
-   requires_dates: false
-   nodes:
-     land_orders:
-       kind: ingest                          # copy from a database connection
-       ingest:
-         source: shop_db                     # a connection from `ducta init ingestion`
-         table: public.orders
-         columns: [order_id, amount, order_date]
-         where: "order_date >= '2026-01-01'"
-       outputs: [bronze.shop.orders]
+   .. tab-item:: TOML
+      :sync: toml
 
-.. code-block:: yaml
+      .. code-block:: toml
 
-   # pipelines/events.yaml
-   type: streaming
-   requires_dates: false
-   nodes:
-     clean_events:
-       kind: stream                          # Structured Streaming
-       stream:
-         input:
-           format: file_stream
-           file_format: json
-           options: {path: "${paths.input}/events"}
-           schema: event_id STRING, amount DOUBLE, ts TIMESTAMP
-         transform:                          # a registered transform, with parameters
-           key: clean_events
-           module: pipelines.transforms
-           params: {min_amount: 0.0}
-         output:
-           format: parquet
-           path: ${paths.output}/${env}/silver/events
-         streaming:
-           checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
-           output_mode: append
-           trigger: 5s                       # or '5 minutes', available_now, once
+         # pipelines/landing.toml
+         requires_dates = false
+
+         [nodes.land_orders]
+         kind = "ingest"
+         outputs = [
+             "bronze.shop.orders",
+         ]
+
+         [nodes.land_orders.ingest]
+         source = "shop_db"
+         table = "public.orders"
+         columns = [
+             "order_id",
+             "amount",
+             "order_date",
+         ]
+         where = "order_date >= '2026-01-01'"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/landing.yaml
+         requires_dates: false
+         nodes:
+           land_orders:
+             kind: ingest                          # copy from a database connection
+             ingest:
+               source: shop_db                     # a connection from `ducta init ingestion`
+               table: public.orders
+               columns: [order_id, amount, order_date]
+               where: "order_date >= '2026-01-01'"
+             outputs: [bronze.shop.orders]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "requires_dates": false,
+           "nodes": {
+             "land_orders": {
+               "kind": "ingest",
+               "ingest": {
+                 "source": "shop_db",
+                 "table": "public.orders",
+                 "columns": [
+                   "order_id",
+                   "amount",
+                   "order_date"
+                 ],
+                 "where": "order_date >= '2026-01-01'"
+               },
+               "outputs": [
+                 "bronze.shop.orders"
+               ]
+             }
+           }
+         }
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/events.toml
+         type = "streaming"
+         requires_dates = false
+
+         [nodes.clean_events]
+         kind = "stream"
+
+         [nodes.clean_events.stream.input]
+         format = "file_stream"
+         file_format = "json"
+         schema = "event_id STRING, amount DOUBLE, ts TIMESTAMP"
+
+         [nodes.clean_events.stream.input.options]
+         path = "${paths.input}/events"
+
+         [nodes.clean_events.stream.transform]
+         key = "clean_events"
+         module = "pipelines.transforms"
+
+         [nodes.clean_events.stream.transform.params]
+         min_amount = 0.0
+
+         [nodes.clean_events.stream.output]
+         format = "parquet"
+         path = "${paths.output}/${env}/silver/events"
+
+         [nodes.clean_events.stream.streaming]
+         checkpoint_location = "${paths.output}/${env}/_ckpt/clean_events"
+         output_mode = "append"
+         trigger = "5s"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/events.yaml
+         type: streaming
+         requires_dates: false
+         nodes:
+           clean_events:
+             kind: stream                          # Structured Streaming
+             stream:
+               input:
+                 format: file_stream
+                 file_format: json
+                 options: {path: "${paths.input}/events"}
+                 schema: event_id STRING, amount DOUBLE, ts TIMESTAMP
+               transform:                          # a registered transform, with parameters
+                 key: clean_events
+                 module: pipelines.transforms
+                 params: {min_amount: 0.0}
+               output:
+                 format: parquet
+                 path: ${paths.output}/${env}/silver/events
+               streaming:
+                 checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+                 output_mode: append
+                 trigger: 5s                       # or '5 minutes', available_now, once
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "type": "streaming",
+           "requires_dates": false,
+           "nodes": {
+             "clean_events": {
+               "kind": "stream",
+               "stream": {
+                 "input": {
+                   "format": "file_stream",
+                   "file_format": "json",
+                   "options": {
+                     "path": "${paths.input}/events"
+                   },
+                   "schema": "event_id STRING, amount DOUBLE, ts TIMESTAMP"
+                 },
+                 "transform": {
+                   "key": "clean_events",
+                   "module": "pipelines.transforms",
+                   "params": {
+                     "min_amount": 0.0
+                   }
+                 },
+                 "output": {
+                   "format": "parquet",
+                   "path": "${paths.output}/${env}/silver/events"
+                 },
+                 "streaming": {
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/clean_events",
+                   "output_mode": "append",
+                   "trigger": "5s"
+                 }
+               }
+             }
+           }
+         }
 
 Each kind accepts only its own keys: an ``ingest`` node with ``run:`` is an
 error. A stream node is closed too: how it runs (``checkpoint_location``,
@@ -475,21 +1023,92 @@ gives datasets and nodes the values they do not set themselves. Precedence, lowe
 first: project ``defaults`` < pipeline ``defaults`` < the dataset or node itself <
 the active environment's overrides.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   defaults:
-     catalog:                           # {glob: dataset keys}, applied in order
-       "bronze.*": {format: parquet}
-       "silver.*": {format: parquet}
-       "gold.*": {format: csv}
-     node:                              # retry, timeout_seconds, on_missing_input, fail_fast
-       retry: 2
-     stream:                            # the `stream:` block of every stream node
-       streaming: {trigger: 10s, output_mode: append}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [defaults.catalog."bronze.*"]
+         format = "parquet"
+
+         [defaults.catalog."silver.*"]
+         format = "parquet"
+
+         [defaults.catalog."gold.*"]
+         format = "csv"
+
+         [defaults.node]
+         retry = 2
+
+         [defaults.stream.streaming]
+         trigger = "10s"
+         output_mode = "append"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         defaults:
+           catalog:                           # {glob: dataset keys}, applied in order
+             "bronze.*": {format: parquet}
+             "silver.*": {format: parquet}
+             "gold.*": {format: csv}
+           node:                              # retry, timeout_seconds, on_missing_input, fail_fast
+             retry: 2
+           stream:                            # the `stream:` block of every stream node
+             streaming: {trigger: 10s, output_mode: append}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "defaults": {
+             "catalog": {
+               "bronze.*": {
+                 "format": "parquet"
+               },
+               "silver.*": {
+                 "format": "parquet"
+               },
+               "gold.*": {
+                 "format": "csv"
+               }
+             },
+             "node": {
+               "retry": 2
+             },
+             "stream": {
+               "streaming": {
+                 "trigger": "10s",
+                 "output_mode": "append"
+               }
+             }
+           }
+         }
 
 A ``quality`` default applies only to nodes that declare a ``quality`` block, so a
 default gate does not turn every node into one with checks to run.
@@ -502,12 +1121,45 @@ a placeholder that is the whole value keeps its type. A placeholder also works
 inside a **key**, which is how one template serves several pipelines: node names
 are unique across the project, so each copy has to name its nodes differently.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/ml.risk.yaml
-   extends: templates/ml_xgboost
-   params: {target: At_Risk, method: stratified}
-   description: Early academic-risk warning   # replaces the template's description
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/ml.risk.toml
+         extends = "templates/ml_xgboost"
+         description = "Early academic-risk warning"
+
+         [params]
+         target = "At_Risk"
+         method = "stratified"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/ml.risk.yaml
+         extends: templates/ml_xgboost
+         params: {target: At_Risk, method: stratified}
+         description: Early academic-risk warning   # replaces the template's description
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "extends": "templates/ml_xgboost",
+           "params": {
+             "target": "At_Risk",
+             "method": "stratified"
+           },
+           "description": "Early academic-risk warning"
+         }
 
 .. code-block:: yaml
 
@@ -554,60 +1206,271 @@ The same block — ``checks`` plus an optional ``gate`` — appears in three pla
   replace the dataset's catalog contract for that node;
 - a node's ``quality``: checks on what the node writes.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/etl.yaml
-   nodes:
-     clean:
-       run: pipelines.etl:clean
-       inputs: {raw: orders_raw}
-       outputs: [silver.sales.orders]
-       input_checks:
-         orders_raw:
-           checks:
-             row_count: {min: 1}
-       quality:
-         profile: strict                     # checks from settings.quality.profiles
-         checks:
-           null_rate: {columns: [order_id], threshold: 0}
-           empty_dataset: true               # `name: true` enables a check with its defaults
-           duplicates: false                 # `false` disables one the profile enables
-         gate:
-           max_errors: 0
-           on_fail: stop_all                 # skip_downstream (default) | stop_all | warn_only
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/etl.toml
+         [nodes.clean]
+         run = "pipelines.etl:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         raw = "orders_raw"
+
+         [nodes.clean.input_checks.orders_raw.checks.row_count]
+         min = 1
+
+         [nodes.clean.quality]
+         profile = "strict"
+
+         [nodes.clean.quality.checks]
+         empty_dataset = true
+         duplicates = false
+
+         [nodes.clean.quality.checks.null_rate]
+         columns = [
+             "order_id",
+         ]
+         threshold = 0
+
+         [nodes.clean.quality.gate]
+         max_errors = 0
+         on_fail = "stop_all"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/etl.yaml
+         nodes:
+           clean:
+             run: pipelines.etl:clean
+             inputs: {raw: orders_raw}
+             outputs: [silver.sales.orders]
+             input_checks:
+               orders_raw:
+                 checks:
+                   row_count: {min: 1}
+             quality:
+               profile: strict                     # checks from settings.quality.profiles
+               checks:
+                 null_rate: {columns: [order_id], threshold: 0}
+                 empty_dataset: true               # `name: true` enables a check with its defaults
+                 duplicates: false                 # `false` disables one the profile enables
+               gate:
+                 max_errors: 0
+                 on_fail: stop_all                 # skip_downstream (default) | stop_all | warn_only
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "nodes": {
+             "clean": {
+               "run": "pipelines.etl:clean",
+               "inputs": {
+                 "raw": "orders_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ],
+               "input_checks": {
+                 "orders_raw": {
+                   "checks": {
+                     "row_count": {
+                       "min": 1
+                     }
+                   }
+                 }
+               },
+               "quality": {
+                 "profile": "strict",
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "order_id"
+                     ],
+                     "threshold": 0
+                   },
+                   "empty_dataset": true,
+                   "duplicates": false
+                 },
+                 "gate": {
+                   "max_errors": 0,
+                   "on_fail": "stop_all"
+                 }
+               }
+             }
+           }
+         }
 
 Profiles live in ``ducta.yaml``:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings:
-     quality:
-       profiles:
-         strict:
-           checks:
-             empty_dataset: {enabled: true}
-             duplicates: {columns: [id]}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings.quality.profiles.strict.checks.empty_dataset]
+         enabled = true
+
+         [settings.quality.profiles.strict.checks.duplicates]
+         columns = [
+             "id",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings:
+           quality:
+             profiles:
+               strict:
+                 checks:
+                   empty_dataset: {enabled: true}
+                   duplicates: {columns: [id]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "quality": {
+               "profiles": {
+                 "strict": {
+                   "checks": {
+                     "empty_dataset": {
+                       "enabled": true
+                     },
+                     "duplicates": {
+                       "columns": [
+                         "id"
+                       ]
+                     }
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 Checks can also be listed directly, next to the gate, without the ``checks:``
 level; any key that is not ``gate``, ``enabled``, ``fail_fast``, ``profile``,
 ``dataset_name`` or ``output`` is read as the name of a check:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/etl.yaml
-   nodes:
-     clean:
-       run: pipelines.etl:clean
-       inputs: {raw: orders_raw}
-       outputs: [silver.sales.orders]
-       quality:
-         null_rate: {columns: [order_id], threshold: 0}
-         row_count: {min: 400}
-         gate: {max_errors: 0}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/etl.toml
+         [nodes.clean]
+         run = "pipelines.etl:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         raw = "orders_raw"
+
+         [nodes.clean.quality.null_rate]
+         columns = [
+             "order_id",
+         ]
+         threshold = 0
+
+         [nodes.clean.quality.row_count]
+         min = 400
+
+         [nodes.clean.quality.gate]
+         max_errors = 0
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/etl.yaml
+         nodes:
+           clean:
+             run: pipelines.etl:clean
+             inputs: {raw: orders_raw}
+             outputs: [silver.sales.orders]
+             quality:
+               null_rate: {columns: [order_id], threshold: 0}
+               row_count: {min: 400}
+               gate: {max_errors: 0}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "nodes": {
+             "clean": {
+               "run": "pipelines.etl:clean",
+               "inputs": {
+                 "raw": "orders_raw"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ],
+               "quality": {
+                 "null_rate": {
+                   "columns": [
+                     "order_id"
+                   ],
+                   "threshold": 0
+                 },
+                 "row_count": {
+                   "min": 400
+                 },
+                 "gate": {
+                   "max_errors": 0
+                 }
+               }
+             }
+           }
+         }
 
 **Parameters are checked when the project is loaded**, with the file and line:
 an unknown parameter (``colums``), a value of the wrong type or outside its range
@@ -628,16 +1491,76 @@ Quality profiles (named, reusable sets of checks) can live in
 ``quality/profiles.yaml`` instead of ``settings.quality.profiles``, which keeps
 ``ducta.yaml`` short:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # quality/profiles.yaml
-   customers_dimension:
-     checks:
-       null_rate: {columns: [customer_id, country], threshold: 0.0}
-       duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
-   strict:
-     checks:
-       empty_dataset: {enabled: true}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # quality/profiles.toml
+         [customers_dimension.checks.null_rate]
+         columns = [
+             "customer_id",
+             "country",
+         ]
+         threshold = 0.0
+
+         [customers_dimension.checks.duplicates]
+         columns = [
+             "customer_id",
+         ]
+         max_duplicate_rate = 0.0
+
+         [strict.checks.empty_dataset]
+         enabled = true
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # quality/profiles.yaml
+         customers_dimension:
+           checks:
+             null_rate: {columns: [customer_id, country], threshold: 0.0}
+             duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
+         strict:
+           checks:
+             empty_dataset: {enabled: true}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "customers_dimension": {
+             "checks": {
+               "null_rate": {
+                 "columns": [
+                   "customer_id",
+                   "country"
+                 ],
+                 "threshold": 0.0
+               },
+               "duplicates": {
+                 "columns": [
+                   "customer_id"
+                 ],
+                 "max_duplicate_rate": 0.0
+               }
+             }
+           },
+           "strict": {
+             "checks": {
+               "empty_dataset": {
+                 "enabled": true
+               }
+             }
+           }
+         }
 
 The file is merged into ``settings.quality.profiles`` before environments apply,
 so an environment can still override one value
@@ -659,21 +1582,102 @@ when ``--env`` is omitted), ``dev``, ``sandbox`` (and ``sandbox_<developer>``),
 deep-merged over the whole project — settings, paths, catalog entries and
 pipelines:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings: {max_parallel_nodes: 4}
-   environments:
-     dev:
-       settings: {max_parallel_nodes: 1, log_level: DEBUG}
-     prod:
-       paths: {input: s3://lake/raw, output: s3://lake/curated}
-       settings: {max_parallel_nodes: 16, evidence_level: signed, run_lock: {backend: storage}}
-       catalog.gold.sales.daily.write.mode: append
-       pipelines.etl.nodes.clean.quality.gate.on_fail: stop_all
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         max_parallel_nodes = 4
+
+         [environments.dev.settings]
+         max_parallel_nodes = 1
+         log_level = "DEBUG"
+
+         [environments.prod]
+         "catalog.gold.sales.daily.write.mode" = "append"
+         "pipelines.etl.nodes.clean.quality.gate.on_fail" = "stop_all"
+
+         [environments.prod.paths]
+         input = "s3://lake/raw"
+         output = "s3://lake/curated"
+
+         [environments.prod.settings]
+         max_parallel_nodes = 16
+         evidence_level = "signed"
+
+         [environments.prod.settings.run_lock]
+         backend = "storage"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings: {max_parallel_nodes: 4}
+         environments:
+           dev:
+             settings: {max_parallel_nodes: 1, log_level: DEBUG}
+           prod:
+             paths: {input: s3://lake/raw, output: s3://lake/curated}
+             settings: {max_parallel_nodes: 16, evidence_level: signed, run_lock: {backend: storage}}
+             catalog.gold.sales.daily.write.mode: append
+             pipelines.etl.nodes.clean.quality.gate.on_fail: stop_all
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "max_parallel_nodes": 4
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "max_parallel_nodes": 1,
+                 "log_level": "DEBUG"
+               }
+             },
+             "prod": {
+               "paths": {
+                 "input": "s3://lake/raw",
+                 "output": "s3://lake/curated"
+               },
+               "settings": {
+                 "max_parallel_nodes": 16,
+                 "evidence_level": "signed",
+                 "run_lock": {
+                   "backend": "storage"
+                 }
+               },
+               "catalog.gold.sales.daily.write.mode": "append",
+               "pipelines.etl.nodes.clean.quality.gate.on_fail": "stop_all"
+             }
+           }
+         }
 
 - Mappings merge key by key; lists and scalars replace.
 - A dotted key sets one value deep inside the project. Dataset names that
@@ -706,12 +1710,40 @@ Inside the catalog and settings:
   for values that differ per machine (``${DATA_ROOT}``, ``${WAREHOUSE_HOST}``).
   An unset variable is left as written.
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   events:
-     format: parquet
-     path: ${DATA_ROOT}/events/${env}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [events]
+         format = "parquet"
+         path = "${DATA_ROOT}/events/${env}"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         events:
+           format: parquet
+           path: ${DATA_ROOT}/events/${env}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "events": {
+             "format": "parquet",
+             "path": "${DATA_ROOT}/events/${env}"
+           }
+         }
 
 **Credentials never go in configuration.** ``${NAME}`` refuses variable names
 that look like secrets — containing ``PASSWORD``, ``SECRET``, ``TOKEN``,
@@ -760,6 +1792,294 @@ and ``ducta.toml`` together are an error, not a choice.
 Errors name the file and the line in every format. TOML locates every key written
 as ``key = value`` under its table; a value inside an inline table or a
 multi-line array is located at the line of the key that holds it.
+
+The same project in the three formats
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The pipeline below is one file, ``pipelines/etl``, written three ways. Every tab
+is the same pipeline: ``ducta config show --engine`` prints the same documents
+for all of them, and each one passes ``ducta config validate`` and runs. The TOML
+and JSON tabs are what ``ducta config convert`` writes from the YAML one.
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+         :caption: pipelines/etl.toml
+
+         #:schema ../.ducta/schema/pipeline.json
+         description = "Orders: land, clean, aggregate"
+         type = "batch"
+         requires_dates = false
+
+         [nodes.extract]
+         run = "pipelines.etl:extract"
+         outputs = [
+             "bronze.etl.raw_data",
+         ]
+
+         [nodes.extract.inputs]
+         source_data = "source_data"
+
+         [nodes.transform]
+         run = "pipelines.etl:transform"
+         outputs = [
+             "silver.etl.clean_data",
+         ]
+
+         [nodes.transform.inputs]
+         raw_data = "bronze.etl.raw_data"
+
+         [nodes.transform.quality.null_rate]
+         columns = [
+             "amount",
+         ]
+         threshold = 0.0
+
+         [nodes.transform.quality.range]
+         column = "amount"
+         min = 0
+
+         [nodes.transform.quality.gate]
+         max_errors = 0
+         on_fail = "skip_downstream"
+
+         [nodes.load]
+         run = "pipelines.etl:load"
+         outputs = [
+             "gold.etl.final_output",
+         ]
+
+         [nodes.load.inputs]
+         clean_data = "silver.etl.clean_data"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+         :caption: pipelines/etl.yaml
+
+         description: "Orders: land, clean, aggregate"
+         type: batch
+         requires_dates: false
+
+         nodes:
+           extract:
+             run: pipelines.etl:extract
+             inputs: {source_data: source_data}
+             outputs: [bronze.etl.raw_data]
+
+           transform:
+             run: pipelines.etl:transform
+             inputs: {raw_data: bronze.etl.raw_data}
+             outputs: [silver.etl.clean_data]
+             quality:
+               null_rate: {columns: [amount], threshold: 0.0}
+               range: {column: amount, min: 0}
+               gate: {max_errors: 0, on_fail: skip_downstream}
+
+           load:
+             run: pipelines.etl:load
+             inputs: {clean_data: silver.etl.clean_data}
+             outputs: [gold.etl.final_output]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+         :caption: pipelines/etl.json
+
+         {
+           "$schema": "../.ducta/schema/pipeline.json",
+           "description": "Orders: land, clean, aggregate",
+           "type": "batch",
+           "requires_dates": false,
+           "nodes": {
+             "extract": {
+               "run": "pipelines.etl:extract",
+               "inputs": {
+                 "source_data": "source_data"
+               },
+               "outputs": [
+                 "bronze.etl.raw_data"
+               ]
+             },
+             "transform": {
+               "run": "pipelines.etl:transform",
+               "inputs": {
+                 "raw_data": "bronze.etl.raw_data"
+               },
+               "outputs": [
+                 "silver.etl.clean_data"
+               ],
+               "quality": {
+                 "null_rate": {
+                   "columns": [
+                     "amount"
+                   ],
+                   "threshold": 0.0
+                 },
+                 "range": {
+                   "column": "amount",
+                   "min": 0
+                 },
+                 "gate": {
+                   "max_errors": 0,
+                   "on_fail": "skip_downstream"
+                 }
+               }
+             },
+             "load": {
+               "run": "pipelines.etl:load",
+               "inputs": {
+                 "clean_data": "silver.etl.clean_data"
+               },
+               "outputs": [
+                 "gold.etl.final_output"
+               ]
+             }
+           }
+         }
+
+
+The project file follows the same rule:
+
+.. tab-set::
+   :sync-group: ducta-format
+
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+         :caption: ducta.toml
+
+         #:schema .ducta/schema/project.json
+         version = 2
+         project = "orders"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         mode = "local"
+         max_parallel_nodes = 4
+
+         [defaults.catalog."bronze.*"]
+         format = "parquet"
+
+         [defaults.catalog."silver.*"]
+         format = "parquet"
+
+         [defaults.catalog."gold.*"]
+         format = "csv"
+
+         [environments.dev.settings]
+         max_parallel_nodes = 1
+         log_level = "DEBUG"
+
+         [environments.prod.settings]
+         max_parallel_nodes = 8
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+         :caption: ducta.yaml
+
+         version: 2
+         project: orders
+         paths: {input: data, output: data}
+
+         settings:
+           mode: local
+           max_parallel_nodes: 4
+
+         defaults:
+           catalog:
+             "bronze.*": {format: parquet}
+             "silver.*": {format: parquet}
+             "gold.*": {format: csv}
+
+         environments:
+           dev:
+             settings: {max_parallel_nodes: 1, log_level: DEBUG}
+           prod:
+             settings: {max_parallel_nodes: 8}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+         :caption: ducta.json
+
+         {
+           "$schema": ".ducta/schema/project.json",
+           "version": 2,
+           "project": "orders",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "mode": "local",
+             "max_parallel_nodes": 4
+           },
+           "defaults": {
+             "catalog": {
+               "bronze.*": {
+                 "format": "parquet"
+               },
+               "silver.*": {
+                 "format": "parquet"
+               },
+               "gold.*": {
+                 "format": "csv"
+               }
+             }
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "max_parallel_nodes": 1,
+                 "log_level": "DEBUG"
+               }
+             },
+             "prod": {
+               "settings": {
+                 "max_parallel_nodes": 8
+               }
+             }
+           }
+         }
+
+
+What changes from one to the next is only syntax:
+
+* **Comments** exist in YAML and TOML (``#``), not in JSON. ``ducta template
+  --format toml|json`` and ``ducta config convert`` write no comments, so a
+  project that is explained in its comments is best kept in YAML.
+* **Editor schema.** YAML names it in a ``# yaml-language-server: $schema=``
+  comment, TOML in a ``#:schema`` comment, JSON in a top-level ``"$schema"`` key.
+  All three point at the files ``ducta config schema --out .`` writes under
+  ``.ducta/schema/``.
+* **Dotted names are quoted keys in TOML**: ``[defaults.catalog."bronze.*"]``,
+  where YAML writes ``"bronze.*": {...}``.
+* **Inline mappings** (``inputs: {raw_data: bronze.etl.raw_data}``) are a table
+  in TOML (``[nodes.transform.inputs]``) and a nested object in JSON.
+
+Pick the format per file, not per project: ``ducta.yaml`` can sit next to
+``pipelines/etl.toml`` and ``pipelines/report.json``. To move a whole project
+from one to another:
+
+.. code-block:: bash
+
+   ducta config convert --to toml --out ../orders-toml   # writes ducta.toml, catalog.toml, pipelines/*.toml
+   cp -r pipelines/*.py ../orders-toml/pipelines/        # your Python and data are not copied
+   cd ../orders-toml && ducta config validate
 
 ``ducta template --format toml|json`` writes a template in that format, and
 ``ducta config convert`` rewrites an existing project (see below). Converted
@@ -883,36 +2203,166 @@ A project grows into this layout:
 ``pipelines/`` and ``catalog/``; data scientists edit the ML pipeline's ``split``,
 ``hyperparams`` and ``model_version`` without touching Python:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/ml.churn_train.yaml
-   description: Churn model — features, training, evaluation
-   type: ml
-   requires_dates: false
-   model_version: "2026.10"
-   hyperparams: {n_estimators: 200, max_depth: 8}
-   split: {method: stratified, stratify_col: churned, test_size: 0.2, val_size: 0.2, seed: 42}
-   nodes:
-     build_features:
-       run: churn.features:build_features
-       ml_stage: feature_engineering
-       inputs: {orders: silver.sales.orders}
-       outputs: [ml.churn.features]
-     train_model:
-       run: churn.model:train_model
-       ml_stage: training
-       inputs: {features: ml.churn.features}
-       outputs: [ml.churn.metrics]
-       after: [build_features]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/ml.churn_train.toml
+         description = "Churn model — features, training, evaluation"
+         type = "ml"
+         requires_dates = false
+         model_version = "2026.10"
+
+         [hyperparams]
+         n_estimators = 200
+         max_depth = 8
+
+         [split]
+         method = "stratified"
+         stratify_col = "churned"
+         test_size = 0.2
+         val_size = 0.2
+         seed = 42
+
+         [nodes.build_features]
+         run = "churn.features:build_features"
+         ml_stage = "feature_engineering"
+         outputs = [
+             "ml.churn.features",
+         ]
+
+         [nodes.build_features.inputs]
+         orders = "silver.sales.orders"
+
+         [nodes.train_model]
+         run = "churn.model:train_model"
+         ml_stage = "training"
+         outputs = [
+             "ml.churn.metrics",
+         ]
+         after = [
+             "build_features",
+         ]
+
+         [nodes.train_model.inputs]
+         features = "ml.churn.features"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/ml.churn_train.yaml
+         description: Churn model — features, training, evaluation
+         type: ml
+         requires_dates: false
+         model_version: "2026.10"
+         hyperparams: {n_estimators: 200, max_depth: 8}
+         split: {method: stratified, stratify_col: churned, test_size: 0.2, val_size: 0.2, seed: 42}
+         nodes:
+           build_features:
+             run: churn.features:build_features
+             ml_stage: feature_engineering
+             inputs: {orders: silver.sales.orders}
+             outputs: [ml.churn.features]
+           train_model:
+             run: churn.model:train_model
+             ml_stage: training
+             inputs: {features: ml.churn.features}
+             outputs: [ml.churn.metrics]
+             after: [build_features]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Churn model — features, training, evaluation",
+           "type": "ml",
+           "requires_dates": false,
+           "model_version": "2026.10",
+           "hyperparams": {
+             "n_estimators": 200,
+             "max_depth": 8
+           },
+           "split": {
+             "method": "stratified",
+             "stratify_col": "churned",
+             "test_size": 0.2,
+             "val_size": 0.2,
+             "seed": 42
+           },
+           "nodes": {
+             "build_features": {
+               "run": "churn.features:build_features",
+               "ml_stage": "feature_engineering",
+               "inputs": {
+                 "orders": "silver.sales.orders"
+               },
+               "outputs": [
+                 "ml.churn.features"
+               ]
+             },
+             "train_model": {
+               "run": "churn.model:train_model",
+               "ml_stage": "training",
+               "inputs": {
+                 "features": "ml.churn.features"
+               },
+               "outputs": [
+                 "ml.churn.metrics"
+               ],
+               "after": [
+                 "build_features"
+               ]
+             }
+           }
+         }
 
 A pipeline repeated for several sources is written once as a template and each
 copy states only its parameters (see *Say it once* above):
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/bronze.customers.yaml
-   extends: templates/ingest_csv
-   params: {table: customers, source: data/raw/customers.csv}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/bronze.customers.toml
+         extends = "templates/ingest_csv"
+
+         [params]
+         table = "customers"
+         source = "data/raw/customers.csv"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/bronze.customers.yaml
+         extends: templates/ingest_csv
+         params: {table: customers, source: data/raw/customers.csv}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "extends": "templates/ingest_csv",
+           "params": {
+             "table": "customers",
+             "source": "data/raw/customers.csv"
+           }
+         }
 
 Good practice
 -------------

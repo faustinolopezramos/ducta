@@ -31,21 +31,94 @@ Step 1: The project
 ``ducta.yaml`` names the project, where data lives, and what changes in
 production:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   description: Daily revenue per category, from the shop's order export
-   paths: {input: data, output: data}
-   settings:
-     evidence_level: record
-   environments:
-     dev:
-       settings: {max_parallel_nodes: 1}
-     prod:
-       paths: {input: s3://shop-exports, output: s3://lake/sales}
-       settings: {evidence_level: required, run_lock: {backend: storage}}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+         description = "Daily revenue per category, from the shop's order export"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         evidence_level = "record"
+
+         [environments.dev.settings]
+         max_parallel_nodes = 1
+
+         [environments.prod.paths]
+         input = "s3://shop-exports"
+         output = "s3://lake/sales"
+
+         [environments.prod.settings]
+         evidence_level = "required"
+
+         [environments.prod.settings.run_lock]
+         backend = "storage"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         description: Daily revenue per category, from the shop's order export
+         paths: {input: data, output: data}
+         settings:
+           evidence_level: record
+         environments:
+           dev:
+             settings: {max_parallel_nodes: 1}
+           prod:
+             paths: {input: s3://shop-exports, output: s3://lake/sales}
+             settings: {evidence_level: required, run_lock: {backend: storage}}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "description": "Daily revenue per category, from the shop's order export",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "evidence_level": "record"
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "max_parallel_nodes": 1
+               }
+             },
+             "prod": {
+               "paths": {
+                 "input": "s3://shop-exports",
+                 "output": "s3://lake/sales"
+               },
+               "settings": {
+                 "evidence_level": "required",
+                 "run_lock": {
+                   "backend": "storage"
+                 }
+               }
+             }
+           }
+         }
 
 The sample export has two days, and the kind of mess real exports have — a
 repeated order, one without an amount, one with a negative amount:
@@ -68,36 +141,170 @@ Step 2: The datasets
 
 Every dataset is declared once in ``catalog.yaml``:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   orders_raw:
-     description: Orders as exported by the shop, one file with every day
-     format: csv
-     path: ${paths.input}/orders.csv
-     options: {header: true, inferSchema: true}
-     incremental: {column: order_date}
-     quality:
-       empty_dataset: true
-       schema: {expected_columns: [order_id, category, amount, order_date]}
+   .. tab-item:: TOML
+      :sync: toml
 
-   bronze.sales.orders:
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [order_id]}
+      .. code-block:: toml
 
-   silver.sales.orders:
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [order_id]}
+         # catalog.toml
+         [orders_raw]
+         description = "Orders as exported by the shop, one file with every day"
+         format = "csv"
+         path = "${paths.input}/orders.csv"
 
-   gold.sales.daily_revenue:
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [order_date, category]}
+         [orders_raw.options]
+         header = true
+         inferSchema = true
+
+         [orders_raw.incremental]
+         column = "order_date"
+
+         [orders_raw.quality]
+         empty_dataset = true
+
+         [orders_raw.quality.schema]
+         expected_columns = [
+             "order_id",
+             "category",
+             "amount",
+             "order_date",
+         ]
+
+         ["bronze.sales.orders"]
+         format = "delta"
+
+         ["bronze.sales.orders".write]
+         mode = "merge"
+
+         ["bronze.sales.orders".write.merge]
+         keys = [
+             "order_id",
+         ]
+
+         ["silver.sales.orders"]
+         format = "delta"
+
+         ["silver.sales.orders".write]
+         mode = "merge"
+
+         ["silver.sales.orders".write.merge]
+         keys = [
+             "order_id",
+         ]
+
+         ["gold.sales.daily_revenue"]
+         format = "delta"
+
+         ["gold.sales.daily_revenue".write]
+         mode = "merge"
+
+         ["gold.sales.daily_revenue".write.merge]
+         keys = [
+             "order_date",
+             "category",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         orders_raw:
+           description: Orders as exported by the shop, one file with every day
+           format: csv
+           path: ${paths.input}/orders.csv
+           options: {header: true, inferSchema: true}
+           incremental: {column: order_date}
+           quality:
+             empty_dataset: true
+             schema: {expected_columns: [order_id, category, amount, order_date]}
+
+         bronze.sales.orders:
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [order_id]}
+
+         silver.sales.orders:
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [order_id]}
+
+         gold.sales.daily_revenue:
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [order_date, category]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "orders_raw": {
+             "description": "Orders as exported by the shop, one file with every day",
+             "format": "csv",
+             "path": "${paths.input}/orders.csv",
+             "options": {
+               "header": true,
+               "inferSchema": true
+             },
+             "incremental": {
+               "column": "order_date"
+             },
+             "quality": {
+               "empty_dataset": true,
+               "schema": {
+                 "expected_columns": [
+                   "order_id",
+                   "category",
+                   "amount",
+                   "order_date"
+                 ]
+               }
+             }
+           },
+           "bronze.sales.orders": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "order_id"
+                 ]
+               }
+             }
+           },
+           "silver.sales.orders": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "order_id"
+                 ]
+               }
+             }
+           },
+           "gold.sales.daily_revenue": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "order_date",
+                   "category"
+                 ]
+               }
+             }
+           }
+         }
 
 - ``incremental: {column: order_date}`` — a run with ``--start-date`` and
   ``--end-date`` reads only those days, filtered at the source.
@@ -111,37 +318,172 @@ Every dataset is declared once in ``catalog.yaml``:
 Step 3: The pipeline
 --------------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/daily.yaml
-   description: Orders to daily revenue per category
-   nodes:
-     land:
-       description: "Bronze: the day's orders as they arrived"
-       run: pipelines.daily:land
-       inputs: {orders: orders_raw}
-       outputs: [bronze.sales.orders]
+   .. tab-item:: TOML
+      :sync: toml
 
-     clean:
-       description: "Silver: one row per order, no missing or negative amounts"
-       run: pipelines.daily:clean
-       inputs: {orders: bronze.sales.orders}
-       outputs: [silver.sales.orders]
-       quality:
-         checks:
-           duplicates: {columns: [order_id]}
-           null_rate: {columns: [amount], threshold: 0}
-           range: {column: amount, min: 0}
-         gate: {on_fail: stop_all}
+      .. code-block:: toml
 
-     daily_revenue:
-       description: "Gold: revenue and order count per day and category"
-       run: pipelines.daily:daily_revenue
-       inputs: {orders: silver.sales.orders}
-       outputs: [gold.sales.daily_revenue]
-       quality:
-         checks:
-           row_count: {min: 1}
+         # pipelines/daily.toml
+         description = "Orders to daily revenue per category"
+
+         [nodes.land]
+         description = "Bronze: the day's orders as they arrived"
+         run = "pipelines.daily:land"
+         outputs = [
+             "bronze.sales.orders",
+         ]
+
+         [nodes.land.inputs]
+         orders = "orders_raw"
+
+         [nodes.clean]
+         description = "Silver: one row per order, no missing or negative amounts"
+         run = "pipelines.daily:clean"
+         outputs = [
+             "silver.sales.orders",
+         ]
+
+         [nodes.clean.inputs]
+         orders = "bronze.sales.orders"
+
+         [nodes.clean.quality.checks.duplicates]
+         columns = [
+             "order_id",
+         ]
+
+         [nodes.clean.quality.checks.null_rate]
+         columns = [
+             "amount",
+         ]
+         threshold = 0
+
+         [nodes.clean.quality.checks.range]
+         column = "amount"
+         min = 0
+
+         [nodes.clean.quality.gate]
+         on_fail = "stop_all"
+
+         [nodes.daily_revenue]
+         description = "Gold: revenue and order count per day and category"
+         run = "pipelines.daily:daily_revenue"
+         outputs = [
+             "gold.sales.daily_revenue",
+         ]
+
+         [nodes.daily_revenue.inputs]
+         orders = "silver.sales.orders"
+
+         [nodes.daily_revenue.quality.checks.row_count]
+         min = 1
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/daily.yaml
+         description: Orders to daily revenue per category
+         nodes:
+           land:
+             description: "Bronze: the day's orders as they arrived"
+             run: pipelines.daily:land
+             inputs: {orders: orders_raw}
+             outputs: [bronze.sales.orders]
+
+           clean:
+             description: "Silver: one row per order, no missing or negative amounts"
+             run: pipelines.daily:clean
+             inputs: {orders: bronze.sales.orders}
+             outputs: [silver.sales.orders]
+             quality:
+               checks:
+                 duplicates: {columns: [order_id]}
+                 null_rate: {columns: [amount], threshold: 0}
+                 range: {column: amount, min: 0}
+               gate: {on_fail: stop_all}
+
+           daily_revenue:
+             description: "Gold: revenue and order count per day and category"
+             run: pipelines.daily:daily_revenue
+             inputs: {orders: silver.sales.orders}
+             outputs: [gold.sales.daily_revenue]
+             quality:
+               checks:
+                 row_count: {min: 1}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Orders to daily revenue per category",
+           "nodes": {
+             "land": {
+               "description": "Bronze: the day's orders as they arrived",
+               "run": "pipelines.daily:land",
+               "inputs": {
+                 "orders": "orders_raw"
+               },
+               "outputs": [
+                 "bronze.sales.orders"
+               ]
+             },
+             "clean": {
+               "description": "Silver: one row per order, no missing or negative amounts",
+               "run": "pipelines.daily:clean",
+               "inputs": {
+                 "orders": "bronze.sales.orders"
+               },
+               "outputs": [
+                 "silver.sales.orders"
+               ],
+               "quality": {
+                 "checks": {
+                   "duplicates": {
+                     "columns": [
+                       "order_id"
+                     ]
+                   },
+                   "null_rate": {
+                     "columns": [
+                       "amount"
+                     ],
+                     "threshold": 0
+                   },
+                   "range": {
+                     "column": "amount",
+                     "min": 0
+                   }
+                 },
+                 "gate": {
+                   "on_fail": "stop_all"
+                 }
+               }
+             },
+             "daily_revenue": {
+               "description": "Gold: revenue and order count per day and category",
+               "run": "pipelines.daily:daily_revenue",
+               "inputs": {
+                 "orders": "silver.sales.orders"
+               },
+               "outputs": [
+                 "gold.sales.daily_revenue"
+               ],
+               "quality": {
+                 "checks": {
+                   "row_count": {
+                     "min": 1
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 There is no ordering to declare: ``clean`` reads what ``land`` writes, and
 ``daily_revenue`` reads what ``clean`` writes. The ``clean`` gate stops the

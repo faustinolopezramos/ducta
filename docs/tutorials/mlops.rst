@@ -45,26 +45,89 @@ Prerequisites
 Step 1: Configure Ducta's MLOps Layer
 --------------------------------------
 
-MLOps settings live under ``settings.mlops`` in ``ducta.yaml``, next to the
-seed that makes training reproducible:
+Tracking is on by itself for ``type: ml`` pipelines. What you decide in
+``ducta.yaml`` is where it is kept, whether a run may go without it, and the seed
+that makes training reproducible:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: churn
-   paths: {input: data, output: data}
-   settings:
-     random_seed: 42              # seeds random/numpy/torch + ml_context["node_seed"]
-     mlops:
-       backend_type: local
-       storage_path: ./mlops_data
-       model_retention_days: 90
-       metric_buffer_size: 200
-       auto_flush_metrics: true
-   environments:
-     prod:
-       settings.mlops.backend_type: databricks
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "churn"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         random_seed = 42
+         mlops_path = "models"
+         mlops_required = false
+
+         [environments.dev.settings]
+         mlops_enabled = false
+
+         [environments.prod.settings]
+         mlops_required = true
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: churn
+         paths: {input: data, output: data}
+         settings:
+           random_seed: 42              # seeds random/numpy/torch + ml_context["node_seed"]
+           mlops_path: models           # experiments and model registry live here
+           mlops_required: false
+         environments:
+           dev:
+             settings: {mlops_enabled: false}      # no tracking while iterating
+           prod:
+             settings: {mlops_required: true}      # no tracking, no run
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "churn",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "random_seed": 42,
+             "mlops_path": "models",
+             "mlops_required": false
+           },
+           "environments": {
+             "dev": {
+               "settings": {
+                 "mlops_enabled": false
+               }
+             },
+             "prod": {
+               "settings": {
+                 "mlops_required": true
+               }
+             }
+           }
+         }
+
+Retention, buffering and backend options are environment variables
+(``Ducta_MLOPS_*``); the table is in :doc:`../mlops`.
 
 Ducta seeds ``random``, ``numpy`` and ``torch`` globally from ``random_seed``
 and gives each node a deterministic seed of its own.
@@ -74,34 +137,127 @@ Step 2: Define the Training Pipeline
 
 The training data is a dataset like any other:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   gold.churn.training_set:
-     format: parquet
-     use_pandas: true                 # the node receives a pandas DataFrame
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         ["gold.churn.training_set"]
+         format = "parquet"
+         use_pandas = true
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         gold.churn.training_set:
+           format: parquet
+           use_pandas: true                 # the node receives a pandas DataFrame
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "gold.churn.training_set": {
+             "format": "parquet",
+             "use_pandas": true
+           }
+         }
 
 The pipeline is ``type: ml``; its hyperparameters and split are versioned here,
 not in code:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/ml_training.yaml
-   description: Train and register the customer churn model
-   type: ml
-   requires_dates: false
-   model_version: "1.0.0"
-   hyperparams: {n_estimators: 150, max_depth: 12}
-   split:                              # applied by the node via split_dataframe
-     method: stratified
-     stratify_col: churn
-     test_size: 0.2
-     val_size: 0.1
-   nodes:
-     train_churn_model:
-       description: Train a RandomForest and register it when it beats the baseline
-       run: pipelines.ml:train_and_register
-       inputs: {training_data: gold.churn.training_set}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/ml_training.toml
+         description = "Train and register the customer churn model"
+         type = "ml"
+         requires_dates = false
+         model_version = "1.0.0"
+
+         [hyperparams]
+         n_estimators = 150
+         max_depth = 12
+
+         [split]
+         method = "stratified"
+         stratify_col = "churn"
+         test_size = 0.2
+         val_size = 0.1
+
+         [nodes.train_churn_model]
+         description = "Train a RandomForest and register it when it beats the baseline"
+         run = "pipelines.ml:train_and_register"
+
+         [nodes.train_churn_model.inputs]
+         training_data = "gold.churn.training_set"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/ml_training.yaml
+         description: Train and register the customer churn model
+         type: ml
+         requires_dates: false
+         model_version: "1.0.0"
+         hyperparams: {n_estimators: 150, max_depth: 12}
+         split:                              # applied by the node via split_dataframe
+           method: stratified
+           stratify_col: churn
+           test_size: 0.2
+           val_size: 0.1
+         nodes:
+           train_churn_model:
+             description: Train a RandomForest and register it when it beats the baseline
+             run: pipelines.ml:train_and_register
+             inputs: {training_data: gold.churn.training_set}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Train and register the customer churn model",
+           "type": "ml",
+           "requires_dates": false,
+           "model_version": "1.0.0",
+           "hyperparams": {
+             "n_estimators": 150,
+             "max_depth": 12
+           },
+           "split": {
+             "method": "stratified",
+             "stratify_col": "churn",
+             "test_size": 0.2,
+             "val_size": 0.1
+           },
+           "nodes": {
+             "train_churn_model": {
+               "description": "Train a RandomForest and register it when it beats the baseline",
+               "run": "pipelines.ml:train_and_register",
+               "inputs": {
+                 "training_data": "gold.churn.training_set"
+               }
+             }
+           }
+         }
 
 Step 3: Create the Training Script
 ----------------------------------
@@ -218,12 +374,53 @@ Hyperparameter sweeps
 To search hyperparameters instead of guessing them, declare a sweep spec —
 list values are expanded into the cartesian product, scalars stay fixed:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # sweeps/rf_grid.yaml
-   n_estimators: [100, 200, 400]
-   max_depth: [5, 12]
-   class_weight: balanced
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # sweeps/rf_grid.toml
+         n_estimators = [
+             100,
+             200,
+             400,
+         ]
+         max_depth = [
+             5,
+             12,
+         ]
+         class_weight = "balanced"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # sweeps/rf_grid.yaml
+         n_estimators: [100, 200, 400]
+         max_depth: [5, 12]
+         class_weight: balanced
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "n_estimators": [
+             100,
+             200,
+             400
+           ],
+           "max_depth": [
+             5,
+             12
+           ],
+           "class_weight": "balanced"
+         }
 
 .. code-block:: bash
 
@@ -274,18 +471,65 @@ Promotion gates
 Block promotions to Production that do not beat the current model (or the
 trivial baseline) by a margin:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: churn
-   paths: {input: data, output: data}
-   settings:
-     mlops:
-       promotion_policy:
-         metric: val_f1
-         min_delta: 0.01
-         compare_to: current_production   # or baseline
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "churn"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings.mlops.promotion_policy]
+         metric = "val_f1"
+         min_delta = 0.01
+         compare_to = "current_production"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: churn
+         paths: {input: data, output: data}
+         settings:
+           mlops:
+             promotion_policy:
+               metric: val_f1
+               min_delta: 0.01
+               compare_to: current_production   # or baseline
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "churn",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "mlops": {
+               "promotion_policy": {
+                 "metric": "val_f1",
+                 "min_delta": 0.01,
+                 "compare_to": "current_production"
+               }
+             }
+           }
+         }
 
 .. code-block:: bash
 
@@ -298,15 +542,56 @@ Reproducibility guards
 
 Two settings turn lineage recording into guarantees:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: churn
-   paths: {input: data, output: data}
-   settings:
-     random_seed: 42              # seeds random/numpy/torch + per-node ml_context["node_seed"]
-     fingerprint_policy: warn     # record | warn | fail when inputs changed vs previous run
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "churn"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         random_seed = 42
+         fingerprint_policy = "warn"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: churn
+         paths: {input: data, output: data}
+         settings:
+           random_seed: 42              # seeds random/numpy/torch + per-node ml_context["node_seed"]
+           fingerprint_policy: warn     # record | warn | fail when inputs changed vs previous run
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "churn",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "random_seed": 42,
+             "fingerprint_policy": "warn"
+           }
+         }
 
 With ``fingerprint_policy: fail`` the pipeline aborts before training on
 data that changed since the previous successful run of the same pipeline.

@@ -69,22 +69,106 @@ Project Layout
 Node Template
 -------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/sales.yaml
-   nodes:
-     clean_sales:
-       run: myproject.nodes:clean_sales      # module:function
-       inputs: {sales: raw_sales}            # parameter → dataset
-       outputs: [core.analytics.sales_clean]
-       retry: 2
-       timeout_seconds: 600
-       quality:
-         checks:
-           row_count: {min: 1000}
-           null_rate: {columns: [id], threshold: 0.0}
-           duplicates: {columns: [id]}
-         gate: {max_errors: 0, on_fail: skip_downstream}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/sales.toml
+         [nodes.clean_sales]
+         run = "myproject.nodes:clean_sales"
+         outputs = [
+             "core.analytics.sales_clean",
+         ]
+         retry = 2
+         timeout_seconds = 600
+
+         [nodes.clean_sales.inputs]
+         sales = "raw_sales"
+
+         [nodes.clean_sales.quality.checks.row_count]
+         min = 1000
+
+         [nodes.clean_sales.quality.checks.null_rate]
+         columns = [
+             "id",
+         ]
+         threshold = 0.0
+
+         [nodes.clean_sales.quality.checks.duplicates]
+         columns = [
+             "id",
+         ]
+
+         [nodes.clean_sales.quality.gate]
+         max_errors = 0
+         on_fail = "skip_downstream"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/sales.yaml
+         nodes:
+           clean_sales:
+             run: myproject.nodes:clean_sales      # module:function
+             inputs: {sales: raw_sales}            # parameter → dataset
+             outputs: [core.analytics.sales_clean]
+             retry: 2
+             timeout_seconds: 600
+             quality:
+               checks:
+                 row_count: {min: 1000}
+                 null_rate: {columns: [id], threshold: 0.0}
+                 duplicates: {columns: [id]}
+               gate: {max_errors: 0, on_fail: skip_downstream}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "nodes": {
+             "clean_sales": {
+               "run": "myproject.nodes:clean_sales",
+               "inputs": {
+                 "sales": "raw_sales"
+               },
+               "outputs": [
+                 "core.analytics.sales_clean"
+               ],
+               "retry": 2,
+               "timeout_seconds": 600,
+               "quality": {
+                 "checks": {
+                   "row_count": {
+                     "min": 1000
+                   },
+                   "null_rate": {
+                     "columns": [
+                       "id"
+                     ],
+                     "threshold": 0.0
+                   },
+                   "duplicates": {
+                     "columns": [
+                       "id"
+                     ]
+                   }
+                 },
+                 "gate": {
+                   "max_errors": 0,
+                   "on_fail": "skip_downstream"
+                 }
+               }
+             }
+           }
+         }
 
 Other kinds: ``kind: ingest`` (``ingest: {source, table | query, columns, where}``)
 and ``kind: stream`` (``stream: {transform, input, output, checkpoint_location, trigger}``).
@@ -92,37 +176,166 @@ and ``kind: stream`` (``stream: {transform, input, output, checkpoint_location, 
 Dataset Template
 ----------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # catalog.yaml
-   raw_sales:
-     format: csv
-     path: ${paths.input}/sales.csv
-     options: {header: true}
-     incremental: {column: sale_date}
-     quality: {empty_dataset: true}
-   core.analytics.sales_clean:
-     format: delta
-     write:
-       mode: merge
-       merge: {keys: [id]}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # catalog.toml
+         [raw_sales]
+         format = "csv"
+         path = "${paths.input}/sales.csv"
+
+         [raw_sales.options]
+         header = true
+
+         [raw_sales.incremental]
+         column = "sale_date"
+
+         [raw_sales.quality]
+         empty_dataset = true
+
+         ["core.analytics.sales_clean"]
+         format = "delta"
+
+         ["core.analytics.sales_clean".write]
+         mode = "merge"
+
+         ["core.analytics.sales_clean".write.merge]
+         keys = [
+             "id",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # catalog.yaml
+         raw_sales:
+           format: csv
+           path: ${paths.input}/sales.csv
+           options: {header: true}
+           incremental: {column: sale_date}
+           quality: {empty_dataset: true}
+         core.analytics.sales_clean:
+           format: delta
+           write:
+             mode: merge
+             merge: {keys: [id]}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "raw_sales": {
+             "format": "csv",
+             "path": "${paths.input}/sales.csv",
+             "options": {
+               "header": true
+             },
+             "incremental": {
+               "column": "sale_date"
+             },
+             "quality": {
+               "empty_dataset": true
+             }
+           },
+           "core.analytics.sales_clean": {
+             "format": "delta",
+             "write": {
+               "mode": "merge",
+               "merge": {
+                 "keys": [
+                   "id"
+                 ]
+               }
+             }
+           }
+         }
 
 Environment Overrides
 ---------------------
 
 Only what differs, in ``ducta.yaml``:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: sales
-   paths: {input: data, output: data}
-   settings: {max_parallel_nodes: 4}
-   environments:
-     prod:
-       settings: {max_parallel_nodes: 16, evidence_level: signed}
-       paths: {output: s3://lake/prod}
-       catalog.raw_sales.path: s3://landing/sales.csv
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "sales"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [settings]
+         max_parallel_nodes = 4
+
+         [environments.prod]
+         "catalog.raw_sales.path" = "s3://landing/sales.csv"
+
+         [environments.prod.settings]
+         max_parallel_nodes = 16
+         evidence_level = "signed"
+
+         [environments.prod.paths]
+         output = "s3://lake/prod"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: sales
+         paths: {input: data, output: data}
+         settings: {max_parallel_nodes: 4}
+         environments:
+           prod:
+             settings: {max_parallel_nodes: 16, evidence_level: signed}
+             paths: {output: s3://lake/prod}
+             catalog.raw_sales.path: s3://landing/sales.csv
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "sales",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "settings": {
+             "max_parallel_nodes": 4
+           },
+           "environments": {
+             "prod": {
+               "settings": {
+                 "max_parallel_nodes": 16,
+                 "evidence_level": "signed"
+               },
+               "paths": {
+                 "output": "s3://lake/prod"
+               },
+               "catalog.raw_sales.path": "s3://landing/sales.csv"
+             }
+           }
+         }
 
 Then run: ``ducta start --pipeline sales --env prod``

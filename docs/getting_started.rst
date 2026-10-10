@@ -79,28 +79,131 @@ Step 4: Customizing the Pipeline
 
 Open ``pipelines/etl.yaml``:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/etl.yaml — the file name is the pipeline name
-   description: "Complete ETL pipeline: Extract -> Transform -> Load"
-   requires_dates: false
-   nodes:
-     extract:
-       run: pipelines.etl:extract
-       inputs: [source_data]
-       outputs: [bronze.etl.raw_data]
-     transform:
-       run: pipelines.etl:transform
-       inputs: [bronze.etl.raw_data]
-       outputs: [silver.etl.clean_data]
-       quality:
-         checks:
-           null_rate: {columns: [amount], threshold: 0.0}
-         gate: {max_errors: 0}
-     load:
-       run: pipelines.etl:load
-       inputs: [silver.etl.clean_data]
-       outputs: [gold.etl.final_output]
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/etl.toml
+         description = "Complete ETL pipeline: Extract -> Transform -> Load"
+         requires_dates = false
+
+         [nodes.extract]
+         run = "pipelines.etl:extract"
+         inputs = [
+             "source_data",
+         ]
+         outputs = [
+             "bronze.etl.raw_data",
+         ]
+
+         [nodes.transform]
+         run = "pipelines.etl:transform"
+         inputs = [
+             "bronze.etl.raw_data",
+         ]
+         outputs = [
+             "silver.etl.clean_data",
+         ]
+
+         [nodes.transform.quality.checks.null_rate]
+         columns = [
+             "amount",
+         ]
+         threshold = 0.0
+
+         [nodes.transform.quality.gate]
+         max_errors = 0
+
+         [nodes.load]
+         run = "pipelines.etl:load"
+         inputs = [
+             "silver.etl.clean_data",
+         ]
+         outputs = [
+             "gold.etl.final_output",
+         ]
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/etl.yaml — the file name is the pipeline name
+         description: "Complete ETL pipeline: Extract -> Transform -> Load"
+         requires_dates: false
+         nodes:
+           extract:
+             run: pipelines.etl:extract
+             inputs: [source_data]
+             outputs: [bronze.etl.raw_data]
+           transform:
+             run: pipelines.etl:transform
+             inputs: [bronze.etl.raw_data]
+             outputs: [silver.etl.clean_data]
+             quality:
+               checks:
+                 null_rate: {columns: [amount], threshold: 0.0}
+               gate: {max_errors: 0}
+           load:
+             run: pipelines.etl:load
+             inputs: [silver.etl.clean_data]
+             outputs: [gold.etl.final_output]
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "description": "Complete ETL pipeline: Extract -> Transform -> Load",
+           "requires_dates": false,
+           "nodes": {
+             "extract": {
+               "run": "pipelines.etl:extract",
+               "inputs": [
+                 "source_data"
+               ],
+               "outputs": [
+                 "bronze.etl.raw_data"
+               ]
+             },
+             "transform": {
+               "run": "pipelines.etl:transform",
+               "inputs": [
+                 "bronze.etl.raw_data"
+               ],
+               "outputs": [
+                 "silver.etl.clean_data"
+               ],
+               "quality": {
+                 "checks": {
+                   "null_rate": {
+                     "columns": [
+                       "amount"
+                     ],
+                     "threshold": 0.0
+                   }
+                 },
+                 "gate": {
+                   "max_errors": 0
+                 }
+               }
+             },
+             "load": {
+               "run": "pipelines.etl:load",
+               "inputs": [
+                 "silver.etl.clean_data"
+               ],
+               "outputs": [
+                 "gold.etl.final_output"
+               ]
+             }
+           }
+         }
 
 To add a step, add a node here and the datasets it writes to ``catalog.yaml``.
 ``ducta config validate`` checks the result without running anything.

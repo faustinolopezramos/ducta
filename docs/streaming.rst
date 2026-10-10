@@ -16,32 +16,127 @@ checkpoint; your Python is a transform function.
 A stream node
 -------------
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # pipelines/events.yaml
-   type: streaming
-   requires_dates: false
-   nodes:
-     clean_events:
-       kind: stream
-       stream:
-         input:
-           format: kafka
-           options:
-             kafka.bootstrap.servers: broker:9092
-             subscribe: events
-         transform:
-           key: clean_events                 # a registered transform
-           module: pipelines.transforms      # imported so it can register itself
-           params: {min_amount: 0.0}
-         output:
-           format: delta
-           path: ${paths.output}/${env}/silver/events
-         streaming:
-           checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
-           output_mode: append               # append | update | complete
-           trigger: {type: processing_time, interval: 10 seconds}
-           watermark: {column: event_time, delay: 10 minutes}
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # pipelines/events.toml
+         type = "streaming"
+         requires_dates = false
+
+         [nodes.clean_events]
+         kind = "stream"
+
+         [nodes.clean_events.stream.input]
+         format = "kafka"
+
+         [nodes.clean_events.stream.input.options]
+         "kafka.bootstrap.servers" = "broker:9092"
+         subscribe = "events"
+
+         [nodes.clean_events.stream.transform]
+         key = "clean_events"
+         module = "pipelines.transforms"
+
+         [nodes.clean_events.stream.transform.params]
+         min_amount = 0.0
+
+         [nodes.clean_events.stream.output]
+         format = "delta"
+         path = "${paths.output}/${env}/silver/events"
+
+         [nodes.clean_events.stream.streaming]
+         checkpoint_location = "${paths.output}/${env}/_ckpt/clean_events"
+         output_mode = "append"
+
+         [nodes.clean_events.stream.streaming.trigger]
+         type = "processing_time"
+         interval = "10 seconds"
+
+         [nodes.clean_events.stream.streaming.watermark]
+         column = "event_time"
+         delay = "10 minutes"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # pipelines/events.yaml
+         type: streaming
+         requires_dates: false
+         nodes:
+           clean_events:
+             kind: stream
+             stream:
+               input:
+                 format: kafka
+                 options:
+                   kafka.bootstrap.servers: broker:9092
+                   subscribe: events
+               transform:
+                 key: clean_events                 # a registered transform
+                 module: pipelines.transforms      # imported so it can register itself
+                 params: {min_amount: 0.0}
+               output:
+                 format: delta
+                 path: ${paths.output}/${env}/silver/events
+               streaming:
+                 checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
+                 output_mode: append               # append | update | complete
+                 trigger: {type: processing_time, interval: 10 seconds}
+                 watermark: {column: event_time, delay: 10 minutes}
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "type": "streaming",
+           "requires_dates": false,
+           "nodes": {
+             "clean_events": {
+               "kind": "stream",
+               "stream": {
+                 "input": {
+                   "format": "kafka",
+                   "options": {
+                     "kafka.bootstrap.servers": "broker:9092",
+                     "subscribe": "events"
+                   }
+                 },
+                 "transform": {
+                   "key": "clean_events",
+                   "module": "pipelines.transforms",
+                   "params": {
+                     "min_amount": 0.0
+                   }
+                 },
+                 "output": {
+                   "format": "delta",
+                   "path": "${paths.output}/${env}/silver/events"
+                 },
+                 "streaming": {
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/clean_events",
+                   "output_mode": "append",
+                   "trigger": {
+                     "type": "processing_time",
+                     "interval": "10 seconds"
+                   },
+                   "watermark": {
+                     "column": "event_time",
+                     "delay": "10 minutes"
+                   }
+                 }
+               }
+             }
+           }
+         }
 
 .. list-table::
    :widths: 26 74
@@ -129,16 +224,59 @@ whatever is available and stop. Combined with ``--mode sync`` the command
 returns when they finish — a streaming pipeline behaves like a batch job, which
 suits backfills, local runs and CI. Switch the trigger for one environment only:
 
-.. code-block:: yaml
+.. tab-set::
+   :sync-group: ducta-format
 
-   # ducta.yaml
-   version: 2
-   project: events
-   paths: {input: data, output: data}
-   environments:
-     sandbox:
-       pipelines.events.nodes.clean_events.stream.streaming.trigger:
-         type: available_now
+   .. tab-item:: TOML
+      :sync: toml
+
+      .. code-block:: toml
+
+         # ducta.toml
+         version = 2
+         project = "events"
+
+         [paths]
+         input = "data"
+         output = "data"
+
+         [environments.sandbox."pipelines.events.nodes.clean_events.stream.streaming.trigger"]
+         type = "available_now"
+
+   .. tab-item:: YAML
+      :sync: yaml
+
+      .. code-block:: yaml
+
+         # ducta.yaml
+         version: 2
+         project: events
+         paths: {input: data, output: data}
+         environments:
+           sandbox:
+             pipelines.events.nodes.clean_events.stream.streaming.trigger:
+               type: available_now
+
+   .. tab-item:: JSON
+      :sync: json
+
+      .. code-block:: json
+
+         {
+           "version": 2,
+           "project": "events",
+           "paths": {
+             "input": "data",
+             "output": "data"
+           },
+           "environments": {
+             "sandbox": {
+               "pipelines.events.nodes.clean_events.stream.streaming.trigger": {
+                 "type": "available_now"
+               }
+             }
+           }
+         }
 
 The ``streaming_basic`` template (``ducta template --template streaming_basic``)
 reads a file stream, applies a registered transform and writes Parquet, with
