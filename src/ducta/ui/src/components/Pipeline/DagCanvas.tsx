@@ -76,6 +76,12 @@ interface DagCanvasProps {
    * top, readable, to be panned — instead of whole and illegible.
    */
   fitMinZoom?: number;
+  /**
+   * Room kept around the framed graph. The default clears the editor's
+   * toolbars; a canvas embedded without them (a run's graph) passes less, or
+   * its few cards land in a sliver at the bottom.
+   */
+  fitPadding?: { top: `${number}px`; right: `${number}px`; bottom: `${number}px`; left: `${number}px` };
 }
 
 function notFresh(state: "fresh" | "stale" | "never" | undefined): "stale" | "never" | undefined {
@@ -199,6 +205,7 @@ function DagCanvasInner({
   orientation = "vertical",
   strata = null,
   fitMinZoom,
+  fitPadding = FIT_PADDING,
 }: DagCanvasProps) {
   /**
    * Card sizes, fed back from React Flow's own measurement into the layout.
@@ -434,7 +441,7 @@ function DagCanvasInner({
     if (!measured || fittedFor.current === fitKey) return;
     fittedFor.current = fitKey;
     const bandRoom = strata?.bands.length ? FIT_BAND_LABEL_PX : 0;
-    const padding = { ...FIT_PADDING, top: `${parseInt(FIT_PADDING.top, 10) + bandRoom}px` as `${number}px` };
+    const padding = { ...fitPadding, top: `${parseInt(fitPadding.top, 10) + bandRoom}px` as `${number}px` };
     void fitView({ padding, maxZoom: FIT_MAX_ZOOM }).then(() => {
       if (!fitMinZoom || getViewport().zoom >= fitMinZoom) return;
       // Too small to read whole: show it from the top, centred across.
@@ -446,7 +453,7 @@ function DagCanvasInner({
         y: FIT_TOP_PX + bandRoom - bounds.y * fitMinZoom,
       });
     });
-  }, [measured, fitKey, fitView, layout, fitMinZoom, getViewport, setViewport, getNodesBounds, getNodes, flowStore, strata?.bands.length]);
+  }, [measured, fitKey, fitView, layout, fitMinZoom, fitPadding, getViewport, setViewport, getNodesBounds, getNodes, flowStore, strata?.bands.length]);
 
   /**
    * Pick up React Flow's measurements and re-run the layout with real sizes.
@@ -505,7 +512,7 @@ function DagCanvasInner({
         onNodeDoubleClick={onOpenNode ? (_e, node) => onOpenNode(node.id) : undefined}
         zoomOnDoubleClick={!onOpenNode}
         fitView
-        fitViewOptions={{ padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM }}
+        fitViewOptions={{ padding: fitPadding, maxZoom: FIT_MAX_ZOOM }}
         minZoom={0.2}
         maxZoom={1.6}
         nodesDraggable={false}

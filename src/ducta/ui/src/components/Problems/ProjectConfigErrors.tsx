@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconAlertTriangle } from "@tabler/icons-react";
 import type { Problem } from "../../api/queries/problems";
@@ -13,11 +14,13 @@ export function ProjectConfigErrors({
   problems,
   isChecking,
   onFix,
+  action,
 }: {
   projectId: string;
   problems: Problem[];
   isChecking?: boolean;
   onFix?: (p: Problem) => void;
+  action?: ReactNode;
 }) {
   const navigate = useNavigate();
   return (
@@ -34,6 +37,7 @@ export function ProjectConfigErrors({
         isChecking={isChecking}
         onOpen={(p) => p.file && navigate(routes.code(projectId, p.file, p.line ?? undefined))}
         onFix={onFix}
+        action={action}
       />
     </div>
   );

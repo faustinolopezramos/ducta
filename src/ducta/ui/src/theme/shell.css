@@ -501,8 +501,13 @@ li[data-outcome="skipped"] .node-tests__dot { background: var(--text-dim); }
 
 /* The inspector's tabs fit its width: tighter, and scroll rather than clip. */
 .focus-head-tabs { min-width: 0; }
-.focus-head-tabs .tabs { overflow-x: auto; scrollbar-width: none; }
-.focus-head-tabs .tabs-tab { padding-left: 7px; padding-right: 7px; white-space: nowrap; }
+/* Seven views in a narrow panel: tight tabs, and a fade at the edge so a tab
+   that does not fit reads as "scroll", not as a clipped word. */
+.focus-head-tabs .tabs {
+  overflow-x: auto; scrollbar-width: none; gap: 0;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+.focus-head-tabs .tabs-tab { padding-left: 6px; padding-right: 6px; white-space: nowrap; }
 
 /* KeyHint */
 .key-hint { display: inline-flex; gap: 2px; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--surface); color: var(--text-muted); font-family: var(--font-sans); font-size: var(--text-2xs); line-height: 1.4; }
@@ -568,6 +573,9 @@ li[data-outcome="skipped"] .node-tests__dot { background: var(--text-dim); }
 .run-graph__toggle button { padding: 3px 10px; border: 0; background: var(--surface); color: var(--text-muted); font-size: var(--text-xs); cursor: pointer; }
 .run-graph__toggle button[aria-checked="true"] { background: var(--primary); color: var(--primary-contrast, #fff); }
 .run-graph__canvas { height: 320px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
+/* The canvas' 420px floor is for auto-height pages; here the box sets the height,
+   and the floor made React Flow frame the graph for a taller box than is shown. */
+.run-graph__canvas .dag-canvas-root { min-height: 0; }
 .run-options { width: min(520px, calc(100vw - 32px)); }
 .run-options__row { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
 .run-options__check { display: flex; align-items: center; gap: 6px; font-size: var(--text-sm); color: var(--text-muted); }
@@ -629,3 +637,8 @@ a.debug-panel__where { color: var(--primary); }
 .node-connection__lineage table { border-collapse: collapse; font-size: var(--text-xs); }
 .node-connection__lineage th { padding: 1px 8px 1px 0; text-align: left; font-weight: var(--weight-semibold); }
 .node-connection__lineage td { color: var(--text-muted); }
+
+/* "Propose with AI" above a node's checks. */
+.node-quality__ai { display: flex; justify-content: flex-end; }
+.node-quality__propose { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); }
+.node-quality__propose:disabled { opacity: 0.5; cursor: default; }

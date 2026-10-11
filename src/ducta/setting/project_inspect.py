@@ -48,6 +48,7 @@ from ducta.setting.project_loader import (
     project_tree,
     read_project,
     resolve_path,
+    visible_in,
 )
 
 #: Marks "no such key", which is different from a key whose value is null.
@@ -352,7 +353,7 @@ def convert_project(root: Path, target: Path, fmt: str) -> List[Path]:
             sources += [
                 (p, kind)
                 for p in sorted(base.rglob("*"))
-                if p.is_file() and p.suffix.lower() in pf.SUFFIXES
+                if p.is_file() and p.suffix.lower() in pf.SUFFIXES and visible_in(p, base)
             ]
     for source, kind in sources:
         relative = source.relative_to(root).with_suffix(ext)

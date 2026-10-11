@@ -60,7 +60,10 @@ interface TreeNodeProps {
 }
 
 function TreeNode({ entry, activePath, depth, onSelectFile }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(depth === 0);
+  // Top-level folders start open, except dot-folders (.agents, .claude…): tooling, not the project.
+  const [expanded, setExpanded] = useState(
+    (depth === 0 && !entry.name.startsWith(".")) || Boolean(activePath?.startsWith(`${entry.path}/`)),
+  );
   const { data } = useWorkspaceFiles(entry.type === "dir" && expanded ? entry.path : undefined!);
 
   const isActive = entry.path === activePath;

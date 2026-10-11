@@ -1,0 +1,22 @@
+# A minimal, valid Ducta project: copy the parts you need.
+version: 2
+project: sales
+description: Orders from the shop database to daily revenue
+paths: {input: data, output: data}
+
+settings:
+  max_parallel_nodes: 4
+  ingestion: {sources_path: sources.yaml}
+
+defaults:
+  catalog:
+    "bronze.*": {format: parquet}
+    "silver.*": {format: parquet}
+    "gold.*": {format: parquet}
+
+environments:
+  dev:
+    settings: {max_parallel_nodes: 1, log_level: DEBUG}
+  prod:
+    paths: {input: s3://lake/raw, output: s3://lake/curated}
+    pipelines.silver.sales.nodes.clean_orders.quality.gate.on_fail: stop_all

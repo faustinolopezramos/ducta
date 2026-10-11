@@ -107,6 +107,10 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "template.write",
         "model.promote",
         "model.delete",
+        # Draft pipelines with the server's model. Choosing that model and its
+        # key ("ai.configure") is the admin's: a remote provider receives
+        # project configuration.
+        "ai.use",
     ],
     # Runs what is there — including in protected environments (prod) — and
     # handles its runs, but does not change projects or code.

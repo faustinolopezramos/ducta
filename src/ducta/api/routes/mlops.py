@@ -228,6 +228,7 @@ class MLOpsScope:
         self._source_path = source_path
         self._env = env
         self._project = project
+        self.pipeline = pipeline
         self.storage = _resolve_mlops_storage(
             source_path, storage_path, env, pipeline, project=project
         )
@@ -371,8 +372,16 @@ async def mlops_status(scope: MLOpsScopeDep) -> Dict[str, Any]:
 
 @router.get("/experiments", dependencies=[Depends(require_permission("execution.read"))])
 async def list_experiments(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
-    """List all MLOps experiments (most recent first)."""
-    return await run_in_threadpool(lambda: scope.tracker().list_experiments())
+    """List MLOps experiments (most recent first) — only the scoped pipeline's
+    when ``pipeline`` is given: the tracking store is shared by every pipeline."""
+
+    def _run() -> List[Dict[str, Any]]:
+        experiments = scope.tracker().list_experiments()
+        if scope.pipeline:
+            experiments = [e for e in experiments if e.get("name") == scope.pipeline]
+        return experiments
+
+    return await run_in_threadpool(_run)
 
 
 @router.get(

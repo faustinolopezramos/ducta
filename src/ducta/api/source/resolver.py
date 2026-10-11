@@ -171,7 +171,10 @@ class SourceResolver:
                 root / "quality" / "profiles.yaml",
                 *sorted((root / "pipelines").rglob("*.yaml")),
             ]:
-                if f.is_file():
+                # Not what sits in a hidden folder (an assistant's .claude/, …).
+                if f.is_file() and not any(
+                    part.startswith(".") for part in f.relative_to(root).parts[:-1]
+                ):
                     config_files.append(str(f.relative_to(resolved.path)))
 
         projects: List[str] = []

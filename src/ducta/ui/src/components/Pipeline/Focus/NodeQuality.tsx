@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { IconFlask, IconPlus, IconTrash } from "@tabler/icons-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { IconFlask, IconPlus, IconSparkles, IconTrash } from "@tabler/icons-react";
 import { useNodeQuality, useTryChecks, type TriedCheck } from "../../../api/queries";
 import { useQualityChecks, useQualitySummary } from "../../../api/qualityApi";
 import { apiErrorMessage } from "../../../api/mutations/errors";
@@ -7,6 +8,8 @@ import { PermittedButton } from "../../ui/PermittedButton";
 import { Sparkline } from "../../ui/Sparkline";
 import { paramToText, textToParam } from "./checkParams";
 import { FailingRows } from "../../Quality/FailingRows";
+import { AIDraftDialog } from "../../AI/AIDraftDialog";
+import { usePermission } from "../../../hooks/usePermission";
 
 /** Checks whose failures are rows that can be shown. */
 const ROW_CHECKS = new Set(["null_rate", "range", "duplicates", "prediction_contract", "business_rules"]);
@@ -50,6 +53,9 @@ export function NodeQuality({
   const [adding, setAdding] = useState("");
   const [dataset, setDataset] = useState<string | null>(null);
   const [showing, setShowing] = useState<string | null>(null);
+  const canUseAI = usePermission("ai.use");
+  const [proposing, setProposing] = useState(false);
+  const qc = useQueryClient();
   const current = draft ?? toDraft(data?.quality?.checks ?? undefined, catalog);
   const dirty = draft !== null;
   const target = dataset ?? data?.outputs[0] ?? null;
@@ -86,6 +92,28 @@ export function NodeQuality({
 
   return (
     <section className="focus-col node-quality" aria-label="Quality checks of this node">
+      {canUseAI && (
+        <div className="node-quality__ai">
+          <button
+            type="button"
+            className="ai-link node-quality__propose"
+            onClick={() => setProposing(true)}
+            disabled={dirty}
+            title={dirty ? "Save or discard your edits first" : "Checks proposed from this node's data, and tried on it"}
+          >
+            <IconSparkles size={13} aria-hidden="true" /> Propose with AI
+          </button>
+        </div>
+      )}
+      {proposing && (
+        <AIDraftDialog
+          projectId={projectId}
+          mode={{ kind: "quality", pipeline, node, env: env || "dev" }}
+          onClose={() => setProposing(false)}
+          // The panel reads the node's block from the server: read it again.
+          onApplied={() => qc.invalidateQueries({ queryKey: ["server-projects", projectId, "node-quality", pipeline, node] })}
+        />
+      )}
       {trend.length > 0 && (
         <div className="node-quality__trend">
           <span className="focus-col-label">Score, last {trend.length} runs</span>

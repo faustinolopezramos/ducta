@@ -122,6 +122,8 @@ class UnifiedArgumentParser:
         UnifiedArgumentParser._add_model_subcommand(subparsers)
         UnifiedArgumentParser._add_init_subcommand(subparsers)
         UnifiedArgumentParser._add_certify_subcommand(subparsers)
+        UnifiedArgumentParser._add_ai_subcommand(subparsers)
+        UnifiedArgumentParser._add_skill_subcommand(subparsers)
 
         return parser
 
@@ -433,6 +435,11 @@ class UnifiedArgumentParser:
             help="Pipeline to validate (default: all pipelines)",
         )
         validate_parser.add_argument("--env", help="Environment to use")
+        UnifiedArgumentParser._add_output_format_arg(
+            validate_parser,
+            "json: one JSON document on stdout — every problem with its file, line, node "
+            "and suggested fix — for CI and AI assistants",
+        )
 
         show_parser = config_subparsers.add_parser(
             "show",
@@ -1013,4 +1020,235 @@ class UnifiedArgumentParser:
         )
         diff_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
+        )
+
+    @staticmethod
+    def _add_skill_subcommand(subparsers):
+        from ducta.console.commands.skill_cmds import DEFAULT_TARGETS, TARGETS
+
+        skill_parser = subparsers.add_parser(
+            "skill",
+            help="Install Ducta's skill for AI assistants (Claude Code, Codex, Gemini, Copilot…)",
+            description=(
+                "Ducta ships an agent skill in the open Agent Skills format (agentskills.io): "
+                "instructions, references and checks that let an AI assistant install, "
+                "configure, run and debug Ducta with you. Install it where your assistant "
+                "looks for skills."
+            ),
+        )
+        skill_sub = skill_parser.add_subparsers(
+            dest="skill_command", help="Skill commands", required=True
+        )
+        install = skill_sub.add_parser(
+            "install",
+            help="Copy the skill into this project (or your home) for one or more assistants",
+        )
+        install.add_argument(
+            "--target",
+            action="append",
+            choices=list(TARGETS),
+            help=(
+                "Assistant to install for; repeat for several. "
+                + "; ".join(f"{k}: {t.label} ({t.project})" for k, t in TARGETS.items())
+                + f". Default: {' and '.join(DEFAULT_TARGETS)}"
+            ),
+        )
+        install.add_argument(
+            "--global",
+            dest="user",
+            action="store_true",
+            help="Install in your home directory, for every project, instead of this project",
+        )
+        install.add_argument("--path", help="Install into this skills folder instead")
+        install.add_argument(
+            "--force", action="store_true", help="Replace an installed skill of another version"
+        )
+        install.add_argument(
+            "--agents-md",
+            action="store_true",
+            help="Also add a short Ducta section to the project's AGENTS.md, read by "
+            "assistants without skill support",
+        )
+        export = skill_sub.add_parser(
+            "export", help="Write the skill as a zip (for claude.ai, the Skills API, others)"
+        )
+        export.add_argument("--zip", default="ducta-skill.zip", help="Zip file to write")
+        skill_sub.add_parser("path", help="Print where the packaged skill is")
+
+    @staticmethod
+    def _add_ai_subcommand(subparsers):
+        ai_parser = subparsers.add_parser(
+            "ai",
+            help="Draft pipelines with an AI model, local or behind an API key",
+            description=(
+                "Choose a model (local: Ollama, LM Studio, any OpenAI-compatible server; "
+                "remote: Anthropic, OpenAI) and draft pipelines with it. A draft is "
+                "validated like an unsaved edit in the UI and written only when you "
+                "accept it; nothing is run or committed. Settings live in ~/.ducta/ai.toml."
+            ),
+        )
+        ai_sub = ai_parser.add_subparsers(dest="ai_command", help="AI commands", required=True)
+
+        from ducta.ai.config import EFFORTS, PRESETS
+
+        setup = ai_sub.add_parser("setup", help="Choose the provider and model")
+        setup.add_argument("--provider", required=True, choices=list(PRESETS))
+        setup.add_argument(
+            "--model", help="Model name (default: the largest code model a local server serves)"
+        )
+        setup.add_argument("--base-url", help="Endpoint, e.g. http://localhost:8000/v1")
+        setup.add_argument(
+            "--api-key-env", help="Name of the variable holding the key (never the key itself)"
+        )
+        setup.add_argument("--effort", choices=list(EFFORTS), help="Anthropic: reasoning effort")
+
+        login = ai_sub.add_parser("login", help="Keep an API key in the system keychain")
+        login.add_argument("--provider", choices=list(PRESETS), help="Default: the configured one")
+        logout = ai_sub.add_parser("logout", help="Remove the API key from the keychain")
+        logout.add_argument("--provider", choices=list(PRESETS), help="Default: the configured one")
+
+        ai_sub.add_parser("doctor", help="Show the configuration and check the model answers")
+
+        new = ai_sub.add_parser("new", help="Draft a new pipeline from a description")
+        new.add_argument("request", help='What to build, e.g. "silver pipeline that cleans orders"')
+        UnifiedArgumentParser._add_discovery_args(new)
+        new.add_argument(
+            "--attempts", type=int, help="Times the model may fix validation problems (default 3)"
+        )
+        new.add_argument("--write", action="store_true", help="Write the draft once it validates")
+        new.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        new.add_argument("--force", action="store_true", help="Write even if it does not validate")
+        UnifiedArgumentParser._add_output_format_arg(new, "Output format (json prints the draft)")
+
+        fix = ai_sub.add_parser(
+            "fix",
+            help="Draft a fix for a pipeline: its validation problems, a run's error, or a note",
+        )
+        fix.add_argument("pipeline", help="Pipeline to fix")
+        fix.add_argument(
+            "--note", help='What is wrong, in your words (e.g. "amounts come in cents")'
+        )
+        fix.add_argument(
+            "--error-file", help="File holding the error or traceback a run failed with"
+        )
+        UnifiedArgumentParser._add_discovery_args(fix)
+        fix.add_argument(
+            "--attempts", type=int, help="Times the model may fix validation problems (default 3)"
+        )
+        fix.add_argument("--write", action="store_true", help="Write the draft once it validates")
+        fix.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        fix.add_argument("--force", action="store_true", help="Write even if it does not validate")
+        UnifiedArgumentParser._add_output_format_arg(fix, "Output format (json prints the draft)")
+
+        def draft_args(p, what: str = "the draft") -> None:
+            UnifiedArgumentParser._add_discovery_args(p)
+            p.add_argument(
+                "--attempts", type=int, help="Times the model may fix what is found (default 3)"
+            )
+            p.add_argument("--write", action="store_true", help=f"Write {what} once it validates")
+            p.add_argument("--yes", action="store_true", help="Do not ask before writing")
+            p.add_argument(
+                "--force", action="store_true", help="Write even if it does not validate"
+            )
+            UnifiedArgumentParser._add_output_format_arg(p, "Output format (json prints the draft)")
+
+        quality = ai_sub.add_parser(
+            "quality",
+            help="Propose the quality checks of a node's output, proven on its data",
+            description=(
+                "Ducta measures the node's output in --env (column statistics only: the model "
+                "never sees a row), the model proposes the node's `quality` block, and Ducta "
+                "runs it on that data — a check that would fail goes back to the model."
+            ),
+        )
+        quality.add_argument("pipeline", help="Pipeline holding the node")
+        quality.add_argument("node", help="Node whose output to check")
+        quality.add_argument("--env", default="dev", help="Environment whose data is measured")
+        quality.add_argument("--note", help='What matters to you (e.g. "order_id is the key")')
+        draft_args(quality, "the checks")
+
+        document = ai_sub.add_parser(
+            "document",
+            help="Propose descriptions for undocumented datasets, pipelines and nodes",
+            description=(
+                "Adds a one-line description where there is none, and lists the columns that "
+                "hold personal data (metadata.pii). Only what is missing is added; nothing "
+                "else in the files changes."
+            ),
+        )
+        document.add_argument("--env", default="dev", help="Environment whose data gives columns")
+        document.add_argument("--note", help='Anything the model should know (e.g. "in Spanish")')
+        draft_args(document, "the descriptions")
+
+        explain = ai_sub.add_parser(
+            "explain",
+            help="Explain why a run failed and what to do, from its error",
+            description=(
+                "Ducta diagnoses the error (the kind of failure, the line of your code it was "
+                "raised on); the model explains it in plain words. Nothing is changed. In the "
+                "web app, a failed run's page explains it from the run itself."
+            ),
+        )
+        explain.add_argument(
+            "--error-file", required=True, help="File holding the error or traceback (- for stdin)"
+        )
+        explain.add_argument("--note", help="What you were doing, or what you already tried")
+        UnifiedArgumentParser._add_discovery_args(explain)
+        UnifiedArgumentParser._add_output_format_arg(explain, "Output format (json for scripts)")
+
+        review = ai_sub.add_parser(
+            "review",
+            help="Review a node's code and settings: what Ducta is sure of, plus the model's view",
+            description=(
+                "Ducta checks the node first (a retried node that appends, runs near their "
+                "timeout, I/O or collect() inside the function, credentials in the code…); the "
+                "model adds what it sees in the code, the effective settings and the last runs. "
+                "A finding of the model's that cites a line or setting that does not exist is "
+                "dropped. Nothing is changed."
+            ),
+        )
+        review.add_argument("pipeline", help="Pipeline holding the node")
+        review.add_argument("node", help="Node to review")
+        review.add_argument(
+            "--env", default="dev", help="Environment whose settings and runs to use"
+        )
+        review.add_argument("--note", help='What worries you (e.g. "it got slow last week")')
+        review.add_argument(
+            "--no-ai", action="store_true", help="Only Ducta's own checks: no model is asked"
+        )
+        review.add_argument(
+            "--fail-on",
+            choices=["high", "medium", "low"],
+            help="Exit 3 when a finding is this severe or more (for CI)",
+        )
+        UnifiedArgumentParser._add_discovery_args(review)
+        UnifiedArgumentParser._add_output_format_arg(review, "Output format (json for scripts)")
+
+        revise = ai_sub.add_parser("revise", help="Ask for changes to a draft (a new draft)")
+        revise.add_argument("draft_id", help="Draft id (or a unique prefix)")
+        revise.add_argument("--note", required=True, help='What to change (e.g. "group by day")')
+        UnifiedArgumentParser._add_discovery_args(revise)
+        revise.add_argument(
+            "--attempts", type=int, help="Times the model may fix validation problems (default 3)"
+        )
+        revise.add_argument(
+            "--write", action="store_true", help="Write the draft once it validates"
+        )
+        revise.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        revise.add_argument(
+            "--force", action="store_true", help="Write even if it does not validate"
+        )
+        UnifiedArgumentParser._add_output_format_arg(
+            revise, "Output format (json prints the draft)"
+        )
+
+        drafts = ai_sub.add_parser("drafts", help="List the project's drafts")
+        UnifiedArgumentParser._add_discovery_args(drafts)
+
+        apply = ai_sub.add_parser("apply", help="Write a saved draft to the project")
+        apply.add_argument("draft_id", help="Draft id (or a unique prefix), from `ducta ai new`")
+        UnifiedArgumentParser._add_discovery_args(apply)
+        apply.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        apply.add_argument(
+            "--force", action="store_true", help="Write even if it does not validate"
         )

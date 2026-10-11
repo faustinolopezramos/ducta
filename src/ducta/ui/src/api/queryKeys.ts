@@ -120,6 +120,22 @@ export const qk = {
       ["quality", sourceKey(), "reports", dataset, runId ?? "latest", ...scope(s)] as const,
   },
 
+  /** The AI pipeline builder: the server's model (not per source) and each project's drafts. */
+  ai: {
+    settings: () => ["ai", "settings"] as const,
+    models: () => ["ai", "models"] as const,
+    project: (projectId: string) => ["ai", sourceKey(), projectId] as const,
+    job: (projectId: string, jobId: string) => ["ai", sourceKey(), projectId, "jobs", jobId] as const,
+    drafts: (projectId: string) => ["ai", sourceKey(), projectId, "drafts"] as const,
+    draft: (projectId: string, draftId: string) =>
+      ["ai", sourceKey(), projectId, "drafts", draftId] as const,
+    explanation: (projectId: string, executionId: string) =>
+      ["ai", sourceKey(), projectId, "explanations", executionId] as const,
+    docsGaps: (projectId: string) => ["ai", sourceKey(), projectId, "docs-gaps"] as const,
+    review: (projectId: string, pipeline: string, node: string) =>
+      ["ai", sourceKey(), projectId, "reviews", pipeline, node] as const,
+  },
+
   mlops: {
     mlPipelines: () => ["mlops", sourceKey(), "ml-pipelines"] as const,
     experiments: (s: ScopeKey) => ["mlops", sourceKey(), "experiments", ...scope(s)] as const,

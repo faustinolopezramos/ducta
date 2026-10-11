@@ -117,11 +117,13 @@ def first_user_frame(traceback: str, project_root: Path) -> Optional[Dict[str, A
     found: Optional[Dict[str, Any]] = None
     for m in _FRAME.finditer(traceback or ""):
         path = m["file"]
-        if any(marker in path for marker in _NOT_USER):
-            continue
         try:
             rel = str(Path(path).resolve().relative_to(root).as_posix())
         except ValueError:
+            continue
+        # Judged inside the project: a project under a folder named "ducta" is still
+        # the user's code; a virtualenv inside it is not.
+        if any(marker in "/" + rel for marker in _NOT_USER):
             continue
         found = {"file": rel, "line": int(m["line"]), "function": m["fn"]}
     return found

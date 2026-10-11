@@ -155,10 +155,15 @@ jobs:
           /tmp/clean/bin/ducta --help > /dev/null
           /tmp/clean/bin/python - <<'PY'
           import ducta
+          import ducta.ai.providers
           from ducta.api.main import create_app
           from ducta.stream.query_manager import StreamingQueryManager
           from ducta.core.executors import PipelineExecutor
-          assert "/health" in create_app().openapi()["paths"]
+          # The AI builder's SDKs (`ai` extra) must import from a clean install.
+          import anthropic, httpx, keyring
+          paths = create_app().openapi()["paths"]
+          assert "/health" in paths
+          assert "/api/ai/settings" in paths
           print("smoke OK", ducta.__version__)
           PY
 

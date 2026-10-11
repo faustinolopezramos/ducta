@@ -23,13 +23,16 @@ export function graphDepth(items: { id: string; dependsOn?: string[] }[]): numbe
   return Math.max(0, ...items.map((it) => depth(it.id, new Set())));
 }
 
+/** No toolbars over this canvas: a small even margin frames the graph. */
+const RUN_GRAPH_PADDING = { top: "24px", right: "24px", bottom: "24px", left: "24px" } as const;
+
 /**
  * A canvas sized to the graph — one row of nodes does not need the room of
- * five. The floor keeps the framing's toolbar padding (~184px) plus a row.
+ * five: about 120px a row plus the even margin, so one row is 150px.
  */
 function graphHeight(items: { id: string; dependsOn?: string[] }[] | null): number | null {
   if (!items || items.length === 0) return null;
-  return Math.min(480, Math.max(260, 140 + graphDepth(items) * 120));
+  return Math.min(480, 30 + graphDepth(items) * 120);
 }
 
 /**
@@ -101,6 +104,7 @@ export function RunGraph({
           <Skeleton variant="block" height="100%" />
         ) : (
           <DagCanvas
+            fitPadding={RUN_GRAPH_PADDING}
             items={items}
             executionStates={states}
             onSelect={(sel) => sel?.kind === "node" && onSelectNode?.(sel.id)}

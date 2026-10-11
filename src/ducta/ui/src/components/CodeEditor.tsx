@@ -415,9 +415,13 @@ export function CodeEditor({
               <IconWand size={15} stroke={1.9} />
             </IconButton>
           )}
-          <EditorPill tone={isDirty ? "warning" : "success"}>
-            {isDirty ? "Unsaved" : "Saved"}
-          </EditorPill>
+          {/* With a Save button, the button carries the saved state; the pill is
+              for an editor that has none. */}
+          {!readOnly && !onSave && (
+            <EditorPill tone={isDirty ? "warning" : "success"}>
+              {isDirty ? "Unsaved" : "Saved"}
+            </EditorPill>
+          )}
           <IconButton
             title={wordWrap ? "Disable word wrap" : "Enable word wrap"}
             active={wordWrap}
@@ -515,7 +519,7 @@ export function CodeEditor({
               loading={isSaving}
               title="Save changes (Cmd/Ctrl+S)"
             >
-              {isSaving ? "Saving" : "Save"}
+              {isSaving ? "Saving" : isDirty ? "Save" : "Saved"}
             </Button>
           </div>
         )}

@@ -139,6 +139,8 @@ Getting help
    quality
    streaming
    mlops
+   ai
+   ai_assistants
    server_api
 
 .. toctree::

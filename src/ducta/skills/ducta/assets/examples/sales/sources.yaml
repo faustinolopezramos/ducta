@@ -1,0 +1,8 @@
+# Connections for kind: ingest nodes. No credentials here: Ducta reads
+# SHOP_DB_USER and SHOP_DB_PASSWORD from the environment or .env.
+sources:
+  shop_db:
+    type: postgresql
+    host: db.internal
+    port: 5432
+    database: shop

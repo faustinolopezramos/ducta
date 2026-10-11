@@ -126,9 +126,9 @@ export function PipelineTopBar({
     <header className="pipeline-topbar">
       <nav className="pipeline-trail" aria-label="Breadcrumb">
         <Link to="/projects" className="pipeline-trail-link pipeline-trail-link--root">Projects</Link>
-        <span className="pipeline-trail-sep pipeline-trail-sep--root" aria-hidden="true">/</span>
+        <span className="pipeline-trail-sep pipeline-trail-sep--root" aria-hidden="true">›</span>
         <Link to={routes.project(projectId)} className="pipeline-trail-link pipeline-trail-link--project" title={projectName}>{projectName}</Link>
-        <span className="pipeline-trail-sep" aria-hidden="true">/</span>
+        <span className="pipeline-trail-sep" aria-hidden="true">›</span>
         <span className="pipeline-trail-current" aria-current="page" title={pipelineId}>{pipelineId}</span>
         <button
           type="button"

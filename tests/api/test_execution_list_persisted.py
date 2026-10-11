@@ -137,3 +137,28 @@ class TestListingIsScopedToTheWorkspace:
         store.finish_run(_record("legacy"))
         runs, _ = _manager([], store).list_executions_paginated(workspace=tmp_path)
         assert [r.id for r in runs] == ["legacy"]
+
+    def test_legacy_runs_of_a_project_this_workspace_lacks_are_dropped(self, store, tmp_path):
+        # Records without `workspace` are kept only when their project is here:
+        # a legacy run of a project from another workspace can't be opened here.
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        (here / "projects" / "batch" / "ducta.yaml").write_text("version: 2\nproject: education\n")
+        store.finish_run(_record("legacy-here"))
+        store.finish_run(_record("legacy-elsewhere", project_id="ml_scoring"))
+        store.finish_run(_record("legacy-no-project", project_id=None))
+        runs, _ = _manager([], store).list_executions_paginated(workspace=here)
+        assert sorted(r.id for r in runs) == ["legacy-here", "legacy-no-project"]
+
+    def test_runs_of_a_project_since_deleted_from_this_workspace_are_dropped(self, store, tmp_path):
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        (here / "projects" / "batch" / "ducta.yaml").write_text("version: 2\nproject: education\n")
+        store.finish_run(_record("kept", workspace=str(here / "projects" / "batch")))
+        store.finish_run(
+            _record(
+                "gone", project_id="ml_scoring", workspace=str(here / "projects" / "ml_scoring")
+            )
+        )
+        runs, _ = _manager([], store).list_executions_paginated(workspace=here)
+        assert [r.id for r in runs] == ["kept"]

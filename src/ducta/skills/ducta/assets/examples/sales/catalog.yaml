@@ -1,0 +1,14 @@
+# Every dataset once. Three-part names need no path:
+# <paths.output>/<env>/<layer>/<domain>/<table>.
+bronze.sales.orders:
+  description: Orders as copied from the shop database
+  quality:                          # contract: checked wherever it is read
+    empty_dataset: true
+    schema: {expected_columns: [order_id, amount, order_date]}
+
+silver.sales.orders:
+  description: Orders, deduplicated, positive amounts only
+
+gold.sales.daily_revenue:
+  description: Revenue per day
+  write: {mode: overwrite, partition: [order_date]}

@@ -12,6 +12,24 @@ fi
 
 echo "=== Environment: conda \"$CONDA_DEFAULT_ENV\" ($(conda info --base)/envs/$CONDA_DEFAULT_ENV) ==="
 
+# `poetry build` only packages what is already in src/ducta/ui/dist; it never
+# compiles the web app. Build it first, as the release workflow does.
+echo "=== Building web UI ==="
+if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found; it is needed to build the web UI (src/ducta/ui)" >&2
+    exit 1
+fi
+(
+    cd src/ducta/ui
+    npm ci
+    npm run build
+)
+if [[ ! -f src/ducta/ui/dist/index.html ]]; then
+    echo "ERROR: the web UI build produced no src/ducta/ui/dist/index.html" >&2
+    exit 1
+fi
+
+echo ""
 echo "=== Building wheel ==="
 poetry build
 

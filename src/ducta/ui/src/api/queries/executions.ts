@@ -43,9 +43,10 @@ export interface ExecutionListFilters {
  * GET /executions
  * Returns { executions: [...], count }. Supports optional filters.
  */
-export const useExecutionList = (filters: ExecutionListFilters = {}) =>
+export const useExecutionList = (filters: ExecutionListFilters = {}, { enabled = true }: { enabled?: boolean } = {}) =>
   useQuery({
     queryKey: qk.executions.list(filters),
+    enabled,
     queryFn: () =>
       client
         .get("/executions", {

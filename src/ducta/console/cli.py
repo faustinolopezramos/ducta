@@ -161,7 +161,7 @@ def validate_init_arguments(args: argparse.Namespace) -> None:
 
 #: Subcommands that do not run inside an existing project, and so must not
 #: create a `logs/` directory in whatever the current working directory is.
-_PROJECTLESS_SUBCOMMANDS = frozenset({"template"})
+_PROJECTLESS_SUBCOMMANDS = frozenset({"template", "ai"})
 
 
 def _is_projectless(parsed_args: argparse.Namespace) -> bool:
@@ -240,6 +240,8 @@ class UnifiedCLI:
             "init": (validate_init_arguments, self._handle_init_command),
             "certify": (None, self._handle_certify_command),
             "profile": (validate_profile_arguments, self._handle_profile_command),
+            "ai": (None, self._handle_ai_command),
+            "skill": (None, self._handle_skill_command),
         }
 
     def _dispatch_subcommand(self, parsed_args: argparse.Namespace) -> int:
@@ -412,6 +414,16 @@ class UnifiedCLI:
         from ducta.console.commands.profile_cmds import handle_profile
 
         return handle_profile(parsed_args)
+
+    def _handle_ai_command(self, parsed_args: argparse.Namespace) -> int:
+        from ducta.console.commands.ai_cmds import handle_ai
+
+        return handle_ai(parsed_args)
+
+    def _handle_skill_command(self, parsed_args: argparse.Namespace) -> int:
+        from ducta.console.commands.skill_cmds import handle_skill
+
+        return handle_skill(parsed_args)
 
     def _handle_certify_command(self, parsed_args: argparse.Namespace) -> int:
         from ducta.console.commands.certify_cmds import handle_certify

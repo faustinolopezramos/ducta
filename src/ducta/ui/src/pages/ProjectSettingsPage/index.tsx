@@ -4,11 +4,13 @@ import { SETTINGS_TABS, SettingsTabs, type SettingsTab } from "../../components/
 import IngestionPage from "../IngestionPage";
 import { EnvironmentsDiff } from "./EnvironmentsDiff";
 import { AlertRules } from "./AlertRules";
+import { AISettings } from "./AISettings";
 
 const DESCRIPTIONS: Record<SettingsTab, string> = {
   environments: "What each environment changes, side by side.",
   connections: "The databases your ingestion nodes read from.",
   alerts: "Who hears about failures, quality gates and missed SLAs.",
+  ai: "The model that drafts and fixes pipelines. Shared by every project on this server.",
 };
 
 /** `/p/:projectId/settings[/:tab]` — the project's configuration, by topic. */
@@ -27,7 +29,13 @@ export function ProjectSettingsPage() {
   return (
     <PageContainer>
       <PageHeader title={header.title} description={header.description} tabs={header.tabs} />
-      {current === "alerts" ? <AlertRules projectId={projectId} /> : <EnvironmentsDiff projectId={projectId} />}
+      {current === "alerts" ? (
+        <AlertRules projectId={projectId} />
+      ) : current === "ai" ? (
+        <AISettings />
+      ) : (
+        <EnvironmentsDiff projectId={projectId} />
+      )}
     </PageContainer>
   );
 }

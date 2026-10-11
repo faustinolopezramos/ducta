@@ -43,8 +43,25 @@ from ducta.api.services.code_index import module_file, top_level_functions
 from ducta.setting.problems import Problem, parse_problems
 from ducta.setting.project_loader import ProjectConfigError, validate_project
 
-#: Directories that hold data or state, never configuration or code.
-_SKIP = {".git", ".ducta", "data", "logs", "models", "lib", "node_modules", "__pycache__", ".venv"}
+#: Directories that hold data, state, environments or caches — never
+#: configuration or code, and too large to copy for every draft.
+_SKIP = {
+    ".git",
+    ".ducta",
+    ".venv",
+    "venv",
+    "site-packages",
+    "data",
+    "logs",
+    "models",
+    "lib",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".tox",
+}
 #: Passed by the engine, not by an input.
 _INJECTED = {"start_date", "end_date", "ml_context", "spark", "context", "kwargs"}
 

@@ -98,6 +98,99 @@ directly.
 
 ### Added
 
+- **An agent skill for AI coding assistants** (`ducta skill`). Ducta ships a skill in
+  the open Agent Skills format (`SKILL.md`, references for every module, a
+  troubleshooting guide, an environment check and a valid example project) that lets
+  Claude Code, Codex, Gemini CLI, GitHub Copilot and other assistants install,
+  configure, run and debug Ducta. `ducta skill install [--target agents|claude|codex|gemini|copilot]
+  [--global] [--agents-md]` puts it where the assistant looks; `ducta skill export --zip`
+  packages it for claude.ai. Its CLI reference is generated from the parser, and tests
+  check every command and flag it names.
+- **`ducta config validate --output-format json`**: one JSON document on stdout with
+  every problem — file, line, node, code and suggested fix — for CI and assistants. Exit
+  codes are unchanged.
+- **`ducta ai` passes a problem's suggested fix to the model.** It read a `description`
+  field that problems never have; it now sends the fix's label and replacement.
+- **`ducta ai quality PIPELINE NODE`: quality checks proposed from the data, and proven on
+  it.** Ducta measures the node's output (column statistics only — the model never sees a
+  row), the model proposes the node's `quality` block, and Ducta runs it on that data: a
+  check that would fail today goes back to the model. Also in the API
+  (`{"kind": "quality"}`).
+- **`ducta ai document`: descriptions for undocumented datasets, pipelines and nodes**, and
+  `metadata.pii` for columns that hold personal data. Only what is missing is added.
+  In both, the model writes no file: Ducta inserts the proposal, keeping comments and
+  layout, and nothing else in the file can change.
+- **`ducta ai explain`: why a run failed, in plain words, and what to do.** Built on the run
+  diagnosis (kind of failure, the line of your code, what changed since the last good
+  run); when the error has no line, the failing node's function is sent instead of
+  letting the model guess. Changes nothing. API: `{"kind": "explain", "execution_id"}`;
+  kept per run (`GET /api/projects/{id}/ai/explanations/{run}`).
+- **`ducta ai review PIPELINE NODE`: a node's code and settings reviewed.** Ducta's own
+  checks first (a retried node that appends, runs near their timeout, `collect()` or I/O
+  inside the function, credentials in the code, dates the function cannot receive…, also
+  with `--no-ai`), then the model's findings — each kept only if it cites a real line of
+  the function, quoted as it is, or a real setting. `--fail-on high` for CI. API: a
+  `review` job, `…/ai/reviews/{pipeline}/{node}[/checks]`. In the web app, a *Review* tab
+  in the node's inspector, where each finding can become a fix draft.
+- **Web app:** *Explain with AI* on a failed run (the explanation sits under the diagnosis
+  and is kept with the run), *Propose with AI* on a node's *Quality* tab, and *Document
+  with AI* next to *Build with AI* while something has no description.
+- **A failed run's diagnosis finds your code again when the project lives under a folder
+  named `ducta`** (frames were taken for Ducta's own).
+- **`ducta ai` writes code where the project keeps it.** The prompt said `src/` and a
+  module in `pipelines/` was refused, so in a project made by `ducta template` (code in
+  `pipelines/`) every draft failed all its attempts. The code folder now comes from the
+  project's own `run:` references.
+- **`ducta ai setup --provider ollama` picks the largest code model** the server has,
+  not the first one listed, and says when it has none. `ducta ai` exit codes now tell
+  apart a configuration problem (2), a draft that does not validate (3) and a model that
+  cannot be reached (5); `ducta ai login` with nothing configured says what to run.
+- **A failed draft says why, and what to do next.** Each attempt shows the first
+  problem sent back to the model (CLI and web app), and the CLI suggests `revise`,
+  `--attempts` or `apply --force`.
+- **Web app, AI:** closing the draft dialog while the model works keeps the job going
+  and tells you when it ends; the progress shows the time spent; *Settings → AI* tests
+  the settings in the form before saving them (`POST /api/ai/models/test`), fills the
+  model list on arrival, sets Anthropic's effort and the number of attempts, and asks
+  before removing a key; an applied draft still shows what it wrote.
+- **A hidden folder inside `pipelines/` or `catalog/` (an assistant's `.claude/`, …) is
+  no longer read as part of the project**; it broke validation. `ducta skill install`
+  now installs next to `ducta.yaml` from any folder of the project, warns outside one,
+  points `AGENTS.md` to the shared `.agents/` copy, and says to restart the assistant.
+- The "Applied 'dev' environment overrides" line is now debug output (it printed once
+  per environment every time a project was validated).
+
+- **`ducta ai`: draft pipelines with an AI model, local or behind an API key**
+  (extra `ai`, with `api`). `ducta ai setup` chooses Ollama, LM Studio, any
+  OpenAI-compatible server, OpenAI or Anthropic and is kept in `~/.ducta/ai.toml`;
+  `ducta ai login` keeps a key in the system keychain (or it is read from the
+  provider's variable); `ducta ai doctor` checks the connection. `ducta ai new
+  "<description>"` drafts one new pipeline, its new modules and new catalog
+  entries, validates it as an unsaved edit in every environment, and feeds the
+  problems back to the model until it passes. The draft is saved under
+  `.ducta/ai/drafts/` and written only by `--write` or `ducta ai apply`; existing
+  files are never rewritten, and nothing is run or committed. `ducta ai fix
+  <pipeline>` drafts a fix from its validation problems, a run's error
+  (`--error-file`) or a `--note`, and may rewrite only that pipeline and its
+  modules; `ducta ai drafts` lists them. The server exposes the same builder under
+  `/api/ai/*` and `/api/projects/{id}/ai/*` (jobs the UI polls, drafts, apply),
+  with two new permissions: `ai.use` (developers) and `ai.configure` (admins: the
+  server's model and API key, which is stored in its keychain and never returned).
+  `ducta ai revise <draft> --note …` asks for changes to a draft (a new, linked
+  draft). In the UI: **Build with AI** next to *New pipeline* (describe → attempts
+  → diff review → Apply, Ask for changes…, Discard, and the list of earlier
+  drafts), **Fix with AI** on a pipeline's problems and on a failed run, and a
+  **Settings → AI** tab to choose the provider and model, test the connection and
+  keep the API key. Hardened before release: saving settings keeps what was not
+  changed; a keychain key only goes to the endpoint it was stored for, and the
+  API accepts only the provider's own or a `DUCTA_AI_*` key variable; applying
+  re-validates against the current project; new catalog entries cannot point at
+  existing data and new modules cannot shadow installed ones; a fix never sends
+  a file holding a credential to a remote model, and example code is masked;
+  jobs live in `.ducta/ai/jobs/` (any worker answers, only their owner sees
+  them) and can be stopped; Anthropic requests use prompt caching and `high`
+  effort by default; OpenAI reasoning models are retried without `temperature`.
+
 - **A mistyped command names the closest one** (`ducta strat` → "Did you mean 'start'?",
   and the same for `ducta config valdiate`). Argument errors are no longer reported as
   failures "in node 'argument validation'".

@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+from loguru import logger
+
 
 def _sources_of(column: str, sql: str, dialect: Optional[str]) -> List[str]:
     """``schema.table.column`` for each source column *column* is computed from."""
@@ -33,7 +35,9 @@ def _sources_of(column: str, sql: str, dialect: Optional[str]) -> List[str]:
     from sqlglot.lineage import lineage
 
     out = set()
-    for leaf in lineage(column, sql, dialect=dialect).walk():
+    # `schema` by keyword: sqlglot 30.22 made it a required argument, and the
+    # keyword form works from 23.0 (the floor in pyproject) onwards.
+    for leaf in lineage(column, sql, schema=None, dialect=dialect).walk():
         if list(leaf.downstream):
             continue
         col = leaf.name.split(".")[-1]
@@ -73,6 +77,9 @@ def ingest_column_lineage(ingest: Dict[str, Any], dialect: Optional[str] = None)
             try:
                 entry["sources"] = [f"{source}:{s}" for s in _sources_of(name, query, dialect)]
             except Exception as e:  # noqa: BLE001 — one column we cannot trace
+                # Said out loud: an API change in sqlglot once emptied every
+                # column's lineage here without a word.
+                logger.warning("Cannot trace the lineage of column '{}': {}", name, e)
                 entry["error"] = str(e)
             columns.append(entry)
         return {"columns": columns, "note": None}

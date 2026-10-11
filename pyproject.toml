@@ -78,6 +78,7 @@ exclude = [
     "src/ducta/setting/README.md",
     "src/ducta/check/README.md",
     "src/ducta/console/README.md",
+    "src/ducta/ai/README.md",
 ]
 
 [tool.poetry.urls]
@@ -151,6 +152,14 @@ delta-spark = { version = "^3.2.0", optional = true }
 # --- Databricks Connect (extra: databricks — MUTUALLY EXCLUSIVE with `spark`) ---
 databricks-connect = { version = "^14.0.0", optional = true }
 
+# --- AI pipeline builder (extra: ai) — `ducta ai`. Local models (Ollama, LM Studio,
+# vLLM) and OpenAI are reached over httpx; Claude through the official SDK. keyring
+# keeps API keys in the OS keychain. Drafts are validated by the API layer, so
+# install it as `ducta[api,ai]`.
+httpx = { version = ">=0.24", optional = true }
+anthropic = { version = ">=1.13.0,<2.0.0", optional = true }
+keyring = { version = ">=25.0.0", optional = true }
+
 # --- Monitoring (extra: monitoring) ---
 prometheus-client = { version = "^0.17.0", optional = true }
 
@@ -165,6 +174,7 @@ database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
 mlops = ["mlflow", "scikit-learn", "numpy", "scipy", "optuna"]
 boost = ["xgboost", "lightgbm"]
 monitoring = ["prometheus-client"]
+ai = ["httpx", "anthropic", "keyring"]
 databricks = ["databricks-connect"]
 delta = ["delta-spark"]
 all = [
@@ -175,6 +185,7 @@ all = [
     "mlflow", "scikit-learn", "numpy", "scipy", "optuna",
     "xgboost", "lightgbm",
     "prometheus-client",
+    "httpx", "anthropic", "keyring",
 ]
 
 [tool.poetry.group.dev.dependencies]

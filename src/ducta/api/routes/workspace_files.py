@@ -25,7 +25,7 @@ from fastapi import APIRouter, Depends, Query
 from ducta.api.dependencies import WorkspaceManagerDep, require_permission
 from ducta.api.exceptions import ConcurrencyError, http_error_on
 from ducta.api.models.workspace import FileContentResponse, FilesListResponse, WriteFileRequest
-from ducta.api.workspace.manager import FileTooLargeError
+from ducta.api.workspace.manager import FileTooLargeError, SecretFileError
 
 router = APIRouter(prefix="/workspace/files", tags=["Files"])
 
@@ -55,7 +55,11 @@ async def read_file(
     path: str = Query(description="File path relative to workspace root"),
 ) -> FileContentResponse:
     """Read a text file from the workspace."""
-    with http_error_on(404), http_error_on(413, FileTooLargeError):
+    with (
+        http_error_on(404),
+        http_error_on(413, FileTooLargeError),
+        http_error_on(403, SecretFileError),
+    ):
         content = manager.read_file(path)
     return FileContentResponse(
         path=path, content=content, size_bytes=len(content.encode()), version=text_version(content)
@@ -80,7 +84,7 @@ async def write_file(body: WriteFileRequest, manager: WorkspaceManagerDep) -> No
                 "The file changed since it was opened",
                 detail={"path": body.path, "version": found, "content": current},
             )
-    with http_error_on(400):
+    with http_error_on(400), http_error_on(403, SecretFileError):
         manager.write_file(body.path, body.content)
 
 
@@ -101,5 +105,5 @@ async def delete_file(
     path: str = Query(description="File path relative to workspace root"),
 ) -> None:
     """Delete a file from the workspace."""
-    with http_error_on(404):
+    with http_error_on(404), http_error_on(403, SecretFileError):
         manager.delete_file(path)

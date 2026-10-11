@@ -15,7 +15,11 @@ import {
   IconActivity,
   IconAlertCircle,
   IconArrowRight,
+  IconSparkles,
 } from "@tabler/icons-react";
+import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
+import { useAIDocsGaps } from "../../api/aiApi";
+import { usePermission } from "../../hooks/usePermission";
 import { ProjectDependenciesView } from "./DependenciesMap";
 import { NewPipelineModal } from "./NewPipelineModal";
 import { PipelinesView, type PipelineSpecLike } from "./PipelinesTable";
@@ -27,6 +31,7 @@ import { attentionItems } from "../ProjectOverviewPage";
 import { useExecutionList, useStaleness } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
 import { ProjectHealth } from "../../components/Dashboard/ProjectHealth";
+import { EnvHint } from "../../components/Shell/EnvHint";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { formatDuration } from "../../utils/formatDuration";
 import { formatRelative } from "../../utils/timeLabels";
@@ -39,6 +44,12 @@ export function ProjectPage() {
   const { projects, isLoading: projectsLoading } = useProjectList();
 
   const [showCreate, setShowCreate] = useState(false);
+  const [showAI, setShowAI] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
+  const canUseAI = usePermission("ai.use");
+  // Offered only while something has no description.
+  const { data: gaps } = useAIDocsGaps(projectId ?? "", canUseAI);
+  const undocumented = gaps ? gaps.datasets + gaps.pipelines + gaps.nodes : 0;
   const [view, setView] = useState<"pipelines" | "dependencies" | "health">("dependencies");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [runPipelineId, setRunPipelineId] = useState<string | null>(null);
@@ -131,6 +142,29 @@ export function ProjectPage() {
               Health
             </Button>
           </div>
+          {canUseAI && undocumented > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ai-build-btn"
+              onClick={() => setShowDocs(true)}
+              leftIcon={<IconSparkles size={15} stroke={2} />}
+              title={`${undocumented} without a description`}
+            >
+              Document with AI
+            </Button>
+          )}
+          {canUseAI && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="ai-build-btn"
+              onClick={() => setShowAI(true)}
+              leftIcon={<IconSparkles size={15} stroke={2} />}
+            >
+              Build with AI
+            </Button>
+          )}
           <Button
             variant="primary"
             size="sm"
@@ -171,6 +205,19 @@ export function ProjectPage() {
             navigate(routes.pipeline(projectId!, name));
           }}
         />
+      )}
+
+      {showAI && projectId && (
+        <AIDraftDialog
+          projectId={projectId}
+          mode={{ kind: "new" }}
+          onClose={() => setShowAI(false)}
+          onApplied={(pipeline) => pipeline && navigate(routes.pipeline(projectId, pipeline))}
+        />
+      )}
+
+      {showDocs && projectId && (
+        <AIDraftDialog projectId={projectId} mode={{ kind: "docs", gaps }} onClose={() => setShowDocs(false)} />
       )}
 
       {runPipelineId && projectId && (
@@ -250,6 +297,7 @@ function ProjectHealthPane({ projectId }: { projectId: string }) {
 
   return (
     <div className="project-health-pane">
+      <EnvHint projectId={projectId} />
       <ProjectHealth projectId={projectId} env={env} />
       <section className="overview-section" style={{ marginTop: "var(--space-6, 24px)" }}>
         <div className="overview-h-row">

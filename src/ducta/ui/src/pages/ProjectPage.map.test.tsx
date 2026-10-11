@@ -117,6 +117,11 @@ vi.mock("../hooks/useProjects", () => ({
   }),
 }));
 
+vi.mock("../hooks/usePermission", () => ({ usePermission: () => true }));
+vi.mock("../api/aiApi", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/aiApi")>()),
+  useAIDocsGaps: () => ({ data: undefined }),
+}));
 vi.mock("../hooks/useProjectProblems", () => ({
   useProjectProblems: () => ({ problems: [], isChecking: false }),
 }));

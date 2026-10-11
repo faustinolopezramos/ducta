@@ -25,12 +25,13 @@ export function RunsTabs({ projectId, current }: { projectId: string; current: R
   );
 }
 
-export type SettingsTab = "environments" | "alerts" | "connections";
+export type SettingsTab = "environments" | "alerts" | "connections" | "ai";
 
 export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: "environments", label: "Environments" },
   { id: "connections", label: "Connections" },
   { id: "alerts", label: "Alerts" },
+  { id: "ai", label: "AI" },
 ];
 
 export function SettingsTabs({ projectId, current }: { projectId: string; current: SettingsTab }) {

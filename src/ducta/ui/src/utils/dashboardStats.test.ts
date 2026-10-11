@@ -66,6 +66,28 @@ describe("summarizeRuns", () => {
     expect(stats.attention).toEqual([]);
   });
 
+  it("drops a node run's failure once a later pipeline run re-ran that node", () => {
+    const stats = summarizeRuns(
+      [
+        run({ pipeline_name: "golden.transformation", node_names: ["golden.universities"], started_at: hoursAgo(1) }),
+        run({ pipeline_name: "golden.universities", status: "failed", started_at: hoursAgo(3) }),
+      ],
+      NOW
+    );
+    expect(stats.attention).toEqual([]);
+  });
+
+  it("keeps a failure that a success older than it does not fix", () => {
+    const stats = summarizeRuns(
+      [
+        run({ pipeline_name: "golden.universities", status: "failed", started_at: hoursAgo(1) }),
+        run({ pipeline_name: "golden.transformation", node_names: ["golden.universities"], started_at: hoursAgo(3) }),
+      ],
+      NOW
+    );
+    expect(stats.attention.map((a) => a.run.pipeline_name)).toEqual(["golden.universities"]);
+  });
+
   it("keeps the same pipeline name in two projects apart", () => {
     const stats = summarizeRuns(
       [

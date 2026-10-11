@@ -24,3 +24,6 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .problem__fix:hover, .problem__fix:focus-visible { border-color: var(--primary); outline: none; }
+
+.problems-wrap { display: grid; gap: var(--space-2); }
+.problems__action { display: flex; justify-content: flex-end; padding: var(--space-2) var(--space-2) 0; }

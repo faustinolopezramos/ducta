@@ -1,5 +1,8 @@
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { IconPlayerPlay } from "@tabler/icons-react";
+import { IconPlayerPlay, IconSparkles } from "@tabler/icons-react";
+import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
+import { AIExplanation } from "../../components/AI/AIExplanation";
+import { usePermission } from "../../hooks/usePermission";
 import { useQuery } from "@tanstack/react-query";
 import client from "../../api/client";
 import { useDiagnosis, useExecutionLogs, useExecutionStatus } from "../../api/queries";
@@ -68,6 +71,11 @@ export function RunPage() {
   const { mutate: cancel, isPending: cancelling } = useCancelExecution();
   const { mutate: execute } = useExecutePipeline();
   const navigate = useNavigate();
+  // "Fix with AI" sends this run's error (and the pipeline's files) to the model.
+  const canUseAI = usePermission("ai.use");
+  const [aiFixOpen, setAiFixOpen] = useState(false);
+  // Presses of "Explain with AI": the explanation below the diagnosis asks once per press.
+  const [explainAsked, setExplainAsked] = useState(0);
   const { mutate: reproduce } = useReproduceCertificate();
   const [optionsOpen, setOptionsOpen] = useState(false);
 
@@ -112,12 +120,30 @@ export function RunPage() {
                 {cancelling ? "Cancelling…" : "Cancel run"}
               </button>
             )}
+            {failed && canUseAI && (
+              <button type="button" className="diagnose__btn run-page__ai" onClick={() => setExplainAsked((n) => n + 1)}>
+                <IconSparkles size={14} aria-hidden="true" /> Explain with AI
+              </button>
+            )}
+            {failed && canUseAI && (
+              <button type="button" className="diagnose__btn run-page__ai" onClick={() => setAiFixOpen(true)}>
+                <IconSparkles size={14} aria-hidden="true" /> Fix with AI
+              </button>
+            )}
             <Link className="run-page__open" to={routes.pipeline(projectId, run.pipeline_name)}>
               Open the pipeline
             </Link>
           </div>
         }
       />
+      {aiFixOpen && (
+        <AIDraftDialog
+          projectId={projectId}
+          mode={{ kind: "fix", pipeline: run.pipeline_name, executionId: run.id }}
+          onClose={() => setAiFixOpen(false)}
+          onApplied={() => navigate(routes.pipeline(projectId, run.pipeline_name))}
+        />
+      )}
       <dl className="run-page__facts">
         <div>
           <dt>Status</dt>
@@ -165,6 +191,7 @@ export function RunPage() {
           }
         />
       )}
+      {failed && canUseAI && <AIExplanation projectId={projectId} executionId={run.id} requested={explainAsked} />}
 
       <section className="run-page__section" aria-labelledby="run-graph">
         <h2 id="run-graph" className="run-page__h">On the graph</h2>

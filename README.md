@@ -370,6 +370,16 @@ ducta server start --port 8000     # web app & API docs at http://localhost:8000
 
 Browse pipelines, edit configuration, launch runs, and watch logs stream live.
 
+### 7. Working with an AI coding assistant?
+
+```bash
+ducta skill install        # Claude Code, Codex, Gemini CLI, GitHub Copilot…
+```
+
+Ducta ships an [Agent Skill](https://agentskills.io) that teaches your assistant to set
+up, validate, run and debug Ducta projects with you. Details:
+[AI Assistants](https://github.com/faustinolopezramos/ducta/blob/main/docs/ai_assistants.rst).
+
 ---
 
 ## See it in action

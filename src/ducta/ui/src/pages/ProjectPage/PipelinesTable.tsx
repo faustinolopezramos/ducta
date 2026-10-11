@@ -89,7 +89,7 @@ export function PipelinesView({
       key: "type",
       header: "Type",
       width: "110px",
-      cell: (r) => <span className="pipeline-type-tag">{r.type}</span>,
+      cell: (r) => <span className="pipeline-type-tag">{r.type.toLowerCase() === "ml" ? "ML" : r.type}</span>,
     },
     { key: "nodes", header: "Nodes", align: "right", mono: true, width: "80px", cell: (r) => r.nodes },
     {

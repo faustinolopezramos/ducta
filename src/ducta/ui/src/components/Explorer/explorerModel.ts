@@ -14,9 +14,9 @@ export function filterTree(tree: ExplorerPipeline[], query: string): ExplorerPip
     .filter((p) => p.nodes.length > 0 || p.name.toLowerCase().includes(q));
 }
 
-const LAYER_ORDER = ["bronze", "silver", "gold", "other"];
+const LAYER_ORDER = ["bronze", "silver", "gold", "no layer"];
 
-/** Datasets by medallion layer (bronze → silver → gold → other), sorted, filtered. */
+/** Datasets by medallion layer (bronze → silver → gold → no layer), sorted, filtered. */
 export function groupDatasets(
   datasets: { name: string; layer?: string | null }[],
   query: string,
@@ -25,7 +25,7 @@ export function groupDatasets(
   const groups = new Map<string, string[]>();
   for (const d of datasets) {
     if (q && !d.name.toLowerCase().includes(q)) continue;
-    const layer = d.layer ?? "other";
+    const layer = d.layer ?? "no layer";
     groups.set(layer, [...(groups.get(layer) ?? []), d.name]);
   }
   const rank = (layer: string) => {

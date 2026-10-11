@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useEnvironments } from "../../api/queries";
+import { useEnvironments, useExecutionList } from "../../api/queries";
 import { useSourceStore } from "../../store/workspace";
 import { envKind } from "./envKind";
 
@@ -16,8 +16,24 @@ export function EnvSwitcher({ projectId }: { projectId?: string | null }) {
   const options = ["base", ...envs.filter((e) => e !== "base")];
 
   useEffect(() => {
-    if (data && activeEnv !== "base" && !envs.includes(activeEnv)) setActiveEnv("base");
-  }, [data, envs, activeEnv, setActiveEnv]);
+    // A fallback, not a choice: it leaves the first-visit pick below free to run.
+    if (data && activeEnv !== "base" && !envs.includes(activeEnv)) useSourceStore.setState({ activeEnv: "base" });
+  }, [data, envs, activeEnv]);
+
+  // First visit (no environment ever chosen): start where the project's latest
+  // run is, so its pages are not empty. After that the environment only changes
+  // when the user changes it.
+  const envPicked = useSourceStore((s) => s.envPicked);
+  const pickInitialEnv = useSourceStore((s) => s.pickInitialEnv);
+  const { data: runs } = useExecutionList(
+    { project_id: projectId ?? undefined, limit: 200 },
+    { enabled: Boolean(projectId) && !envPicked },
+  );
+  useEffect(() => {
+    if (envPicked || !projectId || !data) return;
+    const latest = runs?.executions?.[0]?.env;
+    if (latest && (latest === "base" || envs.includes(latest))) pickInitialEnv(latest);
+  }, [envPicked, projectId, data, envs, runs, pickInitialEnv]);
 
   const kind = envKind(activeEnv);
   return (

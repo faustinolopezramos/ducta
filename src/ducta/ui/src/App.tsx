@@ -185,7 +185,8 @@ export default function App() {
                   path: "p/:projectId",
                   element: <ProjectScope />,
                   children: [
-                    { index: true, handle: { breadcrumb: (d: any) => d?.params?.projectId ?? "Project" }, element: <ProjectPage /> },
+                    // One address per view: the project's home is its pipelines.
+                    { index: true, element: <Navigate to="pipelines" replace /> },
                     { path: "pipelines", handle: { breadcrumb: () => "Pipelines" }, element: <ProjectPage /> },
                     { path: "pipelines/:pipelineId", handle: { breadcrumb: (d: any) => d?.params?.pipelineId ?? "Pipeline", hideTrail: true }, element: <PipelinePage /> },
                     { path: "datasets/:dataset", handle: { breadcrumb: (d: any) => `Dataset: ${d?.params?.dataset}` }, element: <DatasetPage /> },

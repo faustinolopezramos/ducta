@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any, Dict, List, Optional
 
 import msgpack  # type: ignore
@@ -214,12 +215,15 @@ async def get_execution_diagnosis(
     manager: WorkspaceManagerDep,
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> dict:
-    from ducta.api.services.diagnosis import diagnose
-    from ducta.api.services.run_certificates import latest_successful, load_run_certificate
-
     user_id = current_user.id if current_user else None
     # Memory first, then the persisted run: a diagnosis must survive a restart.
     record = await exec_manager.load_execution(execution_id, user_id=user_id)
+    root = manager.for_project(record.project_id).root if record.project_id else None
+    return await run_in_threadpool(build_diagnosis, record, exec_manager, root)
+
+
+def run_errors(execution_id: str) -> List[Dict[str, Any]]:
+    """A run's errors, as recorded in its error log."""
     from ducta.api.execution.error_recovery import load_error_log_summary
 
     summary = load_error_log_summary(execution_id) or {}
@@ -235,6 +239,15 @@ async def get_execution_diagnosis(
                 "hint": entry.get("hint"),
             }
         )
+    return errors
+
+
+def build_diagnosis(record: Any, exec_manager: Any, project_root: Optional[Path]) -> dict:
+    """Why *record* (a loaded execution) failed — see :mod:`ducta.api.services.diagnosis`."""
+    from ducta.api.services.diagnosis import diagnose
+    from ducta.api.services.run_certificates import latest_successful, load_run_certificate
+
+    errors = run_errors(record.id)
 
     def _last_good_from_history(project_root):
         before = record.started_at
@@ -258,30 +271,22 @@ async def get_execution_diagnosis(
                 return found
         return None
 
-    def compute() -> dict:
-        project_root = None
-        certificate = None
-        last_ok = None
-        if record.project_id:
-            project_root = manager.for_project(record.project_id).root
-            if record.certificate_run_id:
-                certificate = load_run_certificate(
-                    project_root, record.certificate_run_id, record.env
-                )
-            ok = latest_successful(project_root, record.env).get(record.pipeline_name)
-            # The last good run before this one, not this one (a later success is no baseline).
-            if ok and (
-                not certificate
-                or (ok.get("started_at") or "") < (certificate.get("started_at") or "")
-            ):
-                last_ok = ok
-            else:
-                # The project's own copies can be gone (older storage layout);
-                # the run history still names the last good run's certificate.
-                last_ok = _last_good_from_history(project_root)
-        return diagnose(record.model_dump(mode="json"), errors, project_root, certificate, last_ok)
-
-    return await run_in_threadpool(compute)
+    certificate = None
+    last_ok = None
+    if project_root is not None:
+        if record.certificate_run_id:
+            certificate = load_run_certificate(project_root, record.certificate_run_id, record.env)
+        ok = latest_successful(project_root, record.env).get(record.pipeline_name)
+        # The last good run before this one, not this one (a later success is no baseline).
+        if ok and (
+            not certificate or (ok.get("started_at") or "") < (certificate.get("started_at") or "")
+        ):
+            last_ok = ok
+        else:
+            # The project's own copies can be gone (older storage layout);
+            # the run history still names the last good run's certificate.
+            last_ok = _last_good_from_history(project_root)
+    return diagnose(record.model_dump(mode="json"), errors, project_root, certificate, last_ok)
 
 
 @router.get(

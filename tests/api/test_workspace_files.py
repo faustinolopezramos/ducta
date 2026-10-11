@@ -76,3 +76,36 @@ class TestListDirectory:
     def test_rejects_a_file_path(self, workspace):
         with pytest.raises(ValueError, match="not a directory"):
             workspace.list_directory("environment.yaml")
+
+
+class TestSecretFiles:
+    """``.env`` holds credentials and the certificate signing key: the file
+    browser neither lists nor serves it. Templates (``.env.example``) stay."""
+
+    @pytest.fixture
+    def with_env(self, workspace):
+        (workspace.root / ".env").write_text("DUCTA_CONNECT_PASSWORD=s3cret\n")
+        (workspace.root / ".env.local").write_text("X=1\n")
+        (workspace.root / ".env.example").write_text("DUCTA_CONNECT_PASSWORD=\n")
+        return workspace
+
+    def test_env_files_are_not_listed_but_templates_are(self, with_env):
+        names = {e["name"] for e in with_env.list_directory("")}
+
+        assert ".env" not in names and ".env.local" not in names
+        assert ".env.example" in names
+
+    def test_env_files_are_not_read_written_or_deleted(self, with_env):
+        from ducta.api.workspace.manager import SecretFileError
+
+        for call in (
+            lambda: with_env.read_file(".env"),
+            lambda: with_env.write_file(".env", "X=2\n"),
+            lambda: with_env.delete_file(".env.local"),
+        ):
+            with pytest.raises(SecretFileError):
+                call()
+        assert (with_env.root / ".env").read_text() == "DUCTA_CONNECT_PASSWORD=s3cret\n"
+
+    def test_a_template_reads_normally(self, with_env):
+        assert with_env.read_file(".env.example") == "DUCTA_CONNECT_PASSWORD=\n"

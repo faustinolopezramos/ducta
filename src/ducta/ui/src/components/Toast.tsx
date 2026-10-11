@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────
 
 import React, { useEffect } from 'react';
-import { IconCheck, IconX, IconAlertTriangle, IconInfoCircle } from "@tabler/icons-react";
+import { IconCheck, IconAlertCircle, IconAlertTriangle, IconInfoCircle } from "@tabler/icons-react";
 import "./Toast.css";
 
 export interface ToastProps {
@@ -18,7 +18,7 @@ export interface ToastProps {
 
 const TOAST_CONFIG: Record<string, { icon: React.ReactNode }> = {
   success: { icon: <IconCheck size={18} /> },
-  error: { icon: <IconX size={18} /> },
+  error: { icon: <IconAlertCircle size={18} /> },
   warn: { icon: <IconAlertTriangle size={18} /> },
   info: { icon: <IconInfoCircle size={18} /> },
 };

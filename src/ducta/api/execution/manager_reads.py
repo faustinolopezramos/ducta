@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Collection, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -32,16 +32,34 @@ from ducta.api.models.execution import ExecutionResponse, LogEntry
 from ducta.api.utils.pagination import paginate
 
 
-def ran_in(execution: ExecutionResponse, workspace: Path) -> bool:
+def ran_in(
+    execution: ExecutionResponse,
+    workspace: Path,
+    project_ids: Optional[Collection[str]] = None,
+) -> bool:
     """Whether *execution* ran in *workspace* — from it, or from a project inside it
     (or from the workspace a project directory belongs to). A record that does not
     say where it ran (written before ``workspace`` existed) is kept: hiding it would
-    hide history, not another workspace's runs."""
+    hide history, not another workspace's runs. When *project_ids* is given, a run
+    of a project the workspace no longer has (deleted, or never here) is dropped
+    too: nothing it links to can be opened."""
+    if project_ids is not None and execution.project_id and execution.project_id not in project_ids:
+        return False
     if not execution.workspace:
         return True
     ran = Path(execution.workspace)
     here = Path(workspace).resolve()
     return ran == here or ran.is_relative_to(here) or here.is_relative_to(ran)
+
+
+def _project_ids(workspace: Path) -> Optional[Set[str]]:
+    """The ids of the projects in *workspace*, or None when there are none to go by."""
+    try:
+        from ducta.api.repositories.project_repository import ProjectRepository
+
+        return set(ProjectRepository(Path(workspace)).list_ids()) or None
+    except Exception:  # noqa: BLE001 — unknown projects: keep every legacy record
+        return None
 
 
 def _fill_missing(
@@ -137,7 +155,8 @@ class _ReadsMixin:
     ) -> tuple[List[ExecutionResponse], int]:
         all_executions = self.list_executions(user_id=user_id)
         if workspace is not None:
-            all_executions = [e for e in all_executions if ran_in(e, workspace)]
+            ids = _project_ids(workspace)
+            all_executions = [e for e in all_executions if ran_in(e, workspace, ids)]
         if pipeline_name:
             all_executions = [e for e in all_executions if e.pipeline_name == pipeline_name]
         if node_name:

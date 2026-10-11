@@ -15,6 +15,12 @@
   gap: var(--space-8);
 }
 
+/* The stack's gap already spaces its sections; the stat row's own bottom
+   margin on top of it doubled the space above "Needs attention". */
+.dash-stack > .dash-stats {
+  margin-bottom: 0;
+}
+
 /* ── Stat row ───────────────────────────────────────────────────────────── */
 .dash-stats {
   display: flex;

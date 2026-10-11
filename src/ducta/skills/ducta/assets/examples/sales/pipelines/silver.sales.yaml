@@ -1,0 +1,17 @@
+description: Clean orders and compute daily revenue
+requires_dates: false
+depends_on: [bronze.sales]
+nodes:
+  clean_orders:
+    run: pipelines.sales:clean_orders
+    inputs: {orders: bronze.sales.orders}
+    outputs: [silver.sales.orders]
+    quality:
+      profile: keyed
+      checks:
+        range: {column: amount, min: 0}
+      gate: {max_errors: 0}
+  daily_revenue:
+    run: pipelines.sales:daily_revenue
+    inputs: {orders: silver.sales.orders}
+    outputs: [gold.sales.daily_revenue]

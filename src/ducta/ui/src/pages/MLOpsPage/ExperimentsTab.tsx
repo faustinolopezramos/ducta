@@ -384,8 +384,7 @@ export function ExperimentsTab({
               Clear selection
             </Button>
           )}
-          <Button variant="ghost" size="sm" onClick={() => refetch()}>
-            <IconRefresh size={14} />
+          <Button variant="ghost" size="sm" onClick={() => refetch()} leftIcon={<IconRefresh size={14} />}>
             Refresh
           </Button>
         </div>

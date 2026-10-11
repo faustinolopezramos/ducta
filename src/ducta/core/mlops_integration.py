@@ -143,6 +143,19 @@ class MLOpsExecutorIntegration:
                 }
             )
 
+            # One experiment per pipeline, each execution a run in it — not a
+            # new experiment of the same name on every execution.
+            existing = next(
+                (e for e in self._tracker.list_experiments() if e.get("name") == pipeline_name),
+                None,
+            )
+            if existing is not None:
+                self.active_experiment_id = str(existing["experiment_id"])
+                logger.info(
+                    f"Using MLOps experiment {pipeline_name} (ID: {self.active_experiment_id})"
+                )
+                return self.active_experiment_id
+
             exp = self._tracker.create_experiment(
                 name=pipeline_name,
                 description=description,

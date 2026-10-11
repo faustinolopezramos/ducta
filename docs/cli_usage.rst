@@ -170,7 +170,7 @@ comments).
 
 .. code-block:: bash
 
-   ducta config validate [--env ENV] [--pipeline NAME]
+   ducta config validate [--env ENV] [--pipeline NAME] [--output-format rich|json]
    ducta config list-pipelines [--env ENV] [--filter TEXT] [--output-format table|json|list]
    ducta config pipeline-info --pipeline NAME [--env ENV]
    ducta config schema [--out DIR]
@@ -181,7 +181,9 @@ comments).
 
 - ``validate`` checks the schema and every reference between files, then
   imports each node's function and checks its signature — without starting
-  Spark. Every problem is reported with its file and line.
+  Spark. Every problem is reported with its file and line. ``--output-format json``
+  prints one JSON document instead (every problem with file, line, node and fix) for
+  CI and AI assistants; the exit code is the same.
 - ``schema`` prints the JSON Schema of ``ducta.yaml``, ``catalog.yaml`` and
   pipeline files; ``--out .`` refreshes ``.ducta/schema/`` for editor
   completion.
@@ -298,6 +300,19 @@ bypass is audit-logged. See :doc:`mlops`.
 
 Both serve the web app and its REST API. ``--db PATH`` moves the execution
 history (default ``~/.ducta/executions.db``). See :doc:`server_api`.
+
+``ducta skill`` — the skill for AI assistants
+---------------------------------------------
+
+.. code-block:: bash
+
+   ducta skill install [--target agents|claude|codex|gemini|copilot] [--global] [--agents-md] [--force]
+   ducta skill install --path DIR
+   ducta skill export --zip ducta-skill.zip
+   ducta skill path
+
+Puts Ducta's agent skill where an AI coding assistant finds it (default: the
+project's ``.agents/skills/`` and ``.claude/skills/``). See :doc:`ai_assistants`.
 
 Next steps
 ----------

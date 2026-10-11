@@ -33,6 +33,7 @@ import { NodeConnection } from "./NodeConnection";
 import { CommentThreads } from "../../Comments/CommentThreads";
 import { useComments } from "../../../api/queries/comments";
 import { NodeConfig } from "./NodeConfig";
+import { NodeReview } from "../../AI/NodeReview";
 import { DataPreview } from "./DataPreview";
 import { Tabs } from "../../ui/Tabs";
 import {
@@ -97,11 +98,12 @@ interface NodeFocusProps {
   onRunSample?: () => void;
 }
 
-type NodeTab = "overview" | "config" | "quality" | "data" | "runs" | "comments";
-const nodeTabs = (comments: number) => [
+type NodeTab = "overview" | "config" | "quality" | "review" | "data" | "runs" | "comments";
+const nodeTabs = (comments: number, review: boolean) => [
   { id: "overview" as const, label: "Overview" },
   { id: "config" as const, label: "Config" },
   { id: "quality" as const, label: "Quality" },
+  ...(review ? [{ id: "review" as const, label: "Review" }] : []),
   { id: "data" as const, label: "Data" },
   { id: "runs" as const, label: "Runs" },
   { id: "comments" as const, label: "Comments", count: comments || undefined },
@@ -158,6 +160,8 @@ export function NodeFocus({
   // The everyday actions stay as buttons; the rest — rarer, or about the
   // project's structure — wait behind one menu instead of a wall of links.
   const canWrite = usePermission("pipeline.write");
+  // The review reads the node's function: only nodes that run code have one.
+  const canUseAI = usePermission("ai.use");
   const hasChecks = (schema?.quality?.check_count ?? 0) > 0 || (schema?.quality?.checks?.length ?? 0) > 0;
   const moreActions: MenuItem[] = [
     ...(hasChecks && onViewQualityReports
@@ -197,7 +201,7 @@ export function NodeFocus({
     <FocusPanel
       label={`Focus: node ${name}`}
       onClose={onClose}
-      tabs={<Tabs items={nodeTabs(openComments)} value={tab} onChange={setTab} label="Node inspector views" />}
+      tabs={<Tabs items={nodeTabs(openComments, canUseAI && hasCode)} value={tab} onChange={setTab} label="Node inspector views" />}
     >
       {tab === "comments" && projectId ? (
         <CommentThreads
@@ -214,6 +218,8 @@ export function NodeFocus({
           env={activeEnv || "base"}
           onSave={onSetKey ? (q) => onSetKey("quality", q) : undefined}
         />
+      ) : tab === "review" && projectId ? (
+        <NodeReview projectId={projectId} pipeline={pipelineId} node={name} env={activeEnv || "dev"} />
       ) : tab === "runs" ? (
         <>
           <NodeRuns nodeName={name} projectId={projectId} pipelineId={pipelineId} />
@@ -286,7 +292,8 @@ export function NodeFocus({
         <header className="focus-core-head">
           <span className="focus-eyebrow" data-layer={layer ?? undefined}>
             <span className="focus-eyebrow-swatch" aria-hidden="true" />
-            {capitalize(layer ?? schema?.type ?? fallback?.type ?? "node")}
+            {/* "custom" is the server's word for "no type declared" — not one to show. */}
+            {capitalize(layer ?? [schema?.type, fallback?.type].find((t) => t && t !== "custom") ?? "node")}
           </span>
           {status && (
             <Pill tone={statusTone(status)}>

@@ -28,6 +28,19 @@ describe("attentionItems", () => {
     expect(items.map((i) => i.to)).toEqual(["/p/batch/runs/r1"]);
   });
 
+  it("drops a node run's failure once a later pipeline run re-ran that node", () => {
+    const items = attentionItems(
+      "batch",
+      [],
+      [
+        { ...(run("r2", "golden.transformation", "success") as object), node_names: ["golden.universities"] } as never,
+        run("r1", "golden.universities", "failed"),
+      ],
+      [],
+    );
+    expect(items).toEqual([]);
+  });
+
   it("groups stale nodes by pipeline", () => {
     const items = attentionItems("batch", [], [], [
       { node: "a", pipeline: "silver.clean", state: "stale" },

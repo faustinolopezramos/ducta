@@ -311,8 +311,8 @@ the permissions regardless.
    * - ``developer``
      - Read and write on workspace, configs, pipelines, nodes, datasets, Git,
        repositories, executions, projects, quality, ingestion and templates;
-       ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote`` and
-       ``model.delete``.
+       ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote``,
+       ``model.delete`` and ``ai.use``.
    * - ``viewer``
      - Read only: ``workspace.read``, ``project.read``, ``config.read``,
        ``pipeline.read``, ``node.read``, ``dataset.read``, ``git.read``,
@@ -329,6 +329,10 @@ Some routes need more than their name suggests:
   clones it. The operator's ``DUCTA_WORKSPACE`` is not checked.
 - **Models**: promoting a version needs ``model.promote``. Deleting a version, and
   the garbage collection that deletes old ones, needs ``model.delete``.
+- **The AI pipeline builder** (:doc:`ai`): drafting needs ``ai.use``, and applying
+  a draft also ``pipeline.write``. Choosing the server's model and keeping its API
+  key need ``ai.configure`` (admin only): a remote provider receives project
+  configuration.
 - **Testing an unsaved ingestion connection** needs ``ingestion.write``. The
   server connects to whatever host and port the caller sends.
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { IconAlertTriangle, IconCircleCheck, IconCircleX, IconInfoCircle, IconWand } from "@tabler/icons-react";
 import type { Problem } from "../../api/queries/problems";
 import "./Problems.css";
@@ -44,11 +45,14 @@ export function ProblemsPanel({
   isChecking,
   onOpen,
   onFix,
+  action,
 }: {
   problems: Problem[];
   isChecking?: boolean;
   onOpen?: (p: Problem) => void;
   onFix?: (p: Problem) => void;
+  /** Shown above the list when there is something wrong (e.g. "Fix with AI"). */
+  action?: ReactNode;
 }) {
   if (problems.length === 0) {
     return (
@@ -58,11 +62,18 @@ export function ProblemsPanel({
       </div>
     );
   }
-  return (
+  const list = (
     <ul className="problems" aria-label="Problems">
       {problems.map((p, i) => (
         <ProblemItem key={`${p.file}:${p.line}:${p.message}:${i}`} problem={p} onOpen={onOpen} onFix={onFix} />
       ))}
     </ul>
+  );
+  if (!action) return list;
+  return (
+    <div className="problems-wrap">
+      <div className="problems__action">{action}</div>
+      {list}
+    </div>
   );
 }

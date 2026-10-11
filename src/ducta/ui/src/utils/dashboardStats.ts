@@ -13,6 +13,8 @@ export interface RunLike {
   pipeline_name: string;
   project_id?: string | null;
   node_name?: string | null;
+  /** The nodes a scoped run covered. */
+  node_names?: string[] | null;
   env?: string | null;
   status: string;
   started_at?: string | null;
@@ -108,6 +110,15 @@ export function isStuckQueued(run: RunLike, now: number = Date.now()): boolean {
   return t !== null && now - t > QUEUED_STUCK_MS;
 }
 
+/**
+ * The names a successful *run* vouches for: its pipeline and, for a scoped run,
+ * its nodes. A node run is recorded under the node's name, so a later pipeline
+ * run that re-ran that node fixes it too.
+ */
+export function namesCovered(run: Pick<RunLike, "pipeline_name" | "node_name" | "node_names">): string[] {
+  return [run.pipeline_name, run.node_name, ...(run.node_names ?? [])].filter((n): n is string => Boolean(n));
+}
+
 export function summarizeRuns(runs: readonly RunLike[], now: number = Date.now()): DashboardStats {
   const timed = runs
     .map((run) => ({ run, t: runTimestamp(run) }))
@@ -118,18 +129,22 @@ export function summarizeRuns(runs: readonly RunLike[], now: number = Date.now()
   const dayAgo = now - DAY;
   const failedLast24h = timed.filter((x) => x.t >= dayAgo && FAILURE_STATUSES.has(x.run.status)).length;
 
-  const latestByPipeline = new Map<string, { run: RunLike; t: number }>();
+  const latestByPipeline = new Map<string, { run: RunLike; t: number; fixed: boolean }>();
   const failuresByPipeline = new Map<string, number>();
+  // Names a newer successful run already vouches for, as runs go back in time.
+  const fixedSoFar = new Set<string>();
   for (const x of timed) {
-    const key = `${x.run.project_id ?? ""}/${x.run.pipeline_name}`;
-    if (!latestByPipeline.has(key)) latestByPipeline.set(key, x);
+    const project = x.run.project_id ?? "";
+    const key = `${project}/${x.run.pipeline_name}`;
+    if (!latestByPipeline.has(key)) latestByPipeline.set(key, { ...x, fixed: fixedSoFar.has(key) });
     if (x.t >= dayAgo && FAILURE_STATUSES.has(x.run.status)) {
       failuresByPipeline.set(key, (failuresByPipeline.get(key) ?? 0) + 1);
     }
+    if (x.run.status === "success") for (const name of namesCovered(x.run)) fixedSoFar.add(`${project}/${name}`);
   }
   const attention: AttentionItem[] = [];
   for (const [key, latest] of latestByPipeline) {
-    if (latest.t >= dayAgo && FAILURE_STATUSES.has(latest.run.status)) {
+    if (!latest.fixed && latest.t >= dayAgo && FAILURE_STATUSES.has(latest.run.status)) {
       attention.push({ run: latest.run, failures: failuresByPipeline.get(key) ?? 1 });
     }
   }

@@ -137,12 +137,21 @@ class _Located:
     file_profiles: Tuple[str, ...] = ()
 
 
+def visible_in(path: Path, base: Path) -> bool:
+    """Not inside a hidden folder (``.claude/``, ``.ipynb_checkpoints/``…) under *base*."""
+    return not any(part.startswith(".") for part in path.relative_to(base).parts[:-1])
+
+
 def catalog_dir_files(root: Path) -> List[Path]:
     """The files of ``catalog/`` (any depth), in a stable order — ``[]`` when there is none."""
     base = Path(root) / CATALOG_DIR
     if not base.is_dir():
         return []
-    return sorted(p for p in base.rglob("*") if p.is_file() and p.suffix.lower() in pf.SUFFIXES)
+    return sorted(
+        p
+        for p in base.rglob("*")
+        if p.is_file() and p.suffix.lower() in pf.SUFFIXES and visible_in(p, base)
+    )
 
 
 def catalog_location(root: Path) -> Path:
@@ -224,7 +233,11 @@ def read_project(root: Path, *, expand: bool = True) -> _Located:
     files: Dict[str, Path] = {}
     pipeline_dir = root / PIPELINES_DIR
     candidates = (
-        sorted(p for p in pipeline_dir.rglob("*") if p.suffix.lower() in pf.SUFFIXES)
+        sorted(
+            p
+            for p in pipeline_dir.rglob("*")
+            if p.suffix.lower() in pf.SUFFIXES and visible_in(p, pipeline_dir)
+        )
         if pipeline_dir.is_dir()
         else []
     )
@@ -496,7 +509,7 @@ def apply_environment(located: _Located, env: Optional[str]) -> Dict[str, Any]:
     name, overrides = environment_overrides(located, env, tree)
     if name is None:
         return tree
-    logger.info("Applied '{}' environment overrides", name)
+    logger.debug("Applied '{}' environment overrides", name)
     return cast(Dict[str, Any], _deep_merge(tree, overrides))
 
 

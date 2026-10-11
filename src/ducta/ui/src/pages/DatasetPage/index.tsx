@@ -85,9 +85,11 @@ export function DatasetPage() {
                 rows={[
                   { label: "Layer", value: entry.layer ?? null, absent: "—" },
                   { label: "Format", value: entry.format ?? null },
-                  { label: "Path", value: entry.path ?? null, plain: true },
+                  // No declared path means the default location, which the data
+                  // section below spells out for the selected environment.
+                  { label: "Path", value: entry.path ?? null, plain: true, absent: "default location" },
                   { label: "Write mode", value: entry.write_mode ?? null, absent: "—" },
-                  { label: "Declared in", value: entry.declared_in.join(", ") || null, plain: true },
+                  { label: "Declared as", value: entry.declared_in.join(" and ") || null, plain: true },
                   ...(pii.length ? [{ label: "PII columns", value: pii.join(", "), plain: true }] : []),
                 ]}
               />

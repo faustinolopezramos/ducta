@@ -44,6 +44,19 @@ class FileTooLargeError(ValueError):
     """The requested file exceeds ``WorkspaceManager.MAX_READ_BYTES``."""
 
 
+class SecretFileError(PermissionError):
+    """The file holds secrets (``.env``) and the file browser does not serve it."""
+
+
+#: ``.env`` variants that are templates, not secrets — the browser shows these.
+_ENV_TEMPLATES = frozenset({".env.example", ".env.sample", ".env.template", ".env.dist"})
+
+
+def is_secret_file(name: str) -> bool:
+    """Whether a file name is a ``.env`` file with real values (``.env``, ``.env.local``…)."""
+    return (name == ".env" or name.startswith(".env.")) and name not in _ENV_TEMPLATES
+
+
 class WorkspaceManager:
     """Abstraction over a Ducta workspace backed by a local Git repository."""
 
@@ -138,6 +151,13 @@ class WorkspaceManager:
 
     _SKIP_DIRS = frozenset({".git", "__pycache__", ".venv", "node_modules", ".mypy_cache", "dist"})
 
+    def _browsable(self, rel_path: str) -> Path:
+        """*rel_path* inside the workspace, refused when it is a secrets file."""
+        target = safe_path(self.root, rel_path)
+        if is_secret_file(target.name):
+            raise SecretFileError(f"'{rel_path}' holds secrets; edit it outside Ducta")
+        return target
+
     def list_directory(self, rel_path: str = "") -> List[Dict[str, Any]]:
         """Return sorted directory entries (dirs first) for *rel_path* inside the workspace."""
         target = safe_path(self.root, rel_path) if rel_path else self.root
@@ -145,7 +165,7 @@ class WorkspaceManager:
             raise ValueError(f"'{rel_path}' is not a directory in this workspace")
         entries = []
         for item in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
-            if item.name in self._SKIP_DIRS:
+            if item.name in self._SKIP_DIRS or (item.is_file() and is_secret_file(item.name)):
                 continue
             rel = posix_relative(item, self.root)
             entries.append(
@@ -160,7 +180,7 @@ class WorkspaceManager:
 
     def read_file(self, rel_path: str) -> str:
         """Read a text file from the workspace."""
-        target = safe_path(self.root, rel_path)
+        target = self._browsable(rel_path)
         if not target.is_file():
             raise ValueError(f"'{rel_path}' is not a file in this workspace")
         size = target.stat().st_size
@@ -173,12 +193,12 @@ class WorkspaceManager:
 
     def write_file(self, rel_path: str, content: str) -> None:
         """Create or overwrite a file in the workspace atomically."""
-        target = safe_path(self.root, rel_path)
+        target = self._browsable(rel_path)
         atomic_write(target, content.encode("utf-8"))
 
     def delete_file(self, rel_path: str) -> None:
         """Delete a file from the workspace."""
-        target = safe_path(self.root, rel_path)
+        target = self._browsable(rel_path)
         if not target.is_file():
             raise ValueError(f"'{rel_path}' is not a file in this workspace")
         target.unlink()

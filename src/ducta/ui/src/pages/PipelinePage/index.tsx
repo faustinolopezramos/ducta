@@ -20,6 +20,9 @@ import { StreamingStatusPanel } from "../../components/Execution/StreamingStatus
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
+import { usePermission } from "../../hooks/usePermission";
+import { IconSparkles } from "@tabler/icons-react";
 import { IconFolderOff, IconSitemap, IconCircleDotted } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
@@ -134,6 +137,32 @@ export function PipelinePage() {
   const { bottomPanelTab, setBottomPanelTab } = useUIStore();
   const [yamlReveal, setYamlReveal] = useState<number | undefined>(undefined);
   const counts = countBySeverity(problems);
+  // "Fix with AI": offered when this pipeline (its file, its nodes) has errors.
+  const canUseAI = usePermission("ai.use");
+  const [aiFixOpen, setAiFixOpen] = useState(false);
+  const pipelineErrors = useMemo(
+    () =>
+      problems.filter(
+        (p) =>
+          p.severity === "error" &&
+          (p.pipeline === pipelineId || (p.file ?? "").replace(/\.ya?ml$/, "") === `pipelines/${pipelineId}`),
+      ),
+    [problems, pipelineId],
+  );
+  const fixWithAI =
+    canUseAI && pipelineId && pipelineErrors.length > 0 ? (
+      <Button size="sm" variant="secondary" leftIcon={<IconSparkles size={14} />} onClick={() => setAiFixOpen(true)}>
+        Fix with AI
+      </Button>
+    ) : null;
+  const aiFixDialog =
+    aiFixOpen && projectId && pipelineId ? (
+      <AIDraftDialog
+        projectId={projectId}
+        mode={{ kind: "fix", pipeline: pipelineId, problems: pipelineErrors.length }}
+        onClose={() => setAiFixOpen(false)}
+      />
+    ) : null;
   const openProblems = useCallback(() => {
     setBottomPanelTab("problems");
     setLogsOpen(true);
@@ -443,7 +472,12 @@ export function PipelinePage() {
   if (!currentPipeline) {
     // The configuration does not load: say why, and lead to each line to fix.
     if (pipelinesError && pipelinesData === undefined) {
-      return <ProjectConfigErrors projectId={projectId ?? ""} problems={problems} isChecking={isChecking} onFix={fixProblem} />;
+      return (
+        <>
+          <ProjectConfigErrors projectId={projectId ?? ""} problems={problems} isChecking={isChecking} onFix={fixProblem} action={fixWithAI} />
+          {aiFixDialog}
+        </>
+      );
     }
     // Only call it "not found" once the server listing has arrived and does
     // not contain it; while it is still loading, show a loading state.
@@ -835,7 +869,7 @@ export function PipelinePage() {
                 </div>
                 <div className="pipeline-dock__body">
                   {bottomPanelTab === "problems" ? (
-                    <ProblemsPanel problems={problems} isChecking={isChecking} onOpen={openProblem} onFix={fixProblem} />
+                    <ProblemsPanel problems={problems} isChecking={isChecking} onOpen={openProblem} onFix={fixProblem} action={fixWithAI} />
                   ) : bottomPanelTab === "preview" && sample && projectId ? (
                     <SamplePreview projectId={projectId} sample={sample}
                       outputs={(itemById.get(sample.node)?.outputs ?? []).map((o) => o.name)}
@@ -904,6 +938,7 @@ export function PipelinePage() {
         onConfirm={() => blocker.state === "blocked" && blocker.proceed()}
         onCancel={() => blocker.state === "blocked" && blocker.reset()}
       />
+      {aiFixDialog}
     </div>
   );
 }

@@ -25,10 +25,10 @@ export function RunTimeline({
             <span
               className={`run-timeline__bar status-${b.status}`}
               style={{ left: `${(b.start / total) * 100}%`, width: `${Math.max((b.duration / total) * 100, 0.6)}%` }}
-              aria-label={`${b.name}: ${b.status}, ${formatDuration(b.duration)}`}
+              aria-label={`${b.name}: ${b.status}, ${formatDuration(b.duration, "precise")}`}
             />
           </span>
-          <span className="run-timeline__dur">{formatDuration(b.duration)}</span>
+          <span className="run-timeline__dur">{formatDuration(b.duration, "precise")}</span>
         </li>
       ))}
     </ol>

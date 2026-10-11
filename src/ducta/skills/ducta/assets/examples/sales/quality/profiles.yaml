@@ -1,0 +1,6 @@
+# Reusable check sets, used with `profile: <name>`.
+keyed:
+  checks:
+    empty_dataset: {enabled: true}
+    null_rate: {columns: [order_id], threshold: 0.0}
+    duplicates: {columns: [order_id], max_duplicate_rate: 0.0}

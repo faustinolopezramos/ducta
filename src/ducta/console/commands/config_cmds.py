@@ -36,6 +36,14 @@ def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
     if cmd == "schema":
         return _handle_schema(parsed_args)
 
+    if cmd == "validate" and getattr(parsed_args, "output_format", "rich") == "json":
+        # A project that cannot even be found is still an answer in JSON.
+        try:
+            config_manager = _init_config_manager(parsed_args, config)
+        except Exception as e:  # noqa: BLE001 — reported, with its exit code
+            return _print_validation_json(parsed_args, {}, e)
+        return _handle_validate(parsed_args, config_manager)
+
     config_manager = _init_config_manager(parsed_args, config)
 
     if cmd == "list-pipelines":
@@ -144,8 +152,49 @@ def _log_preflight_report(name: str, report, prefix: str = "") -> None:
         logger.warning("    WARN   {}", warn)
 
 
+def _validation_document(env: str, reports: dict, error: Optional[BaseException]) -> dict:
+    """``config validate --output-format json``: every problem, located and with its fix."""
+    from ducta.setting.problems import parse_problems
+
+    pipelines = {}
+    for name in sorted(reports):
+        report = reports[name]
+        problems = parse_problems(report.errors, report.warnings, source="preflight")
+        pipelines[name] = {"ok": report.ok, "problems": [p.to_dict() for p in problems]}
+    config_error = []
+    if error is not None:
+        # A ProjectConfigError (one located string per problem) usually arrives
+        # wrapped in a ConfigurationError: walk the cause chain to find it.
+        found, seen = error, set()
+        while found is not None and not getattr(found, "problems", None) and id(found) not in seen:
+            seen.add(id(found))
+            found = found.__cause__ or found.__context__
+        raw = getattr(found, "problems", None) or [str(error)]
+        config_error = [p.to_dict() for p in parse_problems(raw, source="config")]
+    return {
+        "ok": error is None and all(p["ok"] for p in pipelines.values()),
+        "env": env,
+        "pipelines": pipelines,
+        "config_error": config_error,
+    }
+
+
+def _print_validation_json(
+    parsed_args, reports: dict, error: Optional[BaseException] = None
+) -> int:
+    env = getattr(parsed_args, "env", None) or "base"
+    document = _validation_document(env, reports, error)
+    print(json.dumps(document, indent=2, ensure_ascii=False, default=str))
+    if error is None:
+        return ExitCode.SUCCESS.value if document["ok"] else ExitCode.VALIDATION_ERROR.value
+    if isinstance(error, ConfigurationError):
+        return ExitCode.CONFIGURATION_ERROR.value
+    return ExitCode.EXECUTION_ERROR.value
+
+
 def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
     """Preflight-validate one pipeline (or all) and report configuration errors."""
+    as_json = getattr(parsed_args, "output_format", "rich") == "json"
     try:
         env = getattr(parsed_args, "env", None) or "base"
         target = getattr(parsed_args, "pipeline", None)
@@ -159,9 +208,12 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
             reports = {target: validate_pipeline(context, target)}
         else:
             reports = validate_all_pipelines(context)
-            if not reports:
+            if not reports and not as_json:
                 logger.warning("No pipelines found to validate")
                 return ExitCode.SUCCESS.value
+
+        if as_json:
+            return _print_validation_json(parsed_args, reports)
 
         total_errors = 0
         for name in sorted(reports):
@@ -175,10 +227,14 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
         logger.info("Preflight passed — configuration is valid.")
         return ExitCode.SUCCESS.value
     except ConfigurationError as e:
+        if as_json:
+            return _print_validation_json(parsed_args, {}, e)
         # The project does not load: the same code `ducta start` exits with.
         logger.error("Invalid configuration: {}", e)
         return ExitCode.CONFIGURATION_ERROR.value
     except Exception as e:
+        if as_json:
+            return _print_validation_json(parsed_args, {}, e)
         logger.error("Failed to validate configuration: {}", e)
         return ExitCode.EXECUTION_ERROR.value
 

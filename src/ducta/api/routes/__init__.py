@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI  # type: ignore
 
+from ducta.api.routes.ai import router as ai_router
 from ducta.api.routes.auth import router as auth_router
 from ducta.api.routes.certificates import router as certificates_router
 from ducta.api.routes.certificates_standalone import router as certificates_standalone_router
@@ -108,3 +109,6 @@ def register_routes(app: FastAPI) -> None:
 
     # File browser
     app.include_router(workspace_files_router, prefix=API_PREFIX)
+
+    # AI pipeline builder (drafts are validated, written only on apply)
+    app.include_router(ai_router, prefix=API_PREFIX)

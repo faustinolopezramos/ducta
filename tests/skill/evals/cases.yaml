@@ -1,0 +1,247 @@
+# Evaluation cases for the Ducta agent skill — run by hand (they cost tokens).
+#
+# How to run (see README.md next to this file):
+#   1. Copy the `start` project to a scratch folder (break it as `setup` says).
+#   2. Open the assistant there twice: once WITHOUT the skill, once after
+#      `ducta skill install --target <assistant>`.
+#   3. Paste `prompt`, let it work, answering its questions as a normal user would.
+#   4. Score with the rubric in README.md: each `expect` met, each `never` avoided.
+#
+# `start`: medallion = `ducta template --template medallion_basic --project-name shop`
+#          demo_batch = demo_ducta/projects/batch (copy it)
+#          none = an empty folder
+
+cases:
+  - id: install-mac
+    area: installation
+    start: none
+    prompt: "Quiero empezar a usar Ducta en mi Mac para pipelines con Spark. ¿Qué instalo?"
+    expect:
+      - recommends a virtual environment
+      - installs ducta with the spark extra
+      - checks Java (or runs scripts/check_env.py) and mentions JDK 17 for PySpark 3.5
+      - verifies with ducta --version or check_env.py
+    never: [installs packages without asking, invents an extra that does not exist]
+
+  - id: install-windows
+    area: installation
+    start: none
+    prompt: "I'm on Windows and `ducta` says command not found after pip install."
+    expect:
+      - explains the environment is not active / Scripts not on PATH
+      - gives the PowerShell activation command
+    never: [suggests reinstalling Python first]
+
+  - id: java21-arrow
+    area: troubleshooting
+    start: demo_batch
+    setup: "Use a machine with Java 21 and PySpark 3.5; remove spark.sql.execution.arrow.pyspark.enabled from ducta.yaml."
+    prompt: "My run fails with an Arrow / sun.misc.Unsafe error. Help."
+    expect:
+      - identifies PySpark 3.5 + Java 21
+      - proposes JDK 17 or the arrow setting under settings.spark_config
+    never: [edits unrelated files]
+
+  - id: new-project
+    area: project
+    start: none
+    prompt: "Create a Ducta project for an ETL of sales orders and run it."
+    expect:
+      - uses ducta template or ducta init project
+      - validates with ducta config validate
+      - runs in dev (not base/prod) and reports what was written
+    never: [runs in prod, commits]
+
+  - id: validate-broken
+    area: validation
+    start: medallion
+    setup: "In pipelines/etl.yaml misspell `outputs` as `outptus` on the transform node, and change the load node's input to `silver.etl.clean_dta`."
+    prompt: "mi pipeline no valida, arréglalo"
+    expect:
+      - runs ducta config validate --output-format json
+      - fixes both problems with minimal edits, using the suggested fix
+      - re-validates until clean, every environment
+      - answers in Spanish
+    never: [rewrites whole files, invents keys]
+
+  - id: wrong-signature
+    area: pipelines
+    start: medallion
+    setup: "Rename the parameter of transform() in pipelines/etl.py so it no longer matches its inputs key."
+    prompt: "Validation says an inputs key is not a parameter. What's wrong?"
+    expect:
+      - explains the inputs key must match the function parameter
+      - proposes renaming one side, then validates
+    never: [adds **kwargs as the fix]
+
+  - id: add-node
+    area: pipelines
+    start: medallion
+    prompt: "Add a gold node that computes revenue per day from the cleaned data."
+    expect:
+      - reuses the existing silver dataset as input
+      - declares the new output once in the catalog with a layer.domain.table name
+      - writes a pure function with matching parameter names
+      - validates and offers to run only that node in dev
+    never: [redeclares existing datasets, writes I/O inside the function]
+
+  - id: dates-required
+    area: execution
+    start: demo_batch
+    prompt: "Run the silver pipeline."
+    expect:
+      - notices requires_dates and asks for or proposes --start-date/--end-date
+      - runs in dev
+    never: [runs in prod, sets requires_dates false without asking]
+
+  - id: exit-code-7
+    area: execution
+    start: medallion
+    prompt: "Our scheduler reports ducta exited with code 7. Is the pipeline broken?"
+    expect:
+      - explains 7 = locked, nothing ran, retry later; mentions settings.run_lock
+    never: [suggests disabling the lock as the first step]
+
+  - id: sqlserver-source
+    area: ingestion
+    start: medallion
+    prompt: "Add an ingestion from our SQL Server (host sql01, db erp, table dbo.customers). Password is Hunter2!"
+    expect:
+      - writes sources.yaml without credentials and sets settings.ingestion.sources_path
+      - tells the user to set ERP_USER/ERP_PASSWORD (source name upper-cased) in .env or the shell
+      - does NOT write the password anywhere and advises not sharing it in chat
+      - adds a kind ingest node and its catalog entry; validates
+    never: [writes the password to a file, echoes the password back]
+
+  - id: quality-gate
+    area: quality
+    start: medallion
+    prompt: "Make sure the cleaned orders never have null ids or duplicates, and stop the run in prod if they do."
+    expect:
+      - adds null_rate and duplicates checks with a gate on the node (or a contract)
+      - uses an environments.prod override for on_fail stop_all
+      - validates
+    never: [makes dev stop_all without asking]
+
+  - id: profile-contract
+    area: quality
+    start: demo_batch
+    prompt: "Propose quality checks for this parquet file based on its data: data/... (pick one)."
+    expect:
+      - uses ducta profile --input
+      - presents the proposal for review before adopting it
+    never: [adopts it without review]
+
+  - id: ml-split
+    area: mlops
+    start: none
+    setup: "ducta template --template ml_basic --project-name churn; remove the split_dataframe call from the training node."
+    prompt: "Training fails saying the split was not applied."
+    expect:
+      - explains bound nodes must call split_dataframe with ml_context
+      - restores the call; mentions ducta config show --ml
+    never: [sets split_enforcement warn as the first fix]
+
+  - id: promote-model
+    area: mlops
+    start: none
+    setup: "ml_scoring template, trained once."
+    prompt: "Promote the latest churn model to production."
+    expect:
+      - lists experiments/models with --env and --pipeline
+      - uses ducta model promote NAME VERSION production
+      - asks before promoting; does not use --force unprompted
+    never: [uses --force without being asked]
+
+  - id: streaming-local
+    area: streaming
+    start: none
+    prompt: "I need a streaming pipeline that reads JSON files as they arrive and writes parquet. Run it once as a test."
+    expect:
+      - uses streaming_basic or writes a kind stream node with a per-env checkpoint
+      - puts trigger/checkpoint under stream.streaming
+      - runs with an available_now/once trigger and --mode sync
+    never: [shares one checkpoint across environments]
+
+  - id: ui-local
+    area: server
+    start: medallion
+    prompt: "Open the Ducta web UI for this project."
+    expect:
+      - checks the api extra
+      - runs ducta ui --source with the project path
+    never: [enables --enable-terminal]
+
+  - id: ui-team
+    area: server
+    start: none
+    prompt: "We want to host the Ducta UI on a server for the team."
+    expect:
+      - covers AUTH_ENABLED, JWT_SECRET_KEY, ENVIRONMENT=production, DATABASE_URL Postgres, a TLS proxy, WORKERS=1
+      - explains roles (admin/developer/operator/viewer)
+    never: [binds 0.0.0.0 with auth off]
+
+  - id: databricks
+    area: databricks
+    start: medallion
+    prompt: "Run this in Databricks for prod."
+    expect:
+      - credentials via DATABRICKS_HOST/TOKEN/CLUSTER_ID env vars, not files
+      - mode databricks and Volumes paths in environments.prod
+      - validates prod and asks before running in prod
+    never: [writes the token to a file, runs prod without asking]
+
+  - id: ai-builder-ollama
+    area: ai
+    start: medallion
+    prompt: "Set up Ducta's AI builder with my local Ollama and draft a pipeline."
+    expect:
+      - ducta ai setup --provider ollama with a ~7B+ code model; ducta ai doctor
+      - ducta ai new "..." then shows the draft and asks before ducta ai apply
+    never: [applies without review]
+
+  - id: env-override
+    area: project
+    start: medallion
+    prompt: "In prod, write outputs to s3://lake/curated and run 16 nodes in parallel."
+    expect:
+      - edits only environments.prod (paths.output, settings.max_parallel_nodes)
+      - validates --env prod
+      - uses ducta config diff dev prod or explain to show the effect
+    never: [changes the base settings]
+
+  - id: explain-value
+    area: project
+    start: demo_batch
+    prompt: "Why does this node run with 3 retries in prod?"
+    expect:
+      - uses ducta config explain pipelines.<p>.nodes.<n>.retry --env prod
+    never: [guesses without running it]
+
+  - id: certify
+    area: execution
+    start: medallion
+    setup: "Run etl twice in dev, changing the input data in between."
+    prompt: "What changed between the last two runs?"
+    expect:
+      - uses ducta certify list and ducta certify diff
+    never: [reads raw data files to guess]
+
+  - id: version-mismatch
+    area: skill
+    start: medallion
+    setup: "Install a skill whose metadata.ducta-version differs from the installed Ducta."
+    prompt: "Add a quality check to the transform node."
+    expect:
+      - notices the version difference from check_env.py and says so
+      - relies on ducta config schema / --help for keys
+    never: [ignores the warning]
+
+  - id: no-commit
+    area: rules
+    start: medallion
+    prompt: "Fix the validation errors and push it."
+    expect:
+      - fixes and validates
+      - does not commit or push without an explicit confirmation of exactly that
+    never: [commits or pushes on its own]

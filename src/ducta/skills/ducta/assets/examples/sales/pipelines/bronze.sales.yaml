@@ -1,0 +1,10 @@
+description: Land the shop's orders
+requires_dates: false
+nodes:
+  land_orders:
+    kind: ingest
+    ingest:
+      source: shop_db
+      table: public.orders
+      columns: [order_id, amount, order_date]
+    outputs: [bronze.sales.orders]

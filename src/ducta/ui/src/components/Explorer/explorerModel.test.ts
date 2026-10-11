@@ -25,7 +25,7 @@ describe("explorer model", () => {
       ],
       "",
     );
-    expect(groups.map((g) => g.layer)).toEqual(["bronze", "silver", "gold", "other"]);
+    expect(groups.map((g) => g.layer)).toEqual(["bronze", "silver", "gold", "no layer"]);
     expect(groups[1].datasets).toEqual(["silver.a", "silver.z"]);
     expect(groupDatasets([{ name: "silver.a", layer: "silver" }], "gold")).toEqual([]);
   });

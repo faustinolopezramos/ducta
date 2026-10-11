@@ -46,6 +46,12 @@ export function FilterBar({
   }
 
   const presetActive = (days: number) => filters.since === datePresetSince(days) && !filters.until;
+  // The two date fields stay folded behind "Custom range…" until asked for —
+  // or while a range the presets don't express is applied.
+  const [customOpen, setCustomOpen] = useState(false);
+  const customApplied =
+    Boolean(filters.until) || (Boolean(filters.since) && !DATE_PRESETS.some(({ days }) => presetActive(days)));
+  const showCustom = customOpen || customApplied;
 
   return (
     <div className="run-filters" role="search" aria-label="Filter runs">
@@ -133,30 +139,48 @@ export function FilterBar({
             {label}
           </button>
         ))}
-        <input
-          type="date"
-          className="run-filters__date"
-          value={filters.since ?? ""}
-          onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
-          aria-label="From date"
-          title="From date"
-        />
-        <span className="run-filters__sep" aria-hidden="true">→</span>
-        <input
-          type="date"
-          className="run-filters__date"
-          value={filters.until ?? ""}
-          onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
-          aria-label="To date"
-          title="To date"
-        />
+        {!showCustom && (
+          <button
+            type="button"
+            className="run-filters__chip"
+            aria-expanded={false}
+            onClick={() => setCustomOpen(true)}
+            title="Pick a start and end date"
+          >
+            Custom range…
+          </button>
+        )}
+        {showCustom && (
+          <>
+            <input
+              type="date"
+              className="run-filters__date"
+              value={filters.since ?? ""}
+              onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
+              aria-label="From date"
+              title="From date"
+            />
+            <span className="run-filters__sep" aria-hidden="true">→</span>
+            <input
+              type="date"
+              className="run-filters__date"
+              value={filters.until ?? ""}
+              onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
+              aria-label="To date"
+              title="To date"
+            />
+          </>
+        )}
       </div>
 
       {hasFilters && (
         <button
           type="button"
           className="run-filters__clear"
-          onClick={() => onChange(lockedProject ? { project_id: lockedProject } : {})}
+          onClick={() => {
+            setCustomOpen(false);
+            onChange(lockedProject ? { project_id: lockedProject } : {});
+          }}
         >
           <IconX size={12} aria-hidden="true" /> Clear
         </button>
