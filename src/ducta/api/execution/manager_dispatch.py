@@ -331,6 +331,19 @@ class _DispatchMixin:
                     "alerts",
                 )
 
+                # Ducta Sentinel, when the project enabled it (it never raises).
+                from ducta.ai.agents.sentinel.server import on_run_finished
+
+                _spawn_db_task(
+                    asyncio.to_thread(
+                        on_run_finished,
+                        spec.source_path,
+                        spec.project_id,
+                        record.model_dump(mode="json"),
+                    ),
+                    "sentinel",
+                )
+
             if self._db_store is not None:
                 _spawn_db_task(self._db_store.flush_logs(execution_id), "flush_logs")
                 _spawn_db_task(self._db_store.update(record), "update")

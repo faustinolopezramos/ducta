@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import types
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import httpx
@@ -161,6 +162,11 @@ class _FakeMessages:
         self.kwargs = kwargs
         return self.response
 
+    @contextmanager
+    def stream(self, **kwargs):
+        self.kwargs, self.streamed = kwargs, True
+        yield SimpleNamespace(get_final_message=lambda: self.response)
+
 
 def _anthropic_response(stop_reason="end_turn", text="ok"):
     return SimpleNamespace(
@@ -186,6 +192,7 @@ def fake_sdk(monkeypatch):
         "APIConnectionError",
     ):
         setattr(module, name, type(name, (Exception,), {}))
+    module.APITimeoutError = type("APITimeoutError", (module.APIConnectionError,), {})
     monkeypatch.setitem(sys.modules, "anthropic", module)
 
 

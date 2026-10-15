@@ -1067,6 +1067,12 @@ class UnifiedArgumentParser:
             "--force", action="store_true", help="Replace an installed skill of another version"
         )
         install.add_argument(
+            "--agents",
+            action="store_true",
+            help="Also install Ducta's agents (ducta-architect, ducta-sentinel) as Claude Code "
+            "agent definitions in .claude/agents/",
+        )
+        install.add_argument(
             "--agents-md",
             action="store_true",
             help="Also add a short Ducta section to the project's AGENTS.md, read by "
@@ -1255,3 +1261,145 @@ class UnifiedArgumentParser:
         apply.add_argument(
             "--force", action="store_true", help="Write even if it does not validate"
         )
+
+        UnifiedArgumentParser._add_agent_subcommands(ai_sub)
+
+    @staticmethod
+    def _add_agent_subcommands(ai_sub):
+        """``ducta ai architect`` and ``ducta ai sentinel``: Ducta's agents."""
+        fmt = UnifiedArgumentParser._add_output_format_arg
+        discovery = UnifiedArgumentParser._add_discovery_args
+
+        architect = ai_sub.add_parser(
+            "architect",
+            help="Ducta Architect: design pipelines as a blueprint, then build them",
+            description=(
+                "The model designs a blueprint (datasets, pipelines, contracts, logic in "
+                "words); Ducta checks it without a model, writes the YAML itself and has "
+                "the model write only the functions. `check` and `scaffold` need no model."
+            ),
+        )
+        arch = architect.add_subparsers(dest="architect_command", required=True)
+        plan = arch.add_parser("plan", help="Design a blueprint for a request (a draft)")
+        plan.add_argument("request", help='What to build, e.g. "revenue per store and day"')
+        plan.add_argument("--note", help="Answers to the model's questions, or what matters to you")
+        plan.add_argument(
+            "--attempts", type=int, help="Times the model may fix what is found (default 3)"
+        )
+        discovery(plan)
+        fmt(plan, "Output format (json prints the draft)")
+        check = arch.add_parser("check", help="Check a blueprint file without a model")
+        check.add_argument("blueprint", help="The blueprint's YAML file")
+        discovery(check)
+        fmt(check, "Output format (json for scripts and assistants)")
+        scaffold = arch.add_parser(
+            "scaffold",
+            help="Turn a blueprint file into a draft with stub functions, without a model",
+        )
+        scaffold.add_argument("blueprint", help="The blueprint's YAML file")
+        scaffold.add_argument(
+            "--write", action="store_true", help="Write the draft once it validates"
+        )
+        scaffold.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        discovery(scaffold)
+        fmt(scaffold, "Output format (json prints the draft)")
+        build = arch.add_parser(
+            "build", help="Build a blueprint into one draft (the model writes the code)"
+        )
+        build.add_argument(
+            "blueprint", help="A blueprint draft id (from `plan`) or a blueprint file"
+        )
+        build.add_argument(
+            "--attempts", type=int, help="Times the model may fix each module (default 3)"
+        )
+        build.add_argument("--write", action="store_true", help="Write the draft once it validates")
+        build.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        build.add_argument(
+            "--force", action="store_true", help="Write even if it does not validate"
+        )
+        discovery(build)
+        fmt(build, "Output format (json prints the draft)")
+        verify = arch.add_parser(
+            "verify", help="Validate built pipelines; run them in dev and snapshot their tests"
+        )
+        verify.add_argument("pipelines", nargs="*", help="Pipelines to verify (default: all)")
+        verify.add_argument(
+            "--env", default="dev", help="Where to run them (never a protected one)"
+        )
+        verify.add_argument("--run", action="store_true", help="Run them, in dependency order")
+        verify.add_argument(
+            "--tests", action="store_true", help="Write snapshot tests once they ran"
+        )
+        verify.add_argument("--start-date", help="For pipelines that require dates (YYYY-MM-DD)")
+        verify.add_argument("--end-date", help="For pipelines that require dates (YYYY-MM-DD)")
+        discovery(verify)
+        fmt(verify, "Output format (json for scripts)")
+
+        sentinel = ai_sub.add_parser(
+            "sentinel",
+            help="Ducta Sentinel: incidents for failed and late runs, safe re-runs outside prod",
+            description=(
+                "Rules decide: a failed run is diagnosed and a fixed table picks what to do. "
+                "Re-runs happen only where sentinel: in ducta.yaml allows them, never in a "
+                "protected environment; the rest is escalated, with an explanation and a fix "
+                "draft from the model when one is configured. Only `watch` acts."
+            ),
+        )
+        sen = sentinel.add_subparsers(dest="sentinel_command", required=True)
+        status = sen.add_parser(
+            "status", help="Whether Sentinel watches this project, and where it may act"
+        )
+        discovery(status)
+        fmt(status, "Output format (json for scripts)")
+        incidents = sen.add_parser("incidents", help="The project's incidents, newest first")
+        incidents.add_argument(
+            "--status",
+            dest="incident_status",
+            choices=["active", "open", "remediating", "escalated", "resolved", "ignored"],
+            default="active",
+            help="Which incidents (default: active)",
+        )
+        incidents.add_argument("--env", help="Only this environment's")
+        discovery(incidents)
+        fmt(incidents, "Output format (json for scripts and assistants)")
+        show = sen.add_parser("show", help="One incident, with its timeline")
+        show.add_argument("incident_id", help="Incident id")
+        discovery(show)
+        fmt(show, "Output format (json for scripts)")
+        triage = sen.add_parser(
+            "triage", help="What Sentinel would do about a run, without a model and without acting"
+        )
+        triage.add_argument("run_id", help="The run's certificate id")
+        triage.add_argument("--env", help="Its environment (default: searched)")
+        discovery(triage)
+        fmt(triage, "Output format (json for scripts and assistants)")
+        watch = sen.add_parser("watch", help="Run Sentinel: a pass every --interval seconds")
+        watch.add_argument(
+            "--env",
+            action="append",
+            dest="envs",
+            help="Environment to watch (repeatable; default: all)",
+        )
+        watch.add_argument("--interval", type=float, default=60.0, help="Seconds between passes")
+        watch.add_argument("--once", action="store_true", help="One pass, then exit (for cron)")
+        watch.add_argument(
+            "--rerun-timeout",
+            type=float,
+            default=4 * 3600.0,
+            help="Seconds one re-run may take before it is stopped (default: 4 hours)",
+        )
+        discovery(watch)
+        fmt(watch, "Output format (json prints each pass)")
+        pause = sen.add_parser("pause", help="Stop Sentinel's re-runs on this project")
+        pause.add_argument("--reason", default="", help="Why, for the audit log")
+        discovery(pause)
+        resume = sen.add_parser("resume", help="Let Sentinel act again")
+        discovery(resume)
+        for verb, what in (
+            ("resolve", "Mark an incident resolved"),
+            ("ignore", "Ignore an incident"),
+        ):
+            p_ = sen.add_parser(verb, help=what)
+            p_.add_argument("incident_id", help="Incident id")
+            p_.add_argument("--note", default="", help="Why, for its timeline")
+            discovery(p_)

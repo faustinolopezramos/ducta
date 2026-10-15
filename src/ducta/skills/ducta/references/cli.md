@@ -640,6 +640,168 @@ Write a saved draft to the project
 | `--yes` | Do not ask before writing |
 | `--force` | Write even if it does not validate |
 
+### ducta ai architect
+
+The model designs a blueprint (datasets, pipelines, contracts, logic in words); Ducta checks it without a model, writes the YAML itself and has the model write only the functions. `check` and `scaffold` need no model.
+
+#### ducta ai architect plan
+
+Design a blueprint for a request (a draft)
+
+| Option | What it does |
+|---|---|
+| `<request>` | What to build, e.g. "revenue per store and day" — *(required)* |
+| `--note` | Answers to the model's questions, or what matters to you |
+| `--attempts` | Times the model may fix what is found (default 3) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json prints the draft) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai architect check
+
+Check a blueprint file without a model
+
+| Option | What it does |
+|---|---|
+| `<blueprint>` | The blueprint's YAML file — *(required)* |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts and assistants) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai architect scaffold
+
+Turn a blueprint file into a draft with stub functions, without a model
+
+| Option | What it does |
+|---|---|
+| `<blueprint>` | The blueprint's YAML file — *(required)* |
+| `--write` | Write the draft once it validates |
+| `--yes` | Do not ask before writing |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json prints the draft) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai architect build
+
+Build a blueprint into one draft (the model writes the code)
+
+| Option | What it does |
+|---|---|
+| `<blueprint>` | A blueprint draft id (from `plan`) or a blueprint file — *(required)* |
+| `--attempts` | Times the model may fix each module (default 3) |
+| `--write` | Write the draft once it validates |
+| `--yes` | Do not ask before writing |
+| `--force` | Write even if it does not validate |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json prints the draft) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai architect verify
+
+Validate built pipelines; run them in dev and snapshot their tests
+
+| Option | What it does |
+|---|---|
+| `<pipelines>` | Pipelines to verify (default: all) |
+| `--env` | Where to run them (never a protected one) — default `dev` |
+| `--run` | Run them, in dependency order |
+| `--tests` | Write snapshot tests once they ran |
+| `--start-date` | For pipelines that require dates (YYYY-MM-DD) |
+| `--end-date` | For pipelines that require dates (YYYY-MM-DD) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts) — one of `rich`, `json`; default `rich` |
+
+### ducta ai sentinel
+
+Rules decide: a failed run is diagnosed and a fixed table picks what to do. Re-runs happen only where sentinel: in ducta.yaml allows them, never in a protected environment; the rest is escalated, with an explanation and a fix draft from the model when one is configured. Only `watch` acts.
+
+#### ducta ai sentinel status
+
+Whether Sentinel watches this project, and where it may act
+
+| Option | What it does |
+|---|---|
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai sentinel incidents
+
+The project's incidents, newest first
+
+| Option | What it does |
+|---|---|
+| `--status` | Which incidents (default: active) — one of `active`, `open`, `remediating`, `escalated`, `resolved`, `ignored`; default `active` |
+| `--env` | Only this environment's |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts and assistants) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai sentinel show
+
+One incident, with its timeline
+
+| Option | What it does |
+|---|---|
+| `<incident_id>` | Incident id — *(required)* |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai sentinel triage
+
+What Sentinel would do about a run, without a model and without acting
+
+| Option | What it does |
+|---|---|
+| `<run_id>` | The run's certificate id — *(required)* |
+| `--env` | Its environment (default: searched) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json for scripts and assistants) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai sentinel watch
+
+Run Sentinel: a pass every --interval seconds
+
+| Option | What it does |
+|---|---|
+| `--env` | Environment to watch (repeatable; default: all) |
+| `--interval` | Seconds between passes — default `60.0` |
+| `--once` | One pass, then exit (for cron) |
+| `--rerun-timeout` | Seconds one re-run may take before it is stopped (default: 4 hours) — default `14400.0` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--output-format` | Output format (json prints each pass) — one of `rich`, `json`; default `rich` |
+
+#### ducta ai sentinel pause
+
+Stop Sentinel's re-runs on this project
+
+| Option | What it does |
+|---|---|
+| `--reason` | Why, for the audit log — default `` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+
+#### ducta ai sentinel resume
+
+Let Sentinel act again
+
+| Option | What it does |
+|---|---|
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+
+#### ducta ai sentinel resolve
+
+Mark an incident resolved
+
+| Option | What it does |
+|---|---|
+| `<incident_id>` | Incident id — *(required)* |
+| `--note` | Why, for its timeline — default `` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+
+#### ducta ai sentinel ignore
+
+Ignore an incident
+
+| Option | What it does |
+|---|---|
+| `<incident_id>` | Incident id — *(required)* |
+| `--note` | Why, for its timeline — default `` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+
 ## ducta skill
 
 Ducta ships an agent skill in the open Agent Skills format (agentskills.io): instructions, references and checks that let an AI assistant install, configure, run and debug Ducta with you. Install it where your assistant looks for skills.
@@ -654,6 +816,7 @@ Copy the skill into this project (or your home) for one or more assistants
 | `--global` | Install in your home directory, for every project, instead of this project |
 | `--path` | Install into this skills folder instead |
 | `--force` | Replace an installed skill of another version |
+| `--agents` | Also install Ducta's agents (ducta-architect, ducta-sentinel) as Claude Code agent definitions in .claude/agents/ |
 | `--agents-md` | Also add a short Ducta section to the project's AGENTS.md, read by assistants without skill support |
 
 ### ducta skill export

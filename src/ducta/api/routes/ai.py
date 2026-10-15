@@ -118,8 +118,21 @@ class ModelsResponse(BaseModel):
 
 
 class JobRequest(BaseModel):
-    kind: Literal["new", "fix", "revise", "quality", "docs", "explain", "review"] = "new"
-    request: Optional[str] = Field(default=None, max_length=8000, description="new: what to build")
+    kind: Literal[
+        "new",
+        "fix",
+        "revise",
+        "quality",
+        "docs",
+        "explain",
+        "review",
+        "architect_plan",
+        "architect_build",
+        "sentinel_propose",
+    ] = "new"
+    request: Optional[str] = Field(
+        default=None, max_length=8000, description="new, architect_plan: what to build"
+    )
     pipeline: Optional[str] = Field(
         default=None, description="fix: the pipeline to fix; quality: the node's pipeline"
     )
@@ -137,7 +150,14 @@ class JobRequest(BaseModel):
         default=None, description="fix, explain: the failed execution to take the error from"
     )
     draft_id: Optional[str] = Field(
-        default=None, description="revise: the draft to change (with `note` saying how)"
+        default=None,
+        description="revise: the draft to change (with `note` saying how); "
+        "architect_build: the blueprint draft to build",
+    )
+    incident_id: Optional[str] = Field(
+        default=None,
+        description="sentinel_propose: the incident to explain and draft a fix for "
+        "(also takes sentinel.read)",
     )
     max_attempts: Optional[int] = Field(default=None, ge=1, le=10)
 
@@ -172,6 +192,11 @@ class JobResponse(BaseModel):
     #: review: the findings, once done (also kept: GET …/ai/reviews/{pipeline}/{node}).
     review: Optional[Dict[str, Any]] = None
     execution_id: Optional[str] = None
+    #: architect_plan: what the model needs answered before it can design (ask, then retry
+    #: with the answers in `note`).
+    questions: Optional[List[str]] = None
+    #: sentinel_propose: the incident the proposal is linked to.
+    incident_id: Optional[str] = None
 
 
 class DocsGaps(BaseModel):
@@ -226,6 +251,12 @@ class DraftResponse(DraftSummary):
     raw_answer: str = ""
     #: Files that changed since the draft was made: applying it would be refused.
     stale_files: List[str] = Field(default_factory=list)
+    #: blueprint: what the model designed, as Ducta read it (``None`` when it could not).
+    blueprint: Optional[Dict[str, Any]] = None
+    #: blueprint: the same, as the YAML Ducta reads.
+    blueprint_yaml: str = ""
+    #: blueprint: what Ducta's checks say deserves a second look (not errors).
+    warnings: List[str] = Field(default_factory=list)
 
 
 class ApplyRequest(BaseModel):
@@ -696,7 +727,7 @@ async def start_job(
 ) -> JobResponse:
     from ducta.ai.builder import fix, generate, load_draft, revise, save_draft
     from ducta.ai.config import load_config
-    from ducta.ai.errors import AICancelledError, AIConfigError, AIError
+    from ducta.ai.errors import AICancelledError, AIConfigError, AIError, AINotFoundError
     from ducta.ai.explain import explain_failure, save_explanation
     from ducta.ai.proposals import propose_docs, propose_quality
     from ducta.ai.providers import make_provider
@@ -712,7 +743,28 @@ async def start_job(
         raise AIConfigError("Name the pipeline and the node to review")
     if body.kind == "explain" and not body.execution_id:
         raise AIConfigError("Name the failed execution to explain")
+    if body.kind == "architect_plan" and not (body.request or "").strip():
+        raise AIConfigError("Describe what to build")
+    if body.kind == "sentinel_propose":
+        if current_user is not None and not current_user.has_permission("sentinel.read"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission 'sentinel.read' required",
+            )
+        from ducta.ai.agents.sentinel.incidents import Incidents
+
+        if (
+            not body.incident_id
+            or (await asyncio.to_thread(Incidents(root).get, body.incident_id)) is None
+        ):
+            raise AINotFoundError(f"No incident {body.incident_id or ''}".strip())
     previous = None
+    if body.kind == "architect_build":
+        if not body.draft_id:
+            raise AIConfigError("Name the blueprint draft to build")
+        previous = await asyncio.to_thread(load_draft, root, body.draft_id)
+        if previous.kind != "blueprint":
+            raise AIConfigError(f"Draft {previous.id} is not a blueprint")
     if body.kind == "revise":
         if not body.draft_id or not (body.note or "").strip():
             raise AIConfigError("Name the draft to revise and say what to change")
@@ -758,6 +810,7 @@ async def start_job(
         if body.kind in ("explain", "review")
         else body.max_attempts or config.max_attempts,
         execution_id=body.execution_id if body.kind == "explain" else None,
+        incident_id=body.incident_id if body.kind == "sentinel_propose" else None,
     )
     await asyncio.to_thread(_jobs.add, root, job, _owner(current_user))
 
@@ -769,6 +822,30 @@ async def start_job(
 
     def work() -> None:
         try:
+            if body.kind == "sentinel_propose":
+                from ducta.ai.agents.sentinel.propose import propose_for
+
+                who = str(
+                    getattr(current_user, "username", None)
+                    or getattr(current_user, "id", None)
+                    or "user"
+                )
+                linked = propose_for(
+                    root,
+                    body.incident_id or "",
+                    provider=provider,
+                    requested_by=who,
+                    should_stop=stop,
+                )
+                _jobs.finish(
+                    root,
+                    job.id,
+                    status="done",
+                    ok=bool(linked.get("explanation") or linked.get("draft")),
+                    draft_id=linked.get("draft"),
+                    finished_at=_now(),
+                )
+                return
             if body.kind == "review":
                 from ducta.ai.review import review_node, save_review
 
@@ -828,6 +905,42 @@ async def start_job(
                     provider,
                     env=body.env or "dev",
                     note=body.note or "",
+                    max_attempts=body.max_attempts,
+                    on_attempt=report,
+                    should_stop=stop,
+                )
+            elif body.kind == "architect_plan":
+                from ducta.ai.agents.architect.design import NeedsAnswers, design
+
+                try:
+                    draft = design(
+                        root,
+                        body.request or "",
+                        provider,
+                        note=body.note or "",
+                        max_attempts=body.max_attempts,
+                        on_attempt=report,
+                        should_stop=stop,
+                    )
+                except NeedsAnswers as asked:
+                    _jobs.finish(
+                        root,
+                        job.id,
+                        status="done",
+                        ok=False,
+                        questions=asked.questions,
+                        finished_at=_now(),
+                    )
+                    return
+            elif body.kind == "architect_build" and previous is not None:
+                from ducta.ai.agents.architect.build import build
+                from ducta.ai.agents.architect.design import blueprint_of
+
+                draft = build(
+                    root,
+                    blueprint_of(previous),
+                    provider,
+                    blueprint_id=previous.id,
                     max_attempts=body.max_attempts,
                     on_attempt=report,
                     should_stop=stop,
@@ -1001,9 +1114,25 @@ async def get_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -
             attempts=[AttemptModel(**a.__dict__) for a in draft.attempts],
             raw_answer=draft.raw_answer,
             stale_files=stale,
+            **_blueprint_fields(draft),
         )
 
     return await asyncio.to_thread(build)
+
+
+def _blueprint_fields(draft: Any) -> Dict[str, Any]:
+    """A blueprint draft's design, read by Ducta — what the UI shows instead of files."""
+    if draft.kind != "blueprint":
+        return {}
+    from ducta.ai.agents.architect.design import blueprint_of
+    from ducta.ai.errors import AIError
+
+    warnings = [w for w in (draft.evidence or "").split("; ") if w]
+    try:
+        bp = blueprint_of(draft)
+    except AIError:
+        return {"warnings": warnings}
+    return {"blueprint": bp.to_dict(), "blueprint_yaml": bp.to_yaml(), "warnings": warnings}
 
 
 @router.post(

@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { IconAlertTriangle, IconArrowLeft, IconCircleCheck, IconCircleX, IconSparkles } from "@tabler/icons-react";
@@ -28,6 +28,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import { gapsSentence, useElapsed } from "./aiText";
+import { ArchitectStepLine, BlueprintStep, ModulesList, QuestionsStep } from "./Architect";
 import { pipelineOf, splitDiff } from "./diff";
 import "./AIDraftDialog.css";
 
@@ -38,35 +39,50 @@ export type AIDraftMode =
   | { kind: "quality"; pipeline: string; node: string; env: string }
   | { kind: "docs"; gaps?: AIDocsGaps };
 
-type Step = "describe" | "progress" | "review" | "drafts";
+type Step = "describe" | "questions" | "progress" | "review" | "drafts";
 
-const WIDTH: Record<Step, number> = { describe: 560, progress: 560, review: 960, drafts: 680 };
+const WIDTH: Record<Step, number> = { describe: 640, questions: 640, progress: 560, review: 960, drafts: 680 };
+/** A blueprint, and the pipelines built from one, are shown wider: a map, or modules beside the diff. */
+const WIDE = 1120;
 
 /**
  * Drafting with AI, in one dialog: describe (or name what to fix) → watch the
  * attempts → review the diff → apply. A draft is only written on Apply, and
  * Apply never commits or runs anything. Past drafts are a link away.
+ *
+ * Building several pipelines is Ducta Architect, in the same dialog: the model
+ * may ask first (questions), designs a blueprint Ducta checks (review it, ask
+ * for changes, Build), then writes the code module by module (the usual review).
  */
 export function AIDraftDialog({
   projectId,
   mode,
   onClose,
   onApplied,
+  initialDraftId,
 }: {
   projectId: string;
   mode: AIDraftMode;
   onClose: () => void;
   /** After Apply: the pipeline the draft created or changed, if any. */
   onApplied?: (pipeline: string | null) => void;
+  /** Open on this draft's review (a fix Sentinel drafted, say) instead of describing. */
+  initialDraftId?: string;
 }) {
-  const [step, setStep] = useState<Step>("describe");
+  const [step, setStep] = useState<Step>(initialDraftId ? "review" : "describe");
   const [jobId, setJobId] = useState<string | null>(null);
-  const [draftId, setDraftId] = useState<string | null>(null);
+  const [draftId, setDraftId] = useState<string | null>(initialDraftId ?? null);
   const [startError, setStartError] = useState<string | null>(null);
+  // Ducta Architect: the request (sent again with the answers) and the model's questions.
+  const [request, setRequest] = useState("");
+  const [questions, setQuestions] = useState<string[]>([]);
   const start = useStartAIJob(projectId);
+  const discardBlueprint = useDeleteAIDraft(projectId);
   const qc = useQueryClient();
   const { data: job } = useAIJob(projectId, step === "progress" ? jobId : null);
   const running = step === "progress" && (!job || job.status === "running");
+  const { data: opened } = useAIDraft(projectId, step === "review" ? draftId : null);
+  const wide = step === "review" && (opened?.kind === "blueprint" || opened?.kind === "architect");
 
   // The dialog closes but the job goes on: say when it ends.
   const runInBackground = () => {
@@ -83,6 +99,7 @@ export function AIDraftDialog({
 
   const run = (body: AIJobRequest) => {
     setStartError(null);
+    if (body.kind === "architect_plan") setRequest(body.request);
     start.mutate(body, {
       onSuccess: (job) => {
         setJobId(job.id);
@@ -101,19 +118,29 @@ export function AIDraftDialog({
   const title =
     step === "drafts"
       ? "AI drafts"
-      : step === "review"
-        ? "Draft"
-        : mode.kind === "fix"
-          ? `Fix ${mode.pipeline} with AI`
-          : mode.kind === "quality"
-            ? `Propose checks for ${mode.pipeline}.${mode.node}`
-            : mode.kind === "docs"
-              ? "Document the project with AI"
-              : "Build a pipeline with AI";
+      : step === "questions"
+        ? `Ducta Architect needs ${questions.length === 1 ? "an answer" : `${questions.length} answers`}`
+        : step === "review"
+          ? opened?.kind === "blueprint"
+            ? `Blueprint · ${opened.blueprint?.name ?? opened.request}`
+            : opened?.kind === "architect"
+              ? `Built · ${opened.request}`
+              : "Draft"
+          : step === "progress" && job?.kind === "architect_plan"
+            ? "Designing with Ducta Architect"
+            : step === "progress" && job?.kind === "architect_build"
+              ? "Building with Ducta Architect"
+              : mode.kind === "fix"
+                ? `Fix ${mode.pipeline} with AI`
+                : mode.kind === "quality"
+                  ? `Propose checks for ${mode.pipeline}.${mode.node}`
+                  : mode.kind === "docs"
+                    ? "Document the project with AI"
+                    : "Build with AI";
 
   return (
     // Closing while the model works (×, Esc, the backdrop) keeps the job going and says when it ends.
-    <Modal title={title} onClose={running ? runInBackground : onClose} width={WIDTH[step]}>
+    <Modal title={title} onClose={running ? runInBackground : onClose} width={wide ? WIDE : WIDTH[step]}>
       {step === "describe" && (
         <DescribeStep
           projectId={projectId}
@@ -125,16 +152,41 @@ export function AIDraftDialog({
           onShowDrafts={() => setStep("drafts")}
         />
       )}
+      {step === "questions" && (
+        <QuestionsStep
+          questions={questions}
+          pending={start.isPending}
+          error={startError}
+          onBack={() => setStep("describe")}
+          onSubmit={(note) => run({ kind: "architect_plan", request, note })}
+        />
+      )}
       {step === "progress" && jobId && (
         <ProgressStep
           projectId={projectId}
           jobId={jobId}
           onBackground={runInBackground}
           onReview={openDraft}
+          onQuestions={(asked) => {
+            setQuestions(asked);
+            setStep("questions");
+          }}
           onRetry={() => setStep("describe")}
         />
       )}
-      {step === "review" && draftId && (
+      {step === "review" && draftId && opened?.kind === "blueprint" && (
+        <BlueprintStep
+          draft={opened}
+          revising={start.isPending && start.variables?.kind === "revise"}
+          building={start.isPending && start.variables?.kind === "architect_build"}
+          error={startError}
+          onRevise={(note) => run({ kind: "revise", draft_id: draftId, note })}
+          onBuild={() => run({ kind: "architect_build", draft_id: draftId })}
+          discarding={discardBlueprint.isPending}
+          onDiscard={() => discardBlueprint.mutate(draftId, { onSuccess: () => setStep("drafts") })}
+        />
+      )}
+      {step === "review" && draftId && opened?.kind !== "blueprint" && (
         <ReviewStep
           projectId={projectId}
           draftId={draftId}
@@ -151,6 +203,7 @@ export function AIDraftDialog({
             onClose();
           }}
           onBack={() => setStep("drafts")}
+          onOpenDraft={openDraft}
         />
       )}
       {step === "drafts" && (
@@ -187,6 +240,9 @@ function DescribeStep({
   // A note is optional for everything but a new pipeline.
   const optional = mode.kind !== "new";
   const [env, setEnv] = useState(mode.kind === "quality" ? mode.env : "");
+  // A new pipeline, or several designed first (Ducta Architect).
+  const [scale, setScale] = useState<"one" | "several">("one");
+  const several = mode.kind === "new" && scale === "several";
   const { data: envData } = useEnvironments(projectId);
   const declared: string[] = envData?.environments ?? [];
   const envs = declared.length ? declared : env ? [env] : [];
@@ -203,7 +259,9 @@ function DescribeStep({
           ? { kind: "quality", pipeline: mode.pipeline, node: mode.node, env, note }
           : mode.kind === "docs"
             ? { kind: "docs", note }
-            : { kind: "new", request: text.trim() },
+            : several
+              ? { kind: "architect_plan", request: text.trim() }
+              : { kind: "new", request: text.trim() },
     );
   };
 
@@ -237,8 +295,31 @@ function DescribeStep({
           personal data (metadata.pii). Nothing else in the files changes.
         </p>
       )}
+      {mode.kind === "new" && (
+        <fieldset className="ai-scale">
+          <legend>What to build</legend>
+          <label htmlFor="ai-scale-one" className={`ai-scale__option${scale === "one" ? " is-selected" : ""}`}>
+            <input id="ai-scale-one" type="radio" name="ai-scale" checked={scale === "one"} onChange={() => setScale("one")} />
+            <b>One pipeline</b>
+            <span className="ai-dim">A draft with its files, to review and apply.</span>
+          </label>
+          <label htmlFor="ai-scale-several" className={`ai-scale__option${scale === "several" ? " is-selected" : ""}`}>
+            <input
+              id="ai-scale-several"
+              type="radio"
+              name="ai-scale"
+              checked={scale === "several"}
+              onChange={() => setScale("several")}
+            />
+            <b>Several pipelines — design first</b>
+            <span className="ai-dim">
+              Ducta Architect drafts a blueprint (datasets, pipelines, contracts). You approve it, then it is built.
+            </span>
+          </label>
+        </fieldset>
+      )}
       <label className="projects-modal__label" htmlFor="ai-request">
-        {optional ? "Anything the model should know? (optional)" : "What should it do?"}
+        {optional ? "Anything the model should know? (optional)" : "Describe it"}
       </label>
       <textarea
         id="ai-request"
@@ -253,7 +334,9 @@ function DescribeStep({
               ? "order_id is the key"
               : mode.kind === "docs"
                 ? "Write the descriptions in Spanish"
-                : "Gold pipeline that averages G1, G2 and G3 per school from the cleaned students"
+                : several
+                  ? "Revenue per store and day, and orders per day, from the cleaned silver orders"
+                  : "Gold pipeline that averages G1, G2 and G3 per school from the cleaned students"
         }
         // eslint-disable-next-line jsx-a11y/no-autofocus -- the dialog's one field
         autoFocus
@@ -267,7 +350,9 @@ function DescribeStep({
             ? "It may change this pipeline's file and its modules, nothing else."
             : mode.kind === "quality"
               ? "It may change this node's quality block, nothing else. The checks are run on the data before you see them."
-              : "It may add one pipeline, new modules and new datasets. Existing files are never changed."}
+              : several
+                ? "It may add pipelines, new modules and new datasets. Existing files are never changed."
+                : "It may add one pipeline, new modules and new datasets. Existing files are never changed."}
         </p>
       )}
 
@@ -288,7 +373,7 @@ function DescribeStep({
           Cancel
         </Button>
         <Button type="submit" variant="primary" loading={pending} disabled={!canSubmit}>
-          {SUBMIT[mode.kind]}
+          {several ? "Design" : SUBMIT[mode.kind]}
         </Button>
       </div>
     </form>
@@ -345,17 +430,26 @@ function ProgressStep({
   jobId,
   onBackground,
   onReview,
+  onQuestions,
   onRetry,
 }: {
   projectId: string;
   jobId: string;
   onBackground: () => void;
   onReview: (draftId: string) => void;
+  /** Ducta Architect asked before designing: the dialog asks the person. */
+  onQuestions: (questions: string[]) => void;
   onRetry: () => void;
 }) {
   const { data: job } = useAIJob(projectId, jobId);
   const cancel = useCancelAIJob(projectId);
+  const asked = job?.status === "done" && (job.questions?.length ?? 0) > 0 ? job.questions! : null;
+  useEffect(() => {
+    if (asked) onQuestions(asked);
+  }, [asked, onQuestions]);
   const done = job?.status === "done" && job.draft_id;
+  const building = job?.kind === "architect_build";
+  const planning = job?.kind === "architect_plan";
   const ended = job?.status === "failed" || job?.status === "cancelled";
   const attempts = job?.attempts ?? [];
   const pending = job?.status === "running";
@@ -364,7 +458,14 @@ function ProgressStep({
 
   return (
     <div className="ai-step">
-      <ol className="ai-attempts" aria-live="polite">
+      {planning && <ArchitectStepLine step={1} detail="Design" />}
+      {building && (
+        <>
+          <ArchitectStepLine step={3} detail="Build — Ducta wrote the YAML; the model writes the code" />
+          <ModulesList attempts={attempts} running={pending} />
+        </>
+      )}
+      <ol className="ai-attempts" aria-live="polite" hidden={building}>
         {attempts.map((a) => {
           const problems = a.errors + a.rejected.length;
           return (
@@ -394,7 +495,13 @@ function ProgressStep({
               {attempts.length + 1}
             </span>
             <div>
-              {attempts.length === 0 ? "Writing the draft" : "Fixing what the validator found"}
+              {planning
+                ? attempts.length === 0
+                  ? "Designing the blueprint"
+                  : "Fixing what Ducta found in the blueprint"
+                : attempts.length === 0
+                  ? "Writing the draft"
+                  : "Fixing what the validator found"}
               <span className="ai-dim">
                 {" "}
                 · {job?.model ?? "the model"}
@@ -439,7 +546,7 @@ function ProgressStep({
           </>
         )}
         <Button type="button" variant="primary" disabled={!done} onClick={() => done && onReview(job.draft_id!)}>
-          Review draft
+          {planning ? "Review the blueprint" : "Review draft"}
         </Button>
       </div>
     </div>
@@ -457,6 +564,7 @@ function ReviewStep({
   onApplied,
   onDiscarded,
   onBack,
+  onOpenDraft,
 }: {
   projectId: string;
   draftId: string;
@@ -466,6 +574,8 @@ function ReviewStep({
   onApplied: (draft: AIDraft) => void;
   onDiscarded: () => void;
   onBack: () => void;
+  /** Another draft: a built draft's blueprint. */
+  onOpenDraft: (draftId: string) => void;
 }) {
   const { data: draft, isLoading } = useAIDraft(projectId, draftId);
   const apply = useApplyAIDraft(projectId);
@@ -492,9 +602,13 @@ function ReviewStep({
     (p) => (p.severity === "error" || p.severity === "warning") && !draft.blocking.some((b) => b.message === p.message),
   );
   const count = draft.files.length;
+  // Built from a blueprint: changes are asked of the blueprint, then built again.
+  const built = draft.kind === "architect";
+  const blueprintId = built ? (draft.target ?? null) : null;
 
   return (
     <div className="ai-step">
+      {built && <ArchitectStepLine step={3} detail="Build — Ducta wrote the YAML; the model wrote the code" />}
       <p className="ai-request">
         <button type="button" className="ai-link" onClick={onBack} aria-label="All drafts">
           <IconArrowLeft size={13} aria-hidden="true" />
@@ -502,7 +616,8 @@ function ReviewStep({
         “{draft.request}”
       </p>
 
-      <div className="ai-review">
+      <div className={`ai-review${built ? " ai-review--built" : ""}`}>
+        {built && <ModulesList attempts={draft.attempts} />}
         <nav className="ai-files" aria-label="Files in the draft">
           {draft.file_contents.map((f) => (
             <button
@@ -664,11 +779,17 @@ function ReviewStep({
               `Writes ${count} file${count === 1 ? "" : "s"}. Nothing is committed or run.`
             )}
           </span>
-          {!asking && (
-            <Button type="button" variant="secondary" onClick={() => setAsking(true)}>
-              Ask for changes…
-            </Button>
-          )}
+          {built
+            ? blueprintId && (
+                <Button type="button" variant="secondary" onClick={() => onOpenDraft(blueprintId)}>
+                  Back to the blueprint
+                </Button>
+              )
+            : !asking && (
+                <Button type="button" variant="secondary" onClick={() => setAsking(true)}>
+                  Ask for changes…
+                </Button>
+              )}
           <Button
             type="button"
             variant="primary"
@@ -755,15 +876,28 @@ function DraftsStep({
   );
 }
 
-function draftLabel(d: AIDraftSummary): string {
+export function draftLabel(d: AIDraftSummary): string {
   if (d.kind === "fix") return `Fix · ${d.pipeline}`;
   if (d.kind === "quality") return `Checks · ${d.pipeline}.${d.target}`;
   if (d.kind === "docs") return "Descriptions";
+  if (d.kind === "blueprint") return "Blueprint";
+  if (d.kind === "architect") {
+    const n = d.files.filter((f) => f.startsWith("pipelines/") && /\.ya?ml$/.test(f)).length;
+    return `Architect · ${n} pipeline${n === 1 ? "" : "s"}`;
+  }
   return "New pipeline";
 }
 
 function DraftState({ draft }: { draft: AIDraftSummary }) {
   if (draft.applied_at) return <span className="ai-chip ai-chip--applied">applied</span>;
+  // A blueprint is built, never applied: say whether it can be.
+  if (draft.kind === "blueprint") {
+    return draft.ok ? (
+      <span className="ai-chip ai-chip--added">ready to build</span>
+    ) : (
+      <span className="ai-chip ai-chip--invalid">needs changes</span>
+    );
+  }
   return draft.ok ? (
     <span className="ai-chip ai-chip--added">valid</span>
   ) : (

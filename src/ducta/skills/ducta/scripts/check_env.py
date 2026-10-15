@@ -71,8 +71,21 @@ def _run(cmd: List[str], timeout: int = 30) -> Optional[subprocess.CompletedProc
         return None
 
 
+#: pip's launcher when the interpreter's path has spaces or is too long for a
+#: shebang: ``#!/bin/sh`` and then ``'''exec' "/path/to/python" "$0" "$@"``.
+_SH_TRAMPOLINE = re.compile(r"""^'''exec'\s+(?:"([^"]+)"|(\S+))""", re.MULTILINE)
+
+
+def _is_python(path: Optional[str]) -> bool:
+    return bool(path) and Path(str(path)).name.lower().startswith(("python", "pypy"))
+
+
 def _ducta_python(ducta: Optional[str]) -> Optional[str]:
-    """The interpreter behind the ``ducta`` command, from its shebang (POSIX)."""
+    """The interpreter behind the ``ducta`` command, from its shebang (POSIX).
+
+    Only a Python is returned: the probe is Python code, and handed to another
+    program (``/bin/sh``) it would run as that program's commands.
+    """
     if not ducta:
         return None
     path = Path(ducta)
@@ -81,16 +94,23 @@ def _ducta_python(ducta: Optional[str]) -> Optional[str]:
         if candidate.is_file():
             return str(candidate)
     try:
-        first = path.read_bytes()[:256].split(b"\n", 1)[0].decode("utf-8", "replace")
+        head = path.read_bytes()[:1024].decode("utf-8", "replace")
     except OSError:
         return None
-    if first.startswith("#!"):
-        parts = first[2:].strip().split()
-        if parts and parts[0].endswith("env") and len(parts) > 1:
-            return shutil.which(parts[1])
-        if parts:
-            return parts[0]
-    return None
+    first = head.split("\n", 1)[0]
+    if not first.startswith("#!"):
+        return None
+    parts = first[2:].strip().split()
+    found: Optional[str] = None
+    if parts and Path(parts[0]).name == "env":
+        program = next((p for p in parts[1:] if not p.startswith("-")), None)
+        found = shutil.which(program) if program else None
+    elif parts and _is_python(parts[0]):
+        found = parts[0]
+    elif parts and Path(parts[0]).name in ("sh", "bash"):
+        m = _SH_TRAMPOLINE.search(head)
+        found = (m.group(1) or m.group(2)) if m else None
+    return found if _is_python(found) else None
 
 
 def _skill_ducta_version() -> Optional[str]:

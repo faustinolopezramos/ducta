@@ -34,7 +34,7 @@ from typing import Mapping, Optional
 from urllib.parse import urlparse
 
 from ducta.ai.config import ANTHROPIC, PRESETS, AIConfig
-from ducta.ai.errors import AIConfigError
+from ducta.ai.errors import AIConfigError, AIEnvironmentError
 
 #: The keychain "service" every Ducta key is stored under; see :func:`keychain_user`.
 KEYRING_SERVICE = "ducta-ai"
@@ -93,9 +93,21 @@ def keychain_available() -> bool:
         return False
 
 
+def env_key_allowed(config: AIConfig) -> bool:
+    """Whether ``config.api_key_env`` may be read for where *config* sends requests.
+
+    A provider's own variable (``OPENAI_API_KEY``, ``ANTHROPIC_API_KEY``) holds
+    the key to its own endpoint: pointed at another URL, it is not sent there
+    — like a keychain key, which is bound to its endpoint.
+    """
+    preset = PRESETS.get(config.provider)
+    own = preset.api_key_env if preset else None
+    return not (own and config.custom_endpoint and config.api_key_env == own)
+
+
 def resolve_key(config: AIConfig, env: Optional[Mapping[str, str]] = None) -> ResolvedKey:
     env = os.environ if env is None else env
-    if config.api_key_env and env.get(config.api_key_env):
+    if config.api_key_env and env_key_allowed(config) and env.get(config.api_key_env):
         return ResolvedKey(env[config.api_key_env], f"env:{config.api_key_env}")
     keyring = _keyring()
     if keyring is not None:
@@ -112,12 +124,19 @@ def resolve_key(config: AIConfig, env: Optional[Mapping[str, str]] = None) -> Re
 
 def require_key(config: AIConfig, env: Optional[Mapping[str, str]] = None) -> Optional[str]:
     """The key, or ``None`` for a local model; raises when a remote one has none."""
+    env = os.environ if env is None else env
     resolved = resolve_key(config, env)
     if resolved.value or config.is_local:
         return resolved.value
     if config.api_key_env is None and config.kind != ANTHROPIC:
         # A self-hosted endpoint on the network may not need one either.
         return None
+    if not env_key_allowed(config):
+        raise AIConfigError(
+            f"{config.api_key_env} is the key for {config.label}'s own endpoint and is not "
+            f"sent to {config.endpoint}: name another variable (`ducta ai setup --api-key-env "
+            "NAME`), or run `ducta ai login` to keep a key for that endpoint."
+        )
     where = f"set {config.api_key_env}, or " if config.api_key_env else ""
     raise AIConfigError(
         f"{config.label} needs an API key: {where}run `ducta ai login` to keep it in the "
@@ -134,7 +153,13 @@ def store_key(provider: str, key: str, base_url: Optional[str] = None) -> None:
         )
     if not key.strip():
         raise AIConfigError("The API key is empty")
-    keyring.set_password(KEYRING_SERVICE, keychain_user(provider, base_url), key.strip())
+    try:
+        keyring.set_password(KEYRING_SERVICE, keychain_user(provider, base_url), key.strip())
+    except Exception as e:  # noqa: BLE001 — locked, denied, a broken backend
+        raise AIEnvironmentError(
+            f"The system keychain did not store the key ({type(e).__name__}). Unlock it and "
+            "try again, or put the key in an environment variable."
+        ) from e
 
 
 def delete_key(provider: str, base_url: Optional[str] = None) -> bool:

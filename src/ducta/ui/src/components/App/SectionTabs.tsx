@@ -8,7 +8,7 @@ import { routes } from "../../utils/routes";
  * Each tab keeps its own URL, so links and the back button still work.
  */
 
-export type RunsTab = "history" | "schedules";
+export type RunsTab = "history" | "schedules" | "reliability";
 
 export function RunsTabs({ projectId, current }: { projectId: string; current: RunsTab }) {
   const navigate = useNavigate();
@@ -19,8 +19,13 @@ export function RunsTabs({ projectId, current }: { projectId: string; current: R
       items={[
         { id: "history" as const, label: "History" },
         { id: "schedules" as const, label: "Schedules" },
+        { id: "reliability" as const, label: "Reliability" },
       ]}
-      onChange={(id) => navigate(id === "history" ? routes.runs(projectId) : routes.section(projectId, "schedules"))}
+      onChange={(id) => {
+        if (id === "history") navigate(routes.runs(projectId));
+        else if (id === "schedules") navigate(routes.section(projectId, "schedules"));
+        else navigate(routes.section(projectId, "reliability"));
+      }}
     />
   );
 }

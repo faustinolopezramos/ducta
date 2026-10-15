@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Requires the ducta CLI (pip install ducta; Python 3.10-3.13). Works with any agent that can read files and run shell commands.
 metadata:
   ducta-version: "0.2"
-  skill-version: "1.0.0"
+  skill-version: "1.1.0"
   homepage: https://github.com/faustinolopezramos/ducta
 ---
 
@@ -89,6 +89,7 @@ edit over long explanations.
 | the web UI, the API server, auth and permissions | [server-and-ui](references/server-and-ui.md) |
 | run on Databricks / Unity Catalog | [databricks](references/databricks.md) |
 | draft or fix pipelines with `ducta ai` | [ai-builder](references/ai-builder.md) |
+| design several pipelines, or handle failed/late runs (Architect, Sentinel) | [agents](references/agents.md) |
 | conventions, testing, production readiness | [best-practices](references/best-practices.md) |
 | an error message or something that does not work | [troubleshooting](references/troubleshooting.md) |
 | the exact options of any command | [cli](references/cli.md) |

@@ -39,7 +39,12 @@ export function railItems(projectId: string | null, opts: { hasModels?: boolean 
           label: "Runs",
           icon: IconPlayerPlay,
           path: routes.runs(projectId),
-          also: [routes.section(projectId, "schedules"), "/workspace/executions", "/workspace/schedules"],
+          also: [
+            routes.section(projectId, "schedules"),
+            routes.section(projectId, "reliability"),
+            "/workspace/executions",
+            "/workspace/schedules",
+          ],
         },
         {
           label: "Quality",

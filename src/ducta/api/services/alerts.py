@@ -83,6 +83,7 @@ def _text(event: AlertEvent) -> str:
         "quality_gate": "was stopped by a quality gate",
         "slow": "ran unusually slowly",
         "sla_miss": "missed its SLA",
+        "sentinel": "— a Ducta Sentinel incident",
     }.get(event.kind, event.kind)
     lines = [f"[ducta] {event.project} / {event.pipeline} {title} in {event.env}.", event.summary]
     if event.link:

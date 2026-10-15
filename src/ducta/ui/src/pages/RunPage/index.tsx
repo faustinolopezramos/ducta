@@ -13,6 +13,7 @@ import { useCancelExecution, useExecutePipeline, useRetryExecution } from "../..
 import { isStuckQueued, type RunLike } from "../../utils/dashboardStats";
 import { PageContainer, PageHeader, Skeleton, StatusBadge, EmptyState, Button } from "../../components/ui";
 import { DiagnosePanel } from "../../components/Execution/DiagnosePanel";
+import { SentinelRunNote } from "../SentinelPage/SentinelRunNote";
 import { RunTimeline } from "../../components/Execution/RunTimeline";
 import { RunGraph } from "../../components/Execution/RunGraph";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
@@ -179,6 +180,15 @@ export function RunPage() {
           </div>
         )}
       </dl>
+
+      {failed && (
+        <SentinelRunNote
+          projectId={projectId}
+          pipeline={run.pipeline_name}
+          env={run.env}
+          runIds={[run.id, run.certificate_run_id]}
+        />
+      )}
 
       {failed && diagnosis && (
         <DiagnosePanel

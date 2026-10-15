@@ -1,0 +1,204 @@
+/* ────────────────────────────────────────────────────────────────────────
+ * RELIABILITY — Ducta Sentinel's page, its incident drawer, and the note it
+ * leaves on a failed run. Built on the theme tokens; the drafts it links to
+ * open in the AI dialog (AIDraftDialog.css).
+ * ──────────────────────────────────────────────────────────────────────── */
+
+.rel-page { display: grid; gap: var(--space-4); min-width: 0; }
+.rel-fine { font-size: var(--text-xs); }
+
+.rel-note {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius);
+  font-size: var(--text-sm);
+}
+.rel-note--danger {
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, transparent);
+  color: var(--danger);
+}
+
+.rel-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.rel-card {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  min-width: 0;
+}
+.rel-card--alert { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.rel-card--alert .rel-card__value { color: var(--danger); }
+.rel-card__label,
+.rel-card__sub { font-size: var(--text-xs); color: var(--text-muted); }
+.rel-card__value { font-size: var(--text-lg); font-weight: 600; overflow-wrap: anywhere; }
+.rel-off { gap: var(--space-1); font-size: var(--text-sm); line-height: var(--leading-normal); }
+.rel-off code { font-family: var(--font-mono); font-size: 0.92em; }
+
+.rel-filters { display: flex; gap: var(--space-2); flex-wrap: wrap; }
+.rel-filter {
+  height: 32px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.rel-filter[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface));
+  color: var(--primary);
+  font-weight: 600;
+}
+.rel-filter:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.rel-empty { margin: 0; padding: var(--space-5) 0; text-align: center; font-size: var(--text-sm); }
+
+.rel-table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+}
+.rel-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); min-width: 720px; }
+.rel-table th {
+  text-align: left;
+  padding: var(--space-2) var(--space-4);
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border);
+}
+.rel-table td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border); vertical-align: top; }
+.rel-table tr:last-child td { border-bottom: 0; }
+.rel-row--person { background: color-mix(in srgb, var(--bg) 40%, var(--surface)); }
+.rel-open {
+  border: 0;
+  background: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--primary);
+  cursor: pointer;
+  text-align: left;
+}
+.rel-open:hover { text-decoration: underline; }
+.rel-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+
+.rel-state {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.rel-state--act { background: color-mix(in srgb, var(--primary) 10%, transparent); color: var(--primary); }
+.rel-state--person { background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
+.rel-state--done { background: color-mix(in srgb, var(--success) 12%, transparent); color: var(--success); }
+.rel-state--muted { background: var(--bg); color: var(--text-muted); }
+
+/* The incident drawer. */
+.rel-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(15 27 32 / 0.32);
+  display: flex;
+  justify-content: flex-end;
+}
+.rel-drawer {
+  width: min(760px, 100%);
+  height: 100%;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.rel-drawer:focus { outline: none; }
+.rel-drawer__head {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-4) var(--space-5) var(--space-2);
+}
+.rel-drawer__titles { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.rel-drawer__titles h2 { margin: 0; font-size: var(--text-xl); font-weight: 600; overflow-wrap: anywhere; }
+.rel-drawer__why {
+  margin: 0;
+  padding: 0 var(--space-5) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  line-height: var(--leading-normal);
+}
+.rel-drawer__why b { color: var(--text); font-weight: 600; }
+.rel-drawer__body { flex: 1; overflow-y: auto; padding: var(--space-4) var(--space-5); display: grid; gap: var(--space-4); align-content: start; }
+.rel-drawer__foot {
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.rel-section { display: grid; gap: var(--space-2); }
+.rel-section h3 { margin: 0; font-size: var(--text-sm); font-weight: 600; }
+.rel-box {
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 40%, var(--surface));
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  min-width: 0;
+}
+.rel-pre { margin: var(--space-1) 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-xs); }
+.rel-fix { display: flex; gap: var(--space-3); align-items: center; justify-content: space-between; flex-wrap: wrap; background: var(--surface); }
+.rel-fix > div { display: grid; gap: 2px; min-width: 0; flex: 1 1 280px; }
+.rel-fix__title { font-weight: 500; overflow-wrap: anywhere; }
+
+.rel-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); font-size: var(--text-sm); }
+.rel-timeline li { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: var(--space-2); overflow-wrap: anywhere; }
+.rel-timeline time { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-muted); }
+.rel-timeline b { font-weight: 600; }
+
+/* A failed run: what Sentinel does about it. */
+.rel-banner {
+  margin-bottom: var(--space-4);
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
+  border-radius: var(--radius);
+}
+.rel-banner--person { border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.rel-banner > svg { flex: none; margin-top: 2px; color: var(--primary); }
+.rel-banner--person > svg { color: var(--danger); }
+.rel-banner__text { flex: 1; min-width: 0; display: grid; gap: 4px; }
+.rel-banner__text b { font-size: var(--text-sm); }
+.rel-banner__text span { font-size: var(--text-sm); color: var(--text-muted); line-height: var(--leading-normal); }
+.rel-banner a { flex: none; font-size: var(--text-sm); font-weight: 600; }
+
+@media (max-width: 900px) {
+  .rel-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 520px) {
+  .rel-cards { grid-template-columns: minmax(0, 1fr); }
+  .rel-banner { flex-wrap: wrap; }
+}

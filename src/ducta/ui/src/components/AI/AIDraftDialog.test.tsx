@@ -146,7 +146,7 @@ describe("AIDraftDialog", () => {
 
   it("drafts, shows the attempts, and applies the reviewed draft", async () => {
     const { onApplied } = renderDialog();
-    fireEvent.change(await screen.findByLabelText("What should it do?"), {
+    fireEvent.change(await screen.findByLabelText(/Describe it/), {
       target: { value: "averages per school" },
     });
     await waitFor(() => expect(screen.getByRole("button", { name: "Generate draft" })).toBeEnabled());
@@ -197,7 +197,7 @@ describe("AIDraftDialog", () => {
   it("stops a running job", async () => {
     job = { ...job, status: "running", draft_id: null, attempts: [] };
     renderDialog();
-    fireEvent.change(await screen.findByLabelText("What should it do?"), { target: { value: "x" } });
+    fireEvent.change(await screen.findByLabelText(/Describe it/), { target: { value: "x" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Generate draft" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
     fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
@@ -218,7 +218,7 @@ describe("AIDraftDialog", () => {
       ],
     };
     const { onClose } = renderDialog();
-    fireEvent.change(await screen.findByLabelText("What should it do?"), { target: { value: "x" } });
+    fireEvent.change(await screen.findByLabelText(/Describe it/), { target: { value: "x" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Generate draft" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
     // Each attempt says what was wrong.
@@ -256,12 +256,12 @@ describe("AIDraftDialog", () => {
   it("shows a failed job and goes back", async () => {
     job = { ...job, status: "failed", draft_id: null, attempts: [], error: "Cannot reach http://localhost:11434/v1." };
     renderDialog();
-    fireEvent.change(await screen.findByLabelText("What should it do?"), { target: { value: "x" } });
+    fireEvent.change(await screen.findByLabelText(/Describe it/), { target: { value: "x" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Generate draft" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Generate draft" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach");
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByLabelText("What should it do?")).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Describe it/)).toBeInTheDocument();
   });
 });
 

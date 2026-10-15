@@ -70,7 +70,17 @@ export interface AIAttempt {
 export interface AIJob {
   id: string;
   project_id: string;
-  kind: "new" | "fix" | "revise" | "quality" | "docs" | "explain" | "review";
+  kind:
+    | "new"
+    | "fix"
+    | "revise"
+    | "quality"
+    | "docs"
+    | "explain"
+    | "review"
+    | "architect_plan"
+    | "architect_build"
+    | "sentinel_propose";
   status: "running" | "done" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
@@ -86,6 +96,10 @@ export interface AIJob {
   /** review: the findings, once done. */
   review?: AIReview | null;
   execution_id?: string | null;
+  /** architect_plan: what the model needs answered before it can design. */
+  questions?: string[] | null;
+  /** sentinel_propose: the incident the explanation and fix draft are linked to. */
+  incident_id?: string | null;
 }
 
 export interface AIExplanation {
@@ -137,7 +151,10 @@ export type AIJobRequest =
   | { kind: "quality"; pipeline: string; node: string; env?: string; note?: string }
   | { kind: "docs"; env?: string; note?: string }
   | { kind: "explain"; execution_id: string; note?: string }
-  | { kind: "review"; pipeline: string; node: string; env?: string; note?: string };
+  | { kind: "review"; pipeline: string; node: string; env?: string; note?: string }
+  | { kind: "architect_plan"; request: string; note?: string }
+  | { kind: "architect_build"; draft_id: string }
+  | { kind: "sentinel_propose"; incident_id: string };
 
 export interface AIProblem {
   severity: "error" | "warning" | "info";
@@ -151,8 +168,11 @@ export interface AIProblem {
 
 export interface AIDraftSummary {
   id: string;
-  /** quality: a node's checks; docs: missing descriptions. */
-  kind: "new" | "fix" | "quality" | "docs";
+  /**
+   * quality: a node's checks; docs: missing descriptions; blueprint: Ducta Architect's
+   * design (built, never applied); architect: the pipelines built from a blueprint.
+   */
+  kind: "new" | "fix" | "quality" | "docs" | "blueprint" | "architect";
   request: string;
   pipeline: string | null;
   /** quality: the node. */
@@ -181,6 +201,51 @@ export interface AIDraft extends AIDraftSummary {
   raw_answer: string;
   /** Files changed since the draft was made: applying it would be refused. */
   stale_files: string[];
+  /** blueprint: the design as Ducta read it (null when it could not). */
+  blueprint?: Blueprint | null;
+  /** blueprint: the same, as YAML. */
+  blueprint_yaml?: string;
+  /** blueprint: what Ducta's checks say deserves a second look. */
+  warnings?: string[];
+}
+
+/** Ducta Architect's design: names, datasets and contracts — no code. */
+export interface Blueprint {
+  name: string;
+  goal: string;
+  assumptions: string[];
+  datasets: Record<string, BlueprintDataset>;
+  pipelines: Record<string, BlueprintPipeline>;
+}
+
+export interface BlueprintDataset {
+  description?: string;
+  format?: string;
+  keys?: string[];
+  write?: "overwrite" | "append" | "merge";
+  columns?: Record<string, string>;
+  not_null?: string[];
+  unique?: string[];
+  pii?: string[];
+  owner?: string;
+}
+
+export interface BlueprintPipeline {
+  description?: string;
+  owner?: string;
+  sla?: string;
+  tags?: string[];
+  requires_dates?: boolean;
+  nodes: Record<string, BlueprintNode>;
+}
+
+export interface BlueprintNode {
+  description?: string;
+  kind?: "transform" | "ingest";
+  inputs?: Record<string, string>;
+  outputs?: string[];
+  logic?: string;
+  ingest?: Record<string, unknown>;
 }
 
 // ── settings (the server's model) ─────────────────────────────────────────────

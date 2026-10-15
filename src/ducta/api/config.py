@@ -262,6 +262,15 @@ class Settings(BaseSettings):
     )
     sla_check_env: str = Field(default="prod", description="Environment the SLA watch checks")
 
+    # ── Ducta Sentinel ──────────────────────────────────────────────────────────
+    sentinel_scan_minutes: int = Field(
+        default=1,
+        ge=0,
+        description="Run Sentinel's pass (scheduled re-runs, late and slow pipelines, runs "
+        "started outside the server) this often for every project with sentinel.enabled. "
+        "Finished runs are triaged at once either way. 0 = off. Needs DUCTA_WORKSPACE.",
+    )
+
     # ── Database persistence ────────────────────────────────────────────────────
     database_url: str = Field(
         default="",

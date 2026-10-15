@@ -272,7 +272,9 @@ class AnthropicProvider:
     and cached input costs a tenth.
     """
 
-    max_tokens = 16000
+    #: Current models think before answering, and the thinking counts against
+    #: this limit: room for both, which needs streaming (see :meth:`_streamed`).
+    max_tokens = 64000
     #: The SDK retries 429/5xx/connection errors; a timed-out request is
     #: retried too, so each retry can add a whole ``timeout_seconds``.
     max_retries = 1
@@ -320,8 +322,24 @@ class AnthropicProvider:
             raise AIError("Anthropic rate limit reached; try again in a minute", cause=e) from e
         except anthropic.APIStatusError as e:
             raise AIError(f"Anthropic answered HTTP {e.status_code}: {e.message}") from e
+        except anthropic.APITimeoutError as e:  # a kind of APIConnectionError: before it
+            raise AIError(
+                f"{self.config.endpoint} did not answer within "
+                f"{self.config.timeout_seconds:.0f}s (raise timeout_seconds in ~/.ducta/ai.toml)",
+                cause=e,
+            ) from e
         except anthropic.APIConnectionError as e:
             raise AIError(f"Cannot reach {self.config.endpoint}", cause=e) from e
+
+    @staticmethod
+    def _streamed(stream: Any, **kwargs: Any) -> Any:
+        """The whole answer to a streamed request.
+
+        Streamed, a long answer is never cut by an HTTP timeout: the timeout
+        applies to each wait for the next chunk, not to the whole answer.
+        """
+        with stream(**kwargs) as events:
+            return events.get_final_message()
 
     def complete(self, system: str, messages: List[ChatMessage]) -> Completion:
         model = self.config.require_model()
@@ -347,13 +365,14 @@ class AnthropicProvider:
         with self._anthropic() as client:
             if model in _FALLBACK_MODELS and not self.config.base_url:
                 response = self._call(
-                    client.beta.messages.create,
+                    self._streamed,
+                    stream=client.beta.messages.stream,
                     betas=[_FALLBACK_BETA],
                     fallbacks="default",
                     **kwargs,
                 )
             else:
-                response = self._call(client.messages.create, **kwargs)
+                response = self._call(self._streamed, stream=client.messages.stream, **kwargs)
 
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)

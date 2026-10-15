@@ -209,8 +209,10 @@ def load_config(
     data = _read_file(path)
     if env.get("DUCTA_AI_PROVIDER"):
         if env["DUCTA_AI_PROVIDER"] != data.get("provider"):
-            # Another provider: the file's model and URL belong to the old one.
-            data = {"provider": env["DUCTA_AI_PROVIDER"]}
+            # Another provider: the file's model, URL, key variable and effort
+            # belong to the old one; timeouts and limits still apply.
+            data = {k: v for k, v in data.items() if k not in _PER_PROVIDER}
+            data["provider"] = env["DUCTA_AI_PROVIDER"]
     if env.get("DUCTA_AI_MODEL"):
         data["model"] = env["DUCTA_AI_MODEL"]
     if env.get("DUCTA_AI_BASE_URL"):

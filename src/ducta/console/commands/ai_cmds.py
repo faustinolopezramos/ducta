@@ -84,6 +84,12 @@ class AICommands:
             "drafts": AICommands.drafts,
             "apply": AICommands.apply,
         }.get(command)
+        if command in ("architect", "sentinel"):
+            from ducta.console.commands.agent_cmds import ArchitectCommands, SentinelCommands
+
+            handler = (
+                ArchitectCommands.handle if command == "architect" else SentinelCommands.handle
+            )
         if handler is None:
             logger.error("Unknown ai command: {}", command)
             return ExitCode.GENERAL_ERROR.value
@@ -131,7 +137,10 @@ class AICommands:
         if config.is_local:
             console.print("  Requests stay on this machine.")
         else:
-            env = f"set {config.api_key_env} or " if config.api_key_env else ""
+            from ducta.ai.secrets import env_key_allowed
+
+            usable = config.api_key_env and env_key_allowed(config)
+            env = f"set {config.api_key_env} or " if usable else ""
             console.print(f"  API key: {env}run [bold]ducta ai login[/].")
         console.print("  Check it with [bold]ducta ai doctor[/].")
         return ExitCode.SUCCESS.value
@@ -507,6 +516,14 @@ class AICommands:
             AICommands._show(console, root, draft)
             console.print(f"\nDraft [bold]{draft.id}[/] saved to {path.relative_to(root)}")
 
+        if draft.kind == "blueprint":
+            # A design, not files to write: what comes next is building it.
+            if not as_json and draft.ok:
+                console.print(
+                    f"Build it with [bold]ducta ai architect build {draft.id}[/], or ask for "
+                    f'changes with [bold]ducta ai revise {draft.id} --note "…"[/].'
+                )
+            return ExitCode.SUCCESS.value if draft.ok else ExitCode.VALIDATION_ERROR.value
         if not getattr(parsed_args, "write", False):
             if not as_json and draft.ok:
                 console.print(f"Write it with [bold]ducta ai apply {draft.id}[/].")
@@ -550,7 +567,23 @@ class AICommands:
     def _show(console, root: Path, draft) -> None:
         from rich.syntax import Syntax
 
-        diff = draft.diff(root)
+        if draft.kind == "blueprint":
+            # The design itself; its rendered files are stubs until it is built.
+            from ducta.ai.agents.architect.design import blueprint_of
+
+            try:
+                console.print(
+                    Syntax(blueprint_of(draft).to_yaml(), "yaml", theme="ansi_dark", word_wrap=True)
+                )
+            except AIError:
+                console.print(f"[dim]{draft.raw_answer}[/]", highlight=False)
+            if draft.files:
+                console.print(f"[dim]It would add: {', '.join(sorted(draft.files))}[/]")
+            if draft.evidence:
+                console.print(f"[yellow]{draft.evidence}[/]", highlight=False)
+            diff = ""
+        else:
+            diff = draft.diff(root)
         if diff:
             console.print(Syntax(diff, "diff", theme="ansi_dark", word_wrap=True))
         if draft.notes:

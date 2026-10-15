@@ -111,6 +111,8 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         # key ("ai.configure") is the admin's: a remote provider receives
         # project configuration.
         "ai.use",
+        # Ducta Sentinel's incidents; acting on them is the operator's.
+        "sentinel.read",
     ],
     # Runs what is there — including in protected environments (prod) — and
     # handles its runs, but does not change projects or code.
@@ -131,6 +133,10 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "quality.run",
         "ingestion.read",
         "template.read",
+        # Pause/resume Sentinel, resolve or ignore an incident, re-run (never in a
+        # protected environment from there), ask for a proposal.
+        "sentinel.read",
+        "sentinel.manage",
     ],
     "viewer": [
         "workspace.read",
@@ -145,6 +151,7 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "quality.read",
         "ingestion.read",
         "template.read",
+        "sentinel.read",
     ],
 }
 

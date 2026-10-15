@@ -115,6 +115,54 @@ def install_to(parent: Path, force: bool = False) -> Tuple[Path, str]:
     return dest, f"installed (version {wanted})"
 
 
+#: Ducta's agents as Claude Code subagents (``.claude/agents/<name>.md``).
+AGENTS_FOLDER = {"project": ".claude/agents", "user": ".claude/agents"}
+_AGENT_VERSION = re.compile(r"<!--\s*ducta-agent-version:\s*([\w.-]+)\s*-->")
+
+
+def agent_sources() -> List[Path]:
+    """The agent definitions shipped in the package."""
+    import ducta.ai.agents
+
+    folder = Path(ducta.ai.agents.__file__).resolve().parent / "definitions"
+    return sorted(folder.glob("*.md"))
+
+
+def agent_version(path: Path) -> Optional[str]:
+    """The ``ducta-agent-version`` of a definition, if it is one of Ducta's."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    m = _AGENT_VERSION.search(text)
+    return m.group(1) if m else None
+
+
+def install_agents(folder: Path, force: bool = False) -> List[Tuple[Path, str]]:
+    """Copy Ducta's agent definitions into *folder*; what happened to each, in words."""
+    if folder.exists() and not folder.is_dir():
+        raise FileExistsError(f"{folder} is a file, not a folder")
+    folder.mkdir(parents=True, exist_ok=True)
+    out: List[Tuple[Path, str]] = []
+    for source in agent_sources():
+        dest = folder / source.name
+        wanted = agent_version(source)
+        if dest.exists():
+            there = agent_version(dest)
+            if there is None:
+                raise FileExistsError(f"{dest} exists and is not Ducta's agent; it was left alone")
+            if there == wanted and not force:
+                out.append((dest, f"already installed (version {there})"))
+                continue
+            if not force:
+                raise FileExistsError(
+                    f"{dest} is version {there}; this Ducta ships {wanted}. Pass --force to replace it"
+                )
+        shutil.copyfile(source, dest)
+        out.append((dest, f"installed (version {wanted})"))
+    return out
+
+
 def agents_md_block(skill_path: str) -> str:
     return "\n".join(
         [
@@ -227,6 +275,16 @@ class SkillCommands:
             label = TARGETS[name].label if name in TARGETS else "your assistant"
             print(f"✓ {dest} — {what} — for {label}")
 
+        if getattr(parsed_args, "agents", False):
+            base = Path.home() if parsed_args.user else root
+            folder = base / AGENTS_FOLDER["user" if parsed_args.user else "project"]
+            try:
+                for dest, what in install_agents(folder, force=parsed_args.force):
+                    print(f"✓ {dest} — {what} — Claude Code subagent")
+            except FileExistsError as e:
+                logger.error("{}", e)
+                failed = True
+
         if parsed_args.agents_md and installed:
             # The shared folder when it was installed there: most assistants read it.
             shared = [d for d in installed if d.parent.as_posix().endswith(".agents/skills")]
@@ -234,7 +292,11 @@ class SkillCommands:
             try:
                 shown = first.relative_to(root).as_posix()
             except ValueError:
-                shown = str(first)
+                # Installed with --global: AGENTS.md is shared, so not /Users/<name>/….
+                try:
+                    shown = "~/" + first.relative_to(Path.home()).as_posix()
+                except ValueError:
+                    shown = str(first)
             print(f"✓ {write_agents_md(root, shown)} — points assistants to the skill")
         if installed:
             print("  Restart your assistant (skills are read when it starts), then ask it, e.g.")

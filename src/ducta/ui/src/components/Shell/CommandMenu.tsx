@@ -42,6 +42,7 @@ const SECTIONS: [ProjectSection, string][] = [
   ["code", "Code"],
   ["runs", "Runs"],
   ["schedules", "Runs › Schedules"],
+  ["reliability", "Runs › Reliability"],
   ["quality", "Quality"],
   ["models", "Models"],
   ["settings", "Settings"],

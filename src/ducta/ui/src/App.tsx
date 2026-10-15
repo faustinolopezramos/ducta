@@ -41,6 +41,7 @@ const SchedulesPage        = lazy(() => import("./pages/SchedulesPage"));
 const CertificatesPage       = lazy(() => import("./pages/CertificatesPage")                          .then(m => ({ default: m.CertificatesPage })));
 const CertificateDetailPage  = lazy(() => import("./pages/CertificatesPage/CertificateDetailPage")    .then(m => ({ default: m.CertificateDetailPage })));
 const VerifyCertificatePage  = lazy(() => import("./pages/VerifyCertificatePage")                     .then(m => ({ default: m.VerifyCertificatePage })));
+const SentinelPage           = lazy(() => import("./pages/SentinelPage")                              .then(m => ({ default: m.SentinelPage })));
 
 const DatasetPage            = lazy(() => import("./pages/DatasetPage")                                .then(m => ({ default: m.DatasetPage })));
 const CodePage               = lazy(() => import("./pages/CodePage")                                   .then(m => ({ default: m.CodePage })));
@@ -90,6 +91,20 @@ function ProjectSchedulesRoute() {
         title: "Runs",
         description: "Pipelines that run on their own. Times are UTC.",
         tabs: <RunsTabs projectId={projectId} current="schedules" />,
+      }}
+    />
+  );
+}
+
+function ProjectReliabilityRoute() {
+  const { projectId = "" } = useParams<{ projectId: string }>();
+  return (
+    <SentinelPage
+      projectId={projectId}
+      header={{
+        title: "Runs",
+        description: "Ducta Sentinel watches every run of this project.",
+        tabs: <RunsTabs projectId={projectId} current="reliability" />,
       }}
     />
   );
@@ -195,6 +210,7 @@ export default function App() {
                     { path: "quality", handle: { breadcrumb: () => "Quality" }, element: <WithProjectParam><QualityPage /></WithProjectParam> },
                     { path: "models", handle: { breadcrumb: () => "Models" }, element: <WithProjectParam><MLOpsPage /></WithProjectParam> },
                     { path: "schedules", handle: { breadcrumb: () => "Runs · Schedules" }, element: <ProjectSchedulesRoute /> },
+                    { path: "reliability", handle: { breadcrumb: () => "Runs · Reliability" }, element: <ProjectReliabilityRoute /> },
                     // Connections moved into Settings.
                     { path: "connections", element: <LegacyRedirect to={(p) => routes.section(p.projectId!, "settings", "connections")} /> },
                     { path: "settings", handle: { breadcrumb: () => "Settings" }, element: <ProjectSettingsPage /> },
@@ -219,6 +235,7 @@ export default function App() {
                     { path: "git", element: <GitPage />, handle: { breadcrumb: () => "Git" } },
                     { path: "mlops", element: <ToLastProject to={(id) => routes.section(id, "models")} fallback={<MLOpsPage />} />, handle: { breadcrumb: () => "Models" } },
                     { path: "schedules", element: <ToLastProject to={(id) => routes.section(id, "schedules")} fallback={<SchedulesPage />} />, handle: { breadcrumb: () => "Schedules" } },
+                    { path: "reliability", element: <ToLastProject to={(id) => routes.section(id, "reliability")} fallback={<SentinelPage />} />, handle: { breadcrumb: () => "Reliability" } },
                   ],
                 },
                 { path: "*", element: <Navigate to="/" replace /> },

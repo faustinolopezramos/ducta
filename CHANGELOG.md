@@ -17,6 +17,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Ducta Architect: several pipelines designed first, built after** (`ducta ai
+  architect`). The model writes a blueprint — new datasets with keys, write mode,
+  columns and contract, new pipelines and nodes with their logic in words — and
+  Ducta checks it without a model (taken names, missing inputs, two writers, data
+  flowing to a lower layer, `merge` without keys or off Delta, undeclared sources),
+  writes every YAML file and quality block itself, and has the model write only
+  each pipeline's module, accepted with exactly the blueprint's signatures and no
+  I/O of its own. `plan` (the model may ask questions first), `check` and
+  `scaffold` (no model), `build` (one draft, applied with `ducta ai apply`) and
+  `verify` (validate, run in dev, snapshot tests). Over HTTP as the AI job kinds
+  `architect_plan` and `architect_build`.
+- **Ducta Sentinel: incidents for failed, late and slow runs, and safe re-runs**
+  (`sentinel:` in `ducta.yaml`, off by default; `ducta ai sentinel`). A failed run
+  is diagnosed and a fixed table picks the runbook: re-run an infrastructure
+  failure after a backoff — the failed nodes and everything downstream of them —
+  when every output it re-writes is overwritten or merged (never an appended
+  one), wait for the upstream pipeline and re-run, or escalate to a
+  person with an explanation and a fix draft from the model — never applied.
+  Re-runs only where the policy allows (listed environments, never a protected
+  one — listing one is a validation error —, pipeline globs, a daily budget, a
+  pause switch); every action in `.ducta/ai/sentinel/audit.jsonl`. Runs inside the
+  server (each finished run, and a pass every `SENTINEL_SCAN_MINUTES`) and as
+  `ducta ai sentinel watch`, one pass at a time per project. New alert event
+  `sentinel`; new permissions `sentinel.read` (developer, operator, viewer) and
+  `sentinel.manage` (operator); routes under `/api/projects/{id}/sentinel/`. Asking
+  for a proposal is the AI job kind `sentinel_propose` (`ai.use`). Unasked, only a
+  local model proposes; a remote one needs `sentinel.propose.remote: true`. In the
+  UI: *Runs → Reliability*, an incident drawer, and a note on each failed run;
+  Architect is *Build with AI → Several pipelines — design first*.
+- **Both agents for Claude Code**: `ducta skill install --agents` adds
+  `ducta-architect` and `ducta-sentinel` to `.claude/agents/`; the skill's new
+  `references/agents.md` documents them for any assistant.
 - **`ducta ai`: draft pipelines with an AI model, local or behind an API key**
   (extra `ai`, with `api`). `ducta ai setup` chooses Ollama, LM Studio, any
   OpenAI-compatible server, OpenAI or Anthropic and is kept in `~/.ducta/ai.toml`;

@@ -53,6 +53,7 @@ from ducta.ai.builder import (
     _sha,
     build_context,
 )
+from ducta.ai.context import redact
 from ducta.ai.errors import AIConfigError, AINotFoundError
 from ducta.ai.providers import LLMProvider
 from ducta.ai.yaml_edit import edit_yaml, mapping
@@ -254,7 +255,8 @@ def quality_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> Qua
         facts.unmeasured = f"'{dataset}' is not in the catalog of {env}"
         return facts
     except Exception as e:  # noqa: BLE001 — not materialized, remote, unreadable: say so
-        facts.unmeasured = str(e) or type(e).__name__
+        # The reason reaches the model: a storage URL in it may carry a token.
+        facts.unmeasured = redact(str(e)) or type(e).__name__
         return facts
     facts.frame = frame
     facts.measured_rows = len(frame)
@@ -277,6 +279,14 @@ def _quality_problems(block: Dict[str, Any], facts: QualityFacts) -> List[str]:
     every = {**checks, **inline}
     if not every:
         problems.append("The block has no checks")
+    # A block that "passes" by switching itself off, or by checking another
+    # dataset than the one measured, proves nothing.
+    if block.get("enabled") is not None and block.get("enabled") is not True:
+        problems.append("Do not set `enabled`: the block must stay on")
+    if block.get("dataset_name") not in (None, facts.dataset):
+        problems.append(
+            f"`dataset_name` must be {facts.dataset} (the output measured), or left out"
+        )
     known = {c["name"] for c in facts.columns}
     for name, params in every.items():
         kind = _check_type(name, params)
@@ -285,7 +295,11 @@ def _quality_problems(block: Dict[str, Any], facts: QualityFacts) -> List[str]:
             continue
         if not known or not isinstance(params, dict):
             continue
-        named = list(params.get("columns") or []) + list(params.get("expected_columns") or [])
+        named = [
+            c
+            for key in ("columns", "expected_columns")
+            for c in ([params[key]] if isinstance(params.get(key), str) else params.get(key) or [])
+        ]
         if params.get("column"):
             named.append(params["column"])
         missing = [c for c in named if c not in known]

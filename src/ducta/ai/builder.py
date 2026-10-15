@@ -36,12 +36,14 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set
 
 import yaml  # type: ignore[import-untyped]
 
+from ducta.ai.config import AIConfig
 from ducta.ai.context import (
     MAX_CHARS,
     SKIP_DIRS,
     ProjectContext,
     build_context,
     find_secrets,
+    is_yaml_file,
     normalize_location,
     redact,
 )
@@ -664,7 +666,12 @@ class Draft:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Draft":
         data = dict(data)
-        data["attempts"] = [Attempt(**a) for a in data.get("attempts") or []]
+        # A draft written by another Ducta version may carry fields this one lacks.
+        fields = set(Attempt.__dataclass_fields__)
+        data["attempts"] = [
+            Attempt(**{k: v for k, v in a.items() if k in fields})
+            for a in data.get("attempts") or []
+        ]
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -706,7 +713,10 @@ def load_draft(root: Path, draft_id: str) -> Draft:
         raise AINotFoundError(f"No draft '{draft_id}' in {folder}")
     if len(matches) > 1:
         raise AIConfigError(f"'{draft_id}' matches {len(matches)} drafts; give more of the id")
-    return Draft.from_dict(json.loads(matches[0].read_text(encoding="utf-8")))
+    try:
+        return Draft.from_dict(json.loads(matches[0].read_text(encoding="utf-8")))
+    except (ValueError, TypeError, AttributeError) as e:
+        raise AIConflictError(f"{matches[0].name} is not a readable draft ({e})") from e
 
 
 def delete_draft(root: Path, draft_id: str) -> None:
@@ -723,10 +733,17 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
     root = Path(root).resolve()
     if draft.applied_at:
         raise AIConflictError(f"Draft {draft.id} was already applied at {draft.applied_at}")
-    # The draft is a file on disk: check its paths again rather than trust it.
-    unsafe = [why for why in (_outside(root, rel) for rel in draft.files) if why]
+    if draft.kind == "blueprint":
+        # Its modules are stubs: what is applied is what `architect build` makes of it.
+        raise AIConflictError(
+            f"Draft {draft.id} is a blueprint: build it first (`ducta ai architect build "
+            f"{draft.id}`), then apply that draft"
+        )
+    # The draft is a file on disk anyone could edit: hold its paths to the rules
+    # a draft of its kind was made under, rather than trust them.
+    unsafe = _unwritable(root, draft)
     if unsafe:
-        raise AIConflictError(f"Draft {draft.id} cannot be applied: {'; '.join(unsafe)}")
+        raise AIConflictError(f"Draft {draft.id} cannot be applied: {'; '.join(unsafe[:5])}")
     changed = [rel for rel, sha in draft.base.items() if _sha(_read(root / rel)) != sha]
     if changed:
         raise AIConflictError(
@@ -765,6 +782,68 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
     if (drafts_dir(root) / f"{draft.id}.json").exists():
         save_draft(root, draft)
     return list(draft.files)
+
+
+def _is_catalog_target(root: Path, rel: str) -> bool:
+    """Whether *rel* is where :func:`_catalog_with` puts new catalog entries."""
+    location = catalog_location(root)
+    if location.is_dir() or location.name == CATALOG_DIR:
+        p = PurePosixPath(rel)
+        return len(p.parts) == 2 and p.parts[0] == CATALOG_DIR and is_yaml_file(rel)
+    try:
+        return rel == location.relative_to(root).as_posix()
+    except ValueError:
+        return False
+
+
+def _apply_scope(root: Path, draft: Draft) -> Scope:
+    """What a draft of *draft*'s kind may touch, worked out again from the project."""
+    if draft.kind == "fix":
+        return fix_scope(root, draft.pipeline or "")
+    if draft.kind == "quality":
+        rel = _pipeline_file(root, draft.pipeline or "").relative_to(root).as_posix()
+        return Scope(kind="proposal", editable=frozenset({rel}), purpose="quality")
+    if draft.kind == "docs":
+        from ducta.setting.project_loader import read_project
+
+        located = read_project(root, expand=False)
+        files = {*located.catalog_files.values(), *located.pipeline_files.values()}
+        return Scope(
+            kind="proposal",
+            editable=frozenset(
+                f.relative_to(root).as_posix() for f in files if is_yaml_file(f.name)
+            ),
+            purpose="docs",
+        )
+    # ``new`` and ``architect`` (several new pipelines from a blueprint) only add.
+    return NEW
+
+
+def _unwritable(root: Path, draft: Draft) -> List[str]:
+    """Why each of *draft*'s files may not be written, if any may not."""
+    try:
+        scope = _apply_scope(root, draft)
+    except Exception as e:  # noqa: BLE001 — the pipeline is gone, the project does not load
+        return [f"what it may change cannot be worked out now ({e})"]
+    out: List[str] = []
+    for rel in draft.files:
+        why: Optional[str]
+        if rel not in draft.base:
+            # Without it, "changed since the draft was made" cannot be checked.
+            why = f"{rel}: the draft does not record the file it was made from"
+        elif scope.kind == "proposal":
+            why = _outside(root, rel) or (
+                None
+                if rel in scope.editable
+                else f"{rel}: a {draft.kind} draft only edits the project's YAML files"
+            )
+        elif _is_catalog_target(root, rel):
+            why = _outside(root, rel)
+        else:
+            why = _check_path(root, rel, scope)
+        if why:
+            out.append(why)
+    return out
 
 
 def _recheck(root: Path, draft: Draft) -> List[Dict[str, Any]]:
@@ -828,6 +907,42 @@ def _judge(
     ]
 
 
+#: Characters per token, to size a request to a local model's window
+#: (YAML and code run about three to four).
+_CHARS_PER_TOKEN = 3
+#: Tokens left free in that window: the model's answer, and on a retry the
+#: previous answer plus Ducta's feedback on it.
+_ANSWER_TOKENS = 3000
+_FEEDBACK_TOKENS = 500
+#: The least project context worth sending with a request.
+_MIN_CONTEXT_CHARS = MAX_CHARS // 4
+
+
+def message_budget(config: AIConfig, system: str) -> Optional[int]:
+    """The characters a request (first message and earlier turns) may take, if limited.
+
+    Only Ollama's window is Ducta's to set (``context_tokens``, sent as
+    ``num_ctx``); other providers take far more than a request holds.
+    """
+    if config.provider != "ollama":
+        return None
+    free: int = (
+        config.context_tokens
+        - len(system) // _CHARS_PER_TOKEN
+        - 2 * _ANSWER_TOKENS
+        - _FEEDBACK_TOKENS
+    )
+    return max(0, free) * _CHARS_PER_TOKEN
+
+
+def _too_large(config: AIConfig, chars: int) -> AIConfigError:
+    return AIConfigError(
+        f"The request (about {chars // _CHARS_PER_TOKEN:,} tokens, plus room for the answer) "
+        f"does not fit the model's context window ({config.context_tokens:,} tokens). Raise "
+        "context_tokens in ~/.ducta/ai.toml (if the model supports it) or narrow the request."
+    )
+
+
 #: How the model is asked to answer again, after problems or a change request.
 AGAIN = "answer again with ALL the blocks (complete files, not just the changes)."
 
@@ -881,11 +996,19 @@ def _run(
 ) -> Draft:
     """Ask, validate, send the problems back; *seen* hashes the files the prompt showed."""
     seen = dict(seen or {})
+    budget = message_budget(provider.config, system)
+    fixed = len(first_message) + sum(len(m.content) for m in prior)
+    if budget is not None and fixed > budget:
+        raise _too_large(provider.config, fixed)
     if current is None:
         current = _validate(root, {})
     baseline = {_key(p) for p in current if p.get("severity") == "error"}
     attempts = max_attempts or provider.config.max_attempts
-    messages = [ChatMessage("user", first_message), *prior]
+    # A retry sends the request, the last answer and what was wrong with it:
+    # earlier answers are superseded (each one is complete), so the
+    # conversation does not outgrow the model's window attempt after attempt.
+    base = [ChatMessage("user", first_message), *prior]
+    messages = list(base)
     history: List[Attempt] = []
     assembled = Assembled()
     problems: List[Dict[str, Any]] = []
@@ -923,7 +1046,7 @@ def _run(
             on_attempt(attempt)
         if assembled.files and not blocking and not assembled.rejected:
             break
-        messages += [
+        messages = base + [
             ChatMessage("assistant", completion.text),
             ChatMessage("user", _feedback(assembled, blocking, completion.truncated, again)),
         ]
@@ -972,11 +1095,19 @@ def generate(
             "The project does not validate now, so a draft could not be checked: "
             f"{ctx.config_error}. Fix it first (`ducta ai fix <pipeline>` can help)."
         )
+    tail = f"\n\n{where_code_goes(root)}\n\n# Request\n{request.strip()}"
+    room = MAX_CHARS
+    budget = message_budget(provider.config, SYSTEM_PROMPT)
+    if budget is not None:
+        # The project's context is what gives way to a small window.
+        room = min(room, budget - len(tail))
+        if room < _MIN_CONTEXT_CHARS:
+            raise _too_large(provider.config, _MIN_CONTEXT_CHARS + len(tail))
     return _run(
         root,
         provider,
         system=SYSTEM_PROMPT,
-        first_message=f"{ctx.render()}\n\n{where_code_goes(root)}\n\n# Request\n{request.strip()}",
+        first_message=ctx.render(room) + tail,
         scope=NEW,
         request=request.strip(),
         ctx=ctx,
@@ -1023,6 +1154,23 @@ def fix_scope(root: Path, pipeline: str) -> Scope:
     )
 
 
+def _refuse_credentials(rel: str, text: Optional[str], provider: LLMProvider) -> None:
+    """Raise when *rel*, sent whole, would hand a remote model a credential.
+
+    The model answers with whole files: what it is not shown, it would write
+    back as ``***`` over the real value. So such a file is not sent at all.
+    """
+    if provider.config.is_local:
+        return
+    found = find_secrets(text or "", yaml=is_yaml_file(rel))
+    if found:
+        raise AIConfigError(
+            f"{rel} contains what looks like a credential ({found[0]}). Move it to an "
+            "environment variable or the source configuration before sending this file "
+            f"to {provider.config.endpoint}, or use a local model."
+        )
+
+
 def fix(
     root: Path,
     pipeline: str,
@@ -1050,15 +1198,7 @@ def fix(
         lang = "python" if rel.endswith(".py") else "yaml"
         text = _read(root / rel)
         seen[rel] = _sha(text)
-        found = find_secrets(text or "")
-        if found and not provider.config.is_local:
-            # The model answers with whole files: what it is not shown, it would
-            # write back as "***" over the real value. So it is not sent at all.
-            raise AIConfigError(
-                f"{rel} contains what looks like a credential ({found[0]}). Move it to an "
-                "environment variable or the source configuration before sending this file "
-                f"to {provider.config.endpoint}, or use a local model."
-            )
+        _refuse_credentials(rel, text, provider)
         parts.append(f"```{lang} file={rel}\n{(text or '').rstrip()}\n```")
     if current:
         parts.append(
@@ -1080,9 +1220,14 @@ def fix(
             f"({own:,} characters; the limit is {_MAX_EDITABLE_CHARS:,}). Split its modules "
             "or fix it by hand."
         )
-    parts.insert(
-        0, ctx.render(max(MAX_CHARS // 4, MAX_CHARS - own)) + "\n\n" + where_code_goes(root)
-    )
+    where = "\n\n" + where_code_goes(root)
+    room = max(_MIN_CONTEXT_CHARS, MAX_CHARS - own)
+    budget = message_budget(provider.config, FIX_PROMPT)
+    if budget is not None:
+        room = min(room, budget - own - len(where) - 2)
+        if room < _MIN_CONTEXT_CHARS:
+            raise _too_large(provider.config, own + _MIN_CONTEXT_CHARS)
+    parts.insert(0, ctx.render(room) + where)
     request = note.strip() or (f"Fix pipeline {pipeline}")
     return _run(
         root,
@@ -1116,6 +1261,12 @@ def revise(
         raise AIConfigError("Say what to change")
     if draft.applied_at:
         raise AIConflictError(f"Draft {draft.id} was already applied; draft a new one instead")
+    if draft.kind == "architect":
+        # Built module by module from a blueprint: there is no one conversation to continue.
+        raise AIConfigError(
+            f"Draft {draft.id} was built from blueprint {draft.target or '?'}: revise the "
+            "blueprint (`ducta ai revise <blueprint>`), then build it again"
+        )
     if not draft.prompt or not draft.raw_answer:
         raise AIConfigError(f"Draft {draft.id} predates revisions; generate it again")
     assembler: Optional[Callable[[ParsedAnswer], Assembled]] = None
@@ -1127,6 +1278,10 @@ def revise(
         from ducta.ai.proposals import proposal_setup
 
         scope, system, assembler, again = proposal_setup(root, draft)
+    elif draft.kind == "blueprint":
+        from ducta.ai.agents.architect.design import blueprint_setup
+
+        scope, system, assembler, again = blueprint_setup(root, draft)
     else:
         scope, system = NEW, SYSTEM_PROMPT
 
@@ -1137,6 +1292,11 @@ def revise(
             f"These files changed after draft {draft.id} was made: {', '.join(changed)}. "
             "Draft the fix again."
         )
+    # A fix's prompt holds its files whole and is re-sent as it was made: drafted
+    # with a local model, a file may hold a credential this provider must not get.
+    if draft.kind == "fix":
+        for rel in sorted(seen):
+            _refuse_credentials(rel, _read(root / rel), provider)
     prior = [
         ChatMessage("assistant", draft.raw_answer),
         ChatMessage(

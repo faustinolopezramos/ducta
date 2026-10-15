@@ -146,4 +146,12 @@ export const qk = {
     modelVersions: (name: string, s: ScopeKey) =>
       ["mlops", sourceKey(), "models", name, ...scope(s)] as const,
   },
+
+  sentinel: {
+    status: (projectId: string) => ["sentinel", sourceKey(), projectId, "status"] as const,
+    incidents: (projectId: string, filters?: { status?: string; env?: string }) =>
+      ["sentinel", sourceKey(), projectId, "incidents", filters ?? {}] as const,
+    incident: (projectId: string, incidentId: string) =>
+      ["sentinel", sourceKey(), projectId, "incidents", incidentId] as const,
+  },
 };

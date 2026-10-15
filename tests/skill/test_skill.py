@@ -289,12 +289,11 @@ def test_install_globally_goes_to_the_home_folder(project):
 def test_another_version_needs_force_and_a_foreign_folder_is_never_replaced(project):
     assert _run("install", "--target", "agents") == 0
     installed = project / ".agents" / "skills" / "ducta" / "SKILL.md"
-    installed.write_text(
-        installed.read_text().replace('skill-version: "1.0.0"', 'skill-version: "0.9"')
-    )
+    shipped = f'skill-version: "{skill_cmds.skill_version(skill_cmds.skill_source())}"'
+    installed.write_text(installed.read_text().replace(shipped, 'skill-version: "0.9"'))
     assert _run("install", "--target", "agents") != 0
     assert _run("install", "--target", "agents", "--force") == 0
-    assert 'skill-version: "1.0.0"' in installed.read_text()
+    assert shipped in installed.read_text()
 
     other = project / ".claude" / "skills" / "ducta"
     other.mkdir(parents=True)
@@ -362,3 +361,35 @@ def test_the_eval_cases_are_well_formed():
     assert len(ids) == len(set(ids)) >= 20
     for case in cases:
         assert {"id", "area", "start", "prompt", "expect", "never"} <= set(case), case["id"]
+
+
+# ── Ducta's agents as subagents ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("path", skill_cmds.agent_sources(), ids=lambda p: p.stem)
+def test_agent_definitions_are_valid_subagents(path):
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    meta = yaml.safe_load(text.split("---\n")[1])
+    assert meta["name"] == path.stem and len(meta["description"]) > 80
+    assert meta["model"] == "inherit"
+    assert skill_cmds.agent_version(path)
+    tools = {t.strip() for t in meta["tools"].split(",")}
+    if path.stem == "ducta-sentinel":
+        assert not tools & {"Edit", "Write"}  # Sentinel never writes project files
+    problems = [p for command in _commands(text) for p in _check(command)]
+    assert not problems, "\n".join(problems)
+
+
+def test_install_agents_puts_them_where_claude_code_reads_them(project):
+    assert _run("install", "--target", "claude", "--agents") == 0
+    folder = project / ".claude" / "agents"
+    assert sorted(p.name for p in folder.glob("*.md")) == [
+        "ducta-architect.md",
+        "ducta-sentinel.md",
+    ]
+    assert _run("install", "--target", "claude", "--agents") == 0  # already there: fine
+    mine = folder / "ducta-architect.md"
+    mine.write_text("my own agent\n")
+    assert _run("install", "--target", "claude", "--agents") != 0
+    assert mine.read_text() == "my own agent\n"  # never replaced

@@ -15,6 +15,7 @@ export type ProjectSection =
   | "quality"
   | "models"
   | "schedules"
+  | "reliability"
   | "connections"
   | "code"
   | "settings";
@@ -54,6 +55,9 @@ export const routes = {
     withQuery(`/p/${enc(projectId)}/runs`, query),
   run: (projectId: string, runId: string, query?: { node?: string | null }) =>
     withQuery(`/p/${enc(projectId)}/runs/${enc(runId)}`, query),
+  /** Ducta Sentinel's page; `incident` opens one. */
+  reliability: (projectId: string, incident?: string) =>
+    withQuery(`/p/${enc(projectId)}/reliability`, { incident: incident ?? null }),
   section: (projectId: string, section: ProjectSection, sub?: string) =>
     `/p/${enc(projectId)}/${section}${sub ? `/${sub}` : ""}`,
 } as const;

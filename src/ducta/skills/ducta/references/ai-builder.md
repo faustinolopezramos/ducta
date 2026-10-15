@@ -17,7 +17,8 @@ ducta ai doctor           # shows provider, endpoint, key source (masked), and l
 
 Running `setup` again changes only what is passed. Keys come from the provider's
 variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `--api-key-env NAME`) or the
-keychain; a keychain key is only sent to the endpoint it was stored for. `ducta ai login`
+keychain. A key only goes to its own endpoint: with `--base-url` pointing elsewhere,
+the provider's variable is not used — set `--api-key-env NAME` or `ducta ai login`. `ducta ai login`
 needs a terminal: ask the user to run it, and never ask for the key in the chat.
 
 Local models: use a code model of ~7B+ (`qwen2.5-coder:7b`/`:14b`); 3B models rarely
@@ -52,8 +53,13 @@ current project (`--force` overrides; only if the user asks). After applying: va
 every environment, run in `dev`, and let the user commit.
 
 With a remote provider the project's configuration and code are sent to it (never data
-rows, `.env` or connection settings). A fix whose files contain a credential is refused
-for remote providers. Say where the request goes before running it.
+rows, `.env` or connection settings); credentials written in settings (an ingest's
+`options`, `spark_config`) go as `***`. A fix — or a revision of one — whose files
+contain a credential (quoted or not) is refused for remote providers. Say where the
+request goes before running it.
+
+For several pipelines at once, designed first and built after, use Ducta Architect;
+for failed and late runs, Ducta Sentinel — see [agents](agents.md).
 
 ## In the web app
 
@@ -70,6 +76,6 @@ and on a failed run), **Explain with AI** (on a failed run), **Propose with AI**
 | "needs an API key" | set the provider's variable, or `ducta ai login` |
 | "Cannot reach … Is the local server running" | start it (`ollama serve`) or fix `--base-url` |
 | "does not serve model" | `ducta ai doctor` lists the models; `ollama pull NAME` |
-| "fills Ollama's context window" | raise `context_tokens` in `~/.ducta/ai.toml` |
+| "fills Ollama's context window" / "does not fit the model's context window" | raise `context_tokens` in `~/.ducta/ai.toml` |
 | draft "still invalid after N attempts" | a bigger model, a more precise request, or `ducta ai revise` |
 | "The project does not validate now" | fix the project first (`ducta ai fix PIPELINE` can help) |

@@ -150,10 +150,23 @@ def create_app() -> FastAPI:
                 "SLA watch: every {} min in {}", settings.sla_check_minutes, settings.sla_check_env
             )
 
+        # ── Ducta Sentinel: due re-runs, late and slow pipelines (projects that enable it) ──
+        sentinel_task = None
+        if settings.sentinel_scan_minutes > 0 and workspace:
+            import asyncio as _asyncio
+
+            from ducta.ai.agents.sentinel.server import sentinel_watch
+
+            sentinel_task = _asyncio.create_task(
+                sentinel_watch(workspace, settings.sentinel_scan_minutes * 60)
+            )
+
         yield
 
         if sla_task is not None:
             sla_task.cancel()
+        if sentinel_task is not None:
+            sentinel_task.cancel()
 
         await cron_scheduler.stop()
         exec_manager.shutdown()

@@ -90,6 +90,11 @@ keychain (macOS Keychain, Windows Credential Locker, Secret Service):
 
 Ducta never writes a key to a file, and ``ducta ai doctor`` shows it masked.
 
+A key goes only to the endpoint it belongs to. A keychain key is stored for one
+endpoint, and ``ANTHROPIC_API_KEY``/``OPENAI_API_KEY`` are only sent to the
+provider's own API. If ``--base-url`` points elsewhere (a gateway, a proxy), name
+a variable of its own with ``--api-key-env NAME``, or run ``ducta ai login``.
+
 A keychain key is bound to the endpoint it was stored for: kept for ``openai``
 it is only sent to ``api.openai.com``. Pointing a provider at another URL
 (a gateway) needs a key stored for that URL — ``ducta ai login`` after
@@ -232,6 +237,96 @@ not repeated.
 A review changes nothing; it is kept per node (``.ducta/ai/reviews/``). To act
 on a finding, draft a fix: ``ducta ai fix PIPELINE --note "<the finding>"``.
 
+Ducta Architect: design and build several pipelines
+---------------------------------------------------
+
+For more than one pipeline, Architect designs first and builds after. The model
+writes a **blueprint** — new datasets (keys, write mode, columns, contract, PII),
+new pipelines and nodes, and each node's logic in words — and Ducta checks it
+without a model: names that are taken, inputs that exist, one writer per
+dataset, data flowing bronze → silver → gold, ``merge`` only on Delta with keys,
+sources that are declared. Then Ducta writes every YAML file itself (a quality
+block per output from its contract) and the model writes only each pipeline's
+module, accepted only with exactly the functions and parameters the blueprint
+implies and without I/O of its own:
+
+.. code-block:: bash
+
+   ducta ai architect plan "revenue per store and day"   # a blueprint draft
+   ducta ai revise <draft> --note "keep refunds out"      # ask for changes
+   ducta ai architect build <draft>                       # one draft with every file
+   ducta ai apply <built-draft>
+   ducta ai architect verify silver.stores gold.stores --run --tests   # dev only
+
+When the request leaves something open (which source, what identifies a row),
+the model asks first: ``plan`` prints its questions; answer them with ``--note``.
+Without a model, ``ducta ai architect check <file>`` judges a blueprint written
+by hand (or by another assistant) and ``ducta ai architect scaffold <file>`` makes
+it a draft whose functions are stubs to fill in. A blueprint draft is never
+applied; ``verify`` never runs in a protected environment.
+
+Ducta Sentinel: incidents and safe re-runs
+------------------------------------------
+
+Sentinel watches a project's runs once the project turns it on:
+
+.. code-block:: yaml
+
+   sentinel:
+     enabled: true
+     environments: [dev]        # where it may re-run — never a protected one
+     retry_infra: {max_attempts: 2, backoff_seconds: [60, 300]}
+     max_actions_per_day: 10
+     propose: {explain: true, fix_draft: true, remote: false}
+
+A failed run opens an incident (one per pipeline, environment and kind, until a
+successful run resolves it). Ducta diagnoses it and a fixed table — not the
+model — chooses what to do: a transient infrastructure failure (not missing
+credentials, a missing driver or a full disk) is re-run after a backoff when
+every output it re-writes is overwritten or merged (never when one is appended:
+rows would be written twice); a run that lacked its upstream's data waits for that
+pipeline and is re-run when it succeeds; code, configuration and quality-gate
+failures go to a person, with an explanation and a fix draft from the model when
+one is configured — never applied. Unasked, only a **local** model proposes: a
+remote one would receive the failing pipeline's code and the run's error without
+anyone deciding to send them, so it takes ``propose: {remote: true}``. A re-run covers the failed nodes and every
+node downstream of them, and is the same check for ``rerun_stale``. A re-run happens only if the policy allows it
+at that moment (enabled, the environment listed and not protected, the pipeline
+matching, not paused, budget left); otherwise the incident is escalated with the
+reason. Late (``metadata.sla``) and unusually slow runs open incidents too, and an
+alert rule with ``when: [sentinel]`` hears about escalations and recoveries.
+
+It runs inside the server (each finished run at once, and a pass every
+``SENTINEL_SCAN_MINUTES`` minutes when ``DUCTA_WORKSPACE`` is set) and as a daemon:
+
+.. code-block:: bash
+
+   ducta ai sentinel watch --env dev           # a pass every 60 s; --once for cron
+   ducta ai sentinel status
+   ducta ai sentinel incidents                 # --output-format json
+   ducta ai sentinel triage <run-id>           # what it would do, without acting
+   ducta ai sentinel pause --reason "db maintenance"   # and: resume
+   ducta ai sentinel resolve <incident> --note "fixed upstream"
+
+Its state and an audit log of every action are in ``.ducta/ai/sentinel/``. A
+run is triaged once: Sentinel keeps a mark of the newest run it has seen per
+environment, however long the history. Its lock covers deciding, never a re-run
+or a model call, so a re-run in progress does not hold up the triage of other
+runs; ``watch`` stops a re-run after ``--rerun-timeout`` seconds (4 hours).
+
+A person may resolve, ignore or re-run an incident (``sentinel.manage``; the
+re-run is that person's run) and ask the model for a proposal — an AI job,
+``{"kind": "sentinel_propose", "incident_id": …}``, which needs ``ai.use``.
+
+Agents for your assistant
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``ducta skill install --agents`` also installs both as Claude Code agent
+definitions (``.claude/agents/ducta-architect.md``, ``ducta-sentinel.md``). They
+lean on the commands that need no model (``architect check``/``scaffold``,
+``sentinel triage``/``incidents --output-format json``), so the assistant brings
+the reasoning and Ducta the rules. ``ducta-sentinel`` reads and never edits.
+
 In the UI
 ---------
 
@@ -240,6 +335,12 @@ In the UI
   background* closes the dialog and says when it is done), review the files and
   their diff, then *Apply*, *Ask for changes…* or *Discard* (which asks first).
   *Drafts (n)* lists the earlier ones.
+* **Several pipelines — design first**, the second choice in *Build with AI*, is
+  Ducta Architect: the model may ask a few questions first; the blueprint is
+  shown as a map of datasets per layer (what it reuses, what it adds, how each is
+  written and its contract) beside what Ducta's checks found and the model's
+  assumptions (*Ask for changes* or *Build*); the build shows each module and how
+  it was accepted, then the usual review and *Apply*.
 * **Fix with AI** appears above the problems of a pipeline that has errors, and
   on a failed run (which sends its error along).
 * **Explain with AI**, on a failed run, shows the explanation under the run's
@@ -252,6 +353,12 @@ In the UI
   (Ducta's, at once, no model) or *Review with AI*. Each finding links to its
   line and has *Draft a fix*, which opens a fix draft with the finding as its
   note.
+* **Runs → Reliability** is Ducta Sentinel's page: where it acts, the day's
+  re-runs, what it is handling and what needs a person, and each incident with
+  its explanation, the fix it drafted (*Review the fix* opens the usual draft
+  review — never applied from there), its timeline, and *Mark resolved*,
+  *Ignore* or *Re-run* (never in a protected environment). A failed run says what
+  Sentinel does about it, with a link to the incident.
 * **Settings → AI** chooses the server's provider and model, tests the
   connection and keeps an API key in the server's keychain. Everyone with
   ``ai.use`` sees it; only an admin (``ai.configure``) changes it.
@@ -329,8 +436,10 @@ The configuration a reviewer would see in a pull request: dataset names,
 formats, descriptions and declared schemas; pipelines and their nodes; the
 *names* of ingestion sources; the signatures of the project's functions; one
 existing pipeline file and one node function as examples of house style, with
-any credential written in them (a quoted password or key, a URL's password, a
-bearer token) masked.
+any credential written in them (a password or key, quoted or not, a URL's
+password, a bearer token) masked. A credential written in a setting — an ingest
+node's ``options``, ``spark_config``, a node's settings in a review — is sent as
+``***`` (``${VAR}`` placeholders go as they are).
 
 Never data rows, connection settings, catalog paths or ``.env``. A fix also
 sends the files it may change and, when given, the run's error — with a URL's
@@ -339,6 +448,9 @@ password, ``password=``/``token=``-style values and bearer tokens replaced by
 whole, since the model answers with whole files: one that holds a credential is
 not sent to a remote provider at all (move the value to a variable, or use a
 local model), and a pipeline whose files exceed 60,000 characters is refused.
+``ducta ai revise`` checks those files again against the provider it sends them
+to. With Ollama, a request too large for ``context_tokens`` is refused before it
+is sent.
 With a remote provider, ``ducta ai new``, ``fix`` and the UI say where this —
 configuration and code — is being sent before they send it.
 

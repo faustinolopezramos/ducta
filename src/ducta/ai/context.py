@@ -137,17 +137,58 @@ def redact(text: str) -> str:
     return text
 
 
+#: Name parts that make a setting a credential, alone (``password``) or as a
+#: pair of parts (``account.key``, ``apiKey``, ``fs.s3a.secret.key``).
+_SECRET_PARTS = frozenset(
+    {"password", "passwd", "pwd", "passphrase", "secret", "token", "credential", "credentials"}
+    | {"sig", "apikey", "accesskey", "accountkey", "privatekey", "sastoken", "connectionstring"}
+)
+_SECRET_PAIRS = frozenset({"apikey", "accesskey", "accountkey", "privatekey", "sastoken"})
+_SECRET_PAIRS |= frozenset({"connectionstring", "secretkey", "clientsecret"})
+#: A last part that makes the setting *about* a credential, not the credential:
+#: ``token_url``, ``password_file``, ``api_key_env`` (the name of a variable).
+_NOT_SECRET_LAST = frozenset(
+    {"url", "uri", "endpoint", "path", "file", "env", "var", "name", "type", "id", "provider"}
+    | {"scope", "header", "prefix", "length", "expiry", "hint", "enabled", "required"}
+    | {"count", "ttl", "timeout", "mode", "format", "column", "field", "dir", "location"}
+)
+
+
+def _name_parts(name: str) -> List[str]:
+    spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(name))
+    return [p for p in re.split(r"[^a-zA-Z0-9]+", spaced.lower()) if p]
+
+
+def is_secret_name(name: Any) -> bool:
+    """Whether a setting called *name* holds a credential (``password``, ``spark…account.key…``)."""
+    parts = _name_parts(str(name))
+    if not parts or parts[-1] in _NOT_SECRET_LAST:
+        return False
+    if any(p in _SECRET_PARTS for p in parts):
+        return True
+    return any(a + b in _SECRET_PAIRS for a, b in zip(parts, parts[1:]))
+
+
+#: Values that are placeholders, not secrets.
+_PLACEHOLDER = re.compile(r"^(?:\*+|x+|changeme|password|secret|<[^>]*>|\{[^}]*\})$", re.I)
+#: YAML scalars that cannot be a credential (``use_token: true``).
+_YAML_WORDS = re.compile(r"^(?:true|false|yes|no|on|off|null|~)$", re.I)
+
+
+def _is_placeholder(value: str) -> bool:
+    return "${" in value or "{{" in value or bool(_PLACEHOLDER.match(value.strip()))
+
+
 #: Credentials written into code or YAML: a quoted value given to a
 #: secret-sounding name, a URL's password, a bearer token, or a key whose
 #: prefix gives it away. Narrower than :data:`_SECRETS`, which also catches
-#: ``token = tokenize(x)`` — fine for an error message, not for code.
+#: ``token = tokenize(x)`` — fine for an error message, not for code. An entry
+#: with a ``k`` group counts only when :func:`is_secret_name` says so.
 _CODE_SECRETS = (
     (
         "a quoted password, secret, token or key",
         re.compile(
-            r"(?i)\b(?:password|passwd|pwd|secret|client[_-]?secret|token|access[_-]?token|"
-            r"api[_-]?key|access[_-]?key|account[_-]?key|sas[_-]?token)\b[\"']?\s*[=:]\s*"
-            r"(?P<q>[\"'])(?P<v>[^\"'\s$]{6,})(?P=q)"
+            r"(?P<k>[A-Za-z_][\w.-]*)[\"']?\s*[=:]\s*(?P<q>[\"'])(?P<v>[^\"'\s$]{6,})(?P=q)"
         ),
     ),
     ("a URL with a password", re.compile(r"\b[a-zA-Z][\w+.-]*://[^/\s:@]+:(?P<v>[^/\s@$]+)@")),
@@ -159,29 +200,73 @@ _CODE_SECRETS = (
         ),
     ),
 )
-#: Values that are placeholders, not secrets.
-_PLACEHOLDER = re.compile(r"^(?:\*+|x+|changeme|password|secret|<[^>]*>|\{[^}]*\})$", re.I)
+#: The same in YAML, where a value is rarely quoted: ``password: Hunter2`` on
+#: its own line, or ``{user: etl, password: Hunter2}`` in a flow mapping.
+_YAML_SECRETS = (
+    (
+        "an unquoted password, secret, token or key",
+        re.compile(
+            r"(?m)^[ \t]*(?:-[ \t]+)?(?P<k>[\w.-]+)[ \t]*:[ \t]+"
+            r"(?P<v>[^\s\"'#{}\[\],&*!|>$][^\s#]*)[ \t]*(?:#.*)?$"
+        ),
+    ),
+    (
+        "an unquoted password, secret, token or key",
+        re.compile(r"[{,][ \t]*(?P<k>[\w.-]+)[ \t]*:[ \t]+(?P<v>[^\s\"',{}\[\]$][^\s,}]*)"),
+    ),
+)
 
 
-def _secret_spans(text: str) -> List[tuple]:
-    spans = []
-    for label, pattern in _CODE_SECRETS:
+def _secret_spans(text: str, yaml: bool = False) -> List[tuple]:
+    spans: List[tuple] = []
+    for label, pattern in _CODE_SECRETS + (_YAML_SECRETS if yaml else ()):
         for m in pattern.finditer(text):
-            if not _PLACEHOLDER.match(m.group("v")):
+            value = m.group("v")
+            if _is_placeholder(value) or (yaml and _YAML_WORDS.match(value)):
+                continue
+            if "k" in pattern.groupindex and not is_secret_name(m.group("k")):
+                continue
+            if (m.start("v"), m.end("v")) not in {(s, e) for s, e, _ in spans}:
                 spans.append((m.start("v"), m.end("v"), label))
     return spans
 
 
-def find_secrets(text: str) -> List[str]:
-    """What kinds of credential *text* (code or YAML) seems to contain — never the values."""
-    return sorted({label for _, _, label in _secret_spans(text)})
+def find_secrets(text: str, yaml: bool = False) -> List[str]:
+    """What kinds of credential *text* seems to contain — never the values.
+
+    *yaml* also looks for unquoted values (``password: Hunter2``), which in
+    Python would be a type annotation.
+    """
+    return sorted({label for _, _, label in _secret_spans(text, yaml)})
 
 
-def redact_code(text: str) -> str:
-    """*text* (code or YAML) with the credentials :func:`find_secrets` sees replaced by ``***``."""
-    for start, end, _ in sorted(_secret_spans(text), reverse=True):
+def redact_code(text: str, yaml: bool = False) -> str:
+    """*text* (code or, with *yaml*, YAML) with what :func:`find_secrets` sees replaced by ``***``."""
+    for start, end, _ in sorted(_secret_spans(text, yaml), reverse=True):
         text = text[:start] + "***" + text[end:]
     return text
+
+
+def is_yaml_file(rel: str) -> bool:
+    return str(rel).endswith((".yaml", ".yml"))
+
+
+def redact_config(value: Any, key: str = "") -> Any:
+    """A parsed setting or node spec with its credentials replaced by ``***``.
+
+    A text value under a credential's name (:func:`is_secret_name`) is masked
+    whole unless it is a placeholder (``${VAR}``); any other text goes through
+    :func:`redact` (a URL's password, ``password=…`` inside a connection string).
+    """
+    if isinstance(value, dict):
+        return {k: redact_config(v, str(k)) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [redact_config(v, key) for v in value]
+    if not isinstance(value, str):
+        return value
+    if key and value.strip() and is_secret_name(key) and not _is_placeholder(value):
+        return "***"
+    return redact(value)
 
 
 def normalize_location(path: str) -> str:
@@ -262,7 +347,8 @@ def _node_line(name: str, node: Any) -> str:
         parts.append(f"inputs={dict(inputs) if isinstance(inputs, dict) else list(inputs)}")
     ingest = getattr(node, "ingest", None)
     if ingest is not None:
-        parts.append(f"ingest={ingest.model_dump(exclude_none=True)}")
+        # Its options may hold a connection's credentials, written inline.
+        parts.append(f"ingest={redact_config(ingest.model_dump(exclude_none=True))}")
     outputs = getattr(node, "outputs", None)
     if outputs:
         parts.append(f"outputs={list(outputs)}")
@@ -423,7 +509,7 @@ def _add_code(ctx: ProjectContext, root: Path, project: Any) -> None:
         lines = text.splitlines()
         if len(lines) > _EXAMPLE_PIPELINE_LINES:
             lines = lines[:_EXAMPLE_PIPELINE_LINES] + ["# …"]
-        ctx.example_pipeline = redact_code("\n".join(lines))
+        ctx.example_pipeline = redact_code("\n".join(lines), yaml=True)
         ctx.sections.append(
             f"# Example pipeline file from this project ({PIPELINES_DIR}/{path.name})\n"
             "```yaml\n" + ctx.example_pipeline + "\n```"

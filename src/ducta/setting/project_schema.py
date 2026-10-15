@@ -86,7 +86,7 @@ def check_metadata(value: Dict[str, Any]) -> Dict[str, Any]:
 
 
 #: What an alert rule can be about.
-ALERT_EVENTS = ("failure", "quality_gate", "sla_miss", "slow")
+ALERT_EVENTS = ("failure", "quality_gate", "sla_miss", "slow", "sentinel")
 
 
 class AlertChannel(_Strict):
@@ -115,8 +115,11 @@ class AlertRule(_Strict):
     # Not `on:` — YAML 1.1 reads that key as the boolean true.
     # No `stale`: it was accepted and never sent. A pipeline late for its
     # `metadata.sla` is `sla_miss`.
-    when: List[Literal["failure", "quality_gate", "sla_miss", "slow"]] = Field(
-        ..., min_length=1, description="failure | quality_gate | sla_miss | slow"
+    when: List[Literal["failure", "quality_gate", "sla_miss", "slow", "sentinel"]] = Field(
+        ...,
+        min_length=1,
+        description="failure | quality_gate | sla_miss | slow | sentinel (incidents it "
+        "escalates or resolves)",
     )
     pipelines: List[str] = Field(
         default_factory=lambda: ["*"], description="Pipeline name globs this rule covers"
@@ -142,6 +145,61 @@ class Governance(_Strict):
         description="Running here takes the 'pipeline.execute.protected' permission (operator, admin)",
     )
     warnings: GovernanceWarnings = Field(default_factory=GovernanceWarnings)
+
+
+class SentinelRetry(_Strict):
+    max_attempts: int = Field(
+        default=2, ge=0, le=5, description="Re-runs of a failed run per incident (0: never)"
+    )
+    backoff_seconds: List[int] = Field(
+        default_factory=lambda: [60, 300],
+        description="Wait before each re-run; the last value repeats",
+    )
+
+
+class SentinelWait(_Strict):
+    max_wait_minutes: int = Field(
+        default=60,
+        ge=0,
+        le=1440,
+        description="How long a run that lacked its upstream's data waits for it to succeed",
+    )
+
+
+class SentinelPropose(_Strict):
+    explain: bool = Field(default=True, description="Explain a failure with the AI model")
+    fix_draft: bool = Field(
+        default=True, description="Draft a fix (never applied) for a code or config failure"
+    )
+    remote: bool = Field(
+        default=False,
+        description="Also propose on its own with a remote model (it receives the failing "
+        "pipeline's code and error). Off: only a local model proposes unasked",
+    )
+
+
+class SentinelPolicy(_Strict):
+    """What Ducta Sentinel may do on its own. Read by the server and `ducta ai sentinel watch`;
+    the engine ignores it. It never acts in a protected environment."""
+
+    enabled: bool = Field(default=False, description="Watch this project's runs")
+    environments: List[str] = Field(
+        default_factory=lambda: ["dev"],
+        description="Where Sentinel may act (re-run). Never a protected environment",
+    )
+    pipelines: List[str] = Field(
+        default_factory=lambda: ["*"], description="Pipeline name globs it may act on"
+    )
+    retry_infra: SentinelRetry = Field(default_factory=SentinelRetry)
+    wait_for_upstream: SentinelWait = Field(default_factory=SentinelWait)
+    rerun_stale: bool = Field(
+        default=False, description="Re-run nodes whose code changed since their last success"
+    )
+    catch_up: bool = Field(default=False, description="Run a pipeline late for its SLA")
+    max_actions_per_day: int = Field(
+        default=10, ge=0, le=500, description="Re-runs per project and day, at most"
+    )
+    propose: SentinelPropose = Field(default_factory=SentinelPropose)
 
 
 class Paths(_Strict):
@@ -234,6 +292,22 @@ class ProjectFile(_Strict):
         description="Who hears about what: failures, quality gates, slow runs, missed SLAs "
         "(ADR 0001). Read by the API server; the engine ignores it.",
     )
+    sentinel: SentinelPolicy = Field(
+        default_factory=SentinelPolicy,
+        description="Ducta Sentinel: incidents for failed and late runs, and the safe re-runs "
+        "it may make outside protected environments",
+    )
+
+    @model_validator(mode="after")
+    def _sentinel_never_acts_in_protected_environments(self) -> "ProjectFile":
+        protected = set(self.governance.protected_environments)
+        clash = sorted(set(self.sentinel.environments) & protected)
+        if clash:
+            raise ValueError(
+                f"sentinel.environments lists {', '.join(clash)}, a protected environment "
+                "(governance.protected_environments): Sentinel only acts outside them"
+            )
+        return self
 
     @field_validator("settings")
     @classmethod

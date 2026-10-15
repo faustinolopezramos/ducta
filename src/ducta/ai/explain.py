@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from ducta.ai.context import find_secrets, redact, redact_code
+from ducta.ai.context import find_secrets, redact, redact_code, redact_config
 from ducta.ai.providers import ChatMessage, LLMProvider
 
 EXPLAIN_PROMPT = """\
@@ -155,14 +155,17 @@ def explanation_message(
     root: Path, diagnosis: Dict[str, Any], error: str, note: str = "", remote: bool = True
 ) -> str:
     """What the model is told: the diagnosis, the error, the code, the user's note."""
-    facts = {
-        k: diagnosis.get(k)
-        for k in ("kind", "title", "message", "node", "frame", "what_changed", "suggestions")
-        if diagnosis.get(k)
-    }
+    # The diagnosis quotes the error (its message, a hint): masked like the error itself.
+    facts = redact_config(
+        {
+            k: diagnosis.get(k)
+            for k in ("kind", "title", "message", "node", "frame", "what_changed", "suggestions")
+            if diagnosis.get(k)
+        }
+    )
     parts = ["# Ducta's diagnosis\n```json\n" + json.dumps(facts, indent=2, default=str) + "\n```"]
     if diagnosis.get("hint"):
-        parts.append(f"# Ducta's hint\n{diagnosis['hint']}")
+        parts.append(f"# Ducta's hint\n{redact(str(diagnosis['hint']))}")
     if error.strip():
         parts.append("# The error\n```\n" + redact(error.strip()[-_MAX_ERROR_CHARS:]) + "\n```")
     code = _code_around(root, diagnosis.get("frame"), remote)

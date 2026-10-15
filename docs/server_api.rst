@@ -315,17 +315,18 @@ the permissions regardless.
      - Read and write on workspace, configs, pipelines, nodes, datasets, Git,
        repositories, executions, projects, quality, ingestion and templates;
        ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote``,
-       ``model.delete`` and ``ai.use``.
+       ``model.delete``, ``ai.use`` and ``sentinel.read``.
    * - ``operator``
      - Runs pipelines, including in protected environments
        (``pipeline.execute``, ``pipeline.execute.protected``), runs quality checks
-       (``quality.run``) and cancels or resumes runs (``execution.write``); reads
+       (``quality.run``), cancels or resumes runs (``execution.write``) and handles
+       Ducta Sentinel's incidents (``sentinel.read``, ``sentinel.manage``); reads
        everything a viewer reads. Edits nothing.
    * - ``viewer``
      - Read only: ``workspace.read``, ``project.read``, ``config.read``,
        ``pipeline.read``, ``node.read``, ``dataset.read``, ``git.read``,
        ``repository.read``, ``execution.read``, ``quality.read``,
-       ``ingestion.read``, ``template.read``.
+       ``ingestion.read``, ``template.read``, ``sentinel.read``.
 
 Some routes need more than their name suggests:
 
@@ -340,7 +341,14 @@ Some routes need more than their name suggests:
 - **The AI pipeline builder** (:doc:`ai`): drafting needs ``ai.use``, and applying
   a draft also ``pipeline.write``. Choosing the server's model and keeping its API
   key need ``ai.configure`` (admin only): a remote provider receives project
-  configuration.
+  configuration. Ducta Architect runs as two more job kinds of the same
+  builder (``architect_plan``, ``architect_build``).
+- **Ducta Sentinel** (:doc:`ai`): reading its status and incidents needs
+  ``sentinel.read``; pausing it, resolving or ignoring an incident, or asking for
+  a re-run need ``sentinel.manage`` (operators, admins). A re-run asked for there
+  is refused in a protected environment, and is the person's run. Asking the
+  model for an incident's explanation and fix draft is an AI job
+  (``kind: sentinel_propose``): ``ai.use`` and ``sentinel.read``.
 - **Testing an unsaved ingestion connection** needs ``ingestion.write``. The
   server connects to whatever host and port the caller sends.
 

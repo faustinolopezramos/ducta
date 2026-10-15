@@ -48,7 +48,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import yaml  # type: ignore[import-untyped]
 
 from ducta.ai.builder import _pipeline_file, _validate, parse_answer
-from ducta.ai.context import find_secrets, redact_code
+from ducta.ai.context import find_secrets, redact_code, redact_config
 from ducta.ai.errors import AINotFoundError
 from ducta.ai.explain import node_function
 from ducta.ai.providers import ChatMessage, LLMProvider
@@ -172,7 +172,11 @@ class Review:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Review":
         data = dict(data)
-        data["findings"] = [Finding(**f) for f in data.get("findings") or []]
+        fields = set(Finding.__dataclass_fields__)
+        data["findings"] = [
+            Finding(**{k: v for k, v in f.items() if k in fields})
+            for f in data.get("findings") or []
+        ]
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -283,7 +287,9 @@ def review_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> Revi
 
 _PULLS = {"collect", "toPandas", "toLocalIterator"}
 _ROW_BY_ROW = {"iterrows", "itertuples"}
-_WRITES = {"to_csv", "to_parquet", "to_json", "to_excel", "saveAsTable", "insertInto", "save"}
+#: ``save`` is not here: the name is too common (a model, a figure), and
+#: Spark's ``df.write…save()`` is caught by its ``.write``.
+_WRITES = {"to_csv", "to_parquet", "to_json", "to_excel", "saveAsTable", "insertInto"}
 _READS = {"read_csv", "read_parquet", "read_json", "read_excel", "read_sql", "read_table"}
 
 
@@ -359,11 +365,15 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
                     "Declare the dataset in the catalog, take it as an input and return the result.",
                 ),
             )
+    # ``df.write.parquet(…)`` chains on ``.write``; ``f.write(text)`` calls it:
+    # only the first is a DataFrame written by the function itself.
+    called = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
     for item in ast.walk(tree):
         if (
             isinstance(item, ast.Attribute)
             and item.attr in ("write", "writeStream")
             and isinstance(item.value, (ast.Name, ast.Attribute, ast.Call))
+            and id(item) not in called
         ):
             add(
                 "io",
@@ -562,10 +572,12 @@ def check_finding(raw: Any, facts: ReviewFacts) -> Optional[Finding]:
 
 
 def _render(facts: ReviewFacts, found: List[Finding], remote: bool, note: str) -> str:
-    settings = {
-        k: v for k, v in facts.settings.items() if k in _SETTINGS_KEYS and v not in (None, {}, [])
-    }
-    node = {k: v for k, v in facts.spec.items() if k not in ("description",)}
+    # Settings and the node's spec may hold credentials written inline (an
+    # ingest's options, a storage key in spark_config): the model gets ***.
+    settings = redact_config(
+        {k: v for k, v in facts.settings.items() if k in _SETTINGS_KEYS and v not in (None, {}, [])}
+    )
+    node = redact_config({k: v for k, v in facts.spec.items() if k not in ("description",)})
     facts_doc: Dict[str, Any] = {
         "pipeline": facts.pipeline,
         "node": facts.node,
@@ -575,7 +587,11 @@ def _render(facts: ReviewFacts, found: List[Finding], remote: bool, note: str) -
         "read elsewhere by": facts.readers,
         "seconds per recent run (newest first)": facts.durations or "no successful run yet",
     }
-    effective = {k: f"{v} ({src})" for k, (v, src) in facts.effective.items() if v is not None}
+    effective = {
+        k: f"{redact_config({k: v})[k]} ({src})"
+        for k, (v, src) in facts.effective.items()
+        if v is not None
+    }
     parts = [
         "# The node\n```json\n" + json.dumps(facts_doc, indent=2, default=str) + "\n```",
         "# Its configuration\n```yaml\n" + yaml.safe_dump(node, sort_keys=False).strip() + "\n```",

@@ -191,6 +191,10 @@ ducta.yaml
        pipeline reads with no quality block (both on by default).
    * - ``alerts``
      - Who hears about what — see :ref:`alerts`.
+   * - ``sentinel``
+     - Ducta Sentinel: incidents for failed, late and slow runs, and the safe
+       re-runs it may make (off by default; never in a protected environment —
+       listing one is an error). See :doc:`ai`.
    * - ``description``, ``metadata``
      - Documentation for people; the project's ``metadata`` is free-form.
 
@@ -215,7 +219,9 @@ environment variable, never written in the file:
 - ``failure`` — a run failed; ``quality_gate`` — a gate blocked it;
 - ``slow`` — a successful run took more than 1.5× the pipeline's p95 (after five runs);
 - ``sla_miss`` — the pipeline is late for its ``metadata.sla``, checked every
-  ``SLA_CHECK_MINUTES`` or by ``POST .../alerts/check``.
+  ``SLA_CHECK_MINUTES`` or by ``POST .../alerts/check``;
+- ``sentinel`` — Ducta Sentinel escalated an incident to a person, or saw it
+  recover (see :doc:`ai`).
 
 Channels: ``slack`` and ``teams`` (``webhook_env``), ``webhook`` (``url_env``),
 ``email`` (``to``; the server's ``DUCTA_SMTP_HOST``, ``DUCTA_SMTP_PORT``,

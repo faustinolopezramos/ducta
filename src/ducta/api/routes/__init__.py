@@ -40,6 +40,7 @@ from ducta.api.routes.nodes import router as nodes_router
 from ducta.api.routes.projects import router as projects_router
 from ducta.api.routes.quality import router as quality_router
 from ducta.api.routes.schedules import router as schedules_router
+from ducta.api.routes.sentinel import router as sentinel_router
 from ducta.api.routes.templates import router as templates_router
 from ducta.api.routes.workspace import router as workspace_router
 from ducta.api.routes.workspace_files import router as workspace_files_router
@@ -112,3 +113,4 @@ def register_routes(app: FastAPI) -> None:
 
     # AI pipeline builder (drafts are validated, written only on apply)
     app.include_router(ai_router, prefix=API_PREFIX)
+    app.include_router(sentinel_router, prefix=API_PREFIX)
