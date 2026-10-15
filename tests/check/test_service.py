@@ -96,6 +96,22 @@ class TestRunChecksOnAFile:
         assert "row_count" in names
         assert report["passed"] is True
 
+    def test_failing_checks_return_the_report_instead_of_raising(self, tmp_path):
+        """A failing check is the answer, not an error: `quality run --output-format
+        json` printed nothing and `POST /quality/run` answered 422 without results."""
+        data = tmp_path / "people.csv"
+        data.write_text("id\n1\n2\n")
+        checks = tmp_path / "checks.yaml"
+        checks.write_text("checks:\n  row_count: {min: 10}\n")
+
+        report = QualityService.run_checks(
+            input_path=str(data), format="csv", config_path=str(checks), workspace=str(tmp_path)
+        )
+
+        assert report["passed"] is False
+        assert [r["check_name"] for r in report["results"] if not r["passed"]] == ["row_count"]
+        assert report["source"]["input_path"] == str(data)
+
     def test_a_python_checks_file_is_not_executed(self, tmp_path):
         data = tmp_path / "people.csv"
         data.write_text("id\n1\n")

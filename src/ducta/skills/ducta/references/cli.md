@@ -32,7 +32,7 @@ Start data pipelines directly without orchestration
 | `--env`, `-e` | Execution environment (base, dev, sandbox, prod, or sandbox_<developer>). Defaults to 'base' when omitted. — default `base` |
 | `--pipeline`, `-p` | Pipeline name to execute |
 | `--node`, `-n` | Specific node to execute (optional) |
-| `--mode`, `-m` | Execution mode for streaming/hybrid pipelines: 'async' (default, return once started) or 'sync' (block until terminating queries finish) — one of `sync`, `async`; default `async` |
+| `--mode`, `-m` | Execution mode for streaming/hybrid pipelines. Either way the command runs while the queries do (they live in its process): 'async' (default) reports their status and stops them on Ctrl+C; 'sync' waits inside the engine — one of `sync`, `async`; default `async` |
 | `--start-date` | Start date (YYYY-MM-DD) |
 | `--end-date` | End date (YYYY-MM-DD) |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
@@ -68,7 +68,7 @@ Run streaming pipeline
 | `--config`, `-c` | ducta.yaml, or any file or directory inside the project (default: the project containing the current directory) |
 | `--pipeline`, `-p` | Pipeline name to execute — *(required)* |
 | `--env`, `-e` | Execution environment (base, dev, prod, …) — default `base` |
-| `--mode`, `-m` | Execution mode for streaming pipelines — one of `sync`, `async`; default `async` |
+| `--mode`, `-m` | Either way the command runs while the queries do (they live in its process): 'async' (default) reports their status and stops them on Ctrl+C; 'sync' waits inside the engine — one of `sync`, `async`; default `async` |
 | `--model-version` | Model version for ML pipelines |
 | `--hyperparams` | Hyperparameters as JSON string |
 | `--transforms-module` | Python module path(s) to import before starting the pipeline. Each module must expose a register_transforms(registry) function. Example: src.streaming_fraud_realtime |

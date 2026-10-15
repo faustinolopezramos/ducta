@@ -71,6 +71,8 @@ In-process
        result = ducta.PipelineExecutor(context).run_pipeline(
            pipeline, start_date=ds, end_date=ds
        )
+       if not result.ok:                     # gate_blocked or skipped: nothing raised
+           raise RuntimeError(f"{pipeline} {result.status.value}: {result.skipped or result.gate_blocked}")
        return result.run_id                  # pushed to XCom: the run's certificate id
 
 
@@ -81,7 +83,11 @@ In-process
            op_kwargs={"pipeline": "daily", "ds": "{{ ds }}"},
        )
 
-``run_pipeline`` raises when the pipeline fails, which fails the task.
+``run_pipeline`` raises when a node fails, or a gate with ``on_fail: stop_all``
+blocks, which fails the task. A gate with the default ``on_fail:
+skip_downstream``, or nodes skipped for a missing input, make it return instead,
+with ``result.ok`` false and ``result.status`` ``gate_blocked`` or ``skipped`` —
+hence the check above; without it the task would succeed having written nothing.
 Relative ``paths`` in the project resolve against the worker's working
 directory, so use absolute or cloud paths for ``prod``.
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from pathlib import Path
 from typing import Any, Dict, Tuple
 
 
@@ -44,14 +45,13 @@ def silence_output(quiet: bool):
 
 def bootstrap_worker_context(
     payload: Dict[str, Any], *, ensure_output_dir: bool = False
-) -> Tuple[Any, Any]:
-    """Build a ``(config_manager, context)`` pair for a worker-process payload."""
-    from ducta.console.config import ConfigManager
-    from ducta.console.execution import ContextInitializer
+) -> Tuple[Path, Any]:
+    """Build a ``(project_root, context)`` pair for a worker-process payload."""
+    from ducta.setting.project_context import load_project_context
 
-    config_manager = ConfigManager(base_path=payload.get("base_path"))
-    config_manager.change_to_config_directory()
-    context = ContextInitializer(config_manager).initialize(payload["env"])
+    project_root, context = load_project_context(
+        payload.get("base_path"), payload["env"], chdir=True
+    )
 
     output_path = payload.get("output_path")
     if output_path:
@@ -62,4 +62,4 @@ def bootstrap_worker_context(
         if isinstance(settings, dict):
             settings["output_path"] = output_path
 
-    return config_manager, context
+    return project_root, context

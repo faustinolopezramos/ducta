@@ -1,7 +1,8 @@
-import { useRef, useState } from "react";
-import { useDialogA11y } from "../../hooks/useDialogA11y";
+import { useState } from "react";
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
+import { Modal } from "../../components/ui/Modal";
+import { Select } from "../../components/ui/Select";
 import { ActionButton } from "../../components/ui/ActionButton";
 import { PermittedButton } from "../../components/ui/PermittedButton";
 import { requiresPermission, usePermission } from "../../hooks/usePermission";
@@ -60,116 +61,68 @@ function PromoteModal({
     );
   }
 
-  // Escape to dismiss, focus trapped in the dialog, focus restored on unmount.
-  // This dialog is hand-rolled rather than built on <Modal>, so it had none of
-  // that until now.
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useDialogA11y(dialogRef, onClose);
-
   return (
-    // Backdrop: click-outside is a convenience next to Escape (bound by
-    // `useDialogA11y`) and the Cancel control, so it needs no key handler.
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: "var(--z-modal)",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        tabIndex={-1}
-        style={{
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 10,
-          padding: 24,
-          width: 360,
-          maxWidth: "90vw",
-        }}
-      >
-        <h3 style={{ margin: "0 0 16px", color: colors.text, fontSize: "var(--text-base)" }}>
-          Promote {modelName} v{version}
-        </h3>
+    <Modal title={`Promote ${modelName} v${version}`} onClose={onClose} width={400}>
+      <label htmlFor="promote-stage-select" style={{ display: "block", marginBottom: 6, fontSize: "var(--text-sm)", color: colors.textMuted }}>
+        Target stage
+      </label>
+      <div style={{ marginBottom: 12 }}>
+        <Select
+          id="promote-stage-select"
+          size="sm"
+          value={stage}
+          onChange={(e) => setStage(e.target.value as typeof stage)}
+        >
+          <option value="staging">Staging</option>
+          <option value="production">Production</option>
+          <option value="archived">Archived</option>
+        </Select>
+      </div>
 
-        <label style={{ display: "block", marginBottom: 12, fontSize: "var(--text-sm)", color: colors.textMuted }}>
-          Target stage
-          <select
-            value={stage}
-            onChange={(e) => setStage(e.target.value as typeof stage)}
-            style={{
-              display: "block",
-              marginTop: 4,
-              width: "100%",
-              padding: "6px 10px",
-              borderRadius: 6,
-              border: `1px solid ${colors.border}`,
-              background: colors.bg,
-              color: colors.text,
-              fontSize: "var(--text-sm)",
-            }}
-          >
-            <option value="staging">Staging</option>
-            <option value="production">Production</option>
-            <option value="archived">Archived</option>
-          </select>
-        </label>
-
-        {stage === "production" && (
-          <div
-            style={{
-              margin: "12px 0",
-              padding: "8px 12px",
-              borderRadius: 6,
-              background: "color-mix(in srgb, var(--warning) 12%, transparent)",
-              border: "1px solid var(--warning)",
-              color: "var(--warning)",
-              fontSize: "var(--text-xs)",
-              display: "flex",
-              alignItems: "center",
-              gap: 8,
-            }}
-          >
-            <IconAlertTriangle size={16} style={{ flexShrink: 0 }} />
-            Promoting to Production will make this version live for all pipeline runs.
-          </div>
-        )}
-
-        <label
+      {stage === "production" && (
+        <div
           style={{
+            margin: "12px 0",
+            padding: "8px 12px",
+            borderRadius: 6,
+            background: "color-mix(in srgb, var(--warning) 12%, transparent)",
+            border: "1px solid var(--warning)",
+            color: "var(--warning)",
+            fontSize: "var(--text-xs)",
             display: "flex",
             alignItems: "center",
             gap: 8,
-            fontSize: "var(--text-sm)",
-            color: colors.textMuted,
-            cursor: "pointer",
-            marginBottom: 20,
           }}
         >
-          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
-          Force (bypass promotion policy)
-        </label>
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="primary" size="sm" onClick={handlePromote} disabled={promote.isPending}>
-            {promote.isPending ? "Promoting…" : "Promote"}
-          </Button>
+          <IconAlertTriangle size={16} style={{ flexShrink: 0 }} />
+          Promoting to Production will make this version live for all pipeline runs.
         </div>
+      )}
+
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: "var(--text-sm)",
+          color: colors.textMuted,
+          cursor: "pointer",
+          marginBottom: 20,
+        }}
+      >
+        <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+        Force (bypass promotion policy)
+      </label>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" onClick={handlePromote} disabled={promote.isPending}>
+          {promote.isPending ? "Promoting…" : "Promote"}
+        </Button>
       </div>
-    </div>
+    </Modal>
   );
 }
 
@@ -184,8 +137,6 @@ function GcModal({
   project?: string;
   onClose: () => void;
 }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  useDialogA11y(dialogRef, onClose);
   const [dryRun, setDryRun] = useState(true);
   const gc = useRunMlopsGc();
   const [result, setResult] = useState<Record<string, any> | null>(null);
@@ -203,90 +154,56 @@ function GcModal({
   }
 
   return (
-    // Backdrop: click-outside is a convenience next to Escape (bound by
-    // `useDialogA11y`) and the Cancel control, so it needs no key handler.
-    <div
-      role="presentation"
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.5)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: "var(--z-modal)",
-      }}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        tabIndex={-1}
+    <Modal title="Model Garbage Collection" onClose={onClose} width={420}>
+      <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: colors.textMuted }}>
+        Remove old model versions that are no longer needed.
+      </p>
+
+      <label
         style={{
-          background: colors.surface,
-          border: `1px solid ${colors.border}`,
-          borderRadius: 10,
-          padding: 24,
-          width: 380,
-          maxWidth: "90vw",
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          fontSize: "var(--text-sm)",
+          color: colors.textMuted,
+          cursor: "pointer",
+          marginBottom: 16,
         }}
       >
-        <h3 style={{ margin: "0 0 8px", color: colors.text, fontSize: "var(--text-base)" }}>
-          Model Garbage Collection
-        </h3>
-        <p style={{ margin: "0 0 16px", fontSize: "var(--text-sm)", color: colors.textMuted }}>
-          Remove old model versions that are no longer needed.
-        </p>
+        <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+        Dry run (preview only, no deletion)
+      </label>
 
-        <label
+      {result && (
+        <div
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            fontSize: "var(--text-sm)",
-            color: colors.textMuted,
-            cursor: "pointer",
+            background: colors.bg,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 6,
+            padding: 12,
+            fontSize: "var(--text-xs)",
+            fontFamily: "var(--font-mono)",
             marginBottom: 16,
+            color: colors.text,
           }}
         >
-          <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
-          Dry run (preview only, no deletion)
-        </label>
-
-        {result && (
-          <div
-            style={{
-              background: colors.bg,
-              border: `1px solid ${colors.border}`,
-              borderRadius: 6,
-              padding: 12,
-              fontSize: "var(--text-xs)",
-              fontFamily: "var(--font-mono)",
-              marginBottom: 16,
-              color: colors.text,
-            }}
-          >
-            <div>Models processed: {result.models_processed}</div>
-            <div>Versions removed: {result.versions_removed}</div>
-            <div>
-              Bytes freed: {result.bytes_freed > 0 ? `${(result.bytes_freed / 1024).toFixed(1)} KB` : "0"}
-            </div>
+          <div>Models processed: {result.models_processed}</div>
+          <div>Versions removed: {result.versions_removed}</div>
+          <div>
+            Bytes freed: {result.bytes_freed > 0 ? `${(result.bytes_freed / 1024).toFixed(1)} KB` : "0"}
           </div>
-        )}
-
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Close
-          </Button>
-          <Button variant="primary" size="sm" onClick={handleGc} disabled={gc.isPending}>
-            {gc.isPending ? "Running…" : dryRun ? "Preview" : "Run GC"}
-          </Button>
         </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+        <Button variant="ghost" size="sm" onClick={onClose}>
+          Close
+        </Button>
+        <Button variant="primary" size="sm" onClick={handleGc} disabled={gc.isPending}>
+          {gc.isPending ? "Running…" : dryRun ? "Preview" : "Run GC"}
+        </Button>
       </div>
-    </div>
+    </Modal>
   );
 }
 

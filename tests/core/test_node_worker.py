@@ -119,3 +119,54 @@ class TestDispatchDecision:
         executor = self._executor("dev")
         node = {"run_in_process": True, "execution_mode": "vectorized"}
         assert executor._should_run_in_process(node) is True
+
+
+class TestGateBlockedInWorker:
+    """A quality gate that blocks a node in its worker process surfaces in the
+    parent as QualityGateBlocked — not as a TypeError, which lost skip_retry
+    and let the coordinator retry a node its gate had just blocked."""
+
+    def _executor(self, outcome):
+        from types import SimpleNamespace
+
+        from ducta.core.execution.runner import NodeExecutor
+
+        executor = NodeExecutor.__new__(NodeExecutor)
+        executor.settings = SimpleNamespace(env="dev")
+        executor.pipeline_name = "p"
+        executor.context = SimpleNamespace()
+        executor._run_child = lambda node_name, payload: outcome
+        return executor
+
+    def test_the_parent_raises_the_same_exception(self):
+        import pytest
+
+        from ducta.check.core import QualityGateBlocked
+
+        outcome = {
+            "status": "gate_blocked",
+            "error": "blocked",
+            "gate": {
+                "dataset_name": "silver.orders",
+                "run_id": "r1",
+                "gate_name": "freshness",
+                "triggered_rules": ["rows < 10"],
+            },
+        }
+        with pytest.raises(QualityGateBlocked) as caught:
+            self._executor(outcome)._run_node_in_subprocess("clean", {}, "", "", {})
+
+        error = caught.value
+        assert error.dataset_name == "silver.orders" and error.run_id == "r1"
+        assert error.skip_retry is True
+        assert "freshness" in str(error) and "rows < 10" in str(error)
+
+    def test_an_outcome_without_gate_detail_still_raises_it(self):
+        import pytest
+
+        from ducta.check.core import QualityGateBlocked
+
+        with pytest.raises(QualityGateBlocked, match="worker said no"):
+            self._executor(
+                {"status": "gate_blocked", "error": "worker said no"}
+            )._run_node_in_subprocess("clean", {}, "", "", {})

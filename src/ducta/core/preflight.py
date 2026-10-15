@@ -388,6 +388,49 @@ def _check_check_entries(report: PreflightReport, where: str, checks: Dict[str, 
             )
 
 
+def _check_use_pandas(
+    report: PreflightReport,
+    node_name: str,
+    node_config: Dict[str, Any],
+    input_config: Dict[str, Any],
+) -> None:
+    """``use_pandas`` only changes how a pickle is read. On any other format it was
+    accepted and silently ignored: the node got a Spark DataFrame anyway."""
+    if _is_streaming_node(node_config):
+        return  # a stream node's `input` is its source spec, not catalog datasets
+    for key in _input_keys(node_config):
+        if not isinstance(key, str):
+            continue
+        entry = input_config.get(key) or {}
+        if not entry.get("use_pandas"):
+            continue
+        fmt = entry.get("format")
+        fmt = str(getattr(fmt, "value", fmt) or "").lower()
+        if fmt in ("pickle", "pkl"):
+            continue
+        report.warn(
+            f"Node '{node_name}': input '{key}' sets use_pandas, which applies only to "
+            f"pickle datasets — this {fmt or 'dataset'} still arrives as a Spark DataFrame. "
+            "For pandas, set `execution_mode: vectorized` on the node."
+        )
+
+
+def _check_stream_quality(
+    report: PreflightReport, node_name: str, node_config: Dict[str, Any]
+) -> None:
+    """The streaming engine runs no quality checks. A ``quality`` block (or an input
+    contract) on a stream node was accepted and never evaluated: a stream with an
+    impossible check and ``on_fail: stop_all`` wrote its output and exited 0."""
+    if not _is_streaming_node(node_config):
+        return
+    if node_config.get("data_quality") or node_config.get("sanity_checks"):
+        report.warn(
+            f"Node '{node_name}': quality checks do not run on stream nodes — this "
+            "block is not evaluated. Check the stream's output with a batch node that "
+            "reads it."
+        )
+
+
 def _check_quality_gate(report: PreflightReport, where: str, gate: Any) -> None:
     """Validate the parts of a quality gate that fall back silently at runtime."""
     if not isinstance(gate, dict):
@@ -686,6 +729,8 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
             report, node_name, node_configs[node_name], input_config, output_config, validator
         )
         _check_quality_config(report, node_name, node_configs[node_name])
+        _check_use_pandas(report, node_name, node_configs[node_name], input_config)
+        _check_stream_quality(report, node_name, node_configs[node_name])
         _check_unknown_node_keys(report, node_name, node_configs[node_name])
         _check_merge_outputs(report, node_name, node_configs[node_name], output_config)
 

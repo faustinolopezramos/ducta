@@ -148,7 +148,6 @@ The training data is a dataset like any other:
          # catalog.toml
          ["gold.churn.training_set"]
          format = "parquet"
-         use_pandas = true
 
    .. tab-item:: YAML
       :sync: yaml
@@ -158,7 +157,6 @@ The training data is a dataset like any other:
          # catalog.yaml
          gold.churn.training_set:
            format: parquet
-           use_pandas: true                 # the node receives a pandas DataFrame
 
    .. tab-item:: JSON
       :sync: json
@@ -167,8 +165,7 @@ The training data is a dataset like any other:
 
          {
            "gold.churn.training_set": {
-             "format": "parquet",
-             "use_pandas": true
+             "format": "parquet"
            }
          }
 
@@ -202,6 +199,8 @@ not in code:
          [nodes.train_churn_model]
          description = "Train a RandomForest and register it when it beats the baseline"
          run = "pipelines.ml:train_and_register"
+         ml_stage = "training"
+         execution_mode = "vectorized"
 
          [nodes.train_churn_model.inputs]
          training_data = "gold.churn.training_set"
@@ -226,6 +225,8 @@ not in code:
            train_churn_model:
              description: Train a RandomForest and register it when it beats the baseline
              run: pipelines.ml:train_and_register
+             ml_stage: training             # binds the pipeline's split to this node
+             execution_mode: vectorized     # the function receives pandas DataFrames
              inputs: {training_data: gold.churn.training_set}
 
    .. tab-item:: JSON
@@ -252,6 +253,8 @@ not in code:
              "train_churn_model": {
                "description": "Train a RandomForest and register it when it beats the baseline",
                "run": "pipelines.ml:train_and_register",
+               "ml_stage": "training",
+               "execution_mode": "vectorized",
                "inputs": {
                  "training_data": "gold.churn.training_set"
                }
@@ -362,11 +365,18 @@ Execute the training pipeline using the Ducta CLI:
 
 .. code-block:: bash
 
-   # Validate and Run
+   # Iterate: dev turns tracking off (Step 1), so nothing is logged or registered
    ducta start --env dev --pipeline ml_training
 
    # Override hyperparameters for one run (merged over config values)
    ducta start --env dev --pipeline ml_training --hyperparams '{"max_depth": 8}'
+
+   # Tracked: the run is logged, and the model registered when it beats the baseline
+   ducta start --env prod --pipeline ml_training
+
+The registry lives under ``settings.mlops_path`` (``models/`` here) of the
+environment that ran. ``ducta model`` and ``ducta experiment`` find it through
+``--env``; without it they look in ``./mlops_data``.
 
 Hyperparameter sweeps
 ~~~~~~~~~~~~~~~~~~~~~
@@ -533,7 +543,7 @@ trivial baseline) by a margin:
 
 .. code-block:: bash
 
-   ducta model promote churn-predictor 3 production
+   ducta model promote churn-predictor 3 production --env prod
    # blocked if v3 does not beat Production by min_delta on val_f1;
    # bypass consciously (audit-logged): --force
 

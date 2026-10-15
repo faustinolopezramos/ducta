@@ -35,7 +35,7 @@ def _render_check_results_table(console, table, results: List[dict], header_text
     table.add_column("Check", style="cyan")
     table.add_column("Status")
     table.add_column("Severity")
-    table.add_column("Message", style="white")
+    table.add_column("Message")
     for result in results:
         ok = result.get("passed", False)
         table.add_row(

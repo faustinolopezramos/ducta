@@ -22,6 +22,21 @@ def _make_module(name: str, **attrs):
     return mod
 
 
+def _installed(name: str) -> bool:
+    """Whether the real top-level package is importable. Another conftest may
+    already have put a fake there (``__spec__`` None), which find_spec rejects."""
+    import importlib.util
+
+    top = name.split(".")[0]
+    module = sys.modules.get(top)
+    if module is not None:
+        return getattr(module, "__spec__", None) is not None
+    try:
+        return importlib.util.find_spec(top) is not None
+    except ValueError:
+        return False
+
+
 def _install_mocks():
     # --- type objects used for isinstance() checks ---------------------------
     SparkDataFrame = _types.new_class(
@@ -76,8 +91,6 @@ def _install_mocks():
         "polars", DataFrame=_types.new_class("PolarsDataFrame", (object,), {})
     )
     delta_mod = _make_module("delta", tables=_make_module("delta.tables"))
-    ducta_mlrun = _make_module("ducta.mlrun")
-    ducta_mlrun_fp = _make_module("ducta.mlrun.fingerprint")
 
     mappings = {
         "pyspark": pyspark_mod,
@@ -92,11 +105,13 @@ def _install_mocks():
         "polars": polars_mod,
         "delta": delta_mod,
         "delta.tables": delta_mod.tables,
-        "ducta.mlrun": ducta_mlrun,
-        "ducta.mlrun.fingerprint": ducta_mlrun_fp,
     }
+    import importlib.util
+
     for name, mod in mappings.items():
-        if name not in sys.modules:
+        # Fakes for absent packages only (see tests/gate/conftest.py): a fake
+        # stood in for the real one for every test collected after this file.
+        if name not in sys.modules and not _installed(name):
             sys.modules[name] = mod
         elif name == "pyspark.sql" and not hasattr(sys.modules[name], "streaming"):
             # gate's conftest may have installed pyspark.sql first, without

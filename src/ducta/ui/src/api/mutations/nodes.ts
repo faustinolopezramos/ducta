@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import client from "../client";
-import { toastStore } from "../../hooks/useModalStack";
 import { defaultOnError } from "./errors";
 import { qk } from "../queryKeys";
 
@@ -30,11 +29,6 @@ interface UpdateNodePayload {
   pipeline?: string;
 }
 
-interface UpdateNodeCodePayload {
-  name: string;
-  code: string;
-}
-
 // ── Node Mutations ────────────────────────────────────────────────────────────
 
 /**
@@ -53,24 +47,6 @@ export const useUpdateNode = () => {
   });
 };
 
-/**
- * PUT /nodes/{name}/code
- * Saves Python source code for a node.
- */
-export const useUpdateNodeCode = () => {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ name, code }: UpdateNodeCodePayload) =>
-      client.put(`/nodes/${name}/code`, { code }).then((r) => r.data),
-    onSuccess: () => {
-      invalidateNodeConsumers(queryClient);
-      queryClient.invalidateQueries({ queryKey: qk.git.all() });
-      // Saved, not committed — the status bar counts it until it is.
-      toastStore.getState().show("Code saved", "success");
-    },
-    onError: defaultOnError,
-  });
-};
 
 /**
  * DELETE /nodes/{name}

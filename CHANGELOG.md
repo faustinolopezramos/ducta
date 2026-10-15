@@ -103,6 +103,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`ducta.MLNodeContext` is public** — the type of the `ml_context` an ML node
+  receives, as `docs/mlops.rst` already imported it.
+
 - **One experiment per pipeline.** Every execution created a new experiment with the
   pipeline's name, so *Models* listed `bronze.ingestion` eight times, each with one run.
   An execution is now a run in its pipeline's experiment. Experiments created before
@@ -150,6 +153,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer read as part of the project**; it broke validation. `ducta skill install`
   now installs next to `ducta.yaml` from any folder of the project, warns outside one,
   points `AGENTS.md` to the shared `.agents/` copy, and says to restart the assistant.
+- **A quality gate that blocks a node run with `run_in_process: true` stops the node.**
+  The worker's block reached the parent as a `TypeError`, which lost the gate's
+  no-retry flag: the node was retried, and the error named the wrong cause.
+- **`ducta quality run` prints the report when a check fails.** It logged "Quality run
+  failed" and printed nothing, so `--output-format json` gave a script no results;
+  `POST /api/quality/run` answered 422 instead of the report. The exit code is unchanged.
+- **The CLI is readable on light terminals.** The status dashboard's header was dark text
+  on a forced black background, and tables, schemas and errors printed fixed white text.
+- **Warnings instead of silence** when a Spark config key is not applied, a quality score
+  cannot be computed (the report kept a perfect 1.0), or pickled pandas data cannot be
+  converted to Spark (the node got pandas instead).
+- **Web app:** switching workspace from the header reloads again, so no logs, problems or
+  run states of the previous workspace stay on screen; the bottom panel always marks the
+  tab it shows; the run page's cancel button says *Cancelling…*; an old
+  `/workspace/nodes/<name>/code` link opens the project's Code view.
+- **`ducta stream run` and `ducta start` keep a stream running.** They returned once
+  the queries started, which ended the process and the queries with it: nothing was
+  written. The command now runs while the queries do, stops them gracefully on
+  Ctrl+C, and ends on its own with a terminating trigger. `ducta stream status` and
+  `stop` say where to look for a stream they cannot see (another terminal, the server).
+- **A node without `outputs` runs.** The schema and `ducta config validate` accept a
+  node that only has an effect (notify, audit, train and register); its return value
+  was still checked as a DataFrame, so every run failed ("Result DataFrame is None").
+- **Generated projects keep `.env` out of git.** The template's `.gitignore` ignored
+  `env/` but not `.env` (or `.env.*`), where the docs say credentials go.
+- **List settings read from one variable take commas.** `CORS_ORIGINS=https://a.com`
+  or `GIT_CLONE_ALLOWED_HOSTS=a,b` stopped the server at startup: only JSON lists
+  parsed. Both forms work now.
+- **`ExecutionManager.execute` accepts a relative project path.** It looked for data
+  relative to another directory and reported the pipeline "skipped".
+- **Preflight warns when `use_pandas` has no effect.** It applies only to pickle
+  datasets; on CSV, Parquet and the rest the node got Spark anyway. For pandas, set
+  `execution_mode: vectorized` on the node (now documented).
+- **Preflight warns about `quality` on stream nodes.** The streaming engine runs no
+  checks: the block was accepted and ignored (an impossible check with `on_fail:
+  stop_all` still wrote the output and exited 0).
+- **`alerts[].when: [stale]` is refused.** It was accepted and never sent.
+- **The AI builder rejects a pipeline name that is a path** (`../../x`), which read a YAML
+  file outside the project and sent it to the model.
+
+### Dependencies
+
+- **Python 3.13 installs without building numpy**: numpy 1.26 ships no 3.13 wheels, so
+  3.13 now takes numpy 2.1+ (3.10–3.12 keep numpy 1.x).
+- `uvicorn`, `aiosqlite`, `asyncpg` and `prometheus-client` accept newer releases
+  (`>=x,<1` instead of `^0.x`, which pinned the minor: uvicorn stayed on 0.23).
 
 ## [0.2.0] - 2026-10-10
 

@@ -32,7 +32,6 @@ import { PageLoader, RootRedirect } from "./components/App/PageRedirects";
 import { ConnectWorkspaceForm } from "./components/Workspace/ConnectWorkspaceForm";
 
 // ── Lazy-loaded pages ────────────────────────────────────────────────────────
-const NodeCodePage         = lazy(() => import("./pages/NodeCodePage")        .then(m => ({ default: m.NodeCodePage })));
 const ExecutionHistoryPage = lazy(() => import("./pages/ExecutionHistoryPage").then(m => ({ default: m.ExecutionHistoryPage })));
 const GitPage              = lazy(() => import("./pages/GitPage")             .then(m => ({ default: m.GitPage })));
 const MLOpsPage            = lazy(() => import("./pages/MLOpsPage")          .then(m => ({ default: m.MLOpsPage })));
@@ -209,7 +208,8 @@ export default function App() {
                   path: "workspace",
                   element: <WorkspaceShellWrapper />,
                   children: [
-                    { path: "nodes/:name/code", element: <NodeCodePage />, handle: { breadcrumb: (d: any) => `Node: ${d?.params?.name}` } },
+                    // The node-code page became the project's Code view: land there, not on the overview.
+                    { path: "nodes/:name/code", element: <ToLastProject to={(id) => routes.code(id)} fallback={<Navigate to="/projects" replace />} /> },
                     { path: "executions", element: <ExecutionHistoryPage />, handle: { breadcrumb: () => "All runs" } },
                     { path: "certificates", element: <CertificatesPage />, handle: { breadcrumb: () => "Certificates" } },
                     { path: "certificates/:projectId/:runId", element: <CertificateDetailPage />, handle: { breadcrumb: (d: any) => `Certificate ${d?.params?.runId?.slice(0, 8)}` } },

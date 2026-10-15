@@ -410,12 +410,12 @@ def print_error_report(
     console.print()
     where = f" in {scope} '{node_name}'" if scope else ""
     console.print(f"{sev_emoji.get(severity, '❌')} {etype}{where}", style=f"bold {color}")
-    console.print(f"  ERROR: {message}", style="bold bright_white")
+    console.print(f"  ERROR: {message}", style="bold")
     if location:
         console.print(
             Text.assemble(
                 ("  📍 ", "bold bright_cyan"),
-                (f"{_shorten_path(location['file'])}", "bright_white"),
+                (f"{_shorten_path(location['file'])}", "bold"),
                 (" at line ", "dim"),
                 (location["line"], "bright_yellow"),
             )
@@ -423,7 +423,7 @@ def print_error_report(
     if len(frames) > 1:
         stack = Text.assemble(("  📚 Call stack:\n", "bold bright_cyan"))
         for i, f in enumerate(frames[-3:], 1):
-            stack.append(f"    {i}. {_shorten_path(f['file'], 50)}:{f['line']}\n", "bright_white")
+            stack.append(f"    {i}. {_shorten_path(f['file'], 50)}:{f['line']}\n", "default")
         console.print(stack)
 
     _render_context(console, context)

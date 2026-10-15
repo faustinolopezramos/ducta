@@ -33,7 +33,7 @@ Start here
       :link: configuration
       :link-type: doc
 
-      Global config, pipelines, nodes, inputs, and outputs — every option explained.
+      ``ducta.yaml``, the catalog, pipelines and nodes — every option explained.
 
    .. grid-item-card:: 💻 CLI Usage
       :link: cli_usage
@@ -68,16 +68,16 @@ Ducta bridges the gap between simple scripts and heavyweight orchestrators.
       .. card:: 🛡️ Quality built in
          :shadow: md
 
-         Automatic data-quality checks, validation, and retries come standard —
-         and a *quality gate* can stop a run before bad data spreads.
+         Declarative data-quality checks, validation before every run, opt-in
+         retries — and a *quality gate* can stop a run before bad data spreads.
 
    .. grid-item::
 
       .. card:: 🌍 Environment agnostic
          :shadow: md
 
-         Develop locally with CSVs and deploy to Spark or Databricks with a
-         simple environment override. Same code, different data.
+         Develop locally on files and run on Databricks with an environment
+         override (``mode: databricks``). Same code, different data.
 
    .. grid-item::
 
@@ -94,8 +94,8 @@ Get running in three commands:
 
 .. code-block:: bash
 
-   # 1. Install
-   pip install ducta
+   # 1. Install (running pipelines needs the Spark extra and a JDK — 17 recommended)
+   pip install "ducta[spark]"
 
    # 2. Scaffold a project (Medallion layout: bronze → silver → gold)
    ducta template --template medallion_basic --project-name my_pipeline
@@ -156,6 +156,7 @@ Getting help
    :caption: 🚀 Deployment
 
    databricks_setup
+   deployment_guide
 
 .. toctree::
    :maxdepth: 2

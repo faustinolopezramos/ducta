@@ -34,24 +34,26 @@ Core CLI Commands
    * - ``ducta config convert --to F --out DIR``
      - The configuration files rewritten as yaml, toml or json.
    * - ``ducta start --validate-only``
-     - Checks DAG integrity and configuration without running code.
+     - Checks DAG integrity and configuration without running the pipeline (it
+       imports the node modules to check their functions).
    * - ``ducta quality run``
-     - Runs data quality checks on a specific file or dataset.
+     - Runs a checks file against a data file (``--input``, ``--config``), outside
+       any pipeline.
    * - ``ducta experiment list|runs|show|compare``
      - Lists experiments and their runs, shows one run, or compares runs side by side
        (``--output-format json`` for scripts).
    * - ``ducta model promote|gc``
      - Moves a registered model version to a stage, or removes old versions.
    * - ``ducta server start``
-     - Launches the Ducta API server.
+     - Launches the API and the web app (the same command as ``ducta ui``).
    * - ``ducta --version``
-     - Displays the current version and installation path.
+     - Displays the installed version.
 
 Common Runtime Flags
 --------------------
 
 *   ``-p, --pipeline <name>``: The target pipeline to execute (required for ``ducta start``).
-*   ``-e, --env <env>``: The environment to load — ``base``, ``dev``, ``sandbox``, ``prod``, or ``sandbox_<developer>`` (required for ``ducta start``; defaults to ``base`` for ``config`` subcommands).
+*   ``-e, --env <env>``: The environment to load — ``base``, ``dev``, ``sandbox``, ``prod``, or ``sandbox_<developer>`` (defaults to ``base``).
 *   ``-n, --node <name>``: Execute a single specific node.
 *   ``--validate-only``: Dry run mode — validates config and DAG without executing.
 *   ``--dry-run``: Log all actions without executing the pipeline.
@@ -176,7 +178,7 @@ Node Template
          }
 
 Other kinds: ``kind: ingest`` (``ingest: {source, table | query, columns, where}``)
-and ``kind: stream`` (``stream: {transform, input, output, checkpoint_location, trigger}``).
+and ``kind: stream`` (``stream: {input, transform, output, streaming: {trigger, checkpoint_location}}``).
 
 Dataset Template
 ----------------

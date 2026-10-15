@@ -28,6 +28,21 @@ def _make_module(name: str, **attrs):
     return mod
 
 
+def _installed(name: str) -> bool:
+    """Whether the real top-level package is importable. Another conftest may
+    already have put a fake there (``__spec__`` None), which find_spec rejects."""
+    import importlib.util
+
+    top = name.split(".")[0]
+    module = sys.modules.get(top)
+    if module is not None:
+        return getattr(module, "__spec__", None) is not None
+    try:
+        return importlib.util.find_spec(top) is not None
+    except ValueError:
+        return False
+
+
 def _install_mocks():
     # --- type objects used for isinstance() checks ---------------------------
     SparkDataFrame = _types.new_class(
@@ -72,8 +87,10 @@ def _install_mocks():
     pandas_mod = _make_module("pandas", DataFrame=PandasDataFrame)
     polars_mod = _make_module("polars", DataFrame=PolarsDataFrame)
     delta_mod = _make_module("delta")
-    ducta_mlrun = _make_module("ducta.mlrun")
-    ducta_mlrun_fp = _make_module("ducta.mlrun.fingerprint")
+    # ducta.mlrun is NOT stubbed: it is ours and imports lightly (lazy package,
+    # stdlib-only fingerprint module). An empty stand-in shadowed the real
+    # package for the rest of the session, and code under test that imports
+    # `comparable` from it failed only when this conftest happened to load first.
 
     # --- install into sys.modules -------------------------------------------
     mappings = {
@@ -88,12 +105,16 @@ def _install_mocks():
         "pandas": pandas_mod,
         "polars": polars_mod,
         "delta": delta_mod,
-        "ducta.mlrun": ducta_mlrun,
-        "ducta.mlrun.fingerprint": ducta_mlrun_fp,
     }
+    import importlib.util
+
     for name, mod in mappings.items():
-        if name not in sys.modules:
-            sys.modules[name] = mod
+        # Fakes stand in for packages that are absent, never for installed
+        # ones: a fake `delta` installed during collection shadowed the real
+        # delta-spark for every later test (DeltaTable "from unknown location").
+        if name in sys.modules or _installed(name):
+            continue
+        sys.modules[name] = mod
 
     _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame)
 

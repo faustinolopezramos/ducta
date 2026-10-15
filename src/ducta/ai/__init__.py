@@ -16,19 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-AI-assisted pipeline building.
-
-A model — local (Ollama, LM Studio, vLLM, llama.cpp) or behind an API key
-(Anthropic, OpenAI or any OpenAI-compatible endpoint) — drafts a format-2
-pipeline from a request in plain language. The draft is checked by the same
-validation the UI runs on unsaved edits; its problems go back to the model
-until it passes or the attempts run out. Nothing is written until the user
-accepts the draft, and nothing is ever run or committed.
-
-The provider is a per-machine choice, so it lives in ``~/.ducta/ai.toml`` (see
-:mod:`ducta.ai.config`), never in the project; an API key lives in an
-environment variable or the OS keychain (:mod:`ducta.ai.secrets`).
 """
 
 from ducta.ai.config import AIConfig, load_config

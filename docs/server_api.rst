@@ -8,7 +8,7 @@ Features
 
 - **REST API**: Programmatic control over your Ducta workspace.
 - **Visual Dashboard**: A React-based UI for monitoring pipeline health and execution history.
-- **Persistence**: Optional SQLite/PostgreSQL backend for long-term metadata storage, configured via the ``DATABASE_URL`` environment variable (e.g. ``sqlite+aiosqlite:///./data/ducta.db`` or ``postgresql+asyncpg://user:pass@host:5432/ducta``). When unset, the API runs in in-memory mode.
+- **Persistence**: execution history in SQLite or PostgreSQL, configured via the ``DATABASE_URL`` environment variable (e.g. ``sqlite+aiosqlite:///./data/ducta.db`` or ``postgresql+asyncpg://user:pass@host:5432/ducta``). ``ducta ui`` and ``ducta server start`` default to SQLite at ``~/.ducta/executions.db`` when ``DATABASE_URL`` is not set; ``DATABASE_URL=""`` (set, but empty) keeps history in memory. The app run directly (``uvicorn ducta.api.main:app``) is in-memory unless ``DATABASE_URL`` is set.
 - **Interactive Docs**: Built-in Swagger/OpenAPI documentation.
 - **Authentication**: JWT-based security for enterprise environments.
 
@@ -19,18 +19,20 @@ You can start the server directly from the CLI:
 
 .. code-block:: bash
 
-   # Start the API server only
    ducta server start --port 8000
 
-   # Launch the full UI (Dashboard + API)
+   # The same command under another name
    ducta ui --port 8000
+
+Both start the same server: the API and the web app, on one port. Both open a
+browser unless ``--no-browser`` is given.
 
 **Common Options** (``ducta server start`` and ``ducta ui`` accept the same options):
 
 - ``--port``: Port to bind (default: 8000). No short flag.
 - ``--host``: Host to bind (default: 127.0.0.1).
 - ``--source``: Workspace source path or Git URL to load automatically.
-- ``--db``: Path to the SQLite database used for the local execution-history store (default: ``~/.ducta/executions.db``). This is separate from the optional ``DATABASE_URL``-configured backend described below.
+- ``--db``: Path of the SQLite execution-history database (default: ``~/.ducta/executions.db``). It is how ``DATABASE_URL`` gets its value when you have not set it; a ``DATABASE_URL`` you set wins, and ``--db`` is then ignored.
 - ``--no-browser``: Don't open the browser automatically.
 
 API Endpoints
@@ -210,7 +212,7 @@ The Ducta API can be integrated into your existing CI/CD or orchestration tools 
         -H "Authorization: Bearer <access_token>" \
         -d '{"env": "prod"}'
 
-The request body accepts ``env`` (default ``"base"``), ``node_name``, ``dry_run``, ``validate_only``, ``start_date``, and ``end_date``. The endpoint returns ``202 Accepted`` with an execution record (``id``, ``status``, etc.) that can be polled via ``GET /api/executions/{execution_id}``.
+The request body accepts ``env`` (default ``"base"``), ``node_name``, ``dry_run``, ``validate_only``, ``start_date`` and ``end_date``, and also ``scope`` (``pipeline``, ``selected``, ``from``, ``after``, ``until`` or ``stale``) with ``nodes``, ``sample_rows``, ``pause_after``, ``hyperparams``, ``model_version``, ``sanity_only``, ``reuse_upstream``, ``rerun_all`` and ``debug`` — the full schema is ``ExecuteRequest`` at ``/docs``. The endpoint returns ``202 Accepted`` with an execution record (``id``, ``status``, etc.) that can be polled via ``GET /api/executions/{execution_id}``.
 
 Deployment Model
 ----------------
@@ -244,8 +246,8 @@ Secure Startup Checklist
 ------------------------
 
 The API ships with **safe local-first defaults**: it binds to ``127.0.0.1``,
-authentication is disabled, and persistence is
-in-memory. These defaults make local development frictionless but are **not**
+authentication is disabled, and execution history goes to a local SQLite file
+(in memory when the app is run directly, without ``ducta ui``/``ducta server start``). These defaults make local development frictionless but are **not**
 appropriate once the service is reachable by anyone else.
 
 When exposing the API beyond ``localhost``, set ``ENVIRONMENT=production`` — this
@@ -281,9 +283,10 @@ warnings — and work through this checklist:
        rate limit in front.
    * - ``DATABASE_URL``
      - PostgreSQL DSN
-     - Persists executions, logs, and users. Empty (default) means in-memory —
-       state is lost on restart. Use ``postgresql+asyncpg://...`` for anything
-       shared or long-lived.
+     - Persists executions, logs, and users. Unset, ``ducta ui``/``ducta server start``
+       use SQLite at ``~/.ducta/executions.db``; empty means in-memory — state is
+       lost on restart. Use ``postgresql+asyncpg://...`` for anything shared or
+       long-lived.
    * - ``HOST``
      - ``127.0.0.1`` behind a proxy
      - Only bind a public interface intentionally, and terminate TLS in a
@@ -313,6 +316,11 @@ the permissions regardless.
        repositories, executions, projects, quality, ingestion and templates;
        ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote``,
        ``model.delete`` and ``ai.use``.
+   * - ``operator``
+     - Runs pipelines, including in protected environments
+       (``pipeline.execute``, ``pipeline.execute.protected``), runs quality checks
+       (``quality.run``) and cancels or resumes runs (``execution.write``); reads
+       everything a viewer reads. Edits nothing.
    * - ``viewer``
      - Read only: ``workspace.read``, ``project.read``, ``config.read``,
        ``pipeline.read``, ``node.read``, ``dataset.read``, ``git.read``,

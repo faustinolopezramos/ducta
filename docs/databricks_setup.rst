@@ -14,6 +14,13 @@ You need:
 - Appropriate permissions in Databricks to read/write data
 - Unity Catalog enabled (recommended for production)
 
+Install Ducta with its Databricks extra, in an environment of its own —
+``databricks-connect`` replaces PySpark, which is why ``ducta[all]`` leaves it out:
+
+.. code-block:: bash
+
+   pip install "ducta[databricks]"
+
 Setting Up Ducta for Databricks
 ---------------------------------
 
@@ -27,13 +34,8 @@ Ducta delegates Databricks authentication to ``databricks-connect`` and the Data
    export DATABRICKS_TOKEN=dapi1234567890abcdefg
    export DATABRICKS_CLUSTER_ID=cluster-123456
 
-Or add to your ``.env`` file:
-
-.. code-block:: bash
-
-   DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
-   DATABRICKS_TOKEN=your_token_here
-   DATABRICKS_CLUSTER_ID=cluster-123456
+Ducta does not load a ``.env`` file for these: export them in the shell, the job
+or the scheduler that runs Ducta.
 
 The Databricks SDK also supports resolving these from a named profile in ``~/.databrickscfg`` (set ``DATABRICKS_CONFIG_PROFILE`` instead of the variables above). ``host``, ``token``, and ``cluster_id`` are required; Ducta raises a configuration error at session creation if any of them is missing.
 

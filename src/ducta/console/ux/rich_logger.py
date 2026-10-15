@@ -31,23 +31,23 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.traceback import install as install_rich_traceback
 
-PRIMARY = "bright_white"  # Main text: Bright white
-BOLD_WHITE = "bold bright_white"
+PRIMARY = "default"  # Main text: adaptive to terminal foreground
+BOLD_WHITE = "bold"
 PRIMARY_BOLD = BOLD_WHITE
-DIM_WHITE = "dim white"
+DIM_WHITE = "dim"
 PRIMARY_DIM = DIM_WHITE
 
-SUCCESS = "bold bright_green"
-WARNING = "bold bright_yellow"
-ERROR = "bold bright_red"
-INFO = "bold bright_blue"
+SUCCESS = "bold green"
+WARNING = "bold yellow"
+ERROR = "bold red"
+INFO = "bold blue"
 
-ACCENT = "bold bright_cyan"  # Accent emphasis for DUCTA
+ACCENT = "bold cyan"  # Accent emphasis for DUCTA
 NEUTRAL = DIM_WHITE  # Secondary text
 MUTED = "dim"  # Muted text
 
-TEXT_DEFAULT = BOLD_WHITE  # Primary text
-TEXT_SECONDARY = "white"  # Secondary text
+TEXT_DEFAULT = BOLD_WHITE  # Primary text (adaptive)
+TEXT_SECONDARY = "default"  # Secondary text (adaptive)
 
 DUCTA_THEME = Theme(
     {
@@ -55,7 +55,7 @@ DUCTA_THEME = Theme(
         "logging.level.info": INFO,
         "logging.level.warning": WARNING,
         "logging.level.error": ERROR,
-        "logging.level.critical": "bold bright_white on bright_red",
+        "logging.level.critical": "bold white on red",
         "info": INFO,
         "warning": WARNING,
         "error": ERROR,
@@ -63,10 +63,10 @@ DUCTA_THEME = Theme(
         "debug": DIM_WHITE,
         "Ducta": ACCENT,
         "ducta": ACCENT,
-        "pipeline": PRIMARY,
-        "node": PRIMARY,
-        "metric": "bright_magenta",
-        "highlight": "bright_yellow",
+        "pipeline": "bold",
+        "node": "bold",
+        "metric": "magenta",
+        "highlight": "yellow",
         "dim": NEUTRAL,
         "accent": ACCENT,
     }
@@ -86,11 +86,11 @@ ICONS = {
 }
 
 PROCESS_GROUPS = {
-    "pipeline_start": {"emoji": "▶", "style": "white"},
-    "data_loading": {"emoji": "📥", "style": "white"},
-    "execution": {"emoji": "⚙", "style": "white"},
-    "schema": {"emoji": "📋", "style": "white"},
-    "saving": {"emoji": "💾", "style": "white"},
+    "pipeline_start": {"emoji": "▶", "style": "default"},
+    "data_loading": {"emoji": "📥", "style": "default"},
+    "execution": {"emoji": "⚙", "style": "default"},
+    "schema": {"emoji": "📋", "style": "default"},
+    "saving": {"emoji": "💾", "style": "default"},
     "success": {"emoji": "✓", "style": SUCCESS},
     "error": {"emoji": "✗", "style": ERROR},
 }
@@ -124,11 +124,11 @@ class RichLoggerManager:
             "INFO": INFO,
             "WARNING": WARNING,
             "ERROR": ERROR,
-            "CRITICAL": "bold bright_white on bright_red",
+            "CRITICAL": "bold white on red",
         }
 
         level_name = record["level"].name
-        level_style = level_styles.get(level_name, "white")
+        level_style = level_styles.get(level_name, PRIMARY)
 
         prefix = "[accent]Ducta:[/] "
         time_str = record["time"].strftime("%H:%M:%S")
@@ -254,11 +254,11 @@ def print_execution_header(
         version = "unknown"
 
     console.print()
-    title = Text.assemble(("Ducta ", "bold white on blue"), (f" {version} ", "dim white"))
+    title = Text.assemble(("Ducta ", "bold white on blue"), (f" {version} ", "dim"))
     console.print(Rule(title, align="left", style="blue dim"))
 
     def _print_row(label: str, value: str):
-        console.print(f"  [dim cyan]{label: <12}[/] [bold white]{value}[/]")
+        console.print(f"  [cyan]{label: <12}[/] [bold]{value}[/]")
 
     _print_row("pipeline", pipeline)
     _print_row("env", env.upper())

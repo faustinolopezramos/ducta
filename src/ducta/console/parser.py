@@ -180,8 +180,9 @@ class UnifiedArgumentParser:
             "-m",
             choices=["sync", "async"],
             default="async",
-            help="Execution mode for streaming/hybrid pipelines: 'async' (default, "
-            "return once started) or 'sync' (block until terminating queries finish)",
+            help="Execution mode for streaming/hybrid pipelines. Either way the command "
+            "runs while the queries do (they live in its process): 'async' (default) "
+            "reports their status and stops them on Ctrl+C; 'sync' waits inside the engine",
         )
         start_parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
         start_parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
@@ -303,7 +304,9 @@ class UnifiedArgumentParser:
             "-m",
             default="async",
             choices=["sync", "async"],
-            help="Execution mode for streaming pipelines",
+            help="Either way the command runs while the queries do (they live in its "
+            "process): 'async' (default) reports their status and stops them on Ctrl+C; "
+            "'sync' waits inside the engine",
         )
         run_parser.add_argument("--model-version", help="Model version for ML pipelines")
         run_parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")

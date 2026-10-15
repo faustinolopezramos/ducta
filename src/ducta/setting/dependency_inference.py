@@ -46,7 +46,7 @@ def extract_dependency_name(dependency: Any) -> str:
     elif isinstance(dependency, dict):
         if len(dependency) != 1:
             raise ValueError(f"Dict dependency must have exactly one key-value pair: {dependency}")
-        return next(iter(dependency.keys()))
+        return str(next(iter(dependency.keys())))
     elif dependency is None:
         raise ValueError("Dependency cannot be None")
     else:

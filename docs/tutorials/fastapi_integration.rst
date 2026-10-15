@@ -17,6 +17,7 @@ Ducta includes a built-in API that you can use or extend. However, if you want t
 **Project Setup**
 
 1.  Install Ducta with API extras:
+
     .. code-block:: bash
 
        pip install ducta[api] uvicorn
@@ -50,7 +51,7 @@ Ducta includes a built-in API that you can use or extend. However, if you want t
 
        # 1. Validate that the pipeline exists in the workspace
        ctx = workspace.load_context(body.env)
-       from ducta.exec.executor import PipelineExecutor
+       from ducta import PipelineExecutor
        executor = PipelineExecutor(ctx)
 
        if not executor.validate_pipeline(pipeline_name):
@@ -87,20 +88,23 @@ How to Run
 ----------
 
 1.  Initialize a project:
+
     .. code-block:: bash
 
        ducta template --template medallion_basic --project-name my_project
 
 2.  Start your custom API:
+
     .. code-block:: bash
 
        uvicorn api_demo:app --reload
 
 3.  Trigger a run:
+
     .. code-block:: bash
 
-       curl -X POST "http://localhost:8000/run/etl" \\
-            -H "Content-Type: application/json" \\
+       curl -X POST "http://localhost:8000/run/etl" \
+            -H "Content-Type: application/json" \
             -d '{"env": "dev"}'
 
 What's Next?

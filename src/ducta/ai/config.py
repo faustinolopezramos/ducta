@@ -16,18 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Which model Ducta talks to: ``~/.ducta/ai.toml``, then ``DUCTA_AI_*`` variables.
-
-The file holds a provider, a model and where to reach it — never a key. Which
-model runs is a property of the machine (a laptop with Ollama, a CI runner with
-an API key), not of the project, so nothing here is read from ``ducta.yaml``::
-
-    provider = "ollama"
-    model = "qwen2.5-coder:14b"
-
-``DUCTA_HOME`` moves the directory; ``DUCTA_AI_PROVIDER``, ``DUCTA_AI_MODEL``
-and ``DUCTA_AI_BASE_URL`` override the file for one shell.
 """
 
 from __future__ import annotations
@@ -94,17 +82,11 @@ class AIConfig:
     provider: str
     model: Optional[str] = None
     base_url: Optional[str] = None
-    #: The *name* of the variable holding the key, e.g. ``ANTHROPIC_API_KEY``.
     api_key_env: Optional[str] = None
-    #: Anthropic only: ``output_config.effort``. Unset: ``high`` on the models
-    #: that take it (see :mod:`ducta.ai.providers`).
     effort: Optional[str] = None
     timeout_seconds: float = 300.0
     max_attempts: int = 3
-    #: Ollama only: the context window to ask for. Its default (2–4k tokens)
-    #: silently cuts a project's context short.
     context_tokens: int = 16384
-    #: Keys the file had that this version does not know — kept on save.
     extra: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @property
@@ -213,7 +195,7 @@ def _read_file(path: Path) -> Dict[str, Any]:
     if not path.is_file():
         return {}
     try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
+        return dict(tomllib.loads(path.read_text(encoding="utf-8")))
     except (OSError, tomllib.TOMLDecodeError) as e:
         raise AIConfigError(f"Cannot read {path}: {e}") from e
 
@@ -243,7 +225,7 @@ def load_config(
 
 
 def save_config(config: AIConfig, path: Optional[Path] = None) -> Path:
-    import tomli_w
+    import tomli_w  # type: ignore
 
     config.validate()
     path = path or config_path()
@@ -252,21 +234,14 @@ def save_config(config: AIConfig, path: Optional[Path] = None) -> Path:
     return path
 
 
-#: What belongs to one provider: switching provider drops these from the file.
 _PER_PROVIDER = ("model", "base_url", "api_key_env", "effort")
-#: Field names a caller may update (``extra`` is never set through here).
 _FIELDS = (*_PER_PROVIDER, "timeout_seconds", "max_attempts", "context_tokens")
 
 
 def update_config(
     provider: str, changes: Mapping[str, Any], path: Optional[Path] = None
 ) -> AIConfig:
-    """The file's config with *changes* over it — what is not in *changes* is kept.
-
-    A key in *changes* set to ``None`` goes back to the preset's value. Switching
-    provider drops the old provider's model, URL, key variable and effort, and
-    keeps the rest (timeouts, attempts, context window, unknown keys).
-    """
+    """The file's config with *changes* over it — what is not in *changes* is kept."""
     unknown = set(changes) - set(_FIELDS)
     if unknown:
         raise AIConfigError(f"Unknown AI setting(s): {', '.join(sorted(unknown))}")

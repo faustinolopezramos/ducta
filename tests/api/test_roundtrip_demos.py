@@ -12,8 +12,8 @@ pytest.importorskip("ruamel.yaml")
 
 from ducta.api.repositories.v2_store import (  # noqa: E402
     V2ProjectStore,
-    _restore_blank_lines,
-    _style_of,
+    restore_blank_lines,
+    style_of,
 )
 
 DEMOS = Path.home() / "Desktop" / "demo_ducta" / "projects"
@@ -68,11 +68,11 @@ def test_add_node_then_undo_is_byte_identical(name, tmp_path):
 def test_indentation_is_read_from_the_file():
     indented = "a:\n  rules:\n    - x\n    - y\n  b: 1\n"
     flush = "a:\n  rules:\n  - x\n  b: 1\n"
-    assert _style_of(indented) == {"mapping": 2, "sequence": 4, "offset": 2}
-    assert _style_of(flush) == {"mapping": 2, "sequence": 2, "offset": 0}
+    assert style_of(indented) == {"mapping": 2, "sequence": 4, "offset": 2}
+    assert style_of(flush) == {"mapping": 2, "sequence": 2, "offset": 0}
 
 
 def test_blank_lines_dropped_on_dump_come_back():
     original = "a:\n  - x\n\nb: 1\n\n\nc: 2\n"
     dumped = "a:\n  - x\nb: 1\nc: 2\n"
-    assert _restore_blank_lines(original, dumped) == original
+    assert restore_blank_lines(original, dumped) == original

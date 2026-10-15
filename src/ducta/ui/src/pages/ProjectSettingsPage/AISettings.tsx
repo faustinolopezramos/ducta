@@ -13,6 +13,7 @@ import {
 } from "../../api/aiApi";
 import { apiErrorMessage } from "../../api/mutations/errors";
 import { Button } from "../../components/ui/Button";
+import { Select } from "../../components/ui/Select";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { toastStore } from "../../hooks/useModalStack";
 import { requiresPermission, usePermission } from "../../hooks/usePermission";
@@ -208,9 +209,8 @@ function AISettingsForm({ settings }: { settings: AISettingsData }) {
             <label className="projects-modal__label" htmlFor="ai-effort">
               Effort
             </label>
-            <select
+            <Select
               id="ai-effort"
-              className="projects-modal__input"
               value={effort}
               onChange={(e) => setEffort(e.target.value)}
               disabled={!canConfigure}
@@ -220,7 +220,7 @@ function AISettingsForm({ settings }: { settings: AISettingsData }) {
                   {e || "Model default"}
                 </option>
               ))}
-            </select>
+            </Select>
             <p className="projects-modal__hint">More effort: better drafts, slower and more tokens.</p>
           </div>
         )}

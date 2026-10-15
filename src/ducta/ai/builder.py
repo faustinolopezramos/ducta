@@ -16,31 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Request → draft → validation → (problems back to the model) → draft.
-
-The model answers in fenced blocks, one per file — plain text survives small
-local models far better than JSON with escaped code inside::
-
-    ```yaml file=pipelines/silver.orders.yaml
-    ...
-    ```
-    ```yaml catalog
-    silver.sales.orders_clean: {description: ...}
-    ```
-    ```python file=src/silver_orders.py     (or the project's own code folder)
-    ...
-    ```
-
-What a draft may touch is fixed here (a :class:`Scope`), not by the model:
-
-* :func:`generate` — a *new* pipeline file, *new* Python modules and *new*
-  datasets appended to the catalog. Accepting it can only add to a project.
-* :func:`fix` — the same, plus a full rewrite of one pipeline's file and of the
-  modules its nodes run.
-
-A draft is good when it adds no validation error the project did not already
-have and, for a fix, leaves none on the pipeline being fixed.
 """
 
 from __future__ import annotations
@@ -371,11 +346,7 @@ def _is_package(root: Path, p: PurePosixPath) -> bool:
 
 
 def code_folder(root: Path) -> str:
-    """Where the project keeps the code its nodes run: the folder most ``run:`` use.
-
-    Templates keep it in ``pipelines/`` (a package next to the pipeline files),
-    other projects in ``src/``; ``src`` when nothing says otherwise.
-    """
+    """Where the project keeps the code its nodes run: the folder most ``run:`` use."""
     from collections import Counter
 
     folders: "Counter[str]" = Counter()
@@ -431,13 +402,7 @@ def _new_modules(root: Path, answer: ParsedAnswer) -> Set[str]:
 
 
 def _place_unnamed(root: Path, answer: ParsedAnswer, scope: Scope = NEW) -> List[str]:
-    """Give unnamed blocks the file their content implies; why not, for the rest.
-
-    A YAML mapping with ``nodes:`` is the pipeline (the one being fixed, or one
-    named after its first node); one whose keys are all dotted names is catalog
-    entries; a Python block is the one new module the pipeline's ``run:``
-    references point to — or, in a fix, the one editable module.
-    """
+    """Give unnamed blocks the file their content implies; why not, for the rest."""
     problems: List[str] = []
     python: List[str] = []
     for lang, body in answer.unnamed:
@@ -554,13 +519,7 @@ def _outputs_of(files: Dict[str, str]) -> Set[str]:
 def _catalog_problems(
     entries: Dict[str, Any], outputs: Set[str], locations: Dict[str, str]
 ) -> Dict[str, str]:
-    """Why each of these new catalog entries may not be added, by dataset name.
-
-    A new dataset may not point at data an existing one already names (the same
-    ``path``, a folder inside or around it, the same ``table``): a node writing
-    it would overwrite that data. One the draft writes must also stay inside
-    the project's own storage — no absolute path, ``..`` or URI.
-    """
+    """Why each of these new catalog entries may not be added, by dataset name."""
     taken_paths = {k: v for k, v in locations.items() if not k.startswith("table:")}
     out: Dict[str, str] = {}
     for name, spec in entries.items():
@@ -920,15 +879,7 @@ def _run(
     assembler: Optional[Callable[[ParsedAnswer], Assembled]] = None,
     again: str = AGAIN,
 ) -> Draft:
-    """Ask, validate, send the problems back; *seen* hashes the files the prompt showed.
-
-    *assembler* turns an answer into files when the model does not write them
-    itself (a proposal Ducta applies; see :mod:`ducta.ai.proposals`).
-
-    A file the prompt showed keeps that hash as its base, so applying the draft
-    refuses if the file changed while the model was answering. *current* is the
-    project's validation as it is, when the caller already has it.
-    """
+    """Ask, validate, send the problems back; *seen* hashes the files the prompt showed."""
     seen = dict(seen or {})
     if current is None:
         current = _validate(root, {})
@@ -1036,6 +987,8 @@ def generate(
 
 
 def _pipeline_file(root: Path, pipeline: str) -> Path:
+    if not pipeline or "/" in pipeline or "\\" in pipeline:
+        raise AINotFoundError(f"No pipeline '{pipeline}' in {root / PIPELINES_DIR}")
     for suffix in (".yaml", ".yml"):
         candidate = root / PIPELINES_DIR / f"{pipeline}{suffix}"
         if candidate.is_file():
@@ -1048,6 +1001,8 @@ def _pipeline_file(root: Path, pipeline: str) -> Path:
     except Exception:  # noqa: BLE001 — a project that does not parse has no index
         path = None
     if path is None or not path.is_file():
+        raise AINotFoundError(f"No pipeline '{pipeline}' in {root / PIPELINES_DIR}")
+    if not path.resolve().is_relative_to(Path(root).resolve()):
         raise AINotFoundError(f"No pipeline '{pipeline}' in {root / PIPELINES_DIR}")
     if path.suffix not in (".yaml", ".yml"):
         raise AIConfigError(f"{path.name}: only YAML pipeline files can be fixed")
@@ -1155,11 +1110,7 @@ def revise(
     on_attempt: Optional[Callable[[Attempt], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
 ) -> Draft:
-    """A new draft that asks for *note* on top of *draft* — the same conversation, continued.
-
-    The model sees what it was asked, what it answered, and the change; the new
-    draft is validated like any other and keeps a link to the one it revises.
-    """
+    """A new draft that asks for *note* on top of *draft* — the same conversation, continued."""
     root = Path(root).resolve()
     if not note.strip():
         raise AIConfigError("Say what to change")
@@ -1178,9 +1129,7 @@ def revise(
         scope, system, assembler, again = proposal_setup(root, draft)
     else:
         scope, system = NEW, SYSTEM_PROMPT
-    # The prompt is re-sent as it was: if a file it shows changed since, the
-    # model would rewrite the old text over the new. (A draft from before
-    # ``seen`` existed falls back to the files it changed.)
+
     seen = draft.seen or {r: sha for r, sha in draft.base.items() if r in scope.editable}
     changed = sorted(rel for rel, sha in seen.items() if _sha(_read(root / rel)) != sha)
     if changed:

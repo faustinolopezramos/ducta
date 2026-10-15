@@ -8,6 +8,7 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { EnvHint } from "../../components/Shell/EnvHint";
 import { Panel } from "../../components/ui/Panel";
 import { Field } from "../../components/ui/Field";
+import { Select } from "../../components/ui/Select";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { Sparkline } from "../../components/Quality/Sparkline";
@@ -197,8 +198,8 @@ export default function QualityPage() {
           {sectionTitle(<IconDatabase size={16} color={colors.accent} />, "Datasets")}
           <div style={{ flex: 1 }} />
           {!routeProject && <Field label="Project">
-            <select
-              className="input-field"
+            <Select
+              size="sm"
               style={{ minWidth: 160 }}
               value={project}
               onChange={(e) => handleProjectChange(e.target.value)}
@@ -210,12 +211,12 @@ export default function QualityPage() {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </Field>}
           {/* The environment is the header's; this only picks pipeline runs vs ad-hoc checks. */}
           <Field label="Reports">
-            <select
-              className="input-field"
+            <Select
+              size="sm"
               style={{ minWidth: 160 }}
               value={adhoc ? ADHOC_ENV : env}
               onChange={(e) => handleEnvChange(e.target.value)}
@@ -224,7 +225,7 @@ export default function QualityPage() {
               <option value={activeEnv}>Runs in {activeEnv}</option>
               {!adhoc && env !== activeEnv && <option value={env}>Runs in {env}</option>}
               <option value={ADHOC_ENV}>{ADHOC_LABEL}s (ad-hoc)</option>
-            </select>
+            </Select>
           </Field>
         </div>
 
@@ -275,8 +276,8 @@ export default function QualityPage() {
           </p>
           <div className="quality-score-pick">
             <Field label="Run">
-              <select
-                className="input-field"
+              <Select
+                size="sm"
                 value={manualRunId}
                 onChange={(e) => setManualRunId(e.target.value)}
                 aria-label="Run to score"
@@ -287,7 +288,7 @@ export default function QualityPage() {
                     {r.pipeline_name} · {(statusMetaFor(r.status)?.label ?? r.status).toLowerCase()} · {r.env ?? ""} · {formatRelative(r.started_at) ?? ""}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Button
               variant="secondary"

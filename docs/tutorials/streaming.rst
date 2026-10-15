@@ -29,6 +29,8 @@ Step 1: Generate the project
 Step 2: Read the pipeline
 -------------------------
 
+``pipelines/events_stream.yaml``, without its explanatory comments:
+
 .. tab-set::
    :sync-group: ducta-format
 
@@ -38,7 +40,7 @@ Step 2: Read the pipeline
       .. code-block:: toml
 
          # pipelines/events_stream.toml
-         description = "Ingest a file stream, clean it, and land it as Parquet"
+         description = "Ingest a file stream, clean it, and land it as Delta-ready Parquet"
          type = "streaming"
          requires_dates = false
 
@@ -61,11 +63,6 @@ Step 2: Read the pipeline
 
          [nodes.ingest_events.stream.streaming]
          checkpoint_location = "${paths.output}/${env}/_ckpt/ingest_events"
-         output_mode = "append"
-
-         [nodes.ingest_events.stream.streaming.trigger]
-         type = "processing_time"
-         interval = "5 seconds"
 
          [nodes.clean_events]
          description = "Silver: drop incomplete events and stamp an ingest time"
@@ -73,6 +70,13 @@ Step 2: Read the pipeline
          after = [
              "ingest_events",
          ]
+
+         [nodes.clean_events.stream.transform]
+         key = "clean_events"
+         module = "pipelines.transforms"
+
+         [nodes.clean_events.stream.transform.params]
+         min_amount = 0.0
 
          [nodes.clean_events.stream.input]
          format = "file_stream"
@@ -82,24 +86,12 @@ Step 2: Read the pipeline
          [nodes.clean_events.stream.input.options]
          path = "${paths.output}/${env}/bronze/events"
 
-         [nodes.clean_events.stream.transform]
-         key = "clean_events"
-         module = "pipelines.transforms"
-
-         [nodes.clean_events.stream.transform.params]
-         min_amount = 0.0
-
          [nodes.clean_events.stream.output]
          format = "parquet"
          path = "${paths.output}/${env}/silver/events"
 
          [nodes.clean_events.stream.streaming]
          checkpoint_location = "${paths.output}/${env}/_ckpt/clean_events"
-         output_mode = "append"
-
-         [nodes.clean_events.stream.streaming.trigger]
-         type = "processing_time"
-         interval = "5 seconds"
 
    .. tab-item:: YAML
       :sync: yaml
@@ -107,9 +99,10 @@ Step 2: Read the pipeline
       .. code-block:: yaml
 
          # pipelines/events_stream.yaml
-         description: Ingest a file stream, clean it, and land it as Parquet
+         description: Ingest a file stream, clean it, and land it as Delta-ready Parquet
          type: streaming
          requires_dates: false
+
          nodes:
            ingest_events:
              description: "Bronze: land the raw event stream exactly as it arrives"
@@ -118,37 +111,35 @@ Step 2: Read the pipeline
                input:
                  format: file_stream
                  file_format: json
-                 options: {path: "${paths.input}/events", maxFilesPerTrigger: 1}
                  schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+                 options:
+                   path: ${paths.input}/events
+                   maxFilesPerTrigger: 1
                output:
                  format: parquet
                  path: ${paths.output}/${env}/bronze/events
                streaming:
                  checkpoint_location: ${paths.output}/${env}/_ckpt/ingest_events
-                 output_mode: append
-                 trigger: {type: processing_time, interval: 5 seconds}
 
            clean_events:
              description: "Silver: drop incomplete events and stamp an ingest time"
              kind: stream
              after: [ingest_events]
              stream:
-               input:
-                 format: file_stream
-                 file_format: parquet
-                 options: {path: "${paths.output}/${env}/bronze/events"}
-                 schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
                transform:
                  key: clean_events
                  module: pipelines.transforms
                  params: {min_amount: 0.0}
+               input:
+                 format: file_stream
+                 file_format: parquet
+                 schema: event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP
+                 options: {path: "${paths.output}/${env}/bronze/events"}
                output:
                  format: parquet
                  path: ${paths.output}/${env}/silver/events
                streaming:
                  checkpoint_location: ${paths.output}/${env}/_ckpt/clean_events
-                 output_mode: append
-                 trigger: {type: processing_time, interval: 5 seconds}
 
    .. tab-item:: JSON
       :sync: json
@@ -156,7 +147,8 @@ Step 2: Read the pipeline
       .. code-block:: json
 
          {
-           "description": "Ingest a file stream, clean it, and land it as Parquet",
+           "$schema": "../.ducta/schema/pipeline.json",
+           "description": "Ingest a file stream, clean it, and land it as Delta-ready Parquet",
            "type": "streaming",
            "requires_dates": false,
            "nodes": {
@@ -167,23 +159,18 @@ Step 2: Read the pipeline
                  "input": {
                    "format": "file_stream",
                    "file_format": "json",
+                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
                    "options": {
                      "path": "${paths.input}/events",
                      "maxFilesPerTrigger": 1
-                   },
-                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
+                   }
                  },
                  "output": {
                    "format": "parquet",
                    "path": "${paths.output}/${env}/bronze/events"
                  },
                  "streaming": {
-                   "checkpoint_location": "${paths.output}/${env}/_ckpt/ingest_events",
-                   "output_mode": "append",
-                   "trigger": {
-                     "type": "processing_time",
-                     "interval": "5 seconds"
-                   }
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/ingest_events"
                  }
                }
              },
@@ -194,14 +181,6 @@ Step 2: Read the pipeline
                  "ingest_events"
                ],
                "stream": {
-                 "input": {
-                   "format": "file_stream",
-                   "file_format": "parquet",
-                   "options": {
-                     "path": "${paths.output}/${env}/bronze/events"
-                   },
-                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP"
-                 },
                  "transform": {
                    "key": "clean_events",
                    "module": "pipelines.transforms",
@@ -209,17 +188,20 @@ Step 2: Read the pipeline
                      "min_amount": 0.0
                    }
                  },
+                 "input": {
+                   "format": "file_stream",
+                   "file_format": "parquet",
+                   "schema": "event_id STRING, category STRING, amount DOUBLE, ts TIMESTAMP",
+                   "options": {
+                     "path": "${paths.output}/${env}/bronze/events"
+                   }
+                 },
                  "output": {
                    "format": "parquet",
                    "path": "${paths.output}/${env}/silver/events"
                  },
                  "streaming": {
-                   "checkpoint_location": "${paths.output}/${env}/_ckpt/clean_events",
-                   "output_mode": "append",
-                   "trigger": {
-                     "type": "processing_time",
-                     "interval": "5 seconds"
-                   }
+                   "checkpoint_location": "${paths.output}/${env}/_ckpt/clean_events"
                  }
                }
              }
@@ -231,6 +213,9 @@ Step 2: Read the pipeline
   datasets, so Ducta cannot infer the order from the data.
 - Every node has its own checkpoint, under the environment's directory — the
   checkpoint is what lets a restarted query continue where it stopped.
+- ``trigger`` and ``output_mode`` are not in this file: ``defaults.stream`` in
+  ``ducta.yaml`` gives every stream node ``{trigger: 5s, output_mode: append}``,
+  and a node that sets its own keeps it.
 
 The transform is a function registered under a key:
 
@@ -260,15 +245,13 @@ Step 3: Run it continuously
    ducta config validate --env dev
    ducta stream run --pipeline events_stream --env dev
 
-The command starts both queries and returns. They keep running: copy another
-``.json`` event into ``data/events/`` and it appears in
+The command starts both queries and keeps running while they do — they live in
+its process. Copy another ``.json`` event into ``data/events/`` and it appears in
 ``data/dev/bronze/events`` and, if it has an amount, in
-``data/dev/silver/events``.
+``data/dev/silver/events``. Press Ctrl+C to stop both queries.
 
-.. code-block:: bash
-
-   ducta stream status --env dev                         # queries, rates, health
-   ducta stream stop --env dev --execution-id <id>
+To keep a stream running without a terminal, start it from the server
+(``ducta ui``) and watch or stop it there (see :doc:`../streaming`).
 
 Step 4: Run it as a finite job
 ------------------------------

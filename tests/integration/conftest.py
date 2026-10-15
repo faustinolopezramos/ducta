@@ -20,12 +20,7 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark", reason="integration tests require pyspark")
 
-# Pin the workers to the interpreter running the tests. Spark otherwise launches
-# workers with whatever `python3` is first on PATH, which on macOS is the system
-# 3.9 — every Python-side operation then dies with PYTHON_VERSION_MISMATCH, and
-# the failure looks like a Ducta bug rather than an environment one.
-os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+# The workers' interpreter is pinned in the root conftest (PYSPARK_PYTHON).
 
 
 @pytest.fixture(scope="session")

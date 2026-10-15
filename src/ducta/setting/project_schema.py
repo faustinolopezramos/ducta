@@ -86,7 +86,7 @@ def check_metadata(value: Dict[str, Any]) -> Dict[str, Any]:
 
 
 #: What an alert rule can be about.
-ALERT_EVENTS = ("failure", "quality_gate", "sla_miss", "slow", "stale")
+ALERT_EVENTS = ("failure", "quality_gate", "sla_miss", "slow")
 
 
 class AlertChannel(_Strict):
@@ -113,8 +113,10 @@ class AlertChannel(_Strict):
 
 class AlertRule(_Strict):
     # Not `on:` — YAML 1.1 reads that key as the boolean true.
-    when: List[Literal["failure", "quality_gate", "sla_miss", "slow", "stale"]] = Field(
-        ..., min_length=1, description="failure | quality_gate | sla_miss | slow | stale"
+    # No `stale`: it was accepted and never sent. A pipeline late for its
+    # `metadata.sla` is `sla_miss`.
+    when: List[Literal["failure", "quality_gate", "sla_miss", "slow"]] = Field(
+        ..., min_length=1, description="failure | quality_gate | sla_miss | slow"
     )
     pipelines: List[str] = Field(
         default_factory=lambda: ["*"], description="Pipeline name globs this rule covers"

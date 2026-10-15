@@ -120,7 +120,11 @@ class TestGateBlockedReportsNonZeroExit:
 
         assert result == ExitCode.SUCCESS.value
 
-    def test_streaming_run_reports_success(self):
+    def test_streaming_run_waits_for_its_queries_then_reports_success(self, monkeypatch):
+        # The queries live in this process: the command stays until they end.
+        from ducta.console import execution
+
+        monkeypatch.setattr(execution, "_FOREGROUND_POLL_SECONDS", 0)
         exec_obj = _executor_returning(
             PipelineRunResult(
                 pipeline="my_pipeline",
@@ -128,10 +132,17 @@ class TestGateBlockedReportsNonZeroExit:
                 streaming_execution_ids=["exec-1"],
             )
         )
+        exec_obj.get_streaming_pipeline_status.side_effect = [
+            {"active_queries": 1},
+            {"active_queries": 0},
+            {"active_queries": 0},
+        ]
 
         result = _cmd_with_fake_executor(exec_obj)
 
         assert result == ExitCode.SUCCESS.value
+        exec_obj.wait_for_streaming_startup.assert_called_once()
+        assert exec_obj.get_streaming_pipeline_status.call_count == 3
 
     def test_missing_deps_skip_reports_a_dependency_error(self):
         # A skip used to exit 0, so no script wrapping `ducta` could tell a run

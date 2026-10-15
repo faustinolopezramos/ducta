@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from collections import defaultdict, deque
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -42,7 +42,7 @@ class MissingDependencyReferenceError(ValueError):
 
 
 def kahn_topological_sort(
-    adjacency: Dict[str, Iterable[str]],
+    adjacency: Mapping[str, Iterable[str]],
     node_order: List[str],
     *,
     sort_dependents: bool = False,
@@ -114,7 +114,7 @@ class DependencyResolver:
 
         resolved = resolve_node_dependencies(pipeline_nodes, node_configs)
 
-        dag = defaultdict(set)
+        dag: Dict[str, Set[str]] = defaultdict(set)
         for node_name in pipeline_nodes:
             dag[node_name] = set()
 

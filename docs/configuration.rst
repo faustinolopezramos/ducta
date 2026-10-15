@@ -42,7 +42,8 @@ current directory (or ``--base-path``) upwards, the first directory holding a
 Strict by design
 ----------------
 
-Unknown keys are **errors**, never ignored. A typo does not silently change
+Unknown keys are **errors**, never ignored (except inside a dataset's
+``options``, which go to the reader as written). A typo does not silently change
 behaviour; it stops the run with the file, the line and a suggestion:
 
 .. code-block:: text
@@ -62,8 +63,12 @@ to a location.
      - pipelines/etl.yaml:6 node 'daily': after 'cleen' is not a node of pipeline 'etl' (did you mean 'clean'?)
 
 Each stage reports every problem it finds, not just the first.
-Free-form data you want to keep with the project goes under ``metadata:``
-(allowed in ``ducta.yaml`` and on pipelines and nodes); Ducta never reads it.
+Data you want to keep with the project goes under ``metadata:`` (in
+``ducta.yaml``, on datasets, pipelines and nodes). On datasets, pipelines and
+nodes it is free-form except for the keys Ducta recognises and type-checks: ``owner`` (governance warnings),
+``sla`` (``daily 06:00``, ``hourly`` or ``6h`` — late-pipeline alerts and
+freshness), ``criticality`` (``low``/``medium``/``high``), ``docs`` (a URL),
+``pii`` and ``tags`` (lists of text). The web app shows them.
 
 ducta.yaml
 ----------
@@ -165,7 +170,8 @@ ducta.yaml
    * - ``version``
      - Always ``2``. Required.
    * - ``project``
-     - The project's name (certificates and MLOps runs carry it). Required.
+     - The project's name. Required. MLflow names experiments after it, and it is
+       part of the configuration a Run Certificate fingerprints.
    * - ``paths``
      - ``input`` and ``output``: the base directories or URIs your datasets
        live under. Required. Referenced from the catalog as ``${paths.input}``
@@ -174,8 +180,50 @@ ducta.yaml
      - Engine settings — see below.
    * - ``environments``
      - What changes per environment — see :ref:`environments`.
+   * - ``defaults``
+     - Values datasets, pipelines and nodes get unless they set their own:
+       ``defaults.catalog`` (``{glob: dataset keys}``), ``defaults.node``,
+       ``defaults.stream``. Precedence: project < pipeline < node < environment.
+   * - ``governance``
+     - ``protected_environments`` (default ``[prod, production]``): running there
+       takes the ``pipeline.execute.protected`` permission. ``warnings``: report
+       pipelines and outputs without ``metadata.owner``, and outputs another
+       pipeline reads with no quality block (both on by default).
+   * - ``alerts``
+     - Who hears about what — see :ref:`alerts`.
    * - ``description``, ``metadata``
-     - Documentation for people; not read by Ducta.
+     - Documentation for people; the project's ``metadata`` is free-form.
+
+.. _alerts:
+
+Alerts
+~~~~~~
+
+A list of rules. Each says ``when`` to alert, for which ``pipelines`` (name
+globs, default ``["*"]``), and through which ``channels``. Secrets are named by
+environment variable, never written in the file:
+
+.. code-block:: yaml
+
+   alerts:
+     - when: [failure, quality_gate]
+       pipelines: ["gold.*"]
+       channels:
+         - {type: slack, webhook_env: SLACK_WEBHOOK_URL}
+         - {type: email, to: [data-team@example.com]}
+
+- ``failure`` — a run failed; ``quality_gate`` — a gate blocked it;
+- ``slow`` — a successful run took more than 1.5× the pipeline's p95 (after five runs);
+- ``sla_miss`` — the pipeline is late for its ``metadata.sla``, checked every
+  ``SLA_CHECK_MINUTES`` or by ``POST .../alerts/check``.
+
+Channels: ``slack`` and ``teams`` (``webhook_env``), ``webhook`` (``url_env``),
+``email`` (``to``; the server's ``DUCTA_SMTP_HOST``, ``DUCTA_SMTP_PORT``,
+``DUCTA_SMTP_FROM``, ``DUCTA_SMTP_USER``, ``DUCTA_SMTP_PASSWORD``).
+
+Alerts are sent by the server (``ducta ui`` / ``ducta server start``) for the
+runs it executes; ``ducta start`` on the command line sends none.
+``POST .../alerts/test`` sends a test message through one rule.
 
 Settings
 ~~~~~~~~
@@ -208,7 +256,7 @@ list; the ones most projects touch:
    * - ``fingerprint_mode``
      - How much of each dataset its fingerprint covers: ``auto`` (default —
        the Delta version, the run's window, or the whole dataset when it is
-       small), ``exact``, ``sample`` or ``schema``.
+       small), ``exact``, ``exact_crypto``, ``sample`` or ``schema``.
    * - ``in_memory_handoff``
      - Pass a node's output to its dependants in memory instead of re-reading
        it (false).
@@ -752,7 +800,8 @@ Pipeline keys
        ``model_version`` too, overriding the pipeline's; ``ml_stage: training`` or
        ``evaluation`` binds it to apply the pipeline's split.
    * - ``description``, ``metadata``
-     - Documentation; not read by Ducta.
+     - Documentation; ``metadata``'s recognised keys (``owner``, ``sla``…) are
+       described above.
 
 Node keys
 ~~~~~~~~~
@@ -786,6 +835,12 @@ Node keys
    * - ``run_in_process``
      - Run the node in its own process, so a timeout can stop pure-Python
        code that never calls Spark.
+   * - ``execution_mode``
+     - ``vectorized``: the function receives its inputs as pandas DataFrames
+       (collected with ``toPandas``) and a pandas result is converted back to
+       Spark. Refused above ``execution_mode_max_rows`` rows per input (default
+       5,000,000) so the driver does not run out of memory. The dataset key
+       ``use_pandas`` does not do this — it applies only to pickle files.
    * - ``ml_stage``
      - ``feature_engineering``, ``training``, ``evaluation`` or ``serving``. A
        ``training``/``evaluation`` node must apply the pipeline's ``split``.
@@ -796,7 +851,8 @@ Node keys
      - When an input does not exist yet: ``skip`` (default — the node and its
        dependants are skipped) or ``fail``.
    * - ``description``, ``metadata``
-     - Documentation; not read by Ducta.
+     - Documentation; ``metadata``'s recognised keys (``owner``, ``sla``…) are
+       described above.
 
 **Ordering comes from the data.** ``daily`` reads what ``clean`` writes, so it
 runs after it; nodes with no path between them run in parallel. Node names are

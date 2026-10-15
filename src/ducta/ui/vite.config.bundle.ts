@@ -67,7 +67,6 @@ export default defineConfig({
           ],
           'feature-editor': [
             './src/components/CodeEditor',
-            './src/components/CodeEditorModal',
           ],
           'utils-all': [
             './src/utils/storage',

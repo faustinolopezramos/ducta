@@ -115,6 +115,7 @@ class QualityService:
     ) -> Dict[str, Any]:
         """Run data-quality checks on a local file and return a report dict."""
         from ducta.check import FileStorageBackend, ValidationPhaseRunner
+        from ducta.check.core import QualityChecksFailed
         from ducta.setting.loaders import ConfigLoaderFactory
 
         df = _pandas_loader_for(format)(input_path)
@@ -125,12 +126,23 @@ class QualityService:
 
         dataset_name = Path(input_path).stem
         runner = ValidationPhaseRunner(workspace_path=workspace, fail_fast=fail_fast)
-        report = runner.run(
-            dataset_name=dataset_name,
-            df=df,
-            config={"checks": checks_config},
-        )
-        report_dict = report.to_dict()
+        try:
+            report_dict = runner.run(
+                dataset_name=dataset_name,
+                df=df,
+                config={"checks": checks_config},
+            ).to_dict()
+        except QualityChecksFailed as failed:
+            # Failing checks are this command's answer, not an error in it: the
+            # runner saved the report before raising, so hand it back like a
+            # passing one. The CLI then prints it and exits non-zero on
+            # `passed: false`, instead of "Quality run failed" and no report.
+            stored = (
+                runner.storage.load_report(failed.run_id, dataset_name) if failed.run_id else None
+            )
+            if not stored:
+                raise
+            report_dict = dict(stored)
         report_dict["source"] = {
             "input_path": input_path,
             "format": format,
@@ -138,13 +150,13 @@ class QualityService:
             "checks": source_checks,
             "fail_fast": fail_fast,
         }
-        if report.run_id:
+        if report_dict.get("run_id"):
             storage = (
                 runner.storage
                 if isinstance(runner.storage, FileStorageBackend)
                 else (FileStorageBackend(workspace))
             )
-            storage.save_report(report_dict, report.run_id, dataset_name)
+            storage.save_report(report_dict, report_dict["run_id"], dataset_name)
         return report_dict
 
     @staticmethod
@@ -321,7 +333,7 @@ class QualityService:
         profiles = raw_profiles if isinstance(raw_profiles, dict) else {}
 
         # The blocks the engine runs for this node: `quality` on its output, and
-        # each input's contract (catalog `checks` merged with `input_checks`).
+        # each input's contract (a node's `input_checks` replace the catalog's).
         blocks: List[Tuple[str, Dict[str, Any]]] = [
             ("'quality'", node_cfg.get("data_quality") or {})
         ]

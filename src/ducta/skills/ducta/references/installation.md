@@ -40,8 +40,8 @@ else is an extra — install only what the project needs:
 pip install "ducta[spark,delta,mlops]"
 ```
 
-A missing extra shows up as `No module named '<package>'`, or as exit code **5**
-from `ducta start`.
+A missing extra shows up as `No module named '<package>'` and exit code **1**
+from `ducta start`, with the `pip install` to run.
 `python3 scripts/check_env.py` lists which extras are importable.
 
 ## Check the installation
@@ -60,7 +60,7 @@ script, so it works when `python3` is a different interpreter.
 | Symptom | Cause | Fix |
 |---|---|---|
 | `ducta: command not found` | The environment is not active, or its scripts folder is not on `PATH`. | Activate the venv/conda env; or run `python -m pip show ducta` to see where it is. |
-| `No module named 'pyspark'` / exit code 5 | The `spark` extra is missing. | `pip install "ducta[spark]"` in the same environment. |
+| `No module named 'pyspark'` / exit code 1 | The `spark` extra is missing. | `pip install "ducta[spark]"` in the same environment. |
 | `JAVA_GATEWAY_EXITED` / "Java gateway process exited" | No JDK, or an incompatible one. | Install a JDK (17 recommended for PySpark 3.5) and set `JAVA_HOME`. |
 | Arrow errors on Java 21 (`UnsupportedOperationException`, `sun.misc.Unsafe`, `DirectByteBuffer`) | PySpark 3.5's bundled Arrow cannot run on JDK 21+. | Use JDK 17, or add `spark.sql.execution.arrow.pyspark.enabled: "false"` under `settings.spark_config`. Scoring with `mapInPandas` falls back to a slower row path. |
 | Wheels fail to build on Apple Silicon | An x86 Python under Rosetta. | Use an arm64 Python. |

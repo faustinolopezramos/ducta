@@ -2173,7 +2173,15 @@ class PositiveValuesCheck(BaseQualityCheck):
 
         # .gitignore
         gitignore = (
-            """__pycache__/
+            """# Secrets and machine-local values: never committed. Templates are.
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+!.env.dist
+
+__pycache__/
 *.py[cod]
 *.so
 .Python

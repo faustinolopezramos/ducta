@@ -15,11 +15,8 @@ import { ResizeHandle } from "../../components/ui/ResizeHandle";
 import { useUIStore } from "../../store/uiStore";
 import { useLogsStore } from "../../store/logsStore";
 import { ExecutionControls } from "../../components/Execution";
-import { InlineLogs } from "../../components/Execution/InlineLogs";
-import { StreamingStatusPanel } from "../../components/Execution/StreamingStatusPanel";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
 import { usePermission } from "../../hooks/usePermission";
 import { IconSparkles } from "@tabler/icons-react";
@@ -28,15 +25,15 @@ import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
 import { useProjectProblems } from "../../hooks/useProjectProblems";
 import { PipelineSourceEditor } from "../../components/Pipeline/PipelineSourceEditor";
-import { ProblemsPanel } from "../../components/Problems/ProblemsPanel";
 import { useStatusBarItem } from "../../components/Shell/statusBarStore";
 import { countBySeverity, nodesWithProblems, useProblemsStore } from "../../store/problemsStore";
 import { usePreflightPipeline } from "../../api/certificatesApi";
 import type { Problem } from "../../api/queries/problems";
 import { useApplyFix } from "../../hooks/useApplyFix";
-import { SamplePreview } from "../../components/Pipeline/SamplePreview";
 import { BreakpointBanner } from "../../components/Pipeline/BreakpointBanner";
 import { DebugPanel } from "../../components/Debug/DebugPanel";
+import { PipelineDock } from "./PipelineDock";
+import { PipelineDialogs } from "./PipelineDialogs";
 import { useCanvasEditing } from "./useCanvasEditing";
 import { aliasFor, datasetForParam, moduleOf, suggestNodeName } from "./canvasEdits";
 import { DATASET_DRAG_TYPE, FUNCTION_DRAG_TYPE } from "../../components/Explorer/PipelineExplorer";
@@ -61,7 +58,6 @@ import { toastStore } from "../../hooks/useModalStack";
 import { ExtractTemplateDialog } from "./ExtractTemplateDialog";
 import { useCommandMenu } from "../../components/Shell/commandStore";
 import { collapseGroups, GROUP_PREFIX, groupsOf, worstState } from "../../components/Pipeline/canvasGroups";
-import { RunOptionsDialog } from "../../components/Execution/RunOptionsDialog";
 import { envKind } from "../../components/Shell/envKind";
 
 /** The API's message, plus the problems a rejected edit would have caused. */
@@ -74,7 +70,6 @@ function errorText(error: unknown): string {
 const EXPLORER = { min: 180, max: 420, initial: 240 };
 const INSPECTOR = { min: 300, max: 640, initial: 400 };
 const CODE = { min: 320, max: 1100, initial: 560 };
-const DOCK = { min: 120, max: 640, initial: 260 };
 /** Past this many nodes the minimap is shown without being asked for. */
 const MINIMAP_AUTO_NODES = 15;
 
@@ -842,50 +837,27 @@ export function PipelinePage() {
           </div>
 
           {logsOpen && (
-            <>
-              <ResizeHandle orientation="horizontal" panelAfter label="Resize logs" value={bottomPanelHeight}
-                min={DOCK.min} max={DOCK.max} defaultValue={DOCK.initial} onChange={setBottomPanelHeight} />
-              <div className="pipeline-dock" style={{ height: bottomPanelHeight }}>
-                <div className="pipeline-dock__tabs" role="tablist" aria-label="Bottom panel">
-                  <button type="button" role="tab" aria-selected={bottomPanelTab !== "problems"}
-                    className={`pipeline-dock__tab${bottomPanelTab !== "problems" ? " is-active" : ""}`}
-                    onClick={() => setBottomPanelTab("logs")}>Logs</button>
-                  <button type="button" role="tab" aria-selected={bottomPanelTab === "problems"}
-                    className={`pipeline-dock__tab${bottomPanelTab === "problems" ? " is-active" : ""}`}
-                    onClick={() => setBottomPanelTab("problems")}>
-                    Problems
-                    {(counts.errors > 0 || counts.warnings > 0) && (
-                      <span className={`pipeline-dock__count${counts.errors ? " is-bad" : " is-warn"}`}>{counts.errors + counts.warnings}</span>
-                    )}
-                  </button>
-                  {sample && (
-                    <button type="button" role="tab" aria-selected={bottomPanelTab === "preview"}
-                      className={`pipeline-dock__tab${bottomPanelTab === "preview" ? " is-active" : ""}`}
-                      onClick={() => setBottomPanelTab("preview")}>
-                      Sample · {sample.node}
-                    </button>
-                  )}
-                  <button type="button" className="pipeline-dock__close" aria-label="Close panel (⌘J)" onClick={() => setLogsOpen(false)}>×</button>
-                </div>
-                <div className="pipeline-dock__body">
-                  {bottomPanelTab === "problems" ? (
-                    <ProblemsPanel problems={problems} isChecking={isChecking} onOpen={openProblem} onFix={fixProblem} action={fixWithAI} />
-                  ) : bottomPanelTab === "preview" && sample && projectId ? (
-                    <SamplePreview projectId={projectId} sample={sample}
-                      outputs={(itemById.get(sample.node)?.outputs ?? []).map((o) => o.name)}
-                      env={activeEnv} />
-                  ) : (
-                    <>
-                      {activeExecutionId && (
-                        <StreamingStatusPanel executionId={activeExecutionId} isActive={isExecuting} />
-                      )}
-                      <InlineLogs isRunning={isExecuting} onClose={() => setLogsOpen(false)} mode="fill"
-                        nodes={pipelineNodes} executionStates={executionStates} />
-                    </>
-                  )}
-                </div>
-              </div>
-            </>
+            <PipelineDock
+              height={bottomPanelHeight}
+              onHeightChange={setBottomPanelHeight}
+              onClose={() => setLogsOpen(false)}
+              tab={bottomPanelTab}
+              onTabChange={setBottomPanelTab}
+              counts={counts}
+              sample={sample}
+              projectId={projectId}
+              itemById={itemById}
+              activeEnv={activeEnv}
+              problems={problems}
+              isChecking={isChecking}
+              onOpenProblem={openProblem}
+              onFixProblem={fixProblem}
+              fixWithAI={fixWithAI}
+              activeExecutionId={activeExecutionId}
+              isExecuting={isExecuting}
+              pipelineNodes={pipelineNodes}
+              executionStates={executionStates}
+            />
           )}
         </div>
 
@@ -901,44 +873,28 @@ export function PipelinePage() {
         )}
       </div>
 
-      {extractDialog}
-      {subDialog}
-      {runOptionsOpen && (
-        <RunOptionsDialog
-          pipeline={pipelineId ?? ""}
-          env={activeEnv ?? ""}
-          nodes={pipelineNodes.map((n: { id: string }) => n.id)}
-          initialNode={selectedInThisPipeline}
-          onCancel={() => setRunOptionsOpen(false)}
-          onRun={(o) => {
-            setRunOptionsOpen(false);
-            guard(() => runWithOptions(o))();
-          }}
-        />
-      )}
-      <ConfirmDialog
-        open={confirmRun !== null}
-        tone="danger"
-        title={`Run ${pipelineId} in ${activeEnv}?`}
-        description={`${activeEnv} is production: this run writes real data. Type the pipeline's name to run it.`}
-        requireTyping={pipelineId ?? ""}
-        confirmLabel="Run in production"
-        onCancel={() => setConfirmRun(null)}
-        onConfirm={() => {
+      <PipelineDialogs
+        extractDialog={extractDialog}
+        subDialog={subDialog}
+        runOptionsOpen={runOptionsOpen}
+        pipelineId={pipelineId}
+        activeEnv={activeEnv}
+        pipelineNodes={pipelineNodes}
+        selectedInThisPipeline={selectedInThisPipeline}
+        onCloseRunOptions={() => setRunOptionsOpen(false)}
+        onRunWithOptions={(o) => {
+          setRunOptionsOpen(false);
+          guard(() => runWithOptions(o))();
+        }}
+        confirmRun={confirmRun}
+        onCancelConfirmRun={() => setConfirmRun(null)}
+        onConfirmRun={() => {
           confirmRun?.();
           setConfirmRun(null);
         }}
+        blocker={blocker}
+        aiFixDialog={aiFixDialog}
       />
-      <ConfirmDialog
-        open={blocker.state === "blocked"}
-        title="Leave without saving?"
-        description="You have unsaved pipeline changes that will be lost."
-        tone="danger"
-        confirmLabel="Leave"
-        onConfirm={() => blocker.state === "blocked" && blocker.proceed()}
-        onCancel={() => blocker.state === "blocked" && blocker.reset()}
-      />
-      {aiFixDialog}
     </div>
   );
 }

@@ -26,10 +26,9 @@ from rich.console import Console  # type: ignore
 from rich.table import Table  # type: ignore
 from rich.text import Text  # type: ignore
 
-PRIMARY = "white"
-BOLD_WHITE = "bold white"
-PRIMARY_BOLD = BOLD_WHITE
-PRIMARY_DIM = "dim white"
+# One palette for the whole CLI: the terminal's own foreground, never a fixed
+# white that disappears on a light theme.
+from ducta.console.ux.rich_logger import PRIMARY, PRIMARY_BOLD, PRIMARY_DIM
 
 
 def parse_spark_schema_line(line: str) -> Optional[Tuple[str, str, str, int]]:
@@ -57,28 +56,28 @@ def _build_schema_table(title: str, source_label: str, field_count: int) -> Tabl
     table = Table(
         title=f"[{PRIMARY_BOLD}]🔧 {title}[/] [{PRIMARY_DIM}]{source_label} • {field_count} fields[/]",
         box=box.ROUNDED,
-        border_style="white",
-        header_style="bold white on black",
+        border_style=PRIMARY_DIM,
+        header_style=PRIMARY_BOLD,
         show_lines=False,
         padding=(0, 1),
     )
     table.add_column("№", style=PRIMARY_DIM, width=4, justify="right")
-    table.add_column("Field Name", style="white", no_wrap=True, min_width=20)
+    table.add_column("Field Name", style=PRIMARY, no_wrap=True, min_width=20)
     table.add_column("Data Type", style=PRIMARY_DIM, justify="center", width=15)
-    table.add_column("Nullable", style="white", justify="center", width=10)
+    table.add_column("Nullable", style=PRIMARY, justify="center", width=10)
     return table
 
 
 def _nullable_display(is_nullable: bool) -> str:
     icon = "✓" if is_nullable else "✗"
-    style = "white" if is_nullable else PRIMARY_DIM
+    style = PRIMARY if is_nullable else PRIMARY_DIM
     return f"[{style}]{icon}[/]"
 
 
 def _render_schema_footer(console: Console, table: Table, field_count: int) -> None:
     footer = Text()
     footer.append("Total Fields: ", style="dim")
-    footer.append(f"{field_count}", style=BOLD_WHITE)
+    footer.append(f"{field_count}", style=PRIMARY_BOLD)
 
     console.print()
     console.print(table)
@@ -179,4 +178,4 @@ def _get_type_color(data_type: str = "") -> str:
         return "bright_blue"
     if "binary" in dt:
         return "bright_red"
-    return "white"
+    return PRIMARY

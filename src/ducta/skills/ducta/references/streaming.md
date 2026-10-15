@@ -65,13 +65,15 @@ score each micro-batch.
 ## Running
 
 ```bash
-ducta stream run --pipeline events --env dev             # start and return
-ducta stream run --pipeline events --env dev --mode sync # wait for the queries
-ducta stream status --env dev --output-format json
-ducta stream stop --execution-id ID --env dev
+ducta stream run --pipeline events --env dev   # runs until the queries end, or Ctrl+C
 ```
 
-`ducta start --pipeline events --mode sync` also runs streaming and hybrid pipelines.
+The queries live in the command's process, so it keeps running while they do; Ctrl+C
+stops them gracefully. `ducta start --pipeline events` behaves the same.
+`ducta stream status` / `stop` only see streams of their own process. A stream that
+must outlive a terminal is started from the server (`ducta ui`, or
+`POST .../pipelines/{name}/execute`): `GET /api/executions/{id}/streaming` shows it,
+`POST /api/executions/{id}/cancel` stops it.
 
 **Backfills and CI:** a terminating trigger (`once`, `available_now`) plus `--mode sync`
 turns a stream into a batch job. Switch it per environment:
@@ -89,5 +91,5 @@ environments:
 | "checkpoint already in use" | another query uses that checkpoint: give each node (and environment) its own |
 | transform not found | the module is not imported or does not call `registry.register` with that key |
 | `trigger` / `checkpoint_location` "not allowed here" | move it under `stream.streaming` |
-| the command returns at once and nothing seems to happen | default `--mode async`: use `ducta stream status`, or `--mode sync` |
+| `ducta stream status` lists nothing | it only sees its own process: check the terminal running `ducta stream run`, or the server's `GET /api/executions/{id}/streaming` |
 | scoring a stream fails on Java 21 | streaming model scoring needs Arrow: use JDK 17 |

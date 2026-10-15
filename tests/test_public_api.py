@@ -50,7 +50,7 @@ class TestSurface:
 
     def test_the_documented_extension_points_are_public(self):
         # README points contributors at these by name.
-        for name in ("register_check", "ReaderFactory", "WriterFactory"):
+        for name in ("register_check", "ReaderFactory", "WriterFactory", "MLNodeContext"):
             assert name in ducta.__all__, f"{name} is a documented extension point"
 
     def test_errors_are_catchable_from_the_top_level(self):

@@ -280,3 +280,17 @@ def test_a_problems_fix_reaches_the_model():
     )
     assert "pipelines/etl.yaml:4" in text
     assert "Use 'timeout_seconds'" in text and "replace 'timout' with 'timeout_seconds'" in text
+
+
+# pipelines/<name>.yaml: two levels up leaves the project.
+@pytest.mark.parametrize("name", ["../../outside", "a/../../../outside", "..\\..\\outside", ""])
+def test_a_pipeline_name_cannot_reach_outside_the_project(tmp_path, name):
+    from ducta.ai.builder import fix_scope
+    from ducta.ai.errors import AINotFoundError
+
+    project = tmp_path / "project"
+    (project / "pipelines").mkdir(parents=True)
+    (tmp_path / "outside.yaml").write_text("nodes: {secret: {}}\n", encoding="utf-8")
+
+    with pytest.raises(AINotFoundError):
+        fix_scope(project, name)

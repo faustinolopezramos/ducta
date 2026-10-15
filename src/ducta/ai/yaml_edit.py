@@ -38,20 +38,20 @@ def edit_yaml(text: str, edit: Callable[[Any], None]) -> str:
     try:
         from ruamel.yaml.comments import CommentedMap
 
-        from ducta.api.repositories.v2_store import _restore_blank_lines, _style_of, _yaml
+        from ducta.api.repositories.v2_store import restore_blank_lines, round_trip_yaml, style_of
     except ImportError as e:  # pragma: no cover — the api extra brings ruamel
         raise AIEnvironmentError(
             "Applying a proposal needs Ducta's API extra: pip install 'ducta[api,ai]'"
         ) from e
-    doc = _yaml().load(text) if text.strip() else None
+    doc = round_trip_yaml().load(text) if text.strip() else None
     if doc is None:
         doc = CommentedMap()
     edit(doc)
     buf = io.StringIO()
-    writer = _yaml(**_style_of(text))
+    writer = round_trip_yaml(**style_of(text))
     writer.width = 4096  # a {flow: mapping} stays on its line
     writer.dump(doc, buf)
-    return _restore_blank_lines(text, buf.getvalue())
+    return restore_blank_lines(text, buf.getvalue())
 
 
 def mapping(value: Any) -> Any:

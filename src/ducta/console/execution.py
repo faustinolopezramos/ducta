@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -148,6 +149,64 @@ def _load_streaming_context(config: Optional[Union[str, Path]], env: str = "base
     return load_context(config, env)
 
 
+#: A stream lives in the process that started it: these commands, a new process,
+#: never see one started elsewhere. Say where to look instead of only "not found".
+_OTHER_PROCESS_HINT = (
+    "A stream started with `ducta stream run` runs in that terminal: stop it there "
+    "with Ctrl+C. A stream started from the server (`ducta ui`): see it with "
+    "GET /api/executions/<id>/streaming and stop it with POST /api/executions/<id>/cancel, "
+    "or from the web app."
+)
+
+#: How often a foreground stream checks whether its queries are still running.
+_FOREGROUND_POLL_SECONDS = 5.0
+
+
+def _stay_in_foreground(executor: PipelineExecutor, pipeline: str, execution_id: str) -> int:
+    """Keep this process — and the queries running inside it — alive until they end.
+
+    The queries run in this process's Spark session. Returning after startup, as
+    the command used to, ended the process and killed them before they wrote
+    anything. Ctrl+C stops them gracefully; a finite trigger ends on its own.
+    """
+    # Before the first look: right after starting, no query is active yet, and
+    # "none active" would read as "all done".
+    executor.wait_for_streaming_startup(execution_id, timeout=300.0)
+    print(
+        f"Streaming pipeline '{pipeline}' is running (execution ID: {execution_id}). "
+        "Press Ctrl+C to stop it."
+    )
+    try:
+        while True:
+            status = executor.get_streaming_pipeline_status(execution_id)
+            if not isinstance(status, dict) or int(status.get("active_queries") or 0) == 0:
+                break
+            time.sleep(_FOREGROUND_POLL_SECONDS)
+    except KeyboardInterrupt:
+        logger.info("Stopping streaming pipeline '{}'...", pipeline)
+        if executor.stop_streaming_pipeline(execution_id, graceful=True):
+            logger.info("Streaming pipeline '{}' stopped.", pipeline)
+            return ExitCode.SUCCESS.value
+        logger.error("Streaming pipeline '{}' did not stop cleanly.", pipeline)
+        return ExitCode.EXECUTION_ERROR.value
+
+    final = executor.get_streaming_pipeline_status(execution_id)
+    final = final if isinstance(final, dict) else {}
+    if int(final.get("failed_queries") or 0) or final.get("status") in (
+        "failed",
+        "error",
+        "partial_failure",
+    ):
+        logger.error(
+            "Streaming pipeline '{}' ended with failed queries (status: {}).",
+            pipeline,
+            final.get("status"),
+        )
+        return ExitCode.EXECUTION_ERROR.value
+    logger.info("Streaming pipeline '{}' finished: every query ended.", pipeline)
+    return ExitCode.SUCCESS.value
+
+
 def run_streaming_pipeline_cli(
     config: Optional[Union[str, Path]],
     pipeline: str,
@@ -202,9 +261,11 @@ def run_streaming_pipeline_cli(
                 len(started) + len(skipped) + len(failed),
             )
 
-        print(f"Streaming pipeline '{pipeline}' started with execution ID: {execution_id}")
-        logger.info("Streaming pipeline '{}' started with execution ID: {}", pipeline, execution_id)
-        return ExitCode.SUCCESS.value
+        if mode == "sync":
+            # The engine already waited for the queries to end.
+            print(f"Streaming pipeline '{pipeline}' finished (execution ID: {execution_id})")
+            return ExitCode.SUCCESS.value
+        return _stay_in_foreground(executor, pipeline, execution_id)
     except json.JSONDecodeError as e:
         logger.error("Invalid hyperparams JSON: {}", e)
         return ExitCode.VALIDATION_ERROR.value
@@ -229,6 +290,7 @@ def get_streaming_pipeline_status_cli(
             status_info = executor.get_streaming_pipeline_status(execution_id)
             if not status_info:
                 logger.error("Pipeline with execution_id '{}' not found", execution_id)
+                logger.info(_OTHER_PROCESS_HINT)
                 return ExitCode.VALIDATION_ERROR.value
             if format_type == "json":
                 print(json.dumps(status_info, indent=2, default=str))
@@ -236,6 +298,9 @@ def get_streaming_pipeline_status_cli(
                 PipelineStatusFormatter.format_single_pipeline(status_info)
         else:
             status_list = executor.list_streaming_pipelines()
+            if not status_list and format_type != "json":
+                logger.info("No streaming pipeline runs in this process. {}", _OTHER_PROCESS_HINT)
+                return ExitCode.SUCCESS.value
             if format_type == "json":
                 print(json.dumps(status_list, indent=2, default=str))
             else:
@@ -264,6 +329,10 @@ def stop_streaming_pipeline_cli(
                 f" (timeout: {timeout}s)" if timeout > 0 else "",
             )
             return ExitCode.SUCCESS.value
+        if not executor.get_streaming_pipeline_status(execution_id):
+            logger.error("No streaming pipeline '{}' in this process.", execution_id)
+            logger.info(_OTHER_PROCESS_HINT)
+            return ExitCode.VALIDATION_ERROR.value
         logger.error("Failed to stop pipeline '{}' within {}s.", execution_id, timeout)
         return ExitCode.EXECUTION_ERROR.value
     except Exception as e:

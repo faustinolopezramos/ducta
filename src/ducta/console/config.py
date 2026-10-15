@@ -31,17 +31,10 @@ from typing import Optional
 from loguru import logger  # type: ignore
 
 from ducta.console.core import ConfigurationError, SecurityError, SecurityValidator
-from ducta.setting.project_loader import PROJECT_FILE, find_project_root, project_file
+from ducta.setting.project_context import find_nearest_project
+from ducta.setting.project_loader import PROJECT_FILE, project_file
 
-
-def find_nearest_project(start: Path) -> Optional[Path]:
-    """The format-2 project at ``start`` or in its nearest ancestor."""
-    start = start.resolve()
-    for directory in (start, *start.parents):
-        root = find_project_root(directory)
-        if root is not None:
-            return root
-    return None
+__all__ = ["ConfigManager", "find_nearest_project"]
 
 
 class ConfigManager:

@@ -44,7 +44,9 @@ function WorkspaceMenu() {
       hint: src,
       onSelect: () => {
         updateSource(src);
-        // Every query is keyed by the source: start clean.
+        // A full reload, as ConnectWorkspaceForm does: queries are keyed by the
+        // source, but the in-memory stores (logs, problems, run states), each
+        // useWorkspaceSelection copy and open WebSockets are not.
         globalThis.location.assign("/projects");
       },
     })),

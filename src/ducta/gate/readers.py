@@ -169,8 +169,14 @@ class PickleReader(SparkReaderBase):
                     spark = self._ctx_spark()
                     if spark is not None:
                         return spark.createDataFrame(data)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001
+                # The node then gets the pandas frame, not the Spark one it expects.
+                logger.warning(
+                    "Could not convert pickled pandas data from {} to Spark; returning it "
+                    "as pandas (set use_pandas: true to make that explicit): {}",
+                    source,
+                    e,
+                )
         return data
 
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:

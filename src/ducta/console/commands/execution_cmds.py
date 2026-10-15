@@ -357,8 +357,15 @@ class ExecutionCommands:
             rerun_all=self.config.rerun_all,
         )
 
-        from ducta.console.execution import report_run_outcome
+        from ducta.console.execution import _stay_in_foreground, report_run_outcome
+        from ducta.core.results import RunStatus
 
+        if result.status is RunStatus.RUNNING and result.streaming_execution_ids:
+            # A streaming pipeline started in async mode: its queries run in this
+            # process, so returning now would end them before they wrote anything.
+            return _stay_in_foreground(
+                exec_obj, self.config.pipeline, result.streaming_execution_ids[0]
+            )
         return report_run_outcome(result, pipeline=self.config.pipeline)
 
     def _execute_sweep(self, exec_obj, base_hyperparams) -> int:

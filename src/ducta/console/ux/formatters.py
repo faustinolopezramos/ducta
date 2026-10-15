@@ -73,7 +73,7 @@ class PipelineStatusFormatter:
     @staticmethod
     def _get_status_color(status: str) -> str:
         """Get color for status value."""
-        return PipelineStatusFormatter.STATUS_COLOR_MAP.get(status.lower(), "white")
+        return PipelineStatusFormatter.STATUS_COLOR_MAP.get(status.lower(), PRIMARY)
 
     @staticmethod
     def _get_status_emoji(status: str) -> str:
@@ -95,7 +95,7 @@ class PipelineStatusFormatter:
         environment = status_info.get("environment", "N/A")
 
         table = Table(
-            title=f"[{PRIMARY_BOLD}]Pipeline:[/] [white]{pipeline_name}[/]",
+            title=f"[{PRIMARY_BOLD}]Pipeline:[/] [bold]{pipeline_name}[/]",
             box=box.ROUNDED,
             show_header=True,
             header_style=PRIMARY_BOLD,
@@ -103,7 +103,7 @@ class PipelineStatusFormatter:
         )
 
         table.add_column("Property", style=PRIMARY, no_wrap=True)
-        table.add_column("Value", style="white")
+        table.add_column("Value", style=PRIMARY)
 
         status_color = PipelineStatusFormatter._get_status_color(status)
 
@@ -159,7 +159,7 @@ class PipelineStatusFormatter:
             emoji = PipelineStatusFormatter._get_status_emoji(status)
             status_display = f"[{color}]{emoji} {status_key.capitalize()}[/]"
         else:
-            status_display = f"[white]❓ {status}[/]"
+            status_display = f"❓ {status}"
 
         progress = PipelineStatusFormatter._calculate_progress(nodes)
 
@@ -204,7 +204,7 @@ class PipelineStatusFormatter:
         table = Table(
             box=box.DOUBLE_EDGE,
             show_header=True,
-            header_style=f"bold {PRIMARY} on black",
+            header_style=PRIMARY_BOLD,
             border_style=PRIMARY,
             row_styles=[PRIMARY_DIM, ""],
             padding=(0, 1),

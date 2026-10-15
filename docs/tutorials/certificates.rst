@@ -12,10 +12,12 @@ Where it lives
 
 .. code-block:: text
 
-   .ducta/runs/<environment>/<run_id>/certificate.json
+   <paths.output>/<environment>/.ducta/runs/<run_id>/certificate.json
 
-One file per run, scoped by environment so a ``dev`` run and a ``prod`` run
-with the same pipeline never collide.
+One file per run, under the environment's output so a ``dev`` run and a ``prod``
+run with the same pipeline never collide (``settings.run_certificate_dir``
+moves it). Certificates written by older versions under ``.ducta/runs/`` are
+still listed by ``ducta certify``.
 
 Anatomy of a certificate
 -------------------------
@@ -25,7 +27,7 @@ A trimmed real certificate, from a batch ingestion run:
 .. code-block:: json
 
    {
-     "schema_version": "1.2",
+     "schema_version": "1.6",
      "run_id": "f9fb815596a74bf2a66d6cf3570b5493",
      "pipeline": "bronze.ingestion",
      "environment_name": "base",
@@ -45,12 +47,12 @@ A trimmed real certificate, from a batch ingestion run:
      "outputs": {
        "bronze.education.student": {
          "row_count": 395,
-         "schema_hash": "sha256:b04ea2c3...",
+         "schema_hash": "b04ea2c3296853c6...",
          "engine": "spark",
          "algorithm": "xxhash64-multiset/v2",
          "mode": "exact",
-         "content_hash": "sha256:...",
-         "fingerprint": "sha256:..."
+         "content_hash": "9e1c07d2a4f3...",
+         "fingerprint": "ad16e8e5da9e..."
        }
      },
      "quality": [
@@ -238,26 +240,38 @@ difference is not cosmetic:
    * - Mode
      - How it hashes
      - What it misses
-   * - ``exact`` (default)
+   * - ``auto`` (default)
+     - Cost proportional to what the run processed: a Delta input by its commit
+       version (no scan), an input with an incremental window by every row of the
+       window, any other input by every row up to ``fingerprint_exact_max_bytes``
+       (10 GiB) and by a sample above it; outputs by every row of the batch written.
+     - Whatever the strategy it picked misses — the certificate records the mode
+       actually used (``exact``, ``delta``, ``sample``), and ``certify`` flags it.
+   * - ``exact``
      - Order-independent digest over **every row** (Spark: ``xxhash64`` per
        row, aggregated by count/sum/bit_xor). A single changed cell
        anywhere — first row or last — changes the fingerprint. Insensitive
        to row reordering or repartitioning.
      - Nothing, short of a hash collision.
+   * - ``exact_crypto``
+     - The same over every row, with SHA-256 instead of ``xxhash64``.
+     - Nothing; slower, for when a hash collision must be ruled out.
    * - ``sample``
-     - Hashes only the first *N* rows (head-only).
-     - A change to any row outside the sampled window is invisible. On a
-       large table this is most of it.
+     - ``fingerprint_sample_rows`` rows (default 100). Spark: the rows with the
+       lowest row hash — chosen by content, so a reordering does not change the
+       sample. pandas: head, middle and tail.
+     - A change to any row outside the sample is invisible. On a large table
+       this is most of it.
    * - ``schema``
-     - Hashes column names and types only.
-     - Every row. Two datasets with the same schema and completely
-       different content fingerprint identically.
+     - Hashes column names and types, and counts the rows.
+     - Every row's content. Two datasets with the same schema and row count
+       and completely different content fingerprint identically.
 
 The legacy aliases ``fast`` and ``full`` still parse — they map to
 ``sample`` and ``exact`` respectively — but write ``exact``/``sample``/
 ``schema`` explicitly in new configs. ``fast`` in particular reads like
-"the quick version of exact" and is actually "hash only the first 100
-rows"; a project that sets it without realizing what it maps to ends up
+"the quick version of exact" and is actually "hash a 100-row
+sample"; a project that sets it without realizing what it maps to ends up
 with certificates that look complete and aren't.
 
 ``sample``/``schema`` are legitimate choices when a full scan is too
@@ -323,7 +337,13 @@ tamper-evident"* rather than a bare *"no"*.
 .. code-block:: text
 
    $ ducta certify verify --run-id f9fb8155
-   ✓ Certificate f9fb815596a7... verified: hash matches and signature valid [signature: valid]
+   ✓ Certificate f9fb815596a7... verified (authenticated): hash matches and signature valid — untampered [signature: valid]
+
+Without the key, a signed certificate verifies only its integrity, and says so:
+
+.. code-block:: text
+
+   ✓ Certificate f9fb815596a7... verified (integrity): integrity OK — signed, but the signature was NOT checked (no key provided); provide the key to rule out deliberate tampering [signature: present (no key)]
 
 If any input or output was fingerprinted in ``sample`` or ``schema`` mode,
 ``verify`` also warns explicitly — this is the command people run
@@ -333,7 +353,7 @@ belongs here, not only in the JSON:
 .. code-block:: text
 
    $ ducta certify verify --run-id 19a88fcb
-   ✓ Certificate 19a88fcb7fac... verified: hash matches and signature valid [signature: valid]
+   ✓ Certificate 19a88fcb7fac... verified (authenticated): hash matches and signature valid — untampered [signature: valid]
    ⚠ fingerprint mode is not 'exact' for: bronze.education.student (sample) —
      a change outside what was hashed would not be detected
 
@@ -375,7 +395,7 @@ written with ``fingerprint_mode: exact``:
    $ ducta certify diff 19a88fcb7fac f9fb815596a7
 
      bronze.education.student   not comparable
-       (algorithm differs: spark-head/v2 vs xxhash64-multiset/v2)
+       (algorithm differs: spark-minhash/v3 vs xxhash64-multiset/v2)
 
    ⚠ Certificates differ — see mismatches above
 
@@ -398,7 +418,7 @@ Everything above is also a public, stable API:
    from pathlib import Path
    from ducta import verify_certificate, load_certificate, build_certificate
 
-   cert = load_certificate(Path(".ducta/runs/base/f9fb8155.../certificate.json"))
+   cert = load_certificate(Path("data/base/.ducta/runs/f9fb8155.../certificate.json"))
    result = verify_certificate(Path("...certificate.json"), signing_key=key)
    print(result.ok, result.reason, result.signature)
 
@@ -425,8 +445,10 @@ Checklist before you rely on a certificate
 See also
 ------------
 
-- :doc:`mlops` — experiment tracking and the model registry, which
-  certificates link to via ``mlops_run_id``.
+- :doc:`mlops` — experiment tracking and the model registry. A node that
+  scores with a registered model records it in the certificate
+  (``nodes[].ml.model``: name, version, artifact hash), and ``certify diff``
+  compares it.
 - `core/README.md <https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md>`_
   — the certificate module in the context of the execution engine as a
   whole.

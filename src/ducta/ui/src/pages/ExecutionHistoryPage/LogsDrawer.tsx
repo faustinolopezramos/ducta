@@ -46,8 +46,7 @@ export function LogsDrawer({ executionId, onClose }: { executionId: string; onCl
   // entries — already present in `rawLogs` — so the node states can be
   // derived here instead of needing a dedicated backend endpoint. The node
   // *list* itself isn't in the execution record, so it comes from the
-  // pipeline spec this run belongs to (same source NodeCodePage/PipelinePage
-  // already use).
+  // pipeline spec this run belongs to (the same source PipelinePage uses).
   const { data: pipelinesData } = useServerProjectPipelines(statusData?.project_id ?? "");
   const nodeNames: string[] = pipelinesData?.pipelines?.[statusData?.pipeline_name ?? ""]?.nodes ?? [];
   const nodes = nodeNames.map((name) => ({ id: name, name }));

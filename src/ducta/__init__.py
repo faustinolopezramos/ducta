@@ -61,6 +61,8 @@ logger.disable("ducta")
 _PUBLIC_API: dict[str, str] = {
     # Execution
     "PipelineExecutor": "ducta.core.executors",
+    # What an ML node receives as `ml_context` (docs/mlops.rst types its nodes with it)
+    "MLNodeContext": "ducta.core.ml_context",
     # Configuration
     "Context": "ducta.setting.contexts",
     "load_project": "ducta.setting.project_loader",
@@ -120,6 +122,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
         SchemaValidationError,
     )
     from ducta.core.executors import PipelineExecutor
+    from ducta.core.ml_context import MLNodeContext
     from ducta.gate import ReaderFactory, WriterFactory
     from ducta.setting.contexts import Context
     from ducta.setting.project_loader import load_project
@@ -147,6 +150,7 @@ __all__ = [
     "__version__",
     # Execution
     "PipelineExecutor",
+    "MLNodeContext",
     # Configuration
     "Context",
     "load_project",

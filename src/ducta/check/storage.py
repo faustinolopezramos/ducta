@@ -403,8 +403,8 @@ class FileStorageBackend(StorageBackend):
             )
             for f in files[keep_latest:]:
                 f.unlink()
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001 — retention is best effort
+            logger.debug("Old quality reports were not pruned: {}", e)
 
 
 # ---------------------------------------------------------------------------

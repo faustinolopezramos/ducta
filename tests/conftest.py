@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -35,6 +36,14 @@ import pytest
 os.environ.setdefault(
     "COVERAGE_RCFILE", str(Path(__file__).resolve().parent.parent / "pyproject.toml")
 )
+
+# Spark launches its Python workers with whatever `python3` is first on PATH —
+# on macOS the system 3.9 — and every Python-side operation then dies with
+# PYTHON_VERSION_MISMATCH. Pin them to this interpreter for every test that
+# starts a real session, not only the integration ones: tests/check starts one
+# too, and passed only when the integration conftest had already set this.
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 # ---------------------------------------------------------------------------
 # Eagerly import the real modules that some per-directory conftests
@@ -93,13 +102,41 @@ HAS_SQLGLOT = _has("sqlglot")
 
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-skip Spark-marked tests when pyspark is not installed."""
+    """Run the Delta tests first; auto-skip Spark-marked tests without pyspark.
+
+    Delta's jar joins the JVM classpath only when the JVM starts, and the JVM
+    outlives ``SparkSession.stop()``. Once any earlier test has started Spark,
+    the Delta session cannot load — so in a full run (CI's) the Delta tests
+    always skipped. Moved to the front, they get the first JVM; their fixture
+    stops its session, and later tests start their own.
+    """
+    items.sort(key=lambda item: item.path.name != "test_delta_merge.py")
     if HAS_PYSPARK:
         return
     skip_spark = pytest.mark.skip(reason="pyspark not installed")
     for item in items:
         if "spark" in item.keywords:
             item.add_marker(skip_spark)
+
+
+@pytest.fixture(autouse=True)
+def _forget_project_modules(tmp_path_factory):
+    """Drop the modules a test imported from a project it generated under tmp.
+
+    Every template names its package ``pipelines``. A test that imports the
+    medallion project's ``pipelines`` leaves it in ``sys.modules``, and the next
+    test's streaming project then resolves ``pipelines.transforms`` against the
+    wrong folder — a node fails to start and the test fails only in a full run.
+    """
+    before = set(sys.modules)
+    yield
+    base = os.path.realpath(tmp_path_factory.getbasetemp())
+    for name in set(sys.modules) - before:
+        module = sys.modules.get(name)
+        locations = [getattr(module, "__file__", None) or ""]
+        locations += list(getattr(module, "__path__", None) or [])
+        if any(loc and os.path.realpath(loc).startswith(base) for loc in locations):
+            del sys.modules[name]
 
 
 @pytest.fixture(autouse=True, scope="session")

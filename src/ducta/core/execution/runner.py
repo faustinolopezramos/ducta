@@ -23,6 +23,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
@@ -493,7 +494,17 @@ class NodeExecutor:
             return
         error = outcome.get("error") or "worker reported no detail"
         if status == OUTCOME_GATE_BLOCKED:
-            raise QualityGateBlocked(error)
+            # QualityGateBlocked(error) raised a TypeError (it needs the dataset),
+            # which also lost the exception's skip_retry: a blocked node retried.
+            gate = outcome.get("gate") or {}
+            raise QualityGateBlocked(
+                SimpleNamespace(
+                    gate_name=gate.get("gate_name", "gate"),
+                    triggered_rules=gate.get("triggered_rules") or [error],
+                ),
+                gate.get("dataset_name") or node_name,
+                gate.get("run_id"),
+            )
         if status == OUTCOME_MISSING_DEPENDENCY:
             raise MissingDependencyError(error)
         raise RuntimeError(f"Node '{node_name}' failed in worker process: {error}")

@@ -21,6 +21,21 @@ def _make_module(name: str, **attrs):
     return mod
 
 
+def _installed(name: str) -> bool:
+    """Whether the real top-level package is importable. Another conftest may
+    already have put a fake there (``__spec__`` None), which find_spec rejects."""
+    import importlib.util
+
+    top = name.split(".")[0]
+    module = sys.modules.get(top)
+    if module is not None:
+        return getattr(module, "__spec__", None) is not None
+    try:
+        return importlib.util.find_spec(top) is not None
+    except ValueError:
+        return False
+
+
 def _install_mocks():
     # ------------------------------------------------------------------ #
     # pydantic mock — supports BaseModel, Field, validators, model_dump  #
@@ -178,8 +193,12 @@ def _install_mocks():
         "pyspark": pyspark,
         "pyspark.sql": ps_sql,
     }
+    import importlib.util
+
     for name, mod in mappings.items():
-        if name not in sys.modules:
+        # Fakes for absent packages only (see tests/gate/conftest.py). Ducta's own
+        # modules are always importable, so they are never faked here.
+        if name not in sys.modules and not _installed(name):
             sys.modules[name] = mod
 
 

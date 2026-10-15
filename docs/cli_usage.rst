@@ -53,8 +53,9 @@ lists every option of a command.
    * - ``--rerun-all``
      - Re-run the whole chain, ignoring reuse settings.
    * - ``--mode, -m {async,sync}``
-     - Streaming and hybrid pipelines: return once started (``async``, default)
-       or wait for the queries to finish (``sync``).
+     - Streaming and hybrid pipelines. Either way the command runs while the
+       queries do — they live in its process. ``async`` (default) reports their
+       status and stops them on Ctrl+C; ``sync`` waits inside the engine.
    * - ``--base-path PATH``
      - The project directory, when not running from inside it.
    * - ``--log-level LEVEL``, ``--verbose``, ``--quiet``, ``--log-file PATH``
@@ -100,9 +101,12 @@ Orchestrators can act on the exit code of ``ducta start``:
      - Invalid command-line arguments — an unknown pipeline name, a malformed
        date.
    * - 4
-     - The pipeline ran and failed.
+     - The pipeline ran and failed: a node raised, or a quality gate blocked one.
    * - 5
-     - A missing dependency (e.g. an optional extra is not installed).
+     - The pipeline did not complete: nodes were skipped because a dataset they
+       read is missing (an upstream that has not run). An optional extra that is
+       not installed exits ``1`` and names the ``pip install`` to run; a package
+       your code imports that is not installed fails preflight (``2``).
    * - 6
      - A security check refused a path or module.
    * - 7
@@ -206,6 +210,13 @@ comments).
    ducta stream run --pipeline events [--env ENV] [--mode async|sync]
    ducta stream status [--env ENV] [--execution-id ID] [--output-format table|json]
    ducta stream stop --execution-id ID [--env ENV] [--timeout SECONDS]
+
+``run`` keeps running while the queries do — they live in its process — and
+stops them on Ctrl+C; a terminating trigger (``available_now``) ends it on its
+own. ``status`` and ``stop`` only see streams of their own process: a stream
+started by another command, or by the server, is managed in that terminal (Ctrl+C)
+or through the server (``GET /api/executions/{id}/streaming``,
+``POST /api/executions/{id}/cancel``).
 
 Run from inside the project, or point ``--config`` at its ``ducta.yaml``.
 ``--transforms-module MODULE`` imports modules that register transforms before

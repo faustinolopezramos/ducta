@@ -127,6 +127,18 @@ class OutputWriter:
             logger.info("Node '{}' output is an artifact URI. Skipping standard saving.", node_name)
             return
 
+        # A node that declares no outputs runs for its effect (notify, audit,
+        # train-and-register): there is nothing to write, so what it returns is
+        # neither validated nor saved. The schema and `config validate` accept
+        # such a node; validating its return value made it fail every run.
+        if not node_config.get("output"):
+            logger.debug(
+                "Node '{}' declares no outputs; its return value ({}) is not saved.",
+                node_name,
+                type(result_df).__name__,
+            )
+            return
+
         PipelineValidator.validate_dataframe_schema(result_df)
         self.display_schema(result_df, node_name)
 
@@ -155,7 +167,7 @@ class OutputWriter:
             console = RichLoggerManager.get_console()
             line = Text("  ")
             line.append("✓ ", style="bright_green")
-            line.append(f"Output saved for node '{node_name}'", style="white")
+            line.append(f"Output saved for node '{node_name}'")
             console.print(line)
             console.print()
         except Exception:

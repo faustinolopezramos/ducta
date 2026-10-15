@@ -269,12 +269,9 @@ def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[
         f"""
         import json, sys
         sys.path.insert(0, {str(exec_source)!r})
-        from ducta.console.config import ConfigManager
-        from ducta.console.execution import ContextInitializer
         from ducta.core.preflight import validate_pipeline
-        cm = ConfigManager()
-        cm.change_to_config_directory()
-        ctx = ContextInitializer(cm).initialize({env!r})
+        from ducta.setting.project_context import load_project_context
+        _, ctx = load_project_context(env={env!r}, chdir=True)
         r = validate_pipeline(ctx, {pipeline_name!r})
         print({_DEEP_PREFLIGHT_MARKER!r} + json.dumps(
             {{"ok": r.ok, "errors": r.errors, "warnings": r.warnings}}

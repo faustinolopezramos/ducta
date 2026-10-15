@@ -42,7 +42,7 @@ export const useNode = (name: string) =>
  */
 export const nodeCodeQuery = (name: string) => ({
   queryKey: qk.nodes.code(name),
-  // Untyped like the endpoint's other consumers read it (NodeCodePage also uses `module_path`).
+  // Untyped like the endpoint's other consumers read it.
   queryFn: async (): Promise<any> => {
     try {
       // A node with no Python module (a config-only ingest) answers 404.

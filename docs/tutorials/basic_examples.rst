@@ -1,8 +1,11 @@
 Basic Examples
 ==============
 
-Small, complete projects that show one idea each. Every one runs as written:
-create the files, then run the command at the end of the section.
+Small examples that show one idea each. The first is a complete project: create
+its files, then run the command at the end of it. The last one changes that
+project and runs as written too. The ones in between show the pipeline (and code)
+for one idea — before running one, declare the datasets it names in
+``catalog.yaml``, as the first project does, and give it data.
 
 A first pipeline
 ----------------
@@ -489,6 +492,8 @@ With ``requires_dates: true`` (the default) a run takes a window, and an
              }
            }
          }
+
+A pipeline whose nodes read ``events`` then processes one day per run:
 
 .. code-block:: bash
 

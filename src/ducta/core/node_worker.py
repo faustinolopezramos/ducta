@@ -49,7 +49,7 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
             from ducta.gate.input import InputLoader
             from ducta.gate.output import DataOutputManager
 
-            _config_manager, context = bootstrap_worker_context(payload)
+            _project_root, context = bootstrap_worker_context(payload)
 
             node_executor = NodeExecutor(
                 context,
@@ -71,6 +71,13 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
                 outcome["status"] = OUTCOME_GATE_BLOCKED
                 outcome["error"] = str(e)
                 outcome["error_type"] = type(e).__name__
+                # Plain values, so the parent can raise the same exception.
+                outcome["gate"] = {
+                    "dataset_name": e.dataset_name,
+                    "run_id": e.run_id,
+                    "gate_name": getattr(e.gate_result, "gate_name", "gate"),
+                    "triggered_rules": list(getattr(e.gate_result, "triggered_rules", []) or []),
+                }
             except MissingDependencyError as e:
                 outcome["status"] = OUTCOME_MISSING_DEPENDENCY
                 outcome["error"] = str(e)

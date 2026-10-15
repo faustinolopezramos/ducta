@@ -111,10 +111,10 @@ class ProfileCommands:
             table = Table(title=title)
             for column, style in (
                 ("Column", "cyan"),
-                ("Type", "white"),
+                ("Type", "default"),
                 ("Nulls", "yellow"),
                 ("Distinct", "blue"),
-                ("Range", "white"),
+                ("Range", "default"),
                 ("Key", "green"),
             ):
                 table.add_column(column, style=style)

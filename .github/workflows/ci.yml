@@ -37,10 +37,11 @@ jobs:
       # keep it a hard failure rather than let the backlog grow back.
       - name: Ruff format check
         run: poetry run ruff format --check src tests
-      # Still advisory: the backlog is ~450 errors, dominated by [union-attr] on
-      # the lazily-created SparkSession. Flip to a hard failure once it is zero.
-      - name: mypy (advisory)
-        run: poetry run mypy src/ducta || true
+      # Blocking. Modules that still had errors when it was switched on are
+      # listed under [[tool.mypy.overrides]] in pyproject.toml (the ratchet):
+      # everything else, and every new module, must type-check.
+      - name: mypy
+        run: poetry run mypy src/ducta
 
   test:
     name: Tests (py${{ matrix.python-version }})

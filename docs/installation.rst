@@ -6,18 +6,22 @@ Ducta is designed to be lightweight and modular. You can install the core engine
 Requirements
 ------------
 
-* **Python**: 3.10, 3.11, or 3.12 (Support for 3.13 is in progress)
+* **Python**: 3.10, 3.11, 3.12 or 3.13
+* **Java**: a JDK for the ``spark`` extra — 17 is the one PySpark 3.5 supports fully
 * **Package Manager**: ``pip``, ``conda``, or ``poetry``
 * **OS**: Linux, macOS, or Windows
 
 Standard Installation
 ---------------------
 
-Install the core Ducta engine using pip:
+Install Ducta with the Spark extra, which pipelines run on:
 
 .. code-block:: bash
 
-   pip install ducta
+   pip install "ducta[spark]"
+
+``pip install ducta`` alone installs the core: ``ducta template``, ``ducta config``
+and ``ducta certify`` work, but running a pipeline needs ``spark``.
 
 Verified Installation
 ~~~~~~~~~~~~~~~~~~~~~
@@ -40,19 +44,29 @@ Ducta follows a "pay-for-what-you-use" approach with its dependencies. You can i
    * - Extra
      - Description
    * - ``ducta[spark]``
-     - Spark + PyArrow support for distributed data processing.
+     - PySpark and PyArrow: the engine pipelines run on.
+   * - ``ducta[delta]``
+     - Delta Lake for local Spark (``delta-spark``): Delta reads, writes and ``merge``.
    * - ``ducta[api]``
-     - FastAPI server, dashboard backend, and orchestration API.
-   * - ``ducta[mlops]``
-     - MLflow-backed experiment tracking, model registry, and Databricks Connect.
+     - The server and web app (``ducta ui``): FastAPI, persistence drivers, Git,
+       Redis for shared rate limits.
    * - ``ducta[database]``
-     - SQL database drivers (PostgreSQL, async SQLAlchemy) for ingestion/persistence.
+     - SQL drivers (SQLAlchemy, PostgreSQL, SQLite) on their own.
+   * - ``ducta[mlops]``
+     - MLflow, scikit-learn, NumPy, SciPy and Optuna: tracking, the model
+       registry and hyperparameter search.
+   * - ``ducta[boost]``
+     - XGBoost and LightGBM.
+   * - ``ducta[ai]``
+     - The AI pipeline builder (``ducta ai``): httpx, the Anthropic SDK, keyring.
+       Needs ``api`` too.
    * - ``ducta[monitoring]``
-     - Prometheus metrics for observability.
-   * - ``ducta[optimization]``
-     - NumPy + scikit-optimize for hyperparameter sweeps.
+     - Prometheus metrics.
+   * - ``ducta[databricks]``
+     - Databricks Connect. Not part of ``all``: it replaces PySpark, so install
+       it in an environment of its own.
    * - ``ducta[all]``
-     - Install every optional feature and connector.
+     - Every extra above except ``databricks``.
 
 Example:
 

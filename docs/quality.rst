@@ -2,7 +2,8 @@ Data Quality
 ============
 
 Ducta checks data at the two moments that matter: **before** a node runs, on
-what it reads, and **after**, on what it wrote. A failing check can stop the
+what it reads, and **after**, on what it returns — before that is written, so a
+blocking gate keeps bad data out of the output. A failing check can stop the
 run, skip what depends on it, or only warn — and every outcome is recorded in
 the run's certificate.
 
@@ -30,7 +31,8 @@ The same block — ``checks``, plus an optional ``gate`` — goes in three place
      - Before that node only, on one input. Replaces the dataset's contract for
        that node.
    * - A node's ``quality``
-     - After the node, on what it wrote.
+     - After the node's function, on what it returns — before it is written. A
+       blocking gate means the output is never written.
 
 Input checks: before a node runs
 --------------------------------
@@ -114,8 +116,8 @@ place for data another team or system produces:
          }
 
 When a contract fails, the node does not run. What happens to the rest of the
-pipeline is the gate's decision (below; by default the node's dependants are
-skipped).
+pipeline is the gate's decision (below). Without a gate, a failing error-severity
+check fails the node like an exception in its code, and the run fails (exit 4).
 
 Output checks: after a node runs
 --------------------------------
@@ -237,8 +239,9 @@ A gate turns the checks' results into a pass or a block:
    * - Key
      - Effect
    * - ``max_errors``
-     - Blocks when more error-severity checks fail. Default ``0``: without a
-       gate, any failing check blocks.
+     - Blocks when more error-severity checks fail. Default ``0``. (Without any
+       gate, a failing error-severity check fails the node instead — no
+       ``on_fail``, the run fails.)
    * - ``max_warnings``
      - Logs a warning when more warning-severity checks fail (never blocks).
    * - ``min_pass_rate``

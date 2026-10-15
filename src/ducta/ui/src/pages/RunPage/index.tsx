@@ -11,7 +11,7 @@ import { RunOptionsDialog } from "../../components/Execution/RunOptionsDialog";
 import { useCallback, useState } from "react";
 import { useCancelExecution, useExecutePipeline, useRetryExecution } from "../../api/mutations";
 import { isStuckQueued, type RunLike } from "../../utils/dashboardStats";
-import { PageContainer, PageHeader, Skeleton, StatusBadge, EmptyState } from "../../components/ui";
+import { PageContainer, PageHeader, Skeleton, StatusBadge, EmptyState, Button } from "../../components/ui";
 import { DiagnosePanel } from "../../components/Execution/DiagnosePanel";
 import { RunTimeline } from "../../components/Execution/RunTimeline";
 import { RunGraph } from "../../components/Execution/RunGraph";
@@ -116,19 +116,34 @@ export function RunPage() {
         actions={
           <div className="run-page__actions">
             {(run.status === "pending" || run.status === "running") && (
-              <button type="button" className="diagnose__btn" onClick={() => cancel(run.id)} disabled={cancelling}>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => cancel(run.id)}
+                loading={cancelling}
+              >
                 {cancelling ? "Cancelling…" : "Cancel run"}
-              </button>
+              </Button>
             )}
             {failed && canUseAI && (
-              <button type="button" className="diagnose__btn run-page__ai" onClick={() => setExplainAsked((n) => n + 1)}>
-                <IconSparkles size={14} aria-hidden="true" /> Explain with AI
-              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setExplainAsked((n) => n + 1)}
+                leftIcon={<IconSparkles size={14} aria-hidden="true" />}
+              >
+                Explain with AI
+              </Button>
             )}
             {failed && canUseAI && (
-              <button type="button" className="diagnose__btn run-page__ai" onClick={() => setAiFixOpen(true)}>
-                <IconSparkles size={14} aria-hidden="true" /> Fix with AI
-              </button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setAiFixOpen(true)}
+                leftIcon={<IconSparkles size={14} aria-hidden="true" />}
+              >
+                Fix with AI
+              </Button>
             )}
             <Link className="run-page__open" to={routes.pipeline(projectId, run.pipeline_name)}>
               Open the pipeline

@@ -6,6 +6,7 @@ export { Toast, ToastContainer } from "../Toast";
 export * from "./Modal";
 export * from "./Toggle";
 export * from "./Input";
+export * from "./Select";
 export * from "./Badge";
 
 // ── Redesign primitives (token-driven, WCAG-aware) ──────────────────────────

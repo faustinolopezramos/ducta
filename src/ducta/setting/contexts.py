@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from loguru import logger  # type: ignore
 
@@ -336,7 +336,7 @@ class Context(MLConfigMixin):
         output_config: Union[str, Dict, Path],
     ) -> None:
         """Load all configuration sources and validate global config."""
-        named_sources = {
+        named_sources: Dict[str, Tuple[Union[str, Dict, Path], str]] = {
             "global_config": (global_config, "global config"),
             "pipelines_config": (pipelines_config, "pipelines config"),
             "nodes_config": (nodes_config, "nodes config"),
@@ -360,7 +360,9 @@ class Context(MLConfigMixin):
                 for future in as_completed(futures):
                     key = futures[future]
                     loaded[key] = future.result()
-            resolved = {k: loaded[k] if k in loaded else named_sources[k][0] for k in named_sources}
+            resolved: Dict[str, Any] = {
+                k: loaded[k] if k in loaded else named_sources[k][0] for k in named_sources
+            }
         else:
             resolved = {
                 k: self._load_and_validate_config(src, label)
@@ -387,12 +389,14 @@ class Context(MLConfigMixin):
         try:
             logger.debug("Validating configurations with Pydantic schemas")
 
-            validated = ConfigSchema(
-                global_config=self.global_config,
-                pipelines_config=self.pipelines_config,
-                nodes_config=self.nodes_config,
-                input_config=self.input_config,
-                output_config=self.output_config,
+            validated = ConfigSchema.model_validate(
+                {
+                    "global_config": self.global_config,
+                    "pipelines_config": self.pipelines_config,
+                    "nodes_config": self.nodes_config,
+                    "input_config": self.input_config,
+                    "output_config": self.output_config,
+                }
             )
 
             dicts = validated.to_dicts()
@@ -443,13 +447,13 @@ class Context(MLConfigMixin):
             self.global_config["environment"] = active
 
     def _load_and_validate_config(
-        self, source: Union[str, Dict], config_name: str
+        self, source: Union[str, Dict, Path], config_name: str
     ) -> Dict[str, Any]:
         """Load configuration from source with validation."""
         try:
             config = self._config_loader.load_config(source)
             self._validator.validate_type(config, dict, config_name)
-            return config
+            return cast(Dict[str, Any], config)
         except (ConfigLoadError, ConfigValidationError):
             raise
         except Exception as e:

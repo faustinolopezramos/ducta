@@ -603,8 +603,13 @@ class SanityPhaseRunner:
                 from ducta.check.gate import QualityGateEvaluator as _GE  # lazy import
 
                 report.score = _GE.compute_score(report, {})
-            except Exception:
-                pass
+            except Exception as score_error:  # noqa: BLE001
+                logger.warning(
+                    "Quality score for node '{}' could not be computed; the report keeps "
+                    "its default score: {}",
+                    node_name,
+                    score_error,
+                )
 
         # Non-fail-fast mode: raise collected failures (AFTER gate so gate result
         # is available). Skipped when a gate was in charge — it has already had
@@ -1096,8 +1101,10 @@ class ValidationPhaseRunner:
             from ducta.check.gate import QualityGateEvaluator
 
             report.score = QualityGateEvaluator.compute_score(report, {})
-        except Exception:
-            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "Quality score could not be computed; the report keeps its default: {}", e
+            )
 
     def _create_and_save_baseline(
         self,

@@ -67,7 +67,7 @@ install only the folder it needs (``--target agents``, plus ``--target claude``
 only if someone uses Claude Code).
 
 **Assistants without skill support** read ``AGENTS.md``: ``--agents-md`` adds a short
-Ducta section there (between ``<!-- ducta-skill -->`` markers, so it is updated in
+Ducta section there (between ``<!-- ducta-skill:start -->`` and ``<!-- ducta-skill:end -->``, so it is updated in
 place and the rest of the file is kept) that points to the installed skill.
 
 **claude.ai and the Skills API** take the skill as a zip:

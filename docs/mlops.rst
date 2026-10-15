@@ -585,12 +585,15 @@ The Ducta registry provides version-controlled model management. Newly registere
 
 .. code-block:: bash
 
-   # ducta model promote <name> <version> <staging|production|archived>
+   # ducta model promote <name> <version> <staging|production|archived> --env ENV
    # <version> is the whole number the registry assigned (3 or v3), not a semantic version
-   ducta model promote sales_predictor 3 production
+   ducta model promote sales_predictor 3 production --env prod
 
    # Clean up old versions past the retention window
-   ducta model gc --dry-run
+   ducta model gc --dry-run --env prod
+
+``--env`` finds the registry of that environment (its ``settings.mlops_path``) and
+its promotion policy; without it, ``ducta model`` looks in ``./mlops_data``.
 
 Promotion to ``production`` is checked against your promotion policy; use
 ``--force`` to bypass it (the bypass is audit-logged). See :doc:`cli_usage` for
@@ -785,9 +788,10 @@ Ducta MLOps captures essential metadata automatically to ensure reproducibility:
 - **Data Fingerprinting:** Generates content digests for input/output datasets.
   ``fingerprint_mode`` selects how much is covered: ``auto`` (default — the
   Delta table version, the run's incremental window, or every row of a small
-  dataset), ``exact`` (order-independent digest over every row), ``sample``
-  (schema plus the first ``fingerprint_sample_rows`` rows) or ``schema``
-  (schema and row count only).
+  dataset), ``exact`` (order-independent digest over every row),
+  ``exact_crypto`` (the same with SHA-256), ``sample`` (``fingerprint_sample_rows``
+  rows chosen by content — on Spark the rows with the lowest row hash) or
+  ``schema`` (schema and row count only).
   Each fingerprint records the engine and algorithm that produced it, so
   fingerprints measured differently are reported as *not comparable* rather
   than as changed data.

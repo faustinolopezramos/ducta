@@ -376,8 +376,9 @@ class SparkSessionFactory:
         for k, v in configs.items():
             try:
                 builder = builder.config(k, v)
-            except Exception:
-                pass
+            except Exception as e:  # noqa: BLE001 — one bad key must not stop the session
+                # Dropped silently before: a session then ran without the user's setting.
+                logger.warning("Spark config '{}' was not applied: {}", k, e)
         return builder
 
     @staticmethod

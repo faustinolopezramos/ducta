@@ -20,13 +20,30 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, ClassVar, List, Literal, Optional
+from typing import Annotated, Any, ClassVar, List, Literal, Optional
 
 from loguru import logger  # type: ignore
 from pydantic import Field, field_validator, model_validator  # type: ignore
-from pydantic_settings import BaseSettings, SettingsConfigDict  # type: ignore
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict  # type: ignore
+
+#: A list read from one environment variable, written either as JSON
+#: (``["a", "b"]``) or comma-separated (``a,b``) — the way docker-compose files and
+#: cloud consoles usually write it. Without ``NoDecode`` only JSON parsed, and
+#: ``CORS_ORIGINS=https://ducta.company.com`` stopped the server at startup.
+EnvList = Annotated[List[str], NoDecode]
+
+
+def _split_env_list(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if text.startswith("["):
+        return json.loads(text)
+    return [item.strip() for item in text.split(",") if item.strip()]
+
 
 #: The only environment names `is_production()` / `is_development()` understand.
 _VALID_ENVIRONMENTS = frozenset({"development", "staging", "production"})
@@ -48,6 +65,17 @@ class Settings(BaseSettings):
         default="development",
         description="Runtime environment: development | staging | production",
     )
+
+    @field_validator(
+        "cors_origins",
+        "cors_allow_methods",
+        "cors_allow_headers",
+        "git_clone_allowed_hosts",
+        mode="before",
+    )
+    @classmethod
+    def _lists_from_env(cls, value: Any) -> Any:
+        return _split_env_list(value)
 
     @field_validator("environment", mode="before")
     @classmethod
@@ -76,7 +104,7 @@ class Settings(BaseSettings):
     workers: int = Field(default=1, description="Number of uvicorn worker processes (prod)")
     reload: bool = Field(default=False, description="Enable auto-reload (dev only)")
 
-    cors_origins: List[str] = Field(
+    cors_origins: EnvList = Field(
         default=[
             "http://localhost:5173",
             "http://127.0.0.1:5173",
@@ -90,8 +118,8 @@ class Settings(BaseSettings):
         ),
     )
     cors_allow_credentials: bool = Field(default=True)
-    cors_allow_methods: List[str] = Field(default=["*"])
-    cors_allow_headers: List[str] = Field(default=["*"])
+    cors_allow_methods: EnvList = Field(default=["*"])
+    cors_allow_headers: EnvList = Field(default=["*"])
 
     rate_limit_enabled: bool = Field(default=False, description="Enable rate limiting middleware")
     rate_limit_requests: int = Field(default=100, description="Max requests per minute per IP")
@@ -190,7 +218,7 @@ class Settings(BaseSettings):
         default=300, description="TTL for in-memory config cache (5 min)"
     )
 
-    git_clone_allowed_hosts: List[str] = Field(
+    git_clone_allowed_hosts: EnvList = Field(
         default_factory=list,
         description=(
             "Allow-list of hostnames permitted as Git clone sources (e.g. "

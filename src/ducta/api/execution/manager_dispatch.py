@@ -93,6 +93,10 @@ class _DispatchMixin:
         debug: bool = False,
         pause_after: Optional[List[str]] = None,
     ) -> ExecutionResponse:
+        # Absolute from here on: the run resolves data paths against the project
+        # root, and a relative root (`Path("./my_project")`, as the FastAPI
+        # tutorial passes) found no inputs — the run was "skipped", exit 0.
+        source_path = Path(source_path).resolve()
         execution_id = str(uuid4())
         now = datetime.now(tz=timezone.utc)
 
@@ -112,7 +116,7 @@ class _DispatchMixin:
             sweep_id=sweep_id,
             sweep_index=sweep_index,
             started_at=now,
-            workspace=str(Path(source_path).resolve()),
+            workspace=str(source_path),
         )
         evicted_ids = self._store.add(record)
         for evicted_id in evicted_ids:

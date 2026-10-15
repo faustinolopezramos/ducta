@@ -167,8 +167,10 @@ A stream node
 Triggers: ``processing_time`` (with ``interval``), ``once``,
 ``available_now`` and ``continuous``.
 
-Node-level keys (``description``, ``after``, ``quality``, ``metadata``…) work
-as on any node. Stream nodes that depend on each other run in order: order them
+Node-level keys (``description``, ``after``, ``metadata``…) work as on any
+node — except ``quality``: the streaming engine runs no checks, and preflight
+warns about a ``quality`` block on a stream node. Check a stream's output with a
+batch node (or pipeline) that reads it. Stream nodes that depend on each other run in order: order them
 with ``after`` when one reads the other's output path.
 
 .. important::
@@ -208,20 +210,27 @@ Running
 
 .. code-block:: bash
 
-   ducta stream run --pipeline events --env dev              # start and return (async)
-   ducta stream run --pipeline events --env dev --mode sync  # wait for the queries
-   ducta stream status
-   ducta stream stop --execution-id <ID>
+   ducta stream run --pipeline events --env dev     # runs until the queries end, or Ctrl+C
 
-``ducta start --pipeline events`` runs a streaming pipeline too, and a
-``hybrid`` pipeline mixes batch and stream nodes.
+The queries run inside the command's process, so the command keeps running while
+they do: Ctrl+C stops them gracefully, and with a terminating trigger (below) it
+ends on its own. ``--mode sync`` waits inside the engine instead of reporting
+status. ``ducta start --pipeline events`` behaves the same way, and a ``hybrid``
+pipeline mixes batch and stream nodes.
+
+To keep a stream running without a terminal, start it from the server (``ducta
+ui``, or ``POST .../pipelines/{name}/execute``): ``GET
+/api/executions/{id}/streaming`` shows its queries and ``POST
+/api/executions/{id}/cancel`` stops it. ``ducta stream status`` and ``ducta
+stream stop`` only see streams of their own process — a stream started by
+another command or by the server is not visible to them.
 
 Terminating runs (backfills and CI)
 -----------------------------------
 
 With a terminating trigger (``once`` or ``available_now``) the queries process
-whatever is available and stop. Combined with ``--mode sync`` the command
-returns when they finish — a streaming pipeline behaves like a batch job, which
+whatever is available and stop, and the command returns when they finish — a
+streaming pipeline behaves like a batch job, which
 suits backfills, local runs and CI. Switch the trigger for one environment only:
 
 .. tab-set::
@@ -317,4 +326,4 @@ Next steps
 ----------
 
 - :doc:`tutorials/streaming` — build a streaming pipeline step by step
-- :doc:`quality` — checks and gates on stream outputs
+- :doc:`quality` — checks and gates, on the batch nodes that read a stream's output

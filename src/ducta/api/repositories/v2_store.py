@@ -96,7 +96,7 @@ _DOC_KEYS = {
 # ── round-trip YAML ──────────────────────────────────────────────────────────
 
 
-def _yaml(mapping: int = 2, sequence: int = 2, offset: int = 0) -> Any:
+def round_trip_yaml(mapping: int = 2, sequence: int = 2, offset: int = 0) -> Any:
     from ruamel.yaml import YAML
 
     y = YAML(typ="rt")
@@ -106,7 +106,7 @@ def _yaml(mapping: int = 2, sequence: int = 2, offset: int = 0) -> Any:
     return y
 
 
-def _style_of(text: str) -> Dict[str, int]:
+def style_of(text: str) -> Dict[str, int]:
     """The file's own indentation — kept on write, so editing one key does not
     re-indent every list in a file written with ``- `` further in.
 
@@ -142,11 +142,11 @@ def _load_rt(path: Path) -> Any:
 
     if not path.exists():
         return CommentedMap()
-    data = _yaml().load(path.read_text(encoding="utf-8"))
+    data = round_trip_yaml().load(path.read_text(encoding="utf-8"))
     return data if data is not None else CommentedMap()
 
 
-def _restore_blank_lines(original: str, written: str) -> str:
+def restore_blank_lines(original: str, written: str) -> str:
     """Put back the blank lines ruamel drops (after a nested block sequence): a
     line kept from the original gets the blank lines it had before it. Lines
     are matched by text and by which occurrence of that text they are."""
@@ -186,13 +186,13 @@ def _dump_rt(path: Path, data: Any) -> None:
     import io
 
     original = path.read_text(encoding="utf-8") if path.exists() else None
-    style = _style_of(original) if original is not None else {}
+    style = style_of(original) if original is not None else {}
     path.parent.mkdir(parents=True, exist_ok=True)
     buf = io.StringIO()
-    _yaml(**style).dump(data, buf)
+    round_trip_yaml(**style).dump(data, buf)
     text = buf.getvalue()
     if original is not None:
-        text = _restore_blank_lines(original, text)
+        text = restore_blank_lines(original, text)
     path.write_text(text, encoding="utf-8")
 
 

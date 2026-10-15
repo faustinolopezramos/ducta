@@ -580,8 +580,11 @@ The same run, from a script or a notebook started in the project directory:
    print(result.status, result.run_id, result.certificate_path)
 
 ``run_pipeline`` returns a ``PipelineRunResult`` (``status``, ``ok``,
-``run_id``, per-node outcomes, the certificate path) and raises when the
-pipeline fails.
+``run_id``, per-node outcomes, the certificate path). It raises when a node
+fails or a ``stop_all`` gate blocks — as ``clean``'s does here. A gate with the
+default ``on_fail: skip_downstream``, or a node skipped for a missing input,
+returns with ``ok`` false (``status`` ``gate_blocked`` or ``skipped``) — check it
+in a script.
 
 Step 8: Schedule it
 -------------------

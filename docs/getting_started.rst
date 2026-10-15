@@ -49,9 +49,13 @@ Ducta separates *what* runs from *how*:
    ├── catalog.yaml           # every dataset: format, location, how it is written, its checks
    ├── pipelines/
    │   ├── etl.yaml           # the `etl` pipeline and its nodes
-   │   └── etl.py             # your Python logic (extract/transform/load)
+   │   ├── etl.py             # your Python logic (extract/transform/load)
+   │   └── checks/            # an example custom quality check
+   ├── data/input.csv         # the sample source
    ├── .ducta/schema/         # JSON Schemas — autocompletion in your editor
-   └── .env                   # secrets & machine-local values
+   ├── .gitignore             # data output, logs and .env stay out of git
+   ├── README.md
+   └── requirements.txt
 
 Step 3: Execute Your First Pipeline
 -----------------------------------
@@ -68,8 +72,9 @@ The template comes with an ``etl`` pipeline ready to run. Let's execute it:
    node names against the catalog — a typo is reported with its file and line.
 2. **Dependency Resolution**: the order came from the data — ``transform`` reads what
    ``extract`` writes.
-3. **Environment Loading**: ``environments.dev`` in ``ducta.yaml`` (if any) was applied,
-   and variables were read from ``.env``.
+3. **Environment Loading**: ``environments.dev`` in ``ducta.yaml`` (if any) was applied.
+   ``${NAME}`` in the files reads the environment variable ``NAME`` of your shell —
+   Ducta does not load a ``.env`` file for it.
 4. **Execution**: your functions ran, with the quality checks and gates in between.
 5. **Evidence**: a run certificate recorded what ran, on which data, with which result
    (``ducta certify list``).
@@ -77,7 +82,7 @@ The template comes with an ``etl`` pipeline ready to run. Let's execute it:
 Step 4: Customizing the Pipeline
 --------------------------------
 
-Open ``pipelines/etl.yaml``:
+Open ``pipelines/etl.yaml`` (shown here without its explanatory comments):
 
 .. tab-set::
    :sync-group: ducta-format
@@ -88,44 +93,71 @@ Open ``pipelines/etl.yaml``:
       .. code-block:: toml
 
          # pipelines/etl.toml
-         description = "Complete ETL pipeline: Extract -> Transform -> Load"
+         description = "Complete ETL pipeline: Extract → Transform → Load"
+         type = "batch"
          requires_dates = false
 
          [nodes.extract]
+         description = "Bronze: land the source exactly as it arrived"
          run = "pipelines.etl:extract"
-         inputs = [
-             "source_data",
-         ]
          outputs = [
              "bronze.etl.raw_data",
          ]
 
+         [nodes.extract.inputs]
+         source_data = "source_data"
+
          [nodes.transform]
+         description = "Silver: deduplicate, drop incomplete and invalid rows"
          run = "pipelines.etl:transform"
-         inputs = [
-             "bronze.etl.raw_data",
-         ]
          outputs = [
              "silver.etl.clean_data",
          ]
 
-         [nodes.transform.quality.checks.null_rate]
+         [nodes.transform.inputs]
+         raw_data = "bronze.etl.raw_data"
+
+         [nodes.transform.quality]
+         fail_fast = false
+
+         [nodes.transform.quality.null_rate]
          columns = [
              "amount",
          ]
          threshold = 0.0
 
+         [nodes.transform.quality.duplicates]
+         columns = [
+             "order_id",
+         ]
+         max_duplicate_rate = 0.0
+
+         [nodes.transform.quality.range]
+         column = "amount"
+         min = 0
+
+         [nodes.transform.quality.row_count]
+         min = 400
+
          [nodes.transform.quality.gate]
          max_errors = 0
+         on_fail = "skip_downstream"
 
          [nodes.load]
+         description = "Gold: aggregate into one row per category"
          run = "pipelines.etl:load"
-         inputs = [
-             "silver.etl.clean_data",
-         ]
          outputs = [
              "gold.etl.final_output",
          ]
+
+         [nodes.load.inputs]
+         clean_data = "silver.etl.clean_data"
+
+         [nodes.load.quality]
+         empty_dataset = true
+
+         [nodes.load.quality.row_count]
+         min = 1
 
    .. tab-item:: YAML
       :sync: yaml
@@ -133,25 +165,38 @@ Open ``pipelines/etl.yaml``:
       .. code-block:: yaml
 
          # pipelines/etl.yaml — the file name is the pipeline name
-         description: "Complete ETL pipeline: Extract -> Transform -> Load"
+         description: "Complete ETL pipeline: Extract → Transform → Load"
+         type: batch
          requires_dates: false
+
          nodes:
            extract:
+             description: "Bronze: land the source exactly as it arrived"
              run: pipelines.etl:extract
-             inputs: [source_data]
+             inputs: {source_data: source_data}
              outputs: [bronze.etl.raw_data]
+
            transform:
+             description: "Silver: deduplicate, drop incomplete and invalid rows"
              run: pipelines.etl:transform
-             inputs: [bronze.etl.raw_data]
+             inputs: {raw_data: bronze.etl.raw_data}
              outputs: [silver.etl.clean_data]
              quality:
-               checks:
-                 null_rate: {columns: [amount], threshold: 0.0}
-               gate: {max_errors: 0}
+               fail_fast: false
+               null_rate: {columns: [amount], threshold: 0.0}
+               duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
+               range: {column: amount, min: 0}
+               row_count: {min: 400}
+               gate: {max_errors: 0, on_fail: skip_downstream}
+
            load:
+             description: "Gold: aggregate into one row per category"
              run: pipelines.etl:load
-             inputs: [silver.etl.clean_data]
+             inputs: {clean_data: silver.etl.clean_data}
              outputs: [gold.etl.final_output]
+             quality:
+               empty_dataset: true
+               row_count: {min: 1}
 
    .. tab-item:: JSON
       :sync: json
@@ -159,48 +204,72 @@ Open ``pipelines/etl.yaml``:
       .. code-block:: json
 
          {
-           "description": "Complete ETL pipeline: Extract -> Transform -> Load",
+           "$schema": "../.ducta/schema/pipeline.json",
+           "description": "Complete ETL pipeline: Extract → Transform → Load",
+           "type": "batch",
            "requires_dates": false,
            "nodes": {
              "extract": {
+               "description": "Bronze: land the source exactly as it arrived",
                "run": "pipelines.etl:extract",
-               "inputs": [
-                 "source_data"
-               ],
+               "inputs": {
+                 "source_data": "source_data"
+               },
                "outputs": [
                  "bronze.etl.raw_data"
                ]
              },
              "transform": {
+               "description": "Silver: deduplicate, drop incomplete and invalid rows",
                "run": "pipelines.etl:transform",
-               "inputs": [
-                 "bronze.etl.raw_data"
-               ],
+               "inputs": {
+                 "raw_data": "bronze.etl.raw_data"
+               },
                "outputs": [
                  "silver.etl.clean_data"
                ],
                "quality": {
-                 "checks": {
-                   "null_rate": {
-                     "columns": [
-                       "amount"
-                     ],
-                     "threshold": 0.0
-                   }
+                 "fail_fast": false,
+                 "null_rate": {
+                   "columns": [
+                     "amount"
+                   ],
+                   "threshold": 0.0
+                 },
+                 "duplicates": {
+                   "columns": [
+                     "order_id"
+                   ],
+                   "max_duplicate_rate": 0.0
+                 },
+                 "range": {
+                   "column": "amount",
+                   "min": 0
+                 },
+                 "row_count": {
+                   "min": 400
                  },
                  "gate": {
-                   "max_errors": 0
+                   "max_errors": 0,
+                   "on_fail": "skip_downstream"
                  }
                }
              },
              "load": {
+               "description": "Gold: aggregate into one row per category",
                "run": "pipelines.etl:load",
-               "inputs": [
-                 "silver.etl.clean_data"
-               ],
+               "inputs": {
+                 "clean_data": "silver.etl.clean_data"
+               },
                "outputs": [
                  "gold.etl.final_output"
-               ]
+               ],
+               "quality": {
+                 "empty_dataset": true,
+                 "row_count": {
+                   "min": 1
+                 }
+               }
              }
            }
          }
