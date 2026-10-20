@@ -130,6 +130,33 @@ new top-level one the name of an installed package.
 Then check and run it as any other pipeline: ``ducta config validate``, a run in
 ``dev``, and a commit of your own.
 
+Add nodes to a pipeline
+-----------------------
+
+``ducta ai extend`` continues an existing pipeline: the model reads its file and
+the code its nodes run, whole, and adds what you describe — new nodes, new
+functions (in a module the pipeline already runs, or a new one) and new
+datasets.
+
+.. code-block:: bash
+
+   ducta ai extend silver.sales "after clean_orders, one row per customer (latest order wins)"
+   ducta ai apply <draft>
+
+**Existing nodes stay as they are.** Ducta checks it without a model: every
+existing node, every key of the pipeline (``depends_on`` may only grow) and
+every function and import of its modules must come back unchanged, and at
+least one node must be new. What it finds goes back to the model like a
+validation error; the code it adds is held to the review's rules (no I/O of its
+own, no ``collect()``, no credential, no commands, network calls or file deletions).
+That review is a net for the obvious, **not a sandbox**: it reads the code, it does
+not confine it. Code a model wrote runs with the pipeline's own access once it is
+applied, so read the diff before you apply it. The pipeline file in the draft is
+Ducta's: the new nodes are added to it as it is, comments and layout kept, so
+the diff shows only what is new. ``apply`` asks again — even with ``--force``.
+Problems the pipeline already had do not block an extension; only those it adds
+do. Like a fix, a file holding a credential is never sent to a remote model.
+
 Fix a pipeline
 --------------
 
@@ -236,6 +263,26 @@ not repeated.
 
 A review changes nothing; it is kept per node (``.ducta/ai/reviews/``). To act
 on a finding, draft a fix: ``ducta ai fix PIPELINE --note "<the finding>"``.
+
+Review a pipeline
+-----------------
+
+.. code-block:: bash
+
+   ducta ai review silver.sales                 # the whole pipeline: every node, and across them
+   ducta ai review silver.sales --no-ai         # only Ducta's checks
+
+Without a node, the review covers the whole pipeline. Ducta's checks run for
+every node (each finding names its node) plus the pipeline's own: no
+``metadata.owner``, the pipeline or its nodes without a description, nothing in
+it checking its data. The model then sees the pipeline's file and every node's
+function (numbered) and may add findings — **each names its node and must cite
+a line of that node's function, or a setting**; one about a node the pipeline
+does not have, or a line that does not match, is dropped. It may also suggest up
+to three **ideas for new nodes**: those are not checked, and each is a request
+for ``ducta ai extend``. A pipeline too large for the model's window is refused
+before anything is sent (review its nodes one by one). The review is kept per
+pipeline (``.ducta/ai/reviews/pipelines/``) and changes nothing.
 
 Ducta Architect: design and build several pipelines
 ---------------------------------------------------
@@ -349,6 +396,12 @@ In the UI
   in the environment you pick — through the same draft dialog.
 * **Document with AI**, next to *Build with AI*, appears while some dataset,
   pipeline or node has no description.
+* **Review pipeline** and **Add nodes with AI**, at the top of a pipeline: the
+  review opens in a drawer — the pipeline's findings, then each node's (*Draft a
+  fix*, *Propose checks*, *Open its review*), and the ideas for new nodes, each
+  with *Add this node*; adding nodes opens the draft dialog, whose review shows
+  what is added and what Ducta checked. A pipeline built with AI opens with its
+  review.
 * **Review**, a tab of a node's inspector, shows its last review: *Run checks*
   (Ducta's, at once, no model) or *Review with AI*. Each finding links to its
   line and has *Draft a fix*, which opens a fix draft with the finding as its
@@ -397,10 +450,17 @@ The UI uses the same builder through the server (see :doc:`server_api`):
        "...", "note": "...", "execution_id": "..."}`` to fix a pipeline from a
        failed run; ``{"kind": "revise", "draft_id": "...", "note": "..."}`` to
        ask for changes; ``{"kind": "quality", "pipeline": "...", "node": "...",
-       "env": "dev"}`` for a node's checks; ``{"kind": "docs"}`` for the
+       "env": "dev"}`` for a node's checks; ``{"kind": "extend", "pipeline":
+       "...", "request": "..."}`` to add nodes to a pipeline; ``{"kind": "docs"}`` for the
        descriptions; ``{"kind": "explain", "execution_id": "..."}`` to explain a
        failed run (the job then holds ``explanation``, and no draft). Answers
        ``202`` at once.
+   * - ``POST /api/projects/{id}/ai/reviews/{pipeline}/checks``
+     - Ducta's own checks of a whole pipeline, at once and without a model.
+   * - ``GET /api/projects/{id}/ai/reviews/{pipeline}``
+     - The pipeline's last review, or ``404``. With the model, a job:
+       ``{"kind": "review_pipeline", "pipeline": "...", "env": "dev"}`` (the job
+       then holds ``review``, with ``ideas``).
    * - ``POST /api/projects/{id}/ai/reviews/{pipeline}/{node}/checks``
      - Ducta's own checks of a node, at once and without a model.
    * - ``GET /api/projects/{id}/ai/reviews/{pipeline}/{node}``

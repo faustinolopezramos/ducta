@@ -58,8 +58,8 @@ Ducta follows a "pay-for-what-you-use" approach with its dependencies. You can i
    * - ``ducta[boost]``
      - XGBoost and LightGBM.
    * - ``ducta[ai]``
-     - The AI pipeline builder (``ducta ai``): httpx, the Anthropic SDK, keyring.
-       Needs ``api`` too.
+     - The AI pipeline builder (``ducta ai``): httpx, the Anthropic SDK, keyring
+       and ruamel.yaml (edits YAML keeping its comments).
    * - ``ducta[monitoring]``
      - Prometheus metrics.
    * - ``ducta[databricks]``

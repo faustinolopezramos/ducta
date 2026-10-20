@@ -129,12 +129,18 @@ class JobRequest(BaseModel):
         "architect_plan",
         "architect_build",
         "sentinel_propose",
+        "extend",
+        "review_pipeline",
     ] = "new"
     request: Optional[str] = Field(
-        default=None, max_length=8000, description="new, architect_plan: what to build"
+        default=None,
+        max_length=8000,
+        description="new, architect_plan: what to build; extend: what the new nodes do",
     )
     pipeline: Optional[str] = Field(
-        default=None, description="fix: the pipeline to fix; quality: the node's pipeline"
+        default=None,
+        description="fix: the pipeline to fix; extend: the pipeline to add nodes to; "
+        "review_pipeline: the pipeline to review; quality: the node's pipeline",
     )
     node: Optional[str] = Field(
         default=None, description="quality: the node whose output to check; review: the node"
@@ -189,7 +195,8 @@ class JobResponse(BaseModel):
     error: Optional[str] = None
     #: explain: the explanation, once done (also kept: GET …/ai/explanations/{execution_id}).
     explanation: Optional[str] = None
-    #: review: the findings, once done (also kept: GET …/ai/reviews/{pipeline}/{node}).
+    #: review, review_pipeline: the findings, once done (also kept:
+    #: GET …/ai/reviews/{pipeline}/{node} and GET …/ai/reviews/{pipeline}).
     review: Optional[Dict[str, Any]] = None
     execution_id: Optional[str] = None
     #: architect_plan: what the model needs answered before it can design (ask, then retry
@@ -257,6 +264,8 @@ class DraftResponse(DraftSummary):
     blueprint_yaml: str = ""
     #: blueprint: what Ducta's checks say deserves a second look (not errors).
     warnings: List[str] = Field(default_factory=list)
+    #: extend: what it adds — nodes (with what they read and write), functions, datasets.
+    added: Optional[Dict[str, Any]] = None
 
 
 class ApplyRequest(BaseModel):
@@ -479,6 +488,52 @@ async def test_ai_models(body: AISettingsUpdate) -> ModelsResponse:
 
 
 @router.get(
+    "/projects/{project_id}/ai/reviews/{pipeline}",
+    summary="The last review of a whole pipeline, if there was one",
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
+)
+async def get_pipeline_review(
+    project_id: str, pipeline: str, svc: ProjectServiceDep
+) -> Dict[str, Any]:
+    from ducta.ai.pipeline_review import load_pipeline_review
+
+    root = _project_root(svc, project_id)
+    found = await asyncio.to_thread(load_pipeline_review, root, pipeline)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No review of {pipeline} yet")
+    return found.to_dict()
+
+
+@router.post(
+    "/projects/{project_id}/ai/reviews/{pipeline}/checks",
+    summary="Ducta's own checks of a whole pipeline, without a model (answers at once)",
+    description="Every node's checks plus the pipeline's own (no owner, nodes with no "
+    "description, nothing checking its data). Kept as the pipeline's last review. Needs no "
+    "AI provider.",
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
+)
+async def check_pipeline(
+    project_id: str, pipeline: str, svc: ProjectServiceDep, env: str = "dev"
+) -> Dict[str, Any]:
+    from ducta.ai.pipeline_review import review_pipeline, save_pipeline_review
+
+    root = _project_root(svc, project_id)
+
+    def run() -> Dict[str, Any]:
+        found = review_pipeline(root, pipeline, None, env=env)
+        save_pipeline_review(root, found)
+        return found.to_dict()
+
+    return await asyncio.to_thread(run)
+
+
+@router.get(
     "/projects/{project_id}/ai/reviews/{pipeline}/{node}",
     summary="The last review of a node, if there was one",
     dependencies=[
@@ -528,7 +583,10 @@ async def check_node(
     "/projects/{project_id}/ai/docs-gaps",
     response_model=DocsGaps,
     summary="How many datasets, pipelines and nodes have no description",
-    dependencies=[Depends(require_permission("ai.use"))],
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
 )
 async def get_docs_gaps(project_id: str, svc: ProjectServiceDep) -> DocsGaps:
     from ducta.ai.proposals import docs_facts
@@ -741,6 +799,10 @@ async def start_job(
         raise AIConfigError("Name the pipeline and the node whose checks to propose")
     if body.kind == "review" and not (body.pipeline and body.node):
         raise AIConfigError("Name the pipeline and the node to review")
+    if body.kind == "review_pipeline" and not body.pipeline:
+        raise AIConfigError("Name the pipeline to review")
+    if body.kind == "extend" and not (body.pipeline and (body.request or "").strip()):
+        raise AIConfigError("Name the pipeline and say what the new nodes should do")
     if body.kind == "explain" and not body.execution_id:
         raise AIConfigError("Name the failed execution to explain")
     if body.kind == "architect_plan" and not (body.request or "").strip():
@@ -807,7 +869,7 @@ async def start_job(
         model=config.model,
         is_local=config.is_local,
         max_attempts=0
-        if body.kind in ("explain", "review")
+        if body.kind in ("explain", "review", "review_pipeline")
         else body.max_attempts or config.max_attempts,
         execution_id=body.execution_id if body.kind == "explain" else None,
         incident_id=body.incident_id if body.kind == "sentinel_propose" else None,
@@ -843,6 +905,29 @@ async def start_job(
                     status="done",
                     ok=bool(linked.get("explanation") or linked.get("draft")),
                     draft_id=linked.get("draft"),
+                    finished_at=_now(),
+                )
+                return
+            if body.kind == "review_pipeline":
+                from ducta.ai.pipeline_review import review_pipeline, save_pipeline_review
+
+                reviewed = review_pipeline(
+                    root,
+                    body.pipeline or "",
+                    provider,
+                    env=body.env or "dev",
+                    note=body.note or "",
+                )
+                if stop():
+                    raise AICancelledError("Stopped")
+                save_pipeline_review(root, reviewed)
+                _jobs.finish(
+                    root,
+                    job.id,
+                    status="done",
+                    ok=True,
+                    review=reviewed.to_dict(),
+                    model=reviewed.model,
                     finished_at=_now(),
                 )
                 return
@@ -941,6 +1026,18 @@ async def start_job(
                     blueprint_of(previous),
                     provider,
                     blueprint_id=previous.id,
+                    max_attempts=body.max_attempts,
+                    on_attempt=report,
+                    should_stop=stop,
+                )
+            elif body.kind == "extend":
+                from ducta.ai.extend import extend
+
+                draft = extend(
+                    root,
+                    body.pipeline or "",
+                    body.request or "",
+                    provider,
                     max_attempts=body.max_attempts,
                     on_attempt=report,
                     should_stop=stop,
@@ -1066,7 +1163,10 @@ def _summary(draft: Any) -> DraftSummary:
     "/projects/{project_id}/ai/drafts",
     response_model=List[DraftSummary],
     summary="The project's AI drafts, newest first",
-    dependencies=[Depends(require_permission("ai.use"))],
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
 )
 async def list_ai_drafts(
     project_id: str, svc: ProjectServiceDep, limit: int = Query(default=50, ge=1, le=200)
@@ -1081,7 +1181,10 @@ async def list_ai_drafts(
     "/projects/{project_id}/ai/drafts/{draft_id}",
     response_model=DraftResponse,
     summary="One draft: its files, diff against the project, problems and attempts",
-    dependencies=[Depends(require_permission("ai.use"))],
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
 )
 async def get_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -> DraftResponse:
     from ducta.ai.builder import _read, _sha, load_draft
@@ -1115,9 +1218,18 @@ async def get_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -
             raw_answer=draft.raw_answer,
             stale_files=stale,
             **_blueprint_fields(draft),
+            added=_extension_added(root, draft),
         )
 
     return await asyncio.to_thread(build)
+
+
+def _extension_added(root: Path, draft: Any) -> Optional[Dict[str, Any]]:
+    if draft.kind != "extend" or draft.applied_at:
+        return None
+    from ducta.ai.extend import extension_summary
+
+    return extension_summary(root, draft)
 
 
 def _blueprint_fields(draft: Any) -> Dict[str, Any]:
@@ -1165,7 +1277,10 @@ async def apply_ai_draft(
     "/projects/{project_id}/ai/drafts/{draft_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Discard a draft",
-    dependencies=[Depends(require_permission("ai.use"))],
+    dependencies=[
+        Depends(require_permission("ai.use")),
+        Depends(require_permission("pipeline.read")),
+    ],
 )
 async def delete_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -> None:
     from ducta.ai.builder import delete_draft

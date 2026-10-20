@@ -32,6 +32,7 @@ ducta ai new "silver pipeline that deduplicates orders and computes daily revenu
 ducta ai fix silver.clean                             # its validation problems
 ducta ai fix silver.clean --error-file failure.log    # a failed run's traceback
 ducta ai fix silver.clean --note "amounts come in cents"
+ducta ai extend silver.clean "one row per customer, latest order wins"   # new nodes; existing ones untouched
 ducta ai revise DRAFT_ID --note "group by store too"  # ask for changes
 ducta ai drafts                                       # every draft, newest first
 ducta ai apply DRAFT_ID                               # review, confirm, write
@@ -39,6 +40,7 @@ ducta ai quality etl transform --env dev              # a node's checks, proven 
 ducta ai document                                     # missing descriptions and metadata.pii
 ducta ai explain --error-file failure.log             # why a run failed; changes nothing
 ducta ai review etl load [--no-ai] [--fail-on high]   # a node's code and settings reviewed
+ducta ai review etl [--no-ai]                         # the whole pipeline, plus ideas for new nodes
 ```
 
 `quality` sends column statistics only (never rows), and Ducta runs the proposed checks
@@ -48,7 +50,10 @@ on the measured data before the draft is shown: it passes on today's data. `qual
 
 Drafts are kept in `.ducta/ai/drafts/`. A `new` draft only adds (one pipeline file, new
 modules, new catalog entries); a `fix` may rewrite that pipeline's file and the modules
-its nodes run. `apply` refuses if a file changed since, and re-validates against the
+its nodes run; an `extend` only adds to them — Ducta refuses (also at `apply`, even
+forced) a draft that changes an existing node, key, function or import. To grow a
+pipeline, prefer `extend` over a `fix` with a note. A pipeline review's ideas are the
+model's, unchecked: each is a request for `extend`. `apply` refuses if a file changed since, and re-validates against the
 current project (`--force` overrides; only if the user asks). After applying: validate
 every environment, run in `dev`, and let the user commit.
 
@@ -63,7 +68,7 @@ for failed and late runs, Ducta Sentinel — see [agents](agents.md).
 
 ## In the web app
 
-**Build with AI** (next to *New pipeline*), **Fix with AI** (on a pipeline's problems
+**Review pipeline** and **Add nodes with AI** (at the top of a pipeline), **Build with AI** (next to *New pipeline*), **Fix with AI** (on a pipeline's problems
 and on a failed run), **Explain with AI** (on a failed run), **Propose with AI** (a node's
 *Quality* tab), the node's **Review** tab, **Document with AI** (while something has no description), and
 **Settings → AI** (admins choose the model and key).

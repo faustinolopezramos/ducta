@@ -22,7 +22,8 @@ ducta start --env dev --pipeline etl --start-date 2026-01-01 --end-date 2026-01-
 | `--dry-run` | logs what would run |
 | `--sanity-only` | runs the input checks of every node, not the nodes |
 | `--node NAME` | one node only (its inputs must already exist) |
-| `--verbose` / `--log-level DEBUG` | more log |
+| `-v` / `--log-level DEBUG` | debug log lines too |
+| `-q` | errors only |
 | `--reuse-upstream` / `--rerun-all` | in a `depends_on` chain: skip still-valid upstreams / force all |
 | `--mode sync` | streaming/hybrid: wait for the queries instead of returning |
 
@@ -36,8 +37,8 @@ ML options (`--model-version`, `--hyperparams`, `--sweep`, `--search`…) are in
 | 0 | success | |
 | 1 | unexpected error | read the log; [troubleshooting](troubleshooting.md) |
 | 2 | the project cannot run as configured (no project, invalid configuration, failed preflight) | `ducta config validate --env ENV --output-format json` |
-| 3 | invalid arguments (unknown pipeline, malformed date) | check `ducta config list-pipelines`, the date format |
-| 4 | the pipeline ran and failed: a node raised, or a quality gate blocked one | find the failed node or gate in the log; re-run it with `--node` |
+| 3 | invalid arguments (unknown pipeline or node, malformed date) | check `ducta config list-pipelines`, the date format |
+| 4 | the pipeline ran and failed: a node raised, or a quality gate blocked one (with `--sweep`/`--search`: a trial failed) | find the failed node or gate in the log; re-run it with `--node` |
 | 5 | nodes were skipped: a dataset they read is missing (an upstream that has not run) | run the upstream first, or `--reuse-upstream`; `ducta config list-pipelines` |
 | 6 | a security check refused a path or module | keep `run:` inside the project's own modules |
 | 7 | **locked**: another run is writing one of its outputs; nothing ran | wait and retry; see `settings.run_lock` |

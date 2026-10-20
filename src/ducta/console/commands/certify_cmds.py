@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -51,6 +52,32 @@ def _env_arg(parsed_args) -> Optional[str]:
     return getattr(parsed_args, "env", None)
 
 
+def _project_root(parsed_args) -> Optional[Path]:
+    """The project at or above ``--base-path`` (default: the current directory)."""
+    from ducta.setting.project_context import find_nearest_project
+
+    return find_nearest_project(Path(getattr(parsed_args, "base_path", None) or Path.cwd()))
+
+
+def _search_envs(parsed_args) -> List[str]:
+    """The canonical environments plus the ones the project declares.
+
+    Searching only the canonical ones missed every certificate of a declared
+    environment such as ``qa`` or ``sandbox_alice``.
+    """
+    envs = list(DEFAULT_ENVIRONMENTS)
+    root = _project_root(parsed_args)
+    if root is not None:
+        try:
+            from ducta.setting.project_loader import validate_project
+
+            declared = list(validate_project(root).project.environments)
+        except Exception:  # noqa: BLE001 — a broken project still has the canonical ones
+            declared = []
+        envs += [e for e in declared if e not in envs]
+    return envs
+
+
 def _resolve_run_certificate_dir(parsed_args, env: str) -> Optional[Path]:
     """The configured run-certificates directory for one environment.
 
@@ -59,21 +86,26 @@ def _resolve_run_certificate_dir(parsed_args, env: str) -> Optional[Path]:
     (the Ducta storage convention; see ``CoreSettings._resolve_scoped_dir``)
     is honored rather than assumed. Returns None if this environment can't be
     resolved at all (e.g. the project defines no config for it).
-    """
-    from ducta.console.config import ConfigManager
-    from ducta.console.execution import ContextInitializer
-    from ducta.core.settings import CoreSettings
 
+    Loaded quietly: listing certificates used to print "LOADING CONFIGURATION"
+    and the project summary once per environment searched.
+    """
+    from ducta.core.settings import CoreSettings
+    from ducta.setting.project_loader import load_project_v2
+
+    root = _project_root(parsed_args)
+    if root is None:
+        return None
+    logger.disable("ducta.setting")
     try:
-        config_manager = ConfigManager(
-            base_path=getattr(parsed_args, "base_path", None), require_config=False
-        )
-        config_manager.change_to_config_directory()
-        context = ContextInitializer(config_manager).initialize(env)
-        return Path(CoreSettings.from_context(context).run_certificate_dir)
+        context = load_project_v2(root, env)
+        runs_dir = Path(CoreSettings.from_context(context).run_certificate_dir)
+        return runs_dir if runs_dir.is_absolute() else root / runs_dir
     except Exception as e:  # noqa: BLE001 — best-effort, one environment at a time
         logger.debug("Could not resolve run-certificates dir for env '{}': {}", env, e)
         return None
+    finally:
+        logger.enable("ducta.setting")
 
 
 #: Pre-convention default (relative to cwd, not ${output_path}/${environment}).
@@ -107,10 +139,17 @@ def _candidate_runs_dirs(parsed_args) -> List[Tuple[Optional[str], Path]]:
         return [(None, Path(explicit))]
 
     env = _env_arg(parsed_args)
+    # Relative paths in the project (output_path, the legacy directory) are
+    # relative to its root, as they are for a run.
+    root = _project_root(parsed_args)
+    if root is not None:
+        os.chdir(root)
     dirs: List[Tuple[Optional[str], Path]] = []
-    for candidate_env in [env] if env else DEFAULT_ENVIRONMENTS:
+    seen: set = set()
+    for candidate_env in [env] if env else _search_envs(parsed_args):
         d = _resolve_run_certificate_dir(parsed_args, candidate_env)
-        if d is not None and d.is_dir():
+        if d is not None and d.is_dir() and d not in seen:
+            seen.add(d)
             dirs.append((candidate_env, d))
     legacy = _legacy_runs_dir()
     if legacy is not None:
@@ -238,27 +277,31 @@ def _handle_list(parsed_args) -> int:
 
     rows.sort(key=lambda d: d.get("started_at", ""), reverse=True)
 
+    from ducta.console.ux.view import display_path
+
     title = (
-        f"Run Certificates — {candidates[0][1]}"
+        f"Run certificates · {display_path(candidates[0][1])}"
         if len(candidates) == 1
-        else "Run Certificates — all environments"
+        else "Run certificates · all environments"
     )
     console = get_console()
     table = create_table(title=title, box=box.SIMPLE_HEAD) if _USE_RICH else None
     if console is not None and table is not None:
+        # no_wrap: a narrow terminal (or a CI log, 80 columns) used to break
+        # "✓ success" and "3/3 passed" over two lines each.
         table.add_column("Run ID", no_wrap=True)
-        table.add_column("Pipeline")
-        table.add_column("Status")
-        table.add_column("Env")
-        table.add_column("Started")
-        table.add_column("Duration", justify="right")
-        table.add_column("Quality")
-        table.add_column("Signed", justify="center")
+        table.add_column("Pipeline", overflow="fold", min_width=8)
+        table.add_column("Status", no_wrap=True)
+        table.add_column("Env", no_wrap=True)
+        table.add_column("Started", no_wrap=True)
+        table.add_column("Duration", justify="right", no_wrap=True)
+        table.add_column("Quality", no_wrap=True)
+        table.add_column("Signed", justify="center", no_wrap=True)
         for d in rows:
             duration = d.get("duration_seconds")
             env_label = d.get("_env_dir") or d.get("environment_name") or "legacy"
             table.add_row(
-                str(d.get("run_id", "?"))[:12],
+                str(d.get("run_id", "?"))[:8],  # as `--run-id` takes it
                 str(d.get("pipeline", "?")),
                 _status_label(str(d.get("status", "?"))),
                 str(env_label),

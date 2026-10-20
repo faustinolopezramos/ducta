@@ -31,6 +31,16 @@ from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.settings import CoreSettings
 
 
+def _compact_view() -> bool:
+    """Whether the CLI's compact view is on (never, outside the CLI)."""
+    try:
+        from ducta.console.ux import view
+
+        return view.is_compact()
+    except Exception:  # noqa: BLE001 — presentation must never break a run
+        return False
+
+
 def report_node_failure(error: Exception, node_name: str) -> None:
     """Show a rich, developer-facing error breakdown for a failed node,
     falling back to a plain log line if the console formatter is unavailable.
@@ -39,6 +49,15 @@ def report_node_failure(error: Exception, node_name: str) -> None:
     each carried an identical try/import/format/except-fallback copy of this.
     """
     try:
+        from ducta.console.ux import view
+
+        if view.is_compact():
+            # One line now; the full error once, when the command ends. Both
+            # the node runner and the coordinator report a failure, and the
+            # classic breakdown below printed it twice.
+            view.node_failed(node_name, error)
+            return
+
         from ducta.console.ux.error_analyzer import format_error_for_developer
         from ducta.console.ux.rich_logger import RichLoggerManager
 
@@ -77,6 +96,8 @@ class OutputWriter:
 
         if not (is_spark or is_pandas):
             return
+        if _compact_view():
+            return  # the compact view shows rows per output; --verbose shows schemas
 
         node_display_name = node_name.replace(".", " › ")
         console = None
@@ -159,6 +180,8 @@ class OutputWriter:
 
         self.output_manager.save_output(env, **output_params)
 
+        if _compact_view():
+            return  # the node's own line says where it wrote
         try:
             from rich.text import Text  # type: ignore
 

@@ -183,6 +183,13 @@ class PipelineExecutor:
                 raise ValueError(f"Unsupported pipeline type: {pipeline_type}")
         except Exception as e:
             result.add_error(str(e))
+            # The result — run id, certificate — is filled in by the `finally`
+            # below and would be lost with the frame: the exception carries it,
+            # so whoever reports the failure can say where its evidence is.
+            try:
+                e.run_result = result  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 — some exception types refuse attributes
+                pass
             raise
         finally:
             try:
@@ -451,10 +458,14 @@ class PipelineExecutor:
             lambda: self.streaming_executor.streaming_manager.list_running_pipelines(), []
         )
 
-    def stop_streaming_pipeline(self, execution_id: str, graceful: bool = True) -> bool:
-        """Stop a running streaming pipeline."""
+    def stop_streaming_pipeline(
+        self, execution_id: str, graceful: bool = True, timeout_seconds: float = 30.0
+    ) -> bool:
+        """Stop a running streaming pipeline, waiting up to *timeout_seconds* per query."""
         return self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.stop_pipeline(execution_id, graceful),
+            lambda: self.streaming_executor.streaming_manager.stop_pipeline(
+                execution_id, graceful, timeout_seconds
+            ),
             False,
         )
 

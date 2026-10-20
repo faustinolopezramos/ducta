@@ -80,7 +80,9 @@ export interface AIJob {
     | "review"
     | "architect_plan"
     | "architect_build"
-    | "sentinel_propose";
+    | "sentinel_propose"
+    | "extend"
+    | "review_pipeline";
   status: "running" | "done" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
@@ -93,8 +95,8 @@ export interface AIJob {
   error: string | null;
   /** explain: the explanation, once done. */
   explanation?: string | null;
-  /** review: the findings, once done. */
-  review?: AIReview | null;
+  /** review: the node's findings; review_pipeline: the pipeline's, once done. */
+  review?: AIReview | AIPipelineReview | null;
   execution_id?: string | null;
   /** architect_plan: what the model needs answered before it can design. */
   questions?: string[] | null;
@@ -123,6 +125,8 @@ export interface AIReviewFinding {
   key: string | null;
   /** `ducta`: certain; `ai`: the model's, checked against the code. */
   source: "ducta" | "ai";
+  /** In a pipeline's review: the node it is about (null: the pipeline itself). */
+  node?: string | null;
 }
 
 export interface AIReview {
@@ -136,6 +140,28 @@ export interface AIReview {
   /** The model's findings dropped: they pointed at nothing real. */
   dropped: number;
   notes: string;
+}
+
+/** A whole pipeline's review: every node, and what is only visible across them. */
+export interface AIPipelineReview {
+  kind: "pipeline";
+  pipeline: string;
+  env: string;
+  created_at: string;
+  findings: AIReviewFinding[];
+  /** Nodes worth adding, as requests for "Add nodes with AI" — the model's, not checked. */
+  ideas: string[];
+  nodes: string[];
+  model: string | null;
+  dropped: number;
+  notes: string;
+}
+
+/** What an extension adds, read by Ducta from its files. */
+export interface AIExtensionAdded {
+  nodes: { name: string; inputs: string[]; outputs: string[]; description: string }[];
+  functions: string[];
+  datasets: string[];
 }
 
 export interface AIDocsGaps {
@@ -154,7 +180,9 @@ export type AIJobRequest =
   | { kind: "review"; pipeline: string; node: string; env?: string; note?: string }
   | { kind: "architect_plan"; request: string; note?: string }
   | { kind: "architect_build"; draft_id: string }
-  | { kind: "sentinel_propose"; incident_id: string };
+  | { kind: "sentinel_propose"; incident_id: string }
+  | { kind: "extend"; pipeline: string; request: string }
+  | { kind: "review_pipeline"; pipeline: string; env?: string; note?: string };
 
 export interface AIProblem {
   severity: "error" | "warning" | "info";
@@ -172,7 +200,7 @@ export interface AIDraftSummary {
    * quality: a node's checks; docs: missing descriptions; blueprint: Ducta Architect's
    * design (built, never applied); architect: the pipelines built from a blueprint.
    */
-  kind: "new" | "fix" | "quality" | "docs" | "blueprint" | "architect";
+  kind: "new" | "fix" | "extend" | "quality" | "docs" | "blueprint" | "architect";
   request: string;
   pipeline: string | null;
   /** quality: the node. */
@@ -207,6 +235,8 @@ export interface AIDraft extends AIDraftSummary {
   blueprint_yaml?: string;
   /** blueprint: what Ducta's checks say deserves a second look. */
   warnings?: string[];
+  /** extend: what it adds. */
+  added?: AIExtensionAdded | null;
 }
 
 /** Ducta Architect's design: names, datasets and contracts — no code. */
@@ -324,8 +354,11 @@ export const useAIJob = (projectId: string, jobId: string | null) => {
       if (job.status === "done" && job.kind === "explain" && job.execution_id) {
         qc.invalidateQueries({ queryKey: qk.ai.explanation(projectId, job.execution_id) });
       }
-      if (job.status === "done" && job.kind === "review" && job.review) {
+      if (job.status === "done" && job.kind === "review" && job.review && "node" in job.review) {
         qc.setQueryData(qk.ai.review(projectId, job.review.pipeline, job.review.node), job.review);
+      }
+      if (job.status === "done" && job.kind === "review_pipeline" && job.review) {
+        qc.setQueryData(qk.ai.pipelineReview(projectId, job.review.pipeline), job.review);
       }
       return job;
     },
@@ -428,6 +461,35 @@ export const useRunNodeChecks = (projectId: string, pipeline: string, node: stri
     mutationFn: ({ env }) =>
       client.post(`${reviewPath(projectId, pipeline, node)}/checks`, null, { params: { env } }).then((r) => r.data),
     onSuccess: (review) => qc.setQueryData(qk.ai.review(projectId, pipeline, node), review),
+  });
+};
+
+const pipelineReviewPath = (projectId: string, pipeline: string) =>
+  `${base(projectId)}/reviews/${encodeURIComponent(pipeline)}`;
+
+/** A pipeline's last review; `null` when it was never reviewed. */
+export const usePipelineReview = (projectId: string, pipeline: string, enabled = true) =>
+  useQuery<AIPipelineReview | null>({
+    queryKey: qk.ai.pipelineReview(projectId, pipeline),
+    queryFn: () =>
+      client
+        .get(pipelineReviewPath(projectId, pipeline), { expectedStatuses: [404] })
+        .then((r) => r.data)
+        .catch((e) => {
+          if (e?.response?.status === 404) return null;
+          throw e;
+        }),
+    enabled: enabled && Boolean(projectId && pipeline),
+    retry: false,
+  });
+
+/** Ducta's own checks of a whole pipeline: at once, no model. Kept as its last review. */
+export const useRunPipelineChecks = (projectId: string, pipeline: string) => {
+  const qc = useQueryClient();
+  return useMutation<AIPipelineReview, unknown, { env: string }>({
+    mutationFn: ({ env }) =>
+      client.post(`${pipelineReviewPath(projectId, pipeline)}/checks`, null, { params: { env } }).then((r) => r.data),
+    onSuccess: (review) => qc.setQueryData(qk.ai.pipelineReview(projectId, pipeline), review),
   });
 };
 

@@ -2,6 +2,8 @@
 
 > **The AI pipeline builder of Ducta.** A model of your choice — **local** (Ollama, LM Studio, vLLM, llama.cpp) or **remote** behind an API key (Anthropic, OpenAI, any OpenAI-compatible endpoint) — drafts a new format-2 pipeline from a description in plain language, or a fix for an existing one. Every draft is checked by the same validation the UI runs on unsaved edits; its problems go back to the model until it passes. **Nothing is written until a person accepts the draft, and nothing is ever run or committed.**
 
+> **The code review is a net, not a sandbox.** `review._code_findings` flags I/O, `collect()`, credentials, commands (`subprocess`, `os.system`), network calls, file deletion and `eval`/`exec` in code a model wrote, so the person reading the diff knows where to look. It does not confine the code: what is applied runs with the pipeline's access.
+
 ## At a glance
 
 | | |
@@ -50,6 +52,8 @@ Ducta AI is a small generate → validate → repair loop:
 *   **The loop** (`builder.py`): parse fenced file blocks from the answer → constrain them to a `Scope` → `validate_draft` on a scratch copy → judge against the project's baseline errors → feed the blocking problems back → repeat up to `max_attempts`.
 *   **Drafts** (`builder.py`): saved as JSON under `<project>/.ducta/ai/drafts/`, applied only if every touched file still has the hash it had when the draft was made.
 *   **Proposals** (`proposals.py`): a node's checks (`propose_quality`) and missing descriptions (`propose_docs`). The model answers with the proposal only; an *assembler* passed to the loop applies it with `yaml_edit.edit_yaml` (comments and layout kept) and can add nothing else. Proposed checks run on the measured output (`run_on_sample`) and those that fail go back to the model.
+*   **Extensions** (`extend.py`): new nodes for an existing pipeline. The model answers with the pipeline's file and modules whole; `existing_changes` (no model) rejects any change to an existing node, key (`depends_on` may only grow), function or import, and `new_code_problems` holds the added code to the review's rules. The pipeline file in the draft is rebuilt by Ducta (`yaml_edit`): the original text plus the new nodes, so the diff shows only additions. `apply_draft` asks `existing_changes` again, even forced.
+*   **Pipeline review** (`pipeline_review.py`): every node's `ducta_checks` (each finding names its node) plus the pipeline's own (owner, descriptions, nothing checking its data); the model's findings must name a node of the pipeline and a line of its function or a setting (`check_finding`, per node); up to three ideas for new nodes, unchecked, each a request for `extend`.
 *   **Explanations** (`explain.py`): a failed run's diagnosis (`api/services/diagnosis.py`), its error and the code around the line — or the failing node's function — turned into *what happened / why / what to do*. Changes nothing; kept in `.ducta/ai/explanations/<run>.json`.
 
 ---
@@ -290,7 +294,8 @@ The server exposes the same builder (`ducta/api/routes/ai.py`). Generation can t
 | `GET /api/projects/{id}/ai/explanations/{run}` | `ai.use` + `execution.read` | The kept explanation of a failed run |
 | `GET /api/ai/models` | `ai.use` | The provider's models (also a connection test) |
 | `POST /api/ai/models/test` | `ai.configure` | The same for settings not saved yet (body of `PUT /api/ai/settings`); saves nothing |
-| `POST /api/projects/{id}/ai/jobs` | `ai.use` + `project.read` | Start `{"request": …}`, `{"kind": "fix", "pipeline": …, "note"?, "error"?, "execution_id"?}` or `{"kind": "revise", "draft_id": …, "note": …}` → `202` |
+| `POST /api/projects/{id}/ai/jobs` | `ai.use` + `project.read` | Start `{"request": …}`, `{"kind": "fix", "pipeline": …, "note"?, "error"?, "execution_id"?}`, `{"kind": "extend", "pipeline": …, "request": …}`, `{"kind": "review_pipeline", "pipeline": …}` or `{"kind": "revise", "draft_id": …, "note": …}` → `202` |
+| `GET /api/projects/{id}/ai/reviews/{pipeline}` · `POST …/reviews/{pipeline}/checks` | `ai.use` + `pipeline.read` | A pipeline's last review; Ducta's checks of it at once, no model |
 | `GET /api/projects/{id}/ai/jobs/{job}` | `ai.use` | Attempts so far; `draft_id` and `ok` when done; `error` if it failed. Only its owner (or `ai.configure`) sees it |
 | `DELETE /api/projects/{id}/ai/jobs/{job}` | `ai.use` | Stop it: `cancelled` at once, no further model request, no draft |
 | `GET /api/projects/{id}/ai/drafts[/{draft}]` | `ai.use` | Summaries; one draft with files (`added`/`modified`), diff, problems, attempts, `stale_files` |
@@ -344,6 +349,8 @@ If the model fails **after** at least one attempt, the loop keeps the last draft
 | `proposals.py` | `propose_quality` (facts, `run_on_sample`, assembler) and `propose_docs`; `proposal_setup` for revisions |
 | `explain.py` | `explain_failure`, `node_function`, explanations kept per run |
 | `review.py` | `ducta_checks` (certain, no model), `review_node` (plus the model's findings, each checked by `check_finding`), reviews kept per node |
+| `extend.py` | `extend` (new nodes for an existing pipeline), `existing_changes` (no existing node, key, function or import may change — asked again at apply), `new_code_problems`, `extension_summary` |
+| `pipeline_review.py` | `review_pipeline`: every node's checks plus the pipeline's own, the model's findings each tied to a node and checked, ideas for new nodes (unchecked); kept per pipeline |
 | `yaml_edit.py` | `edit_yaml`: change a YAML file's parsed document and keep its text |
 | `errors.py` | `AIError` and its subclasses |
 | `agents/` | Ducta's agents — see §10 |

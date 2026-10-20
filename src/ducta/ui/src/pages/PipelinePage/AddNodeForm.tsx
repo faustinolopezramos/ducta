@@ -1,8 +1,9 @@
 import type React from "react";
 import { useMemo, useState } from "react";
+import { IconPlus, IconX } from "@tabler/icons-react";
 import { Button } from "../../components/ui/Button";
 import { Field } from "../../components/ui/Field";
-import { nodeNameError, runError } from "./canvasEdits";
+import { aliasFor, nodeNameError, runError } from "./canvasEdits";
 import type { NodeTemplate } from "../../api/queries";
 
 const addInputStyle: React.CSSProperties = {
@@ -17,6 +18,11 @@ const addInputStyle: React.CSSProperties = {
   width: "100%",
 };
 
+export interface InputItem {
+  dataset: string;
+  alias?: string;
+}
+
 export interface NewNode {
   name: string;
   /** `module:function`; empty for a node configured rather than coded. */
@@ -25,6 +31,10 @@ export interface NewNode {
   reads: string;
   /** A dataset it writes, if any — new ones are added to the catalog. */
   writes: string;
+  /** Multiple inputs with alias parameter mapping. */
+  inputsList?: InputItem[];
+  /** Multiple outputs. */
+  outputsList?: string[];
   /** A node template it instantiates (`use:`) instead of running a function. */
   template?: string;
   /** The template's parameters (`with:`). */
@@ -60,6 +70,63 @@ export function AddNodeForm({
   writtenElsewhere?: (dataset: string) => string | undefined;
 }) {
   const [node, setNode] = useState<NewNode>({ name: "", run: "", reads: "", writes: "", ...initial });
+  const [inputsList, setInputsList] = useState<InputItem[]>(() => {
+    if (initial?.inputsList && initial.inputsList.length > 0) {
+      return initial.inputsList;
+    }
+    if (initial?.reads) {
+      return [{ dataset: initial.reads, alias: aliasFor(initial.reads) }];
+    }
+    return [{ dataset: "", alias: "" }];
+  });
+
+  const [outputsList, setOutputsList] = useState<string[]>(() => {
+    if (initial?.outputsList && initial.outputsList.length > 0) {
+      return initial.outputsList;
+    }
+    if (initial?.writes) {
+      return [initial.writes];
+    }
+    return [""];
+  });
+
+  const updateInput = (index: number, field: "dataset" | "alias", val: string) => {
+    setInputsList((prev) => {
+      const next = [...prev];
+      const current = { ...next[index] };
+      current[field] = val;
+      if (field === "dataset" && !current.alias && val) {
+        current.alias = aliasFor(val);
+      }
+      next[index] = current;
+      return next;
+    });
+  };
+
+  const addInputRow = () => {
+    setInputsList((prev) => [...prev, { dataset: "", alias: "" }]);
+  };
+
+  const removeInputRow = (index: number) => {
+    setInputsList((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : [{ dataset: "", alias: "" }]));
+  };
+
+  const updateOutput = (index: number, val: string) => {
+    setOutputsList((prev) => {
+      const next = [...prev];
+      next[index] = val;
+      return next;
+    });
+  };
+
+  const addOutputRow = () => {
+    setOutputsList((prev) => [...prev, ""]);
+  };
+
+  const removeOutputRow = (index: number) => {
+    setOutputsList((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : [""]));
+  };
+
   const template = templates.find((t) => t.name === node.template);
   // A subpipeline brings its own nodes and datasets: the instance has nothing to wire.
   const isSubpipeline = !!node.template?.startsWith("pipeline:");
@@ -72,22 +139,26 @@ export function AddNodeForm({
   const nameError = name ? nodeNameError(name, taken) : null;
   const fnError = template ? null : runError(node.run.trim());
   const canAdd = Boolean(name) && !nameError && !fnError && !missingParam;
-  const submit = () =>
-    canAdd &&
+  const submit = () => {
+    if (!canAdd) return;
+    const cleanInputs = inputsList.filter((i) => i.dataset.trim());
+    const cleanOutputs = outputsList.filter((o) => o.trim());
     onAdd({
       name,
       run: template ? "" : node.run.trim(),
-      reads: isSubpipeline ? "" : node.reads.trim(),
-      writes: isSubpipeline ? "" : node.writes.trim(),
+      reads: isSubpipeline ? "" : (cleanInputs[0]?.dataset ?? node.reads.trim()),
+      writes: isSubpipeline ? "" : (cleanOutputs[0] ?? node.writes.trim()),
+      inputsList: isSubpipeline ? [] : cleanInputs,
+      outputsList: isSubpipeline ? [] : cleanOutputs,
       ...(template
         ? { template: template.name, with: Object.fromEntries(Object.entries(values).filter(([, v]) => v.trim() !== "")) }
         : {}),
     });
+  };
   const keys = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") submit();
     if (e.key === "Escape") onCancel();
   };
-  const newDataset = node.writes.trim() && !datasets.includes(node.writes.trim());
 
   return (
     <div
@@ -150,19 +221,118 @@ export function AddNodeForm({
           )}
           {!isSubpipeline && (
             <>
-          <Field
-            label="Reads"
-            help={
-              writtenElsewhere?.(node.reads.trim())
-                ? `Written by ${writtenElsewhere(node.reads.trim())} — this pipeline will run after it`
-                : "A dataset from the catalog (optional)"
-            }
-          >
-            <input value={node.reads} onChange={set("reads")} placeholder="bronze.sales.orders" list="add-node-datasets" onKeyDown={keys} style={addInputStyle} />
-          </Field>
-          <Field label="Writes" help={newDataset ? "New dataset — it will be added to the catalog" : "A dataset it produces (optional)"}>
-            <input value={node.writes} onChange={set("writes")} placeholder="silver.sales.orders_clean" list="add-node-datasets" onKeyDown={keys} style={addInputStyle} />
-          </Field>
+              <Field
+                label={`Inputs (${inputsList.filter((i) => i.dataset.trim()).length || inputsList.length})`}
+                help="Datasets read by this node. Specify parameter alias if it differs from dataset name."
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
+                  {inputsList.map((inp, idx) => {
+                    const elsewhere = writtenElsewhere?.(inp.dataset.trim());
+                    return (
+                      <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          <input
+                            value={inp.dataset}
+                            onChange={(e) => updateInput(idx, "dataset", e.target.value)}
+                            placeholder="Dataset (e.g. bronze.orders)"
+                            list="add-node-datasets"
+                            onKeyDown={keys}
+                            style={{ ...addInputStyle, flex: 2 }}
+                            aria-label={`Input dataset ${idx + 1}`}
+                          />
+                          <input
+                            value={inp.alias ?? ""}
+                            onChange={(e) => updateInput(idx, "alias", e.target.value)}
+                            placeholder="param alias"
+                            onKeyDown={keys}
+                            style={{ ...addInputStyle, flex: 1 }}
+                            title="Parameter alias for this input"
+                            aria-label={`Input parameter alias ${idx + 1}`}
+                          />
+                          {inputsList.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeInputRow(idx)}
+                              aria-label={`Remove input ${idx + 1}`}
+                            >
+                              <IconX size={14} />
+                            </Button>
+                          )}
+                        </div>
+                        {elsewhere && (
+                          <span style={{ fontSize: "11px", color: "var(--text-dim)" }}>
+                            Written by {elsewhere} (pipeline dependency)
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={addInputRow}
+                    leftIcon={<IconPlus size={12} />}
+                    style={{ alignSelf: "flex-start", marginTop: "2px" }}
+                  >
+                    Add another input
+                  </Button>
+                </div>
+              </Field>
+
+              <Field
+                label={`Outputs (${outputsList.filter((o) => o.trim()).length || outputsList.length})`}
+                help="Datasets produced by this node. Uncatalogued datasets are automatically registered."
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", width: "100%" }}>
+                  {outputsList.map((out, idx) => {
+                    const isNew = out.trim() && !datasets.includes(out.trim());
+                    return (
+                      <div key={idx} style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                        <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
+                          <input
+                            value={out}
+                            onChange={(e) => updateOutput(idx, e.target.value)}
+                            placeholder="Dataset (e.g. silver.clean_data)"
+                            list="add-node-datasets"
+                            onKeyDown={keys}
+                            style={{ ...addInputStyle, flex: 1 }}
+                            aria-label={`Output dataset ${idx + 1}`}
+                          />
+                          {outputsList.length > 1 && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeOutputRow(idx)}
+                              aria-label={`Remove output ${idx + 1}`}
+                            >
+                              <IconX size={14} />
+                            </Button>
+                          )}
+                        </div>
+                        {isNew && (
+                          <span style={{ fontSize: "11px", color: "var(--primary)" }}>
+                            New dataset — will be added to the catalog
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={addOutputRow}
+                    leftIcon={<IconPlus size={12} />}
+                    style={{ alignSelf: "flex-start", marginTop: "2px" }}
+                  >
+                    Add another output
+                  </Button>
+                </div>
+              </Field>
             </>
           )}
           <datalist id="add-node-functions">

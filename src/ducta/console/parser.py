@@ -29,7 +29,6 @@ HELP_BASE_PATH = (
 )
 HELP_PIPELINE_NAME = "Pipeline name"
 HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
-HELP_TIMEOUT_SECONDS = "Timeout in seconds"
 HELP_CONFIG_FILE = (
     "ducta.yaml, or any file or directory inside the project "
     "(default: the project containing the current directory)"
@@ -63,6 +62,15 @@ class _SuggestingParser(argparse.ArgumentParser):
     """
 
     def error(self, message: str) -> NoReturn:
+        commands = self._subcommands()
+        if commands and message.startswith("the following arguments are required"):
+            # `ducta config` alone said "required: config_command", a name
+            # from the code. Say which commands there are instead.
+            width = max(len(name) for name in commands) + 3
+            lines = [f"{self.prog}: which command?", ""]
+            lines += [f"  {name.ljust(width)}{text}" for name, text in commands.items()]
+            lines += ["", f"Run `{self.prog} <command> --help` for its options."]
+            self.exit(2, "\n".join(lines) + "\n")
         found = _INVALID_CHOICE.search(message)
         if found:
             typed = found.group(1)
@@ -73,6 +81,129 @@ class _SuggestingParser(argparse.ArgumentParser):
         self.print_usage(sys.stderr)
         self.exit(2, f"{self.prog}: error: {message}\n")
 
+    def _subcommands(self) -> "dict[str, str]":
+        """This parser's subcommands and their one-line help, if it has any."""
+        for action in self._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                helps = {a.dest: a.help or "" for a in action._choices_actions}
+                return {name: helps.get(name, "") for name in action.choices}
+        return {}
+
+
+#: ``ducta --help``: the commands by what they are for, each with one line.
+#: The same line is the command's summary wherever argparse lists it.
+COMMAND_GROUPS = (
+    (
+        "Get started",
+        (
+            ("init", "Create a project (init project) or a database connection"),
+            ("template", "Create a project from a named template"),
+        ),
+    ),
+    (
+        "Run",
+        (
+            ("start", "Run a batch, ML or hybrid pipeline"),
+            ("stream", "Run, inspect and stop a streaming pipeline"),
+        ),
+    ),
+    (
+        "Inspect",
+        (
+            ("config", "Validate, list, show, explain, diff and convert the project"),
+            ("certify", "List, show, verify and compare run certificates"),
+            ("quality", "Run data quality checks and read their reports"),
+            ("profile", "Propose the checks a data file already satisfies"),
+        ),
+    ),
+    (
+        "MLOps",
+        (
+            ("experiment", "List and compare tracked experiments and runs"),
+            ("model", "Promote and clean up registered models"),
+        ),
+    ),
+    (
+        "AI",
+        (
+            ("ai", "Draft, fix, review and explain with a model"),
+            ("skill", "Install Ducta's skill for AI assistants"),
+        ),
+    ),
+    (
+        "Web app",
+        (
+            ("ui", "Open the web app"),
+            ("server", "Run the API server"),
+        ),
+    ),
+)
+
+#: One command per group in ``ducta --help``: the simplest thing that group does.
+#: A test parses each one, so they cannot drift from the real options.
+GROUP_EXAMPLES = {
+    "Get started": "ducta init project --name sales",
+    "Run": "ducta start -e dev -p etl",
+    "Inspect": "ducta config validate -e dev",
+    "MLOps": "ducta experiment list -e dev",
+    "AI": 'ducta ai new "clean the orders and count them by day"',
+    "Web app": "ducta ui",
+}
+
+_GLOBAL_OPTIONS = (
+    ("-h, --help", "Show this help"),
+    ("-V, --version", "Show the version"),
+    ("-v, --verbose", "Debug log lines too"),
+    ("-q, --quiet", "Errors only"),
+)
+
+
+#: The short forms `start` has always had, given to every command with the option:
+#: `ducta config validate -e dev` was "unrecognized arguments".
+_SHORT_ALIASES = {"--env": "-e", "--pipeline": "-p"}
+
+
+def _add_short_aliases(parser: argparse.ArgumentParser) -> None:
+    """Add ``-e``/``-p`` wherever ``--env``/``--pipeline`` exist and the letter is free."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for sub in set(action.choices.values()):
+                _add_short_aliases(sub)
+            continue
+        for long, short in _SHORT_ALIASES.items():
+            if long in action.option_strings and short not in parser._option_string_actions:
+                action.option_strings = [short, *action.option_strings]
+                parser._option_string_actions[short] = action
+
+
+class _DuctaParser(_SuggestingParser):
+    """The top-level parser: its help lists the commands by group."""
+
+    def format_help(self) -> str:
+        if self.prog != "ducta":
+            return super().format_help()  # a subcommand's own help
+        width = max(len(name) for _, cmds in COMMAND_GROUPS for name, _ in cmds) + 3
+        lines = [
+            "usage: ducta [-h] [-V] [-v] [-q] <command> [options]",
+            "",
+            "Ducta: data pipelines you can run, check and prove.",
+        ]
+        for group, commands in COMMAND_GROUPS:
+            lines += ["", f"{group}:"]
+            lines += [f"  {name.ljust(width)}{summary}" for name, summary in commands]
+            if group in GROUP_EXAMPLES:
+                lines.append(f"  {'e.g.'.ljust(width)}{GROUP_EXAMPLES[group]}")
+        opt_width = max(len(flag) for flag, _ in _GLOBAL_OPTIONS) + 3
+        lines += ["", "Options:"]
+        lines += [f"  {flag.ljust(opt_width)}{text}" for flag, text in _GLOBAL_OPTIONS]
+        lines += [
+            "",
+            "Run `ducta <command> --help` for a command's options.",
+            "Docs: https://ducta.readthedocs.io/",
+            "",
+        ]
+        return "\n".join(lines)
+
 
 class UnifiedArgumentParser:
     """Unified argument parser for all Ducta CLI commands."""
@@ -80,35 +211,23 @@ class UnifiedArgumentParser:
     @staticmethod
     def create() -> argparse.ArgumentParser:
         """Create configured argument parser with subcommands."""
-        parser = _SuggestingParser(
+        parser = _DuctaParser(
             prog="ducta",
-            description="Ducta - Data Pipeline Framework",
-            epilog="""
-            Unified CLI with subcommands for all Ducta operations.
-
-            Examples:
-            # A new project
-            ducta template --template medallion_basic --project-name my_project
-
-            # Inside the project: check it, then run a pipeline
-            ducta config validate --env dev
-            ducta start --env dev --pipeline etl --start-date 2026-01-01 --end-date 2026-01-31
-
-            # Streaming pipelines
-            ducta stream run --pipeline events --env dev
-            ducta stream status
-
-            Note: Orchestration management (schedules, runs) is now exclusively available
-            through the API REST interface. Use the API endpoints to manage pipeline
-            orchestration, scheduling, and run management.
-            """,
+            description="Ducta: data pipelines you can run, check and prove.",
             formatter_class=argparse.RawDescriptionHelpFormatter,
         )
 
-        parser.add_argument("--version", action="store_true", help="Show Ducta signature & version")
+        parser.add_argument("-V", "--version", action="store_true", help="Show the version")
+        parser.add_argument(
+            "-v",
+            "--verbose",
+            action="store_true",
+            help="Debug log lines too",
+        )
+        parser.add_argument("-q", "--quiet", action="store_true", help="Errors only")
 
         subparsers = parser.add_subparsers(
-            dest="subcommand", help="Available subcommands", required=False
+            dest="subcommand", metavar="<command>", help="Command", required=False
         )
 
         UnifiedArgumentParser._add_start_subcommand(subparsers)
@@ -124,6 +243,11 @@ class UnifiedArgumentParser:
         UnifiedArgumentParser._add_certify_subcommand(subparsers)
         UnifiedArgumentParser._add_ai_subcommand(subparsers)
         UnifiedArgumentParser._add_skill_subcommand(subparsers)
+
+        summaries = {name: text for _, cmds in COMMAND_GROUPS for name, text in cmds}
+        for action in subparsers._choices_actions:
+            action.help = summaries.get(action.dest, action.help)
+        _add_short_aliases(parser)
 
         return parser
 
@@ -194,10 +318,22 @@ class UnifiedArgumentParser:
             help="Logging level",
         )
         start_parser.add_argument("--log-file", help="Custom log file path")
+        # Also accepted before the command (`ducta -v start …`). SUPPRESS keeps an
+        # absent flag here from overwriting one given there.
         start_parser.add_argument(
-            "--verbose", action="store_true", help="Enable verbose output (DEBUG)"
+            "-v",
+            "--verbose",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help="Debug log lines too",
         )
-        start_parser.add_argument("--quiet", action="store_true", help="Reduce output (ERROR only)")
+        start_parser.add_argument(
+            "-q",
+            "--quiet",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help="Errors only",
+        )
 
         start_parser.add_argument("--model-version", help="Model version for ML pipelines")
         start_parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")
@@ -340,7 +476,14 @@ class UnifiedArgumentParser:
         stop_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
         stop_parser.add_argument("--env", "-e", default="base", help="Execution environment")
         stop_parser.add_argument("--execution-id", "-i", required=True, help="Execution ID to stop")
-        stop_parser.add_argument("--timeout", "-t", type=int, default=60, help=HELP_TIMEOUT_SECONDS)
+        stop_parser.add_argument(
+            "--timeout",
+            "-t",
+            type=int,
+            default=60,
+            help="Seconds to wait for each query to stop gracefully (default: 60); "
+            "under 5 stops them at once",
+        )
 
     @staticmethod
     def _add_template_subcommand(subparsers):
@@ -520,6 +663,12 @@ class UnifiedArgumentParser:
         )
 
         UnifiedArgumentParser._add_discovery_args(config_parser)
+        # Also after the subcommand (`ducta config validate --base-path p`), as
+        # every other command takes it. SUPPRESS keeps the subcommand's absent
+        # option from overwriting a value given before it.
+        for name, sub in config_subparsers.choices.items():
+            if name != "schema":
+                sub.add_argument("--base-path", help=HELP_BASE_PATH, default=argparse.SUPPRESS)
 
     @staticmethod
     def _add_ui_subcommand(subparsers):
@@ -1024,6 +1173,9 @@ class UnifiedArgumentParser:
         diff_parser.add_argument(
             "--env", help="Environment to scope the search to (default: search all environments)"
         )
+        # Like every command that works on a project: from outside it, name it.
+        for sub in (list_parser, show_parser, verify_parser, diff_parser):
+            UnifiedArgumentParser._add_discovery_args(sub)
 
     @staticmethod
     def _add_skill_subcommand(subparsers):
@@ -1149,6 +1301,33 @@ class UnifiedArgumentParser:
         fix.add_argument("--force", action="store_true", help="Write even if it does not validate")
         UnifiedArgumentParser._add_output_format_arg(fix, "Output format (json prints the draft)")
 
+        extend_p = ai_sub.add_parser(
+            "extend",
+            help="Draft new nodes for an existing pipeline (existing nodes stay as they are)",
+            description=(
+                "The model reads the pipeline's file and the code its nodes run, and adds what "
+                "you describe: new nodes, functions and datasets. Ducta checks — without a model "
+                "— that every existing node, function and setting is unchanged; the draft is "
+                "reviewed and applied like any other."
+            ),
+        )
+        extend_p.add_argument("pipeline", help="Pipeline to add nodes to")
+        extend_p.add_argument("request", help="What the new nodes should do")
+        UnifiedArgumentParser._add_discovery_args(extend_p)
+        extend_p.add_argument(
+            "--attempts", type=int, help="Times the model may fix what is found (default 3)"
+        )
+        extend_p.add_argument(
+            "--write", action="store_true", help="Write the draft once it validates"
+        )
+        extend_p.add_argument("--yes", action="store_true", help="Do not ask before writing")
+        extend_p.add_argument(
+            "--force", action="store_true", help="Write even if it does not validate"
+        )
+        UnifiedArgumentParser._add_output_format_arg(
+            extend_p, "Output format (json prints the draft)"
+        )
+
         def draft_args(p, what: str = "the draft") -> None:
             UnifiedArgumentParser._add_discovery_args(p)
             p.add_argument(
@@ -1207,17 +1386,19 @@ class UnifiedArgumentParser:
 
         review = ai_sub.add_parser(
             "review",
-            help="Review a node's code and settings: what Ducta is sure of, plus the model's view",
+            help="Review a pipeline, or one of its nodes: what Ducta is sure of, plus the model's view",
             description=(
-                "Ducta checks the node first (a retried node that appends, runs near their "
-                "timeout, I/O or collect() inside the function, credentials in the code…); the "
-                "model adds what it sees in the code, the effective settings and the last runs. "
-                "A finding of the model's that cites a line or setting that does not exist is "
-                "dropped. Nothing is changed."
+                "Ducta checks first (a retried node that appends, runs near their timeout, I/O "
+                "or collect() inside a function, credentials in the code, a pipeline with no "
+                "owner or nothing checking its data…); the model adds what it sees in the code, "
+                "the effective settings and the last runs. A finding of the model's that cites "
+                "a node, line or setting that does not exist is dropped. Without NODE, the whole "
+                "pipeline is reviewed and the model may suggest nodes to add (`ducta ai extend`). "
+                "Nothing is changed."
             ),
         )
-        review.add_argument("pipeline", help="Pipeline holding the node")
-        review.add_argument("node", help="Node to review")
+        review.add_argument("pipeline", help="Pipeline to review (or holding the node)")
+        review.add_argument("node", nargs="?", help="Node to review (default: the whole pipeline)")
         review.add_argument(
             "--env", default="dev", help="Environment whose settings and runs to use"
         )

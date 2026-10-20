@@ -8,7 +8,6 @@ import {
   IconTerminal2,
   IconTemplate,
   IconTrash,
-  IconX,
   IconFlask,
   IconDots,
   IconBoxMultiple,
@@ -38,7 +37,6 @@ import { DataPreview } from "./DataPreview";
 import { Tabs } from "../../ui/Tabs";
 import {
   ChecksList,
-  DatasetRef,
   KeyValues,
   MLPlanBlock,
   NodeRef,
@@ -46,6 +44,7 @@ import {
   lastRunLine,
   qualityLine,
 } from "./parts";
+import { NodeInputsSection, NodeOutputsSection } from "./NodeIOManager";
 
 export interface NeighbourNode {
   id: string;
@@ -88,6 +87,14 @@ interface NodeFocusProps {
   onExtractSubpipeline?: () => void;
   /** Stop reading a dataset (undoable). */
   onDisconnect?: (dataset: string) => void;
+  /** Add a dataset input connection (undoable). */
+  onAddInput?: (dataset: string, alias?: string) => void;
+  /** Add an output dataset (undoable). */
+  onAddOutput?: (dataset: string, meta?: Record<string, unknown>) => void;
+  /** Remove an output dataset (undoable). */
+  onRemoveOutput?: (dataset: string) => void;
+  /** Available datasets in the pipeline/project for auto-completion. */
+  availableDatasets?: string[];
   /** Why the node no longer matches its last successful run, when it does not. */
   staleReasons?: string[];
   /** The environment previews and effective values are shown for. */
@@ -140,6 +147,10 @@ export function NodeFocus({
   onExtractTemplate,
   onExtractSubpipeline,
   onDisconnect,
+  onAddInput,
+  onAddOutput,
+  onRemoveOutput,
+  availableDatasets,
   staleReasons,
   activeEnv = "base",
   onSetKey,
@@ -265,28 +276,14 @@ export function NodeFocus({
         )}
       </FocusColumn>
 
-      <FocusColumn label="Reads" side="in" count={inputs.length}>
-        {inputs.length > 0 ? (
-          inputs.map((io) => (
-            <div key={io.id ?? io.name} className="focus-io-editable">
-              <DatasetRef item={io} onSelect={onSelectDataset} />
-              {onDisconnect && (
-                <button
-                  type="button"
-                  className="focus-io-remove"
-                  aria-label={`Stop reading ${io.name}`}
-                  title={`Stop reading ${io.name} (undoable)`}
-                  onClick={() => onDisconnect(io.name)}
-                >
-                  <IconX size={12} />
-                </button>
-              )}
-            </div>
-          ))
-        ) : (
-          <p className="focus-empty">No inputs declared.</p>
-        )}
-      </FocusColumn>
+      <NodeInputsSection
+        inputs={inputs}
+        onSelectDataset={onSelectDataset}
+        onDisconnect={canWrite && onDisconnect ? (dataset) => onDisconnect(dataset) : undefined}
+        onAddInput={canWrite && onAddInput ? (dataset, alias) => onAddInput(dataset, alias) : undefined}
+        availableDatasets={availableDatasets}
+        disabled={!canWrite}
+      />
 
       <article className={`focus-core${failed ? " focus-core--failed" : ""}`}>
         <header className="focus-core-head">
@@ -410,13 +407,14 @@ export function NodeFocus({
         </div>
       </article>
 
-      <FocusColumn label="Writes" side="out" count={outputs.length}>
-        {outputs.length > 0 ? (
-          outputs.map((io) => <DatasetRef key={io.id ?? io.name} item={io} onSelect={onSelectDataset} />)
-        ) : (
-          <p className="focus-empty">No outputs declared.</p>
-        )}
-      </FocusColumn>
+      <NodeOutputsSection
+        outputs={outputs}
+        onSelectDataset={onSelectDataset}
+        onRemoveOutput={canWrite && onRemoveOutput ? (dataset) => onRemoveOutput(dataset) : undefined}
+        onAddOutput={canWrite && onAddOutput ? (dataset, meta) => onAddOutput(dataset, meta) : undefined}
+        nodeName={name}
+        disabled={!canWrite}
+      />
 
       <FocusColumn label="Feeds" side="to" count={downstream.length}>
         {downstream.length > 0 ? (

@@ -212,7 +212,8 @@ export function ProjectPage() {
           projectId={projectId}
           mode={{ kind: "new" }}
           onClose={() => setShowAI(false)}
-          onApplied={(pipeline) => pipeline && navigate(routes.pipeline(projectId, pipeline))}
+          // A pipeline just built: open it with its review, to check it before running it.
+          onApplied={(pipeline) => pipeline && navigate(routes.pipeline(projectId, pipeline, { review: "1" }))}
         />
       )}
 

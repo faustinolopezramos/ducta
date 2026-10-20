@@ -18,21 +18,12 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import re
-
 from ducta.console.commands.ingestion_setup import IngestionSetupCommands
 from ducta.console.core import ExitCode
-
-_TABLE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class InitCommands:
     """Handles ingestion commands - routes to IngestionSetupCommands."""
-
-    @staticmethod
-    def _is_valid_table_name(name: str) -> bool:
-        """Return True if `name` is a safe SQL identifier."""
-        return bool(name) and bool(_TABLE_NAME_PATTERN.match(name))
 
     @staticmethod
     def handle(parsed_args) -> int:

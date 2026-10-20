@@ -23,8 +23,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional, Tuple, Type
 
-from fastapi import HTTPException  # type: ignore
-
 from ducta.api.models.responses import ErrorCode
 
 
@@ -36,6 +34,10 @@ def http_error_on(status_code: int, *exc_types: Type[Exception]) -> Iterator[Non
     Replaces the ``try: ... except ValueError as exc: raise HTTPException(...)``
     stanza that routes used to spell out by hand.
     """
+    # Imported here: services that share these exceptions are used outside the
+    # server too (`ducta ai`), where FastAPI need not be installed.
+    from fastapi import HTTPException  # type: ignore
+
     catch: Tuple[Type[Exception], ...] = exc_types or (ValueError,)
     try:
         yield

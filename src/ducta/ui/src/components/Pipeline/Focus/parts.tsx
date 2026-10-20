@@ -137,12 +137,14 @@ export function ChecksList({ quality }: { quality: NodeSchema["quality"] | undef
 }
 
 export interface DatasetRefItem {
+  id?: string;
   name: string;
   declared?: boolean;
   format?: string | null;
   path?: string | null;
   write_mode?: string | null;
   layer?: string | null;
+  alias?: string | null;
 }
 
 /** A dataset a node reads or writes, as a link into its focus. */

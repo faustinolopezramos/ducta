@@ -98,3 +98,39 @@ def test_default_sink_is_suppressed_when_file_logging_is_off(tmp_path):
     finally:
         LoggerManager.setup()
         os.chdir(previous)
+
+
+def _make_project(root):
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "ducta.yaml").write_text("version: 2\nproject: demo\n", encoding="utf-8")
+    return root
+
+
+def test_the_log_goes_to_the_project_not_the_cwd(tmp_path):
+    """Regression: `./logs/` was created wherever the user stood — a project's
+    subfolder, or the parent directory when using --base-path."""
+    from ducta.console.cli import _log_file_for
+    from ducta.console.parser import UnifiedArgumentParser
+
+    project = _make_project(tmp_path / "proj")
+    (project / "pipelines").mkdir()
+    parse = UnifiedArgumentParser.create().parse_args
+
+    previous = os.getcwd()
+    try:
+        os.chdir(project / "pipelines")
+        expected = str(project.resolve() / "logs" / "ducta.log")
+        assert _log_file_for(parse(["config", "validate"])) == expected
+        os.chdir(tmp_path)
+        assert _log_file_for(parse(["config", "validate", "--base-path", "proj"])) == expected
+        # Outside any project: no file at all.
+        assert _log_file_for(parse(["certify", "list"])) is None
+        # An explicit --log-file always wins.
+        argv = ["start", "--pipeline", "p", "--log-file", "x.log"]
+        assert _log_file_for(parse(argv)) == "x.log"
+    finally:
+        os.chdir(previous)
+
+
+def test_skill_keeps_no_log_file():
+    assert "skill" in _PROJECTLESS_SUBCOMMANDS

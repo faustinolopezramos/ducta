@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import {
   ContractList,
   DagCanvas,
   DatasetFocus,
   HUDToolbar,
   NodeFocus,
+  PipelineFlowBar,
+  ConnectionModal,
 } from "../../components/Pipeline";
 import { useMlPlan } from "../../api/queries";
 import { NodeCodePane } from "../../components/Pipeline/NodeCodePane";
@@ -18,8 +20,10 @@ import { ExecutionControls } from "../../components/Execution";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
+import { PipelineReview } from "../../components/AI/PipelineReview";
+import { PermittedButton } from "../../components/ui/PermittedButton";
 import { usePermission } from "../../hooks/usePermission";
-import { IconSparkles } from "@tabler/icons-react";
+import { IconChecklist, IconPlus, IconSparkles } from "@tabler/icons-react";
 import { IconFolderOff, IconSitemap, IconCircleDotted } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
@@ -35,7 +39,7 @@ import { DebugPanel } from "../../components/Debug/DebugPanel";
 import { PipelineDock } from "./PipelineDock";
 import { PipelineDialogs } from "./PipelineDialogs";
 import { useCanvasEditing } from "./useCanvasEditing";
-import { aliasFor, datasetForParam, moduleOf, suggestNodeName } from "./canvasEdits";
+import { aliasFor, datasetForParam, datasetsToConnect, moduleOf, suggestNodeName } from "./canvasEdits";
 import { DATASET_DRAG_TYPE, FUNCTION_DRAG_TYPE } from "../../components/Explorer/PipelineExplorer";
 import { useCodeIndex, useComments, useDebugger, useGovernance, useNodeTemplates, usePipelineTemplates, useProjectDatasets, useStaleness } from "../../api/queries";
 import type { NewNode } from "./AddNodeForm";
@@ -157,6 +161,43 @@ export function PipelinePage() {
         mode={{ kind: "fix", pipeline: pipelineId, problems: pipelineErrors.length }}
         onClose={() => setAiFixOpen(false)}
       />
+    ) : null;
+  // "Review pipeline" (a drawer; ?review=1 opens it, as a newly built pipeline
+  // does) and "Add nodes with AI" (the draft dialog, from scratch or from an idea).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const reviewOpen = searchParams.get("review") === "1";
+  const setReviewOpen = useCallback(
+    (open: boolean) => {
+      const next = new URLSearchParams(searchParams);
+      if (open) next.set("review", "1");
+      else next.delete("review");
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
+  const [extendRequest, setExtendRequest] = useState<string | null>(null);
+  const aiActions =
+    canUseAI && pipelineId ? (
+      <>
+        <PermittedButton
+          permission="ai.use"
+          variant="ghost"
+          size="sm"
+          onClick={() => setReviewOpen(true)}
+          leftIcon={<IconChecklist size={15} stroke={1.75} />}
+        >
+          Review pipeline
+        </PermittedButton>
+        <PermittedButton
+          permission="ai.use"
+          variant="ghost"
+          size="sm"
+          onClick={() => setExtendRequest("")}
+          leftIcon={<IconPlus size={15} stroke={1.75} />}
+        >
+          Add nodes with AI
+        </PermittedButton>
+      </>
     ) : null;
   const openProblems = useCallback(() => {
     setBottomPanelTab("problems");
@@ -386,13 +427,40 @@ export function PipelinePage() {
 
   const handleAddNode = useCallback(
     async (n: NewNode) => {
+      let inputsPayload: Record<string, string> | undefined = undefined;
+      if (n.inputsList && n.inputsList.length > 0) {
+        inputsPayload = {};
+        for (const inp of n.inputsList) {
+          if (inp.dataset.trim()) {
+            const alias = inp.alias?.trim() || aliasFor(inp.dataset.trim());
+            inputsPayload[alias] = inp.dataset.trim();
+          }
+        }
+      } else if (n.reads) {
+        inputsPayload = { [aliasFor(n.reads)]: n.reads };
+      }
+
+      let outputsPayload: string[] | undefined = undefined;
+      if (n.outputsList && n.outputsList.length > 0) {
+        outputsPayload = n.outputsList.map((o) => o.trim()).filter(Boolean);
+      } else if (n.writes) {
+        outputsPayload = [n.writes];
+      }
+
+      const catalogSeed: Record<string, Record<string, unknown>> = {};
+      if (outputsPayload) {
+        for (const out of outputsPayload) {
+          catalogSeed[out] = {};
+        }
+      }
+
       const ok = await editing.apply(`Add ${n.name}`, [{
         op: "add_node", node: n.name,
         ...(n.template ? { use: n.template, ...(n.with && Object.keys(n.with).length ? { with: n.with } : {}) } : {}),
         ...(n.run ? { run: n.run } : {}),
-        ...(n.reads ? { inputs: { [aliasFor(n.reads)]: n.reads } } : {}),
-        ...(n.writes ? { outputs: [n.writes] } : {}),
-      }], n.writes ? { [n.writes]: {} } : undefined);
+        ...(inputsPayload && Object.keys(inputsPayload).length ? { inputs: inputsPayload } : {}),
+        ...(outputsPayload && outputsPayload.length ? { outputs: outputsPayload } : {}),
+      }], Object.keys(catalogSeed).length ? catalogSeed : undefined);
       if (ok) { setAddNodeOpen(false); setAddNodeInitial(undefined); selectNodeById(n.name); }
     },
     [editing, setAddNodeOpen, selectNodeById],
@@ -408,6 +476,34 @@ export function PipelinePage() {
   }, [codeOpen, selectedNodeId, closeCode, showInGraph, openCode]);
 
   const [showMinimap, setShowMinimap] = useState(false);
+  const [pendingConnection, setPendingConnection] = useState<{
+    from: string;
+    to: string;
+    outputs: string[];
+    targetInputs: string[];
+  } | null>(null);
+
+  const handleConnectNodes = useCallback(
+    (from: string, to: string) => {
+      const fromItem = itemById.get(from);
+      const toItem = itemById.get(to);
+      const fromOutputs = (fromItem?.outputs ?? []).map((o) => o.name);
+      const toInputs = (toItem?.inputs ?? []).map((i) => i.name);
+      const available = datasetsToConnect(fromOutputs, toInputs);
+
+      if (available.length === 0) {
+        toastStore.getState().show(`${from} writes nothing ${to} does not already read`, "info");
+        return;
+      }
+
+      if (available.length > 1) {
+        setPendingConnection({ from, to, outputs: available, targetInputs: toInputs });
+      } else {
+        void editing.addInput(to, available[0], aliasFor(available[0]));
+      }
+    },
+    [itemById, editing],
+  );
 
   usePipelineKeyboardShortcuts({
     isCodeEditorOpen: false, addNodeOpen,
@@ -598,6 +694,16 @@ export function PipelinePage() {
       onDisconnect={selectedItem?.pipeline && selectedItem.pipeline !== pipelineId ? undefined : (dataset) => {
         void editing.disconnect(selectedNodeId, dataset);
       }}
+      onAddInput={selectedItem?.pipeline && selectedItem.pipeline !== pipelineId ? undefined : (dataset, alias) => {
+        void editing.addInput(selectedNodeId, dataset, alias);
+      }}
+      onAddOutput={selectedItem?.pipeline && selectedItem.pipeline !== pipelineId ? undefined : (dataset, meta) => {
+        void editing.addOutput(selectedNodeId, dataset, meta);
+      }}
+      onRemoveOutput={selectedItem?.pipeline && selectedItem.pipeline !== pipelineId ? undefined : (dataset) => {
+        void editing.removeOutput(selectedNodeId, dataset);
+      }}
+      availableDatasets={datasetNames}
       onViewQualityReports={({ dataset, pipelineName }) =>
         navigate(
           `${routes.section(projectId ?? "", "quality")}?env=${encodeURIComponent(activeEnv ?? "")}` +
@@ -644,7 +750,40 @@ export function PipelinePage() {
         chainStatus={chainStatus}
         runOptions={runOptions}
         runBlocked={runBlocked}
+        aiActions={aiActions}
       />
+      {reviewOpen && projectId && pipelineId && (
+        <PipelineReview
+          projectId={projectId}
+          pipeline={pipelineId}
+          env={activeEnv || "dev"}
+          onClose={() => setReviewOpen(false)}
+          onOpenNode={(node) => {
+            setReviewOpen(false);
+            showInGraph(node);
+          }}
+          onExtend={(request) => {
+            setReviewOpen(false);
+            setExtendRequest(request);
+          }}
+        />
+      )}
+      {extendRequest !== null && projectId && pipelineId && (
+        <AIDraftDialog
+          projectId={projectId}
+          mode={{
+            kind: "extend",
+            pipeline: pipelineId,
+            request: extendRequest,
+            // This pipeline's nodes (the graph may also draw its upstream chain).
+            nodes: dagItems
+              .filter((it) => !it.pipeline || it.pipeline === pipelineId)
+              .filter((it) => it.type !== "dataset")
+              .map((it) => ({ name: it.name ?? it.id, outputs: (it.outputs ?? []).map((o) => o.name) })),
+          }}
+          onClose={() => setExtendRequest(null)}
+        />
+      )}
 
       <div className="pipeline-workbench">
         {explorerOpen && projectId && (
@@ -726,6 +865,16 @@ export function PipelinePage() {
                 />
               ) : (
                 <div className="pipeline-flow" onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
+                  {onCanvas && (
+                    <PipelineFlowBar
+                      items={canvasItems}
+                      freshness={freshness}
+                      designStates={designStates}
+                      executionStates={executionStates}
+                      filter={canvasFilter}
+                      onFilterChange={setCanvasFilter}
+                    />
+                  )}
                   {lens === "list" ? (
                     <ContractList
                       rows={contractRows}
@@ -757,7 +906,7 @@ export function PipelinePage() {
                         setSelection(next);
                       }}
                       onOpenNode={openCode}
-                      onConnectNodes={editing.connect}
+                      onConnectNodes={handleConnectNodes}
                       canConnect={editing.canConnect}
                       designStates={designStates}
                       freshness={freshness}
@@ -804,6 +953,26 @@ export function PipelinePage() {
                       datasets={datasetNames}
                       templates={allTemplates}
                       writtenElsewhere={writtenElsewhere}
+                    />
+                  )}
+
+                  {pendingConnection && (
+                    <ConnectionModal
+                      open={Boolean(pendingConnection)}
+                      onClose={() => setPendingConnection(null)}
+                      sourceNode={pendingConnection.from}
+                      targetNode={pendingConnection.to}
+                      availableOutputs={pendingConnection.outputs}
+                      targetInputs={pendingConnection.targetInputs}
+                      onConnect={(dataset, alias) => {
+                        void editing.addInput(pendingConnection.to, dataset, alias);
+                      }}
+                      onConnectAll={(datasets) => {
+                        void editing.apply(
+                          `Connect ${datasets.join(", ")} → ${pendingConnection.to}`,
+                          datasets.map((dataset) => ({ op: "connect" as const, node: pendingConnection.to, dataset })),
+                        );
+                      }}
                     />
                   )}
                 </div>

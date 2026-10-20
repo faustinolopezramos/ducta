@@ -61,12 +61,37 @@ Invoked as `ducta <subcommand> [options]`:
 | `config`   | `validate`, `list-pipelines`, `pipeline-info`, `schema`, `show`, `explain`, `diff`, `convert` |
 | `ui` / `server` | Launch the local web UI / API server (`--host`, `--port`, `--no-browser`) |
 | `quality`  | `list` / `run` / `report` / `trend` / `score` / `validate-config` for data quality |
-| `experiment` | `list` tracked experiments (`--storage-path`) |
-| `model`    | `promote` / `gc` registered models |
-| `init`     | Scaffold ingestion config (`ingestion`) |
-| `certify`  | Inspect and verify Run Certificates |
+| `experiment` | `list` / `runs` / `show` / `compare` tracked experiments (`--env`, `--pipeline`, `--storage-path`) |
+| `model`    | `promote` / `gc` registered models (both read the project's `settings.mlops`; without `--env`, the base project's) |
+| `init`     | `project` (above), or `ingestion setup` / `list` / `test` / `info` for database connections |
+| `certify`  | `list` / `show` / `verify` / `diff` Run Certificates (`--env`, `--dir`, `--base-path`) |
+| `profile`  | Assay a data file and propose the quality spec it already satisfies |
+| `ai`       | Draft, fix, review and explain with a model; `architect` and `sentinel` agents |
+| `skill`    | `install` / `export` / `path` the agent skill for AI assistants |
 
-Global flags include `--log-level`, `--log-file`, `--verbose`, `--quiet`, and `--version`.
+Global flags: `-V/--version`, `-v/--verbose` and `-q/--quiet` (the last two also
+after `start`). `start` adds `--log-level` and `--log-file`. `-e`/`-p` are short for
+`--env`/`--pipeline` everywhere. Commands that work on a project take `--base-path`
+(after the subcommand; `config` also before it) and otherwise find the project
+from the current directory upwards. `ducta` alone shows the project and what to
+run next.
+
+**What the terminal shows.** By default the classic log: every line as it happens
+(`-v` adds debug, `-q` keeps errors only). `DUCTA_CONSOLE=compact` turns on an
+optional short view (`ux/view.py`): a header, one line per node, a summary, and one
+error block with the user's file and line (full error in `logs/last-error.txt`).
+`ui`/`server`, the library and the API server always use the classic log.
+
+**Logs.** A command that works on a project logs everything, at DEBUG, to
+`<project>/logs/ducta.log` (`--log-file` overrides it). Outside a project, and for
+`template`, `ai` and `skill`, there is no log file. Colour only on a terminal; set
+`FORCE_COLOR=1` to keep it in a pipe.
+
+**Exit codes.** `0` success · `1` unexpected error · `2` configuration ·
+`3` validation (bad arguments, unknown pipeline or node, failed checks) ·
+`4` execution (a run, sweep trial or connection failed) · `5` dependency (nodes
+skipped for missing inputs; a connection that could not be tested) · `6` security ·
+`7` locked.
 
 ---
 

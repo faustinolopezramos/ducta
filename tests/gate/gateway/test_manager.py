@@ -207,7 +207,7 @@ class TestCircuitBreakerIntegration:
         assert mock_connector.test_connection.call_count == 1
 
     @patch("ducta.gate.gateway.manager.ConnectionManager._create_connector")
-    def test_ambiguous_true_does_not_trip_breaker(self, mock_create, temp_dir):
+    def test_untested_does_not_trip_breaker(self, mock_create, temp_dir):
         from ducta.gate.gateway.manager import ConnectionManager
 
         cfg = self._write_cfg(
@@ -216,7 +216,7 @@ class TestCircuitBreakerIntegration:
         )
         cm = ConnectionManager(cfg)
         mock_connector = MagicMock()
-        mock_connector.test_connection.return_value = True  # e.g. no active Spark session
+        mock_connector.test_connection.return_value = None  # no active Spark session
         mock_create.return_value = mock_connector
 
         conn = cm.get("db")

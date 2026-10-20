@@ -107,6 +107,8 @@ class Finding:
     key: Optional[str] = None
     #: ``ducta`` (certain) or ``ai`` (the model's, checked against the code).
     source: str = "ducta"
+    #: In a pipeline's review: the node it is about (``None``: the pipeline itself).
+    node: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -220,14 +222,27 @@ def _durations(root: Path, env: str, pipeline: str, node: str) -> List[float]:
     return [d for _, d in sorted(runs, reverse=True)[:RECENT_RUNS]]
 
 
-def review_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> ReviewFacts:
-    """The node as it runs in *env*: settings, code, recent durations, problems."""
+def review_facts(
+    root: Path,
+    pipeline: str,
+    node: str,
+    env: str = "dev",
+    *,
+    resolved: Optional[Dict[str, Any]] = None,
+    problems: Optional[List[Dict[str, Any]]] = None,
+) -> ReviewFacts:
+    """The node as it runs in *env*: settings, code, recent durations, problems.
+
+    *resolved* (the project in *env*) and *problems* (the validator's) can be
+    passed in when several nodes are looked at: they are the project's, not the node's.
+    """
     from ducta.setting.node_effective_config import effective_node_config
     from ducta.setting.project_loader import apply_environment, read_project
 
     root = Path(root).resolve()
     path = _pipeline_file(root, pipeline)
-    resolved = apply_environment(read_project(root), env)
+    if resolved is None:
+        resolved = apply_environment(read_project(root), env)
     pdoc = (resolved.get("pipelines") or {}).get(pipeline) or yaml.safe_load(
         path.read_text(encoding="utf-8")
     )
@@ -273,7 +288,7 @@ def review_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> Revi
     files = {facts.pipeline_rel, (facts.function or {}).get("file")}
     facts.problems = [
         p
-        for p in _validate(root, {})
+        for p in (problems if problems is not None else _validate(root, {}))
         if p.get("severity") in ("error", "warning")
         and (
             p.get("node") == node
@@ -291,6 +306,86 @@ _ROW_BY_ROW = {"iterrows", "itertuples"}
 #: Spark's ``df.write…save()`` is caught by its ``.write``.
 _WRITES = {"to_csv", "to_parquet", "to_json", "to_excel", "saveAsTable", "insertInto"}
 _READS = {"read_csv", "read_parquet", "read_json", "read_excel", "read_sql", "read_table"}
+#: pandas' ``to_*`` writers return the text when given no path: serialising in memory.
+_PATH_KEYWORDS = {"path", "path_or_buf", "buf", "excel_writer", "fname", "file"}
+#: What a node's function has no business doing: running commands, reaching the
+#: network, deleting files, evaluating text as code. Not a sandbox — a net that
+#: catches the obvious, so the person reading the diff is told where to look.
+_RISKY_MODULES = {
+    "subprocess": "runs commands",
+    "socket": "opens network connections",
+    "requests": "calls the network",
+    "httpx": "calls the network",
+    "urllib.request": "calls the network",
+    "urllib3": "calls the network",
+    "http.client": "calls the network",
+    "ftplib": "calls the network",
+    "smtplib": "sends mail",
+    "ctypes": "loads native code",
+}
+_RISKY_CALLS = {
+    "os.system": "runs commands",
+    "os.popen": "runs commands",
+    "os.remove": "deletes files",
+    "os.unlink": "deletes files",
+    "os.rmdir": "deletes files",
+    "shutil.rmtree": "deletes files",
+    "eval": "runs text as code",
+    "exec": "runs text as code",
+    "compile": "runs text as code",
+    "__import__": "imports by name",
+}
+#: ``Path(...).write_text()`` and friends, whatever the object is called.
+_RISKY_METHODS = {"write_text", "write_bytes", "unlink", "rmdir"}
+_SQL_CHANGES = ("drop", "delete", "insert", "truncate", "create", "alter", "merge", "update")
+
+
+def _dotted(node: ast.AST) -> str:
+    """``a.b.c`` for a name or an attribute chain, else ``""``."""
+    parts: List[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+        return ".".join(reversed(parts))
+    return ""
+
+
+def _risk(item: ast.AST) -> Optional[Tuple[str, str]]:
+    """``(what, why)`` when *item* (an import or a call) is something a node should not do."""
+    if isinstance(item, ast.Import):
+        names = [a.name for a in item.names]
+    elif isinstance(item, ast.ImportFrom):
+        names = [item.module or ""]
+    elif isinstance(item, ast.Call):
+        dotted = _dotted(item.func)
+        if dotted in _RISKY_CALLS:
+            return dotted, _RISKY_CALLS[dotted]
+        if isinstance(item.func, ast.Attribute) and item.func.attr in _RISKY_METHODS:
+            return item.func.attr, "writes or deletes files"
+        if dotted.endswith("spark.sql") and item.args:
+            first = item.args[0]
+            if isinstance(first, ast.Constant) and isinstance(first.value, str):
+                if first.value.lstrip().lower().startswith(_SQL_CHANGES):
+                    return "spark.sql", "changes tables"
+        return None
+    else:
+        return None
+    for name in names:
+        for module, why in _RISKY_MODULES.items():
+            if name == module or name.startswith(module + "."):
+                return module, why
+    return None
+
+
+def _in_memory(name: str, call: ast.Call) -> bool:
+    """``df.to_json()`` with no path returns the text: nothing is written."""
+    return (
+        name.startswith("to_")
+        and not call.args
+        and not any(k.arg in _PATH_KEYWORDS for k in call.keywords)
+    )
 
 
 def _code_findings(facts: ReviewFacts) -> List[Finding]:
@@ -314,6 +409,22 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
         out.append(finding)
 
     for item in ast.walk(tree):
+        risky = _risk(item)
+        if risky:
+            what, why = risky
+            add(
+                "risk",
+                item,
+                Finding(
+                    "high",
+                    "security",
+                    f"The code {why} (`{what}`)",
+                    "A node's function transforms the DataFrames it receives; this reaches "
+                    "outside them, and it runs with the same access as the pipeline.",
+                    "Remove it, or move it out of the node (an ingest node, a source, a job of "
+                    "its own). If it is intended, say so in the review.",
+                ),
+            )
         if not isinstance(item, ast.Call):
             continue
         name = (
@@ -348,7 +459,7 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
                 ),
             )
         elif (
-            name in _WRITES
+            (name in _WRITES and not _in_memory(name, item))
             or (name == "open" and isinstance(item.func, ast.Name))
             or name in _READS
         ):
@@ -689,10 +800,10 @@ def _path(root: Path, pipeline: str, node: str) -> Path:
 
 
 def save_review(root: Path, review: Review) -> Path:
+    from ducta.ai.fsutil import atomic_write_text
+
     path = _path(root, review.pipeline, review.node)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(review.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
+    return atomic_write_text(path, json.dumps(review.to_dict(), indent=2, ensure_ascii=False))
 
 
 def load_review(root: Path, pipeline: str, node: str) -> Optional[Review]:

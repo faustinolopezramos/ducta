@@ -105,17 +105,53 @@ def _build_registry(storage: LocalStorageBackend) -> ModelRegistry:
     return ModelRegistry(storage=storage, registry_path=DEFAULT_REGISTRY_PATH)
 
 
-def _resolve_promotion_policy(env: Optional[str] = None) -> Optional[PromotionPolicy]:
-    """Read mlops.promotion_policy from global config, if configured."""
-    gs = _global_config_of(_discover_context(env))
-    policy_cfg = (gs.get("mlops") or {}).get("promotion_policy")
-    if not isinstance(policy_cfg, dict) or not policy_cfg.get("metric"):
+class PolicyUnavailable(Exception):
+    """The project exists, but its MLOps settings could not be read."""
+
+
+def _project_mlops_settings(env: Optional[str]) -> Optional[Dict[str, Any]]:
+    """``settings.mlops`` of the project around the current directory.
+
+    ``None`` when there is no project here. Without ``--env`` the base
+    project's settings apply. A project that exists but does not load raises
+    :class:`PolicyUnavailable`: a gate or a retention rule nobody can read must
+    not quietly become "none".
+    """
+    from pathlib import Path
+
+    from ducta.setting.project_context import find_nearest_project
+
+    if find_nearest_project(Path.cwd()) is None:
         return None
     try:
-        return PromotionPolicy.from_dict(policy_cfg)
-    except Exception as e:
-        logger.warning(f"Invalid mlops.promotion_policy ignored: {e}")
+        from ducta.console.config import ConfigManager
+        from ducta.console.execution import ContextInitializer
+
+        config_manager = ConfigManager(base_path=None, require_config=False)
+        config_manager.change_to_config_directory()
+        context = ContextInitializer(config_manager).initialize(env or "base")
+    except Exception as e:  # noqa: BLE001 — reported by the caller
+        raise PolicyUnavailable(f"the project does not load: {e}") from e
+    mlops = _global_config_of(context).get("mlops") or {}
+    return mlops if isinstance(mlops, dict) else {}
+
+
+def _resolve_promotion_policy(env: Optional[str] = None) -> Optional[PromotionPolicy]:
+    """``mlops.promotion_policy``; ``None`` only when there genuinely is none.
+
+    This used to return ``None`` for every failure — and without ``--env`` it
+    never looked at all — so a production promotion skipped the gate exactly
+    when nobody could see why.
+    """
+    policy_cfg = (_project_mlops_settings(env) or {}).get("promotion_policy")
+    if policy_cfg is None:
         return None
+    if not isinstance(policy_cfg, dict) or not policy_cfg.get("metric"):
+        raise PolicyUnavailable("mlops.promotion_policy is set but names no metric")
+    try:
+        return PromotionPolicy.from_dict(policy_cfg)
+    except Exception as e:  # noqa: BLE001
+        raise PolicyUnavailable(f"mlops.promotion_policy is invalid: {e}") from e
 
 
 def experiment_list(
@@ -332,13 +368,26 @@ def model_promote(
         logger.error(str(e))
         return ExitCode.VALIDATION_ERROR.value
 
+    # The gate guards Production only, so only a Production promotion needs it.
+    policy: Optional[PromotionPolicy] = None
+    if target_stage == ModelStage.PRODUCTION:
+        try:
+            policy = _resolve_promotion_policy(env)
+        except PolicyUnavailable as e:
+            if not force:
+                logger.error(
+                    f"Cannot check the promotion gate: {e}. Fix it, or pass --force to "
+                    "promote without the gate (the bypass is audit-logged)."
+                )
+                return ExitCode.CONFIGURATION_ERROR.value
+            logger.warning(f"Promotion gate not checked ({e}); promoting because of --force")
+
     try:
         registry = _build_registry(_build_storage(resolved_path))
-        policy = _resolve_promotion_policy(env)
         if policy and target_stage == ModelStage.PRODUCTION:
             logger.info(
                 f"Applying promotion policy: {policy.metric} vs {policy.compare_to} "
-                f"(min_delta={policy.min_delta:+})"
+                f"(min_delta={policy.min_delta:+}, from the {env or 'base'} configuration)"
             )
 
         registry.promote_model(
@@ -372,11 +421,31 @@ def model_gc(
 ) -> int:
     """Garbage collect old models."""
     resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
+    # The project's retention rules, as the API applies them. The CLI used to
+    # read only environment variables, so a project keeping models for a year
+    # lost them after the 90-day default the first time someone ran `model gc`.
+    try:
+        gc_cfg = (_project_mlops_settings(env) or {}).get("gc")
+    except PolicyUnavailable as e:
+        if not dry_run:
+            logger.error(
+                f"Cannot read the project's retention settings ({e}): nothing deleted. "
+                "`ducta config validate` says why; --dry-run shows what the defaults would delete."
+            )
+            return ExitCode.CONFIGURATION_ERROR.value
+        logger.warning(f"Retention settings not read ({e}); dry run with the defaults")
+        gc_cfg = None
     try:
         from ducta.mlrun.config import MLOpsConfig
         from ducta.mlrun.gc import ModelGarbageCollector
 
         mlops_config = MLOpsConfig.from_env()
+        if isinstance(gc_cfg, dict):
+            mlops_config = mlops_config.with_overrides(gc_cfg)
+        logger.info(
+            f"Keeping at most {mlops_config.max_versions_per_model} version(s) per model, "
+            f"none older than {mlops_config.model_retention_days} day(s)"
+        )
         gc = ModelGarbageCollector(
             storage_path=resolved_path,
             max_versions_per_model=mlops_config.max_versions_per_model,

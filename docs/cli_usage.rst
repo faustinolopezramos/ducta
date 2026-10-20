@@ -15,6 +15,38 @@ lists every option of a command.
      --start-date 2026-01-01 --end-date 2026-01-31                  # run it
    ducta certify list                                               # what ran, with evidence
 
+``ducta`` on its own shows the project you are in, its pipelines and the commands
+to run next (outside a project: how to create one). ``ducta --help`` lists the
+commands by what they are for; ``ducta --version`` prints ``ducta X.Y.Z``.
+``-e`` and ``-p`` are short for ``--env`` and ``--pipeline`` in every command.
+
+What the terminal shows
+-----------------------
+
+A run logs every step as it happens: each node, its quality checks, the schema
+of what it wrote, and an execution summary. ``-v`` / ``--verbose`` (before or
+after the command) adds debug lines; ``-q`` / ``--quiet`` keeps only errors.
+Everything is always in ``<project>/logs/ducta.log``, at debug level. Colour only
+on a terminal; ``FORCE_COLOR=1`` keeps it in a pipe.
+
+``DUCTA_CONSOLE=compact`` is an optional short view — a header, one line per node
+(rows written, time, checks), a summary, and for a failure one block with the
+line of your code that raised it and what to type next; it also writes the full
+error to ``logs/last-error.txt``:
+
+.. code-block:: text
+
+   $ DUCTA_CONSOLE=compact ducta start -e dev -p etl
+   ducta 0.2.0 · etl · dev · sales
+
+     ✓ extract     508 rows → bronze.etl.raw_data     0.7s   2 checks passed
+     ✓ transform   478 rows → silver.etl.clean_data   1.0s   4 checks passed
+     ✓ load          5 rows → gold.etl.final_output   0.4s   2 checks passed
+
+   ✓ etl finished in 4.5s · 3/3 nodes
+     certificate  data/dev/.ducta/runs/1a58…/certificate.json
+     inspect      ducta certify show --run-id 1a586806
+
 ``ducta start`` — run a pipeline
 --------------------------------
 
@@ -58,8 +90,8 @@ lists every option of a command.
        status and stops them on Ctrl+C; ``sync`` waits inside the engine.
    * - ``--base-path PATH``
      - The project directory, when not running from inside it.
-   * - ``--log-level LEVEL``, ``--verbose``, ``--quiet``, ``--log-file PATH``
-     - Logging.
+   * - ``--log-level LEVEL``, ``-v/--verbose``, ``-q/--quiet``, ``--log-file PATH``
+     - How much the terminal shows (see above) and where the log goes.
 
 ML pipelines add ``--model-version``, ``--hyperparams JSON``, and
 hyperparameter search: ``--sweep FILE`` (the cartesian product of a grid),
@@ -74,7 +106,7 @@ hyperparameter search: ``--sweep FILE`` (the cartesian product of a grid),
    ducta start --env prod --pipeline daily_sales --start-date 2026-01-01 --end-date 2026-01-31
 
    # Just one node, with debug logging
-   ducta start --env dev --pipeline etl --node clean --verbose
+   ducta start -e dev -p etl -n clean -v
 
    # Everything that can be checked without running
    ducta start --env prod --pipeline etl --validate-only
@@ -98,10 +130,11 @@ Orchestrators can act on the exit code of ``ducta start``:
      - The project cannot run as configured: no project found, invalid
        configuration, or a failed preflight.
    * - 3
-     - Invalid command-line arguments — an unknown pipeline name, a malformed
-       date.
+     - Invalid command-line arguments — an unknown pipeline or node name, a
+       malformed date.
    * - 4
      - The pipeline ran and failed: a node raised, or a quality gate blocked one.
+       With ``--sweep`` or ``--search``: at least one trial failed.
    * - 5
      - The pipeline did not complete: nodes were skipped because a dataset they
        read is missing (an upstream that has not run). An optional extra that is
@@ -286,8 +319,13 @@ project does not set ``mlops_path``; without them the default directory is
 ``./mlops_data``, which is rarely where a pipeline wrote. A run id that does not
 exist is a validation error (exit code 3) and names the directory it searched.
 
-Promotion goes through the promotion policy; ``--force`` bypasses it and the
-bypass is audit-logged. See :doc:`mlops`.
+Promotion to ``production`` goes through the promotion policy
+(``settings.mlops.promotion_policy`` of ``--env``, or of the base project without
+it); ``--force`` bypasses it and the bypass is audit-logged. A project whose policy
+cannot be read refuses the promotion (exit code 2) rather than skip the check.
+``model gc`` keeps what ``settings.mlops.gc`` says (``max_versions_per_model``,
+``model_retention_days``), as the web app does; if the project cannot be read it
+deletes nothing. See :doc:`mlops`.
 
 ``ducta init ingestion`` — database connections
 -----------------------------------------------
@@ -298,6 +336,11 @@ bypass is audit-logged. See :doc:`mlops`.
    ducta init ingestion list
    ducta init ingestion test --source shop_db
    ducta init ingestion info --source shop_db
+
+``test`` exits ``0`` when the connection answered, ``4`` when it failed, and ``5``
+when it could not be tried: testing needs a Spark session, which the CLI does not
+start, so from the terminal a connection is usually checked by the first pipeline
+run that uses it. ``setup`` asks before saving a connection that failed.
 
 ``kind: ingest`` nodes read from these connections — see :doc:`configuration`.
 

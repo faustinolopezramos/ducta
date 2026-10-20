@@ -45,12 +45,6 @@ from ducta.console.validation import (
 )
 from ducta.core.errors import DuctaError as EngineError
 
-HELP_BASE_PATH = "Base path for config discovery"
-HELP_PIPELINE_NAME = "Pipeline name"
-HELP_PIPELINE_NAME_TO_EXECUTE = "Pipeline name to execute"
-HELP_TIMEOUT_SECONDS = "Timeout in seconds"
-HELP_CONFIG_FILE = "Path to configuration file"
-
 
 def validate_stream_run_arguments(args: argparse.Namespace) -> None:
     validate_enum_field(args.mode, ["sync", "async"], "mode")
@@ -75,7 +69,13 @@ def validate_stream_stop_arguments(args: argparse.Namespace) -> None:
 
 def validate_start_arguments(args: argparse.Namespace) -> None:
     validate_required_field(args.env, "env")
-    validate_required_field(args.pipeline, "pipeline")
+    if not args.pipeline:
+        from ducta.console.home import pipeline_hints
+
+        raise ValidationError(
+            "Which pipeline? --pipeline is required",
+            hints=pipeline_hints(getattr(args, "base_path", None)),
+        )
     if args.start_date or args.end_date:
         try:
             args.start_date = parse_iso_date(args.start_date) if args.start_date else None
@@ -159,9 +159,9 @@ def validate_init_arguments(args: argparse.Namespace) -> None:
         raise ValidationError("An init subcommand is required (e.g., project, ingestion)")
 
 
-#: Subcommands that do not run inside an existing project, and so must not
-#: create a `logs/` directory in whatever the current working directory is.
-_PROJECTLESS_SUBCOMMANDS = frozenset({"template", "ai"})
+#: Subcommands that keep no log file: ``template`` runs before its project
+#: exists; ``ai`` and ``skill`` record what they do elsewhere (drafts, audit).
+_PROJECTLESS_SUBCOMMANDS = frozenset({"template", "ai", "skill"})
 
 
 def _is_projectless(parsed_args: argparse.Namespace) -> bool:
@@ -173,7 +173,60 @@ def _is_projectless(parsed_args: argparse.Namespace) -> bool:
     )
 
 
+def _log_file_for(parsed_args: argparse.Namespace) -> Optional[str]:
+    """Where this command's log goes: ``--log-file``, else the project's ``logs/``.
+
+    The default used to be ``./logs/ducta.log`` relative to wherever the user
+    stood, so a run from a project's subfolder, or with ``--base-path``, left
+    a stray ``logs/`` there instead of beside the project's data. Outside a
+    project there is no default file at all.
+    """
+    explicit = getattr(parsed_args, "log_file", None)
+    if explicit:
+        return str(explicit)
+    if _is_projectless(parsed_args):
+        return None
+    from ducta.setting.project_context import find_nearest_project
+
+    start = Path(getattr(parsed_args, "base_path", None) or Path.cwd())
+    root = find_nearest_project(start)
+    return str(root / "logs" / "ducta.log") if root is not None else None
+
+
+#: A server's terminal is a log stream: it keeps every line, as it happens.
+_CLASSIC_SUBCOMMANDS = frozenset({"ui", "server"})
+
+
+def _wants_compact(parsed_args: argparse.Namespace) -> bool:
+    """The compact view only when asked for: ``DUCTA_CONSOLE=compact``.
+
+    The classic log — every line as it happens — is the default (see ``ux.view``).
+    """
+    if os.environ.get("DUCTA_CONSOLE", "").strip().lower() != "compact":
+        return False
+    if parsed_args.subcommand in _CLASSIC_SUBCOMMANDS:
+        return False
+    if getattr(parsed_args, "verbose", False):
+        return False
+    return (getattr(parsed_args, "log_level", None) or "INFO").upper() != "DEBUG"
+
+
+def _report_error(message: str, hints: Optional[List[tuple]] = None) -> None:
+    """An error the user must act on: compact block, or the classic log line."""
+    from ducta.console.ux import view
+
+    if view.is_compact():
+        logger.bind(console=False).error("{}", message)  # the log file keeps it
+        view.print_error(message, hints or [])
+    else:
+        logger.error("Ducta error: {}", message)
+        for label, text in hints or []:
+            logger.info("  {}: {}", label, text)
+
+
 class UnifiedCLI:
+    _set_spark_quiet = False
+
     def run(self, args: Optional[List[str]] = None) -> int:
         parsed_args: Optional[argparse.Namespace] = None
         original_cwd = Path.cwd()
@@ -181,12 +234,12 @@ class UnifiedCLI:
             parsed_args = self._parse_and_setup_logging(args)
             return self._dispatch_subcommand(parsed_args)
         except EngineError as e:
-            logger.error("Ducta error: {}", e)
+            _report_error(str(e), list(getattr(e, "hints", None) or []))
             if parsed_args is not None and getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
             return e.exit_code
         except KeyboardInterrupt:
-            logger.warning("Execution interrupted by user")
+            logger.warning("Interrupted")
             return ExitCode.GENERAL_ERROR.value
         except Exception as e:
             # `logger.error` is a no-op when no sink is attached, and there is a
@@ -199,29 +252,56 @@ class UnifiedCLI:
                 print(f"Unexpected error: {e}", file=sys.stderr)
                 traceback.print_exc(file=sys.stderr)
             else:
-                logger.error("Unexpected error: {}", e)
-                if parsed_args is not None and getattr(parsed_args, "verbose", False):
-                    logger.debug(traceback.format_exc())
+                from ducta.console.ux import view
+
+                if view.is_compact():
+                    logger.bind(console=False).exception("Unexpected error: {}", e)
+                    view.print_error(
+                        f"Unexpected error: {type(e).__name__}: {e}",
+                        [("details", "run it again with --verbose, or read logs/ducta.log")],
+                    )
+                else:
+                    logger.error("Unexpected error: {}", e)
+                    if parsed_args is not None and getattr(parsed_args, "verbose", False):
+                        logger.debug(traceback.format_exc())
             return ExitCode.GENERAL_ERROR.value
         finally:
             try:
                 os.chdir(original_cwd)
             except OSError:
                 pass
+            # Leave the process as it was found: an embedding caller (a test, a
+            # notebook) must not inherit the CLI's view or its quiet JVM.
+            from ducta.console.ux import view
+
+            view.set_mode(compact=False)
+            if self._set_spark_quiet:
+                os.environ.pop("DUCTA_SPARK_QUIET", None)
 
     def _parse_and_setup_logging(self, args: Optional[List[str]]) -> argparse.Namespace:
         from ducta.console.parser import UnifiedArgumentParser
+        from ducta.console.ux import view
 
         parser = UnifiedArgumentParser.create()
         parsed_args = parser.parse_args(args)
         if parsed_args.version and not parsed_args.subcommand:
             return parsed_args
+        compact = _wants_compact(parsed_args)
+        quiet = bool(getattr(parsed_args, "quiet", False))
+        view.set_mode(compact=compact, quiet=quiet)
+        if compact and "DUCTA_SPARK_QUIET" not in os.environ:
+            # The JVM writes to the terminal on its own; only its own logging
+            # configuration quiets it (see setting.session._quiet_log4j_file).
+            os.environ["DUCTA_SPARK_QUIET"] = "1"
+            self._set_spark_quiet = True
+        log_file = _log_file_for(parsed_args) if parsed_args.subcommand else None
         LoggerManager.setup(
             level=getattr(parsed_args, "log_level", "INFO") or "INFO",
-            log_file=getattr(parsed_args, "log_file", None),
+            log_file=log_file,
             verbose=bool(getattr(parsed_args, "verbose", False)),
-            quiet=bool(getattr(parsed_args, "quiet", False)),
-            file_logging=not _is_projectless(parsed_args),
+            quiet=quiet,
+            file_logging=log_file is not None,
+            compact=compact,
         )
         return parsed_args
 
@@ -249,6 +329,12 @@ class UnifiedCLI:
             self._print_signature()
             return ExitCode.SUCCESS.value
         subcommand = parsed_args.subcommand
+        if subcommand is None:
+            # `ducta` alone used to log "Unknown subcommand: None" and exit 1.
+            from ducta.console.home import print_home
+
+            print_home()
+            return ExitCode.SUCCESS.value
         entry = self._build_dispatch_table().get(subcommand)
         if entry is None:
             logger.error("Unknown subcommand: {}", subcommand)
@@ -259,10 +345,17 @@ class UnifiedCLI:
                 validator(parsed_args)
             return handler(parsed_args)
         except ValidationError as e:
+            from ducta.console.ux import view
+
+            if view.is_compact():
+                _report_error(str(e), e.hints)
+                return ExitCode.VALIDATION_ERROR.value
             from ducta.console.ux.error_analyzer import try_format_error
 
             if not try_format_error(e, "", scope=None):
                 logger.error("Invalid arguments: {}", e)
+            for label, text in e.hints:
+                logger.info("  {}: {}", label, text)
             return ExitCode.VALIDATION_ERROR.value
 
     def _handle_experiment_command(self, parsed_args: argparse.Namespace) -> int:
@@ -388,9 +481,7 @@ class UnifiedCLI:
                 enable_terminal=getattr(parsed_args, "enable_terminal", False),
             )
         except ImportError as e:
-            logger.error(
-                "Failed to import UI dependencies. Are you sure Ducta-app is installed? {}", e
-            )
+            logger.error('The web UI needs the api extra: pip install "ducta[api]" ({})', e)
             return ExitCode.GENERAL_ERROR.value
         except Exception as e:
             logger.error("Error launching UI: {}", e)
@@ -432,23 +523,10 @@ class UnifiedCLI:
 
     @staticmethod
     def _print_signature() -> None:
+        """``ducta 0.2.0`` — what scripts and bug reports expect from --version."""
         from ducta import __version__
 
-        _C = "\033[96m"
-        _Y = "\033[93m"
-        _G = "\033[92m"
-        _R = "\033[0m"
-        art = [
-            f"{_C}╔════════════════════════════════╗{_R}".center(64),
-            f"{_C}║  ══════════ Ducta ══════════   ║{_R}".center(64),
-            f"{_C}╚════════════════════════════════╝{_R}".center(64),
-            "",
-            f"{_Y}Data Pipeline Framework{_R}".center(64),
-            f"{_G}v{__version__}{_R}".center(64),
-            "",
-            "",
-        ]
-        print("\n".join(art))
+        print(f"ducta {__version__}")
 
 
 def main() -> int:

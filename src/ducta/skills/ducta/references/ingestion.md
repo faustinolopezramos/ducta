@@ -57,6 +57,10 @@ ducta init ingestion info --source shop_db
 ducta init ingestion test --source shop_db
 ```
 
+`test` exits 0 when the connection answered, 4 when it failed, and 5 when it could
+not be tried: testing needs a Spark session, which the CLI does not start. Exit 5 is
+not a failure — tell the user the first run of an ingest node will check it.
+
 ## 5. The ingest node
 
 ```yaml

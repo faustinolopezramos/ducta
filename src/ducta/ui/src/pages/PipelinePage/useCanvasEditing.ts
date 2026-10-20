@@ -161,12 +161,43 @@ export function useCanvasEditing({
     [apply],
   );
 
+  const addInput = useCallback(
+    (node: string, dataset: string, alias?: string) =>
+      apply(`Read ${dataset} into ${node}`, [
+        { op: "connect" as const, node, dataset, alias: alias?.trim() || null },
+      ]),
+    [apply],
+  );
+
+  const addOutput = useCallback(
+    (node: string, dataset: string, newDatasetMeta?: Record<string, unknown>) => {
+      const newDatasets = newDatasetMeta ? { [dataset]: newDatasetMeta } : undefined;
+      return apply(
+        `Write ${dataset} from ${node}`,
+        [{ op: "add_output" as const, node, dataset }],
+        newDatasets,
+      );
+    },
+    [apply],
+  );
+
+  const removeOutput = useCallback(
+    (node: string, dataset: string) =>
+      apply(`Remove output ${dataset} from ${node}`, [
+        { op: "remove_output" as const, node, dataset },
+      ]),
+    [apply],
+  );
+
   const removeNode = useCallback((node: string) => apply(`Remove ${node}`, [{ op: "remove_node", node }]), [apply]);
 
   return {
     apply,
     connect,
     canConnect,
+    addInput,
+    addOutput,
+    removeOutput,
     disconnect,
     removeNode,
     undo,

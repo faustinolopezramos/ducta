@@ -393,3 +393,17 @@ def test_install_agents_puts_them_where_claude_code_reads_them(project):
     mine.write_text("my own agent\n")
     assert _run("install", "--target", "claude", "--agents") != 0
     assert mine.read_text() == "my own agent\n"  # never replaced
+
+
+def test_a_failed_copy_leaves_the_installed_skill_in_place(project, monkeypatch):
+    assert _run("install", "--target", "agents") == 0
+    dest = project / ".agents" / "skills" / "ducta"
+    before = (dest / "SKILL.md").read_text()
+
+    def broken(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(skill_cmds.shutil, "copytree", broken)
+    assert _run("install", "--target", "agents", "--force") != 0
+    assert (dest / "SKILL.md").read_text() == before
+    assert sorted(p.name for p in dest.parent.iterdir()) == ["ducta"]

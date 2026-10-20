@@ -243,16 +243,20 @@ class JDBCConnector:
             )
         logger.info(f"✓ Verified sha256 for {jar_path.name}")
 
-    def test_connection(self, timeout_seconds: int = 10) -> bool:
-        """
-        Test JDBC connection using Spark.
+    def test_connection(self, timeout_seconds: int = 10) -> Optional[bool]:
+        """Test the JDBC connection using Spark.
+
+        ``True``: it answered. ``False``: it did not. ``None``: nothing was
+        tested, because there is no Spark to test with. This used to return
+        ``True`` for that last case, so every caller reported "connection
+        successful" for a connection nobody had contacted.
         """
 
         try:
             from pyspark.sql import SparkSession
         except ImportError:
             logger.warning("PySpark not available. Skipping connection test.")
-            return True
+            return None
 
         spark = SparkSession.getActiveSession()
         if spark is None:
@@ -260,7 +264,7 @@ class JDBCConnector:
                 "No active SparkSession. Skipping connection test. "
                 "Connection will be validated during pipeline execution."
             )
-            return True
+            return None
 
         jdbc_url = self.get_jdbc_url()
         driver_class = self.get_driver_class()

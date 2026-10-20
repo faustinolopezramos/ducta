@@ -1,6 +1,8 @@
 export { DagCanvas, edgePath } from "./DagCanvas";
 export { DatasetChip } from "./DatasetChip";
 export { HUDToolbar } from "./HUDToolbar";
+export { PipelineFlowBar } from "./PipelineFlowBar";
+export { ConnectionModal } from "./ConnectionModal";
 export { NodeCard } from "./NodeCard";
 export { ContractList } from "./ContractList";
 export { NodeFocus } from "./Focus/NodeFocus";

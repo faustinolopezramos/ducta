@@ -121,10 +121,8 @@ from ducta.console.ux import (
     print_spark_schema,
 )
 
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-
+# The argument validators live in ducta.console.validation: __all__ named them
+# here without importing them, so `from ducta.console import *` raised.
 __all__ = [
     "CLIConfig",
     "ConfigFormat",
@@ -141,17 +139,6 @@ __all__ = [
     "parse_iso_date",
     "validate_date_range",
     "ConfigManager",
-    "validate_conflicting_options",
-    "validate_date_iso",
-    "validate_enum_field",
-    "validate_format",
-    "validate_json_string",
-    "validate_log_level",
-    "validate_mode",
-    "validate_positive_number",
-    "validate_project_name",
-    "validate_required_field",
-    "validate_timeout",
     "UnifiedArgumentParser",
     "ContextInitializer",
     "get_streaming_pipeline_status_cli",

@@ -69,7 +69,7 @@ def test_a_failing_check_fails_the_command(workspace, monkeypatch, capsys):
     (workspace / "checks.yaml").write_text("checks:\n  row_count: {min: 10}\n")
     code, out = _run(monkeypatch, capsys)
 
-    assert code == ExitCode.GENERAL_ERROR.value
+    assert code == ExitCode.VALIDATION_ERROR.value
     assert json.loads(out)["passed"] is False
 
 
@@ -124,7 +124,7 @@ def test_trend_lists_one_score_per_run(workspace, monkeypatch, capsys):
 def test_validate_config_outside_a_project_fails_cleanly(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     code, _ = _ducta(monkeypatch, capsys, "quality", "validate-config", "--node", "x")
-    assert code == ExitCode.GENERAL_ERROR.value
+    assert code == ExitCode.CONFIGURATION_ERROR.value
 
 
 def _template(tmp_path, monkeypatch) -> Path:

@@ -47,10 +47,17 @@ class ConfigManager:
         self.project_root: Optional[Path] = find_nearest_project(self.base_path)
         if self.project_root is None:
             if require_config:
+                from ducta.console.ux.view import display_path
+
+                shown = display_path(self.base_path)
+                where = "here" if shown == "." else f"in {shown}"
                 raise ConfigurationError(
-                    f"No Ducta project found in {self.base_path.resolve()} or above it "
-                    f"(looked for {PROJECT_FILE}, ducta.toml or ducta.json with `version: 2`). Create one with "
-                    "`ducta template`."
+                    f"No Ducta project {where} or in any folder above it "
+                    f"(no {PROJECT_FILE}, ducta.toml or ducta.json with `version: 2`)",
+                    hints=[
+                        ("create one", "ducta init project --name my_project"),
+                        ("or use one", "--base-path PATH"),
+                    ],
                 )
             logger.debug("No project found under {}", self.base_path)
 

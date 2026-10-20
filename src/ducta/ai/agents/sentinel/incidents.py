@@ -57,6 +57,8 @@ class Incident:
     #: Runs that failed under this incident, and re-runs Sentinel made.
     failures: int = 0
     attempts: int = 0
+    #: The nodes that failed under this incident: a run resolves it only if it ran them all.
+    nodes: List[str] = field(default_factory=list)
     last_run_id: Optional[str] = None
     #: An action waiting for its time: {"action", "at", "nodes", "until", "upstream"}.
     pending: Optional[Dict[str, Any]] = None
@@ -100,7 +102,7 @@ class Incidents:
         return Incident.from_dict(data) if data else None
 
     def list(self, *, status: Optional[str] = None, env: Optional[str] = None) -> List[Incident]:
-        out = [Incident.from_dict(d) for d in self.store.list(limit=1000)]
+        out = [Incident.from_dict(d) for d in self.store.list(limit=None)]
         if status == "active":
             out = [i for i in out if i.active]
         elif status:

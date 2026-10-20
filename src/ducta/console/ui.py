@@ -28,34 +28,30 @@ from typing import Optional
 from loguru import logger
 
 _DEFAULT_DB_PATH = Path.home() / ".ducta" / "executions.db"
+_PROJECT_SUFFIXES = (".yaml", ".yml", ".toml", ".json")
 
 
 def _detect_ducta_workspace() -> Optional[str]:
     """Detect if the current directory (or any parent) is a Ducta workspace."""
     from ducta.api.workspace.utils import normalize_workspace_path
-
-    _ENV_NAMES = (
-        "ducta.yaml",
-        "ducta.yml",
-    )
+    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project_loader import find_project_root
 
     def _is_project_dir(path: Path) -> bool:
-        if any((path / name).exists() for name in _ENV_NAMES):
-            return True
-        return (path / "config").is_dir()
+        return find_project_root(path) is not None or (path / "config").is_dir()
 
     cwd = Path.cwd()
 
-    # Walk up the directory tree looking for an environment file
-    candidate = cwd
-    for _ in range(5):  # limit traversal depth
-        for name in _ENV_NAMES:
-            if (candidate / name).exists():
-                return str(normalize_workspace_path(candidate))
-        parent = candidate.parent
-        if parent == candidate:
-            break
-        candidate = parent
+    # The project at or above the current directory, in any of its formats:
+    # looking only for ducta.yaml/.yml missed every TOML and JSON project.
+    root = find_nearest_project(cwd)
+    if root is not None:
+        return str(normalize_workspace_path(root))
+    # A project file that does not parse is still the project to open: the UI
+    # is where its errors are shown.
+    for candidate in (cwd, *cwd.parents):
+        if any((candidate / f"ducta{ext}").is_file() for ext in _PROJECT_SUFFIXES):
+            return str(normalize_workspace_path(candidate))
 
     # Fallback: config/ directory with recognised config files in CWD
     config_dir = cwd / "config"

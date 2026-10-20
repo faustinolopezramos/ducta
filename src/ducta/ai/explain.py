@@ -218,10 +218,10 @@ def _path(root: Path, run_id: str) -> Path:
 
 
 def save_explanation(root: Path, run_id: str, explanation: Explanation) -> Path:
+    from ducta.ai.fsutil import atomic_write_text
+
     path = _path(root, run_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(explanation.to_dict(), indent=2), encoding="utf-8")
-    return path
+    return atomic_write_text(path, json.dumps(explanation.to_dict(), indent=2))
 
 
 def load_explanation(root: Path, run_id: str) -> Optional[Explanation]:

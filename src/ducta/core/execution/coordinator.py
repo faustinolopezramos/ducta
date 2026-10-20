@@ -25,7 +25,7 @@ from __future__ import annotations
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from concurrent.futures import as_completed as thread_as_completed
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -120,13 +120,17 @@ class ParallelCoordinator:
             self._log_ml_pipeline_summary(execution_state.execution_results, ml_info)
 
         try:
+            from ducta.console.ux import view
             from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
 
-            console = RichLoggerManager.get_console()
-            console.print()
-            total_nodes = execution_state.get_completed_count()
-            print_process_separator("summary", "EXECUTION SUMMARY", f"{total_nodes} nodes", console)
-            console.print()
+            if not view.is_compact():  # the compact view prints its own summary
+                console = RichLoggerManager.get_console()
+                console.print()
+                total_nodes = execution_state.get_completed_count()
+                print_process_separator(
+                    "summary", "EXECUTION SUMMARY", f"{total_nodes} nodes", console
+                )
+                console.print()
         except Exception:
             pass
 
@@ -162,6 +166,8 @@ class ParallelCoordinator:
 
     def cancel_all(self, running_snapshot: List) -> None:
         """Cancel all running futures from a snapshot of (future, node_info) pairs."""
+        if not running_snapshot:
+            return
         logger.warning("Cancelling {} running futures", len(running_snapshot))
         for future, node_info in running_snapshot:
             node_name = node_info["node_name"]
@@ -575,12 +581,26 @@ class ParallelCoordinator:
 
             duration = time.time() - node_info["start_time"]
             node_display = node_name.split(".")[-1] if "." in node_name else node_name
-            log_node_complete(node_display, duration)
+            log_node_complete(node_display, duration, outputs=self._output_rows(node_info))
         except Exception:
             logger.info("Node '{}' completed successfully", node_name)
 
         newly_ready = self._find_newly_ready_nodes(node_name, dag, execution_state)
         execution_state.add_to_ready_queue(newly_ready)
+
+    def _output_rows(self, node_info: Dict[str, Any]) -> List[Tuple[str, Optional[int]]]:
+        """``(dataset, rows)`` for each output the node wrote, from its fingerprints."""
+        config = node_info.get("config") or {}
+        outputs = config.get("outputs") or config.get("output") or []
+        if isinstance(outputs, str):
+            outputs = [outputs]
+        fingerprints = getattr(self.context, "_output_fingerprints", None) or {}
+        rows: List[Tuple[str, Optional[int]]] = []
+        for key in outputs if isinstance(outputs, (list, tuple)) else []:
+            fp = fingerprints.get(key) if isinstance(fingerprints, dict) else None
+            count = fp.get("row_count") if isinstance(fp, dict) else None
+            rows.append((str(key), int(count) if isinstance(count, int) else None))
+        return rows
 
     def _maybe_pause(self, node_name: str) -> None:
         """A data breakpoint: after *node_name*, wait (nothing new starts) until resumed.
@@ -753,19 +773,22 @@ class ParallelCoordinator:
         if successful_nodes:
             logger.info("Successful nodes: {}", ", ".join(successful_nodes))
         if failed_nodes:
-            logger.error("Failed nodes: {}", ", ".join(failed_nodes))
+            # node_error: the CLI's compact view has already shown each failure.
+            logger.bind(node_error=True).error("Failed nodes: {}", ", ".join(failed_nodes))
 
         try:
+            from ducta.console.ux import view
             from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
 
-            console = RichLoggerManager.get_console()
-            console.print()
-            print_process_separator(
-                "summary",
-                "ML PIPELINE SUMMARY",
-                f"{len(successful_nodes)}/{len(successful_nodes) + len(failed_nodes)} nodes",
-                console,
-            )
-            console.print()
+            if not view.is_compact():
+                console = RichLoggerManager.get_console()
+                console.print()
+                print_process_separator(
+                    "summary",
+                    "ML PIPELINE SUMMARY",
+                    f"{len(successful_nodes)}/{len(successful_nodes) + len(failed_nodes)} nodes",
+                    console,
+                )
+                console.print()
         except Exception:
             pass

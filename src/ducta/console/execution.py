@@ -42,7 +42,9 @@ from ducta.setting.exceptions import ConfigurationError as SettingConfigurationE
 from ducta.setting.project_loader import load_project_v2
 
 
-def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = None) -> int:
+def report_run_outcome(
+    result: PipelineRunResult, *, pipeline: Optional[str] = None, elapsed: Optional[float] = None
+) -> int:
     """Log what a finished run actually did and return the matching exit code.
 
     Not every unsuccessful outcome raises. A ``skip_downstream`` quality gate and
@@ -55,6 +57,14 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
     answered once.
     """
     name = pipeline or result.pipeline
+    code = _outcome_code(result)
+
+    from ducta.console.ux import view
+
+    if view.is_compact():
+        # The same facts, as a summary: blocked and skipped nodes, the certificate.
+        view.print_run_summary(result, elapsed or 0.0)
+        return code
 
     if result.reused_pipelines:
         logger.info(
@@ -102,13 +112,24 @@ def report_run_outcome(result: PipelineRunResult, *, pipeline: Optional[str] = N
     return ExitCode.SUCCESS.value
 
 
+def _outcome_code(result: PipelineRunResult) -> int:
+    """Gate before skip, as in ``PipelineRunResult.resolve_status``."""
+    if result.gate_blocked:
+        return ExitCode.EXECUTION_ERROR.value
+    if result.skipped:
+        return ExitCode.DEPENDENCY_ERROR.value
+    return ExitCode.SUCCESS.value
+
+
 class ContextInitializer:
     def __init__(self, config_manager: ConfigManager):
         self.config_manager = config_manager
 
     def initialize(self, env: str) -> Context:
         try:
-            if _RICH_AVAILABLE:
+            from ducta.console.ux import view
+
+            if _RICH_AVAILABLE and not view.is_compact():
                 console = RichLoggerManager.get_console()
                 console.print()
                 print_process_separator(
@@ -322,18 +343,22 @@ def stop_streaming_pipeline_cli(
         context = _load_streaming_context(config, env)
         executor = PipelineExecutor(context)
         graceful = not (timeout > 0 and timeout < 5)
-        if executor.stop_streaming_pipeline(execution_id, graceful=graceful):
+        # --timeout used to be validated and printed but never reached the
+        # engine, which always waited its own 30 seconds.
+        if executor.stop_streaming_pipeline(
+            execution_id, graceful=graceful, timeout_seconds=float(timeout)
+        ):
             logger.info(
-                "Pipeline '{}' stopped successfully{}.",
+                "Pipeline '{}' stopped{}.",
                 execution_id,
-                f" (timeout: {timeout}s)" if timeout > 0 else "",
+                "" if graceful else " (immediately, without waiting for the current batch)",
             )
             return ExitCode.SUCCESS.value
         if not executor.get_streaming_pipeline_status(execution_id):
             logger.error("No streaming pipeline '{}' in this process.", execution_id)
             logger.info(_OTHER_PROCESS_HINT)
             return ExitCode.VALIDATION_ERROR.value
-        logger.error("Failed to stop pipeline '{}' within {}s.", execution_id, timeout)
+        logger.error("Pipeline '{}' did not stop within {}s.", execution_id, timeout)
         return ExitCode.EXECUTION_ERROR.value
     except Exception as e:
         logger.error("Error stopping pipeline: {}", e)

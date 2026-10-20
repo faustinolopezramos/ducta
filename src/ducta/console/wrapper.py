@@ -33,7 +33,7 @@ def _get_missing_dependency_message(module_name: str, feature: str) -> str:
     Returns:
         Formatted message to display to the user
     """
-    install_command = f"pip install Ducta[{feature}]"
+    install_command = f'pip install "ducta[{feature}]"'
 
     return f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
@@ -42,14 +42,13 @@ def _get_missing_dependency_message(module_name: str, feature: str) -> str:
 
 The module '{module_name}' is not installed.
 
-This dependency is required to use distributed data processing
-features in ducta. To install it, run:
+This command needs an optional part of ducta. To install it, run:
 
     {install_command}
 
 Alternatively, you can install all optional dependencies:
 
-    pip install Ducta[all]
+    pip install "ducta[all]"
 
 For more information, refer to the documentation at:
 https://ducta.readthedocs.io/
@@ -70,14 +69,23 @@ def _identify_feature_for_module(module_name: str) -> Optional[str]:
         "pyspark": "spark",
         "pyarrow": "spark",
         "fastapi": "api",
+        "starlette": "api",
         "uvicorn": "api",
-        "motor": "api",
-        "pymongo": "api",
+        "jwt": "api",
+        "bcrypt": "api",
         "sqlalchemy": "database",
+        "alembic": "database",
         "psycopg2": "database",
         "mlflow": "mlops",
-        "databricks": "mlops",
+        "sklearn": "mlops",
+        "optuna": "mlops",
+        "databricks": "databricks",
+        "delta": "delta",
         "prometheus_client": "monitoring",
+        "httpx": "ai",
+        "anthropic": "ai",
+        "keyring": "ai",
+        "ruamel": "ai",
     }
 
     return module_to_feature.get(module_name)
@@ -99,8 +107,11 @@ def main() -> int:
 
         return Ducta_main()
     except ModuleNotFoundError as e:
-        missing_module = str(e).split("'")[1] if "'" in str(e) else "unknown"
+        # `e.name` is the module as imported ("ruamel.yaml"); the map is by package.
+        missing_module = (e.name or "").split(".")[0] or "unknown"
         feature = _identify_feature_for_module(missing_module)
+        if feature is None and missing_module.startswith("ducta"):
+            raise  # a broken install of ducta itself: no extra fixes that
         message = _get_missing_dependency_message(missing_module, feature or "all")
         print(message, file=sys.stderr)
 

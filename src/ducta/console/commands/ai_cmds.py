@@ -42,10 +42,12 @@ def _console():
 
 
 def _project_root(parsed_args) -> Path:
-    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project_context import find_nearest_project
 
+    # At or above, as every other command finds its project: from a project's
+    # subfolder this used to fail with "No Ducta project".
     start = Path(getattr(parsed_args, "base_path", None) or Path.cwd())
-    root = find_project_root(start)
+    root = find_nearest_project(start)
     if root is None:
         raise AIConfigError(
             f"No Ducta project (ducta.yaml) at or above {start}: run this inside a project, "
@@ -76,6 +78,7 @@ class AICommands:
             "doctor": AICommands.doctor,
             "new": AICommands.new,
             "fix": AICommands.fix,
+            "extend": AICommands.extend,
             "revise": AICommands.revise,
             "quality": AICommands.quality,
             "document": AICommands.document,
@@ -258,6 +261,23 @@ class AICommands:
         )
 
     @staticmethod
+    def extend(parsed_args) -> int:
+        from ducta.ai.extend import extend
+
+        return AICommands._draft(
+            parsed_args,
+            f"Adding nodes to {parsed_args.pipeline}",
+            lambda root, provider, report: extend(
+                root,
+                parsed_args.pipeline,
+                parsed_args.request,
+                provider,
+                max_attempts=getattr(parsed_args, "attempts", None),
+                on_attempt=report,
+            ),
+        )
+
+    @staticmethod
     def revise(parsed_args) -> int:
         from ducta.ai.builder import load_draft, revise
 
@@ -387,16 +407,31 @@ class AICommands:
                     else f"at {config.endpoint} (the node's code and settings are sent)"
                 )
                 console.print(f"Reviewing with [cyan]{config.model}[/] {where}…")
+        whole = not getattr(parsed_args, "node", None)
+        result: Any
         with console.status("Reviewing…") if not as_json else _null():
-            result = review_node(
-                root,
-                parsed_args.pipeline,
-                parsed_args.node,
-                provider,
-                env=parsed_args.env,
-                note=getattr(parsed_args, "note", None) or "",
-            )
-        save_review(root, result)
+            if whole:
+                from ducta.ai.pipeline_review import review_pipeline, save_pipeline_review
+
+                result = review_pipeline(
+                    root,
+                    parsed_args.pipeline,
+                    provider,
+                    env=parsed_args.env,
+                    note=getattr(parsed_args, "note", None) or "",
+                )
+                save_pipeline_review(root, result)
+            else:
+                node_review = review_node(
+                    root,
+                    parsed_args.pipeline,
+                    parsed_args.node,
+                    provider,
+                    env=parsed_args.env,
+                    note=getattr(parsed_args, "note", None) or "",
+                )
+                save_review(root, node_review)
+                result = node_review
         if as_json:
             print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
         else:
@@ -418,8 +453,9 @@ class AICommands:
             where = ":".join(str(x) for x in (f.file, f.line) if x)
             where = where or (f"setting {f.key}" if f.key else "")
             who = "Ducta" if f.source == "ducta" else "AI"
+            node = f"{f.node}: " if getattr(f, "node", None) else ""
             console.print(
-                f"[{style[f.severity]}]{f.severity:<6}[/] [bold]{f.title}[/] "
+                f"[{style[f.severity]}]{f.severity:<6}[/] [bold]{node}{f.title}[/] "
                 f"[dim]({f.area} · {who}{' · ' + where if where else ''})[/]",
                 highlight=False,
             )
@@ -440,6 +476,12 @@ class AICommands:
         console.print(summary + ". Nothing was changed.[/]")
         if result.notes:
             console.print(f"[yellow]{result.notes}[/]")
+        ideas = getattr(result, "ideas", None) or []
+        if ideas:
+            console.print("\n[bold]Ideas for new nodes[/] [dim](the model's, not checked)[/]")
+            for idea in ideas:
+                console.print(f"  • {idea}", highlight=False)
+            console.print(f'[dim]To add one: ducta ai extend {result.pipeline} "<the idea>"[/]')
         if result.findings:
             console.print(
                 f'[dim]To act on one: ducta ai fix {result.pipeline} --note "<the finding>"[/]'
@@ -554,6 +596,11 @@ class AICommands:
         force = bool(getattr(parsed_args, "force", False))
         if not draft.ok and not force:
             console.print("[red]The draft does not validate[/]; pass --force to write it anyway.")
+            return ExitCode.VALIDATION_ERROR.value
+        if not parsed_args.yes and not sys.stdin.isatty():
+            # Nobody could be asked, so nothing was written: not a success a
+            # script may take for "applied".
+            console.print("Nothing written: not a terminal, so pass --yes to confirm.")
             return ExitCode.VALIDATION_ERROR.value
         if not _confirm(f"Write {len(draft.files)} file(s) to {root}?", parsed_args.yes):
             console.print("Nothing written.")

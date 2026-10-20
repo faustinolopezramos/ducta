@@ -102,6 +102,21 @@ def _later(seconds: float) -> str:
     return (datetime.now(timezone.utc) + timedelta(seconds=seconds)).isoformat(timespec="seconds")
 
 
+def _covers(incident: Incident, event: RunEvent) -> bool:
+    """Whether a successful run settles *incident*: it ran every node that failed.
+
+    A run of one node of the pipeline does not mend another's failure. Sentinel's
+    own re-run is whole by construction (it runs the failed nodes and everything
+    downstream, one by one), and a run that does not say which nodes it ran
+    counts as the whole pipeline.
+    """
+    if incident.kind != "failure" or event.actor == SENTINEL_USER:
+        return True
+    if not incident.nodes or not event.nodes_run:
+        return True
+    return set(incident.nodes) <= set(event.nodes_run)
+
+
 @contextmanager
 def engine_lock(root: Path, wait: float = 0.0) -> Iterator[bool]:
     """Hold the project's engine lock; yields whether it was taken.
@@ -333,7 +348,7 @@ class Sentinel:
             if not allowed:
                 incident.level = "L0"
                 self._escalate(incident, f"{decision.reason} — not acting: {why}")
-            elif incident.attempts >= limit and decision.runbook != "catch_up":
+            elif incident.attempts >= limit:
                 self._escalate(
                     incident,
                     f"still failing after {incident.attempts} re-run(s) (retry_infra.max_attempts: {limit})",
@@ -372,6 +387,7 @@ class Sentinel:
         diagnosis = diagnosis_of(self.root, event)
         incident, new = self.incidents.open(event.env, event.pipeline, "failure")
         incident.failures += 1
+        incident.nodes = sorted({*incident.nodes, *event.failed_nodes})
         incident.last_run_id = event.run_id
         incident.diagnosis = diagnosis
         incident.note(
@@ -398,6 +414,15 @@ class Sentinel:
     def _succeeded(self, event: RunEvent, settings: gate.Settings) -> None:
         for incident in self.incidents.active(event.env, event.pipeline):
             if incident.kind not in ("failure", "stale", "slow", "sla_miss"):
+                continue
+            if not _covers(incident, event):
+                incident.note(
+                    "run",
+                    "partial",
+                    f"{event.run_id or 'a run'} succeeded without "
+                    f"{', '.join(sorted(set(incident.nodes) - set(event.nodes_run)))}: still open",
+                )
+                self._save(incident)
                 continue
             was_escalated = incident.status == "escalated"
             incident.status = "resolved"

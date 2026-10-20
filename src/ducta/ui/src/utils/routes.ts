@@ -39,7 +39,14 @@ export const routes = {
   pipeline: (
     projectId: string,
     pipelineId: string,
-    query?: { focus?: string | null; lens?: string | null; panel?: string | null; run?: string | null },
+    query?: {
+      focus?: string | null;
+      lens?: string | null;
+      panel?: string | null;
+      run?: string | null;
+      /** "1": open the pipeline's review (a pipeline just built with AI). */
+      review?: string | null;
+    },
   ) => withQuery(`/p/${enc(projectId)}/pipelines/${enc(pipelineId)}`, query),
   /** A node is addressed through its pipeline: the canvas, focused on it. */
   node: (projectId: string, pipelineId: string, nodeId: string, panel?: string) =>

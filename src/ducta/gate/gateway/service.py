@@ -78,14 +78,17 @@ class ConnectionSpec:
 def _sources_path(workspace: Path) -> str:
     """Where the project keeps its connections — the engine's answer: a format-2
     project's ``settings.ingestion.sources_path``, else ``config/sources.yaml``."""
-    project_file = workspace / "ducta.yaml"
-    if project_file.is_file():
+    from ducta.setting import project_files as pf
+
+    # ducta.yaml, .toml or .json: reading only the YAML one sent a TOML or JSON
+    # project's connections to config/sources.yaml, where its runs never look.
+    for project_file in pf.find_files(workspace, "ducta")[:1]:
         try:
-            doc = yaml.safe_load(project_file.read_text(encoding="utf-8")) or {}
+            doc = pf.load(project_file) or {}
             path = ((doc.get("settings") or {}).get("ingestion") or {}).get("sources_path")
             if isinstance(path, str) and path.strip():
                 return path
-        except (OSError, yaml.YAMLError, AttributeError):
+        except (OSError, ValueError, AttributeError):
             pass
     return "config/sources.yaml"
 
@@ -130,8 +133,8 @@ class IngestionService:
 
     # ── Test ────────────────────────────────────────────────────────────────
 
-    def test_spec(self, spec: ConnectionSpec) -> bool:
-        """Test connectivity for an unsaved spec. Returns True if verified."""
+    def test_spec(self, spec: ConnectionSpec) -> Optional[bool]:
+        """Test connectivity for an unsaved spec: True verified, False failed, None untested."""
         spec.validate()
         connector = JDBCConnector(
             source_type=spec.source_type,
@@ -141,16 +144,16 @@ class IngestionService:
             username=spec.username,
             password=spec.password,
         )
-        return bool(connector.test_connection())
+        return connector.test_connection()
 
-    def test_connection(self, name: str) -> bool:
-        """Test connectivity for a saved connection. Returns True if verified."""
+    def test_connection(self, name: str) -> Optional[bool]:
+        """Test connectivity for a saved connection: True verified, False failed, None untested."""
         if not self.config_path.exists():
             raise IngestionServiceError("No connections configured")
         manager = ConnectionManager(self.config_path)
         if name not in manager.list_sources():
             raise IngestionServiceError(f"Connection '{name}' not found")
-        return bool(manager.get(name).test_connection())
+        return manager.get(name).test_connection()
 
     # ── Write ───────────────────────────────────────────────────────────────
 

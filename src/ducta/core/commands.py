@@ -213,7 +213,11 @@ class NodeCommand(Command):
             logger.debug(f"Node '{self.node_name}' executed successfully")
             return result
         except Exception as e:
-            logger.error(f"Error executing node '{self.node_name}': {str(e)}")
+            # node_error: the CLI's compact view reports a node failure itself,
+            # once; the log file and the classic view still get this line.
+            logger.bind(node_error=True).error(
+                "Error executing node '{}': {}", self.node_name, str(e)
+            )
             raise
 
 

@@ -27,11 +27,7 @@ from loguru import logger
 
 from ducta.console.core import ValidationError as CoreValidationError
 
-ALLOWED_MODES = ["sync", "async"]
 ALLOWED_LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
-ALLOWED_FORMATS = ["table", "json"]
-ALLOWED_CONFIG_TYPES = ["yaml", "json", "toml", "dsl"]
-ALLOWED_TEMPLATES = ["medallion_basic"]
 PROJECT_NAME_PATTERN = r"^[a-zA-Z0-9_-]+$"
 
 
@@ -83,10 +79,6 @@ def validate_required_field(value: Any, field_name: str) -> None:
         raise CoreValidationError(f"--{field_name} is required")
 
 
-def validate_timeout(timeout: int, max_val: int = 3600) -> None:
-    validate_positive_number(timeout, max_val=max_val, field_name="Timeout")
-
-
 def validate_project_name(project_name: str) -> None:
     if not re.match(PROJECT_NAME_PATTERN, project_name):
         raise CoreValidationError(
@@ -135,13 +127,5 @@ def _validate_choice(
     return True
 
 
-def validate_mode(value: Optional[str], raise_error: bool = True) -> bool:
-    return _validate_choice(value, ALLOWED_MODES, "mode", str.lower, raise_error)
-
-
 def validate_log_level(value: Optional[str], raise_error: bool = True) -> bool:
     return _validate_choice(value, ALLOWED_LOG_LEVELS, "log level", str.upper, raise_error)
-
-
-def validate_format(value: Optional[str], raise_error: bool = True) -> bool:
-    return _validate_choice(value, ALLOWED_FORMATS, "format", str.lower, raise_error)

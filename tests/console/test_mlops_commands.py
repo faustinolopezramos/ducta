@@ -296,3 +296,119 @@ class TestExperimentCliWiring:
 
         assert rc == 0
         assert seen["run_ids"] == ["a", "b"] and seen["output_format"] == "json"
+
+
+class TestPromotionGateFailsClosed:
+    """Regression: without --env the policy was never read, and any failure to
+    read it became "no policy" — a Production promotion then skipped the gate
+    without a word."""
+
+    def _registry(self, monkeypatch):
+        seen = {}
+
+        class _Registry:
+            def promote_model(self, name, number, stage, policy=None, force=False):
+                seen["policy"] = policy
+
+        monkeypatch.setattr(mlops_commands, "_build_registry", lambda storage: _Registry())
+        return seen
+
+    def test_without_env_the_base_projects_policy_applies(self, tmp_path, monkeypatch):
+        seen = self._registry(monkeypatch)
+        asked = []
+
+        def fake_settings(env):
+            asked.append(env)
+            return {"promotion_policy": {"metric": "val_f1", "min_delta": 0.01}}
+
+        monkeypatch.setattr(mlops_commands, "_project_mlops_settings", fake_settings)
+        rc = mlops_commands.model_promote("m", "1", "production", str(tmp_path), env=None)
+        assert rc == ExitCode.SUCCESS.value
+        assert asked == [None]
+        assert seen["policy"].metric == "val_f1"
+
+    @pytest.mark.parametrize(
+        "settings",
+        [
+            {"promotion_policy": {"min_delta": 0.01}},  # no metric
+            {"promotion_policy": "val_f1"},  # not a mapping
+        ],
+    )
+    def test_an_unreadable_policy_refuses_production(self, tmp_path, monkeypatch, settings):
+        seen = self._registry(monkeypatch)
+        monkeypatch.setattr(mlops_commands, "_project_mlops_settings", lambda env: settings)
+        rc = mlops_commands.model_promote("m", "1", "production", str(tmp_path), env="prod")
+        assert rc == ExitCode.CONFIGURATION_ERROR.value
+        assert "policy" not in seen
+
+    def test_a_project_that_does_not_load_refuses_production(self, tmp_path, monkeypatch):
+        seen = self._registry(monkeypatch)
+
+        def broken(env):
+            raise mlops_commands.PolicyUnavailable("the project does not load: boom")
+
+        monkeypatch.setattr(mlops_commands, "_project_mlops_settings", broken)
+        rc = mlops_commands.model_promote("m", "1", "production", str(tmp_path), env="prod")
+        assert rc == ExitCode.CONFIGURATION_ERROR.value
+        assert "policy" not in seen
+        # --force is the conscious way through.
+        rc = mlops_commands.model_promote(
+            "m", "1", "production", str(tmp_path), env="prod", force=True
+        )
+        assert rc == ExitCode.SUCCESS.value
+
+    def test_staging_never_needs_the_policy(self, tmp_path, monkeypatch):
+        self._registry(monkeypatch)
+
+        def broken(env):
+            raise AssertionError("the policy guards Production only")
+
+        monkeypatch.setattr(mlops_commands, "_project_mlops_settings", broken)
+        rc = mlops_commands.model_promote("m", "1", "staging", str(tmp_path), env=None)
+        assert rc == ExitCode.SUCCESS.value
+
+    def test_no_project_means_no_policy(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        assert mlops_commands._project_mlops_settings(None) is None
+        assert mlops_commands._resolve_promotion_policy(None) is None
+
+
+class TestModelGcHonorsProjectRetention:
+    """Regression: the CLI read retention only from environment variables; the
+    API applied settings.mlops.gc. A project keeping models for a year lost them
+    after the 90-day default the first time someone ran `ducta model gc`."""
+
+    def _capture_gc(self, monkeypatch):
+        seen = {}
+
+        class _GC:
+            def __init__(self, storage_path, max_versions_per_model, model_retention_days):
+                seen.update(max_versions=max_versions_per_model, days=model_retention_days)
+
+            def run(self, dry_run=False):
+                seen["ran"] = True
+                return {}
+
+        monkeypatch.setattr("ducta.mlrun.gc.ModelGarbageCollector", _GC)
+        return seen
+
+    def test_project_retention_applies(self, tmp_path, monkeypatch):
+        seen = self._capture_gc(monkeypatch)
+        monkeypatch.setattr(
+            mlops_commands,
+            "_project_mlops_settings",
+            lambda env: {"gc": {"model_retention_days": 365, "max_versions_per_model": 5}},
+        )
+        assert mlops_commands.model_gc(str(tmp_path)) == ExitCode.SUCCESS.value
+        assert seen == {"max_versions": 5, "days": 365, "ran": True}
+
+    def test_unreadable_settings_delete_nothing(self, tmp_path, monkeypatch):
+        seen = self._capture_gc(monkeypatch)
+
+        def broken(env):
+            raise mlops_commands.PolicyUnavailable("the project does not load: boom")
+
+        monkeypatch.setattr(mlops_commands, "_project_mlops_settings", broken)
+        rc = mlops_commands.model_gc(str(tmp_path), dry_run=False)
+        assert rc == ExitCode.CONFIGURATION_ERROR.value
+        assert "ran" not in seen

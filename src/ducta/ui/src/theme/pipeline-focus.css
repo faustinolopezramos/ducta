@@ -514,10 +514,55 @@ a.pipeline-chain-pill:hover {
 .focus-more:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* Six views in a 360px column: compact tabs that scroll rather than clip a label. */
-.pipeline-inspector .tabs {
-  gap: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.pipeline-inspector .tabs::-webkit-scrollbar { display: none; }
 .pipeline-inspector .tabs-tab { padding: 9px 9px; font-size: var(--text-xs); }
+
+/* Node IO Manager interactive controls */
+.node-io-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2, 8px);
+}
+
+.node-io-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+
+.node-io-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--bg-surface, var(--surface, #ffffff));
+  border: 1px solid var(--primary, #0B5F73);
+  border-radius: var(--radius-md, 6px);
+  margin-bottom: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.node-io-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs, 12px);
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+
+.node-io-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 1px var(--primary);
+}
+
+.node-io-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}

@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { IconCheck, IconChevronDown, IconPlayerPlay, IconPlayerStop } from "@tabler/icons-react";
 import { Button } from "../../components/ui/Button";
 import { envKind } from "../../components/Shell/envKind";
@@ -29,6 +29,8 @@ interface PipelineTopBarProps {
   runOptions?: RunOption[];
   /** Why this user may not run in this environment (a protected one), if so. */
   runBlocked?: string | null;
+  /** What the AI offers on this pipeline (review it, add nodes), before Validate. */
+  aiActions?: ReactNode;
 }
 
 export interface RunOption {
@@ -106,6 +108,7 @@ export function PipelineTopBar({
   isExecuting,
   onExecute,
   runBlocked = null,
+  aiActions = null,
   onValidate,
   onCancel,
   chain,
@@ -172,6 +175,7 @@ export function PipelineTopBar({
       )}
 
       <div className="pipeline-topbar-actions">
+        {aiActions}
         <Button
           variant="ghost"
           size="sm"

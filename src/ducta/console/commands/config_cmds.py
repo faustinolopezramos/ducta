@@ -32,6 +32,12 @@ from ducta.console.core import CLIConfig, ConfigurationError, ExitCode
 def handle_config(parsed_args, config: Optional[CLIConfig] = None) -> int:
     cmd = getattr(parsed_args, "config_command", None)
 
+    # `--out` is where the user stands, not the project root this command is
+    # about to move to: `config convert --out conv` from a subfolder used to
+    # write into <project>/conv.
+    if getattr(parsed_args, "out", None):
+        parsed_args.out = str(Path(parsed_args.out).expanduser().resolve())
+
     # The schema is static: it needs no loadable project.
     if cmd == "schema":
         return _handle_schema(parsed_args)
@@ -134,22 +140,22 @@ def _handle_list_pipelines(parsed_args, config_manager: ConfigManager) -> int:
 
 
 def _log_preflight_report(name: str, report, prefix: str = "") -> None:
-    """Log one preflight report's marker/count line and its error/warning
-    bullets. Shared by the layered and non-layered ``config validate``
-    paths; *prefix* carries the layered variant's ``"(layer) "`` tag."""
-    marker = "✓" if report.ok and not report.warnings else ("✗" if report.errors else "⚠")
-    logger.info(
-        "{} {}{}: {} error(s), {} warning(s)",
-        marker,
-        prefix,
-        name,
-        len(report.errors),
-        len(report.warnings),
-    )
+    """One pipeline's verdict, then each problem on its own indented line.
+
+    *prefix* carries the layered variant's ``"(layer) "`` tag.
+    """
+    counts = []
+    if report.errors:
+        counts.append(f"{len(report.errors)} error(s)")
+    if report.warnings:
+        counts.append(f"{len(report.warnings)} warning(s)")
+    marker = "✗" if report.errors else ("!" if report.warnings else "✓")
+    detail = f" — {', '.join(counts)}" if counts else ""
+    logger.info("{} {}{}{}", marker, prefix, name, detail)
     for err in report.errors:
-        logger.error("    ERROR  {}", err)
+        logger.info("    error    {}", err)
     for warn in report.warnings:
-        logger.warning("    WARN   {}", warn)
+        logger.info("    warning  {}", warn)
 
 
 def _validation_document(env: str, reports: dict, error: Optional[BaseException]) -> dict:
@@ -222,15 +228,15 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
             _log_preflight_report(name, report)
 
         if total_errors:
-            logger.error("Preflight found {} error(s). Fix them before running.", total_errors)
+            logger.error("{} error(s): fix them before running", total_errors)
             return ExitCode.VALIDATION_ERROR.value
-        logger.info("Preflight passed — configuration is valid.")
+        logger.success("The project is valid in {} ({} pipeline(s) checked)", env, len(reports))
         return ExitCode.SUCCESS.value
     except ConfigurationError as e:
         if as_json:
             return _print_validation_json(parsed_args, {}, e)
         # The project does not load: the same code `ducta start` exits with.
-        logger.error("Invalid configuration: {}", e)
+        logger.error("{}", e)
         return ExitCode.CONFIGURATION_ERROR.value
     except Exception as e:
         if as_json:
@@ -242,22 +248,30 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
 def _handle_pipeline_info(parsed_args, config_manager: ConfigManager) -> int:
     try:
         env = getattr(parsed_args, "env", None) or "base"
-        logger.info("Fetching pipeline info for environment: '{}'", env)
+        logger.debug("Fetching pipeline info for environment: '{}'", env)
         context_init = execution.ContextInitializer(config_manager)
         context = context_init.initialize(env)
         from ducta.core import PipelineExecutor
 
         exec_obj = PipelineExecutor(context, config_manager.get_config_directory())
         info = exec_obj.get_pipeline_info(parsed_args.pipeline)
+        if not info.get("exists"):
+            # Exit 0 with "Exists: False" read as success to any script.
+            import difflib
 
-        logger.info("Pipeline: {}", parsed_args.pipeline)
-        logger.info("  Exists: {}", info["exists"])
-        logger.info("  Description: {}", info["description"])
-        if info["nodes"]:
-            logger.info("  Nodes: {}", ", ".join(info["nodes"]))
-        else:
-            logger.info("  Nodes: None found")
+            available = sorted(exec_obj.list_pipelines())
+            close = difflib.get_close_matches(parsed_args.pipeline, available, n=1)
+            hint = f" Did you mean '{close[0]}'?" if close else ""
+            logger.error("Pipeline '{}' not found.{}", parsed_args.pipeline, hint)
+            logger.info("Available: {}", ", ".join(available) or "none")
+            return ExitCode.VALIDATION_ERROR.value
 
+        nodes = info.get("nodes") or []
+        logger.info("{} · {} node(s)", parsed_args.pipeline, len(nodes))
+        if info.get("description"):
+            logger.info("  description  {}", info["description"])
+        logger.info("  nodes        {}", ", ".join(nodes) or "none")
+        logger.info("  environment  {}", env)
         return ExitCode.SUCCESS.value
     except Exception as e:
         logger.error("Failed to get pipeline info: {}", e)

@@ -69,6 +69,22 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
 
 
+_METADATA_NAMES = {"metadata.google.internal", "metadata", "instance-data"}
+
+
+def _is_metadata_host(host: str) -> bool:
+    """Whether *host* is a link-local address (``169.254.x.x``, ``fe80::``) or a cloud's
+    metadata name: where a server holds credentials, never a model."""
+    import ipaddress
+
+    if host.lower() in _METADATA_NAMES:
+        return True
+    try:
+        return ipaddress.ip_address(host).is_link_local
+    except ValueError:
+        return False
+
+
 def ducta_home() -> Path:
     return Path(os.environ.get("DUCTA_HOME") or Path.home() / ".ducta").expanduser()
 
@@ -135,10 +151,25 @@ class AIConfig:
             parsed = urlparse(self.base_url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
                 raise AIConfigError(f"'{self.base_url}' is not an http(s) URL")
+            if parsed.username or parsed.password:
+                # Not echoed: it is the credential. A URL is shown in messages and in the UI.
+                raise AIConfigError(
+                    "The base URL must not carry a user or password: keep the key in an "
+                    "environment variable or the keychain (`ducta ai login`)"
+                )
+            if _is_metadata_host(parsed.hostname):
+                raise AIConfigError(
+                    f"'{parsed.hostname}' is a link-local or cloud-metadata address, "
+                    "not a model endpoint"
+                )
         if self.effort is not None and self.effort not in EFFORTS:
             raise AIConfigError(f"Unknown effort '{self.effort}' (one of: {', '.join(EFFORTS)})")
         if self.max_attempts < 1:
             raise AIConfigError("max_attempts must be at least 1")
+        if not self.timeout_seconds > 0:
+            raise AIConfigError("timeout_seconds must be greater than 0")
+        if self.context_tokens < 1:
+            raise AIConfigError("context_tokens must be at least 1")
         return self
 
     def require_model(self) -> str:
@@ -231,9 +262,9 @@ def save_config(config: AIConfig, path: Optional[Path] = None) -> Path:
 
     config.validate()
     path = path or config_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(tomli_w.dumps(config.to_toml_dict()), encoding="utf-8")
-    return path
+    from ducta.ai.fsutil import atomic_write_text
+
+    return atomic_write_text(path, tomli_w.dumps(config.to_toml_dict()))
 
 
 _PER_PROVIDER = ("model", "base_url", "api_key_env", "effort")

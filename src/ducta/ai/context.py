@@ -119,14 +119,24 @@ def _fit_functions(functions: List[str], budget: int) -> str:
 _SECRETS = (
     (re.compile(r"(\b[a-zA-Z][\w+.-]*://[^/\s:@]+:)[^/\s@]+@"), r"\1***@"),
     (
+        # A name that *contains* a credential word (``db_password``, ``PGPASSWORD``,
+        # ``AWS_SECRET_ACCESS_KEY``, ``fs.s3a.secret.key``), not only one that starts with it.
         re.compile(
-            r"(?i)\b((?:password|passwd|pwd|secret|client[_-]?secret|token|access[_-]?token|"
-            r"api[_-]?key|access[_-]?key|account[_-]?key|sas[_-]?token|sig)"
-            r"[\"']?\s*[=:]\s*[\"']?)[^\s\"';,&]+"
+            r"(?i)(?<![A-Za-z0-9])([\w.-]*"
+            r"(?:password|passwd|pwd|secret|token(?!s\b)|api[_-]?key|access[_-]?key|account[_-]?key)"
+            r"[\w.-]*[\"']?\s*[=:]\s*[\"']?)[^\s\"';,&]+"
         ),
         r"\1***",
     ),
+    # An Azure SAS signature: ``sig`` as a word of its own (not ``assigned``, ``design``).
+    (re.compile(r"(?i)(?<![A-Za-z0-9])(sig\s*=\s*)[^\s\"';,&]+"), r"\1***"),
     (re.compile(r"(?i)\b(bearer\s+)[\w.~+/=-]+"), r"\1***"),
+    (
+        re.compile(
+            r"(?i)\b(authorization[\"']?\s*[=:]\s*[\"']?(?:basic|digest|negotiate)\s+)[^\s\"';,]+"
+        ),
+        r"\1***",
+    ),
 )
 
 
@@ -311,11 +321,26 @@ def _function_source(source: str, name: str, limit: int) -> Optional[str]:
 
 
 def _imports(source: str) -> List[str]:
-    return [
-        line
-        for line in source.splitlines()
-        if line.startswith(("import ", "from ")) and not line.startswith("from __future__")
-    ]
+    """The module's top-level imports, each whole (a parenthesised one spans lines)."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return [
+            line
+            for line in source.splitlines()
+            if line.startswith(("import ", "from ")) and not line.startswith("from __future__")
+        ]
+    out: List[str] = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            continue
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            segment = ast.get_source_segment(source, node)
+            if segment:
+                out.append(segment)
+    return out
 
 
 def _source_names(root: Path, settings: Dict[str, Any]) -> List[str]:

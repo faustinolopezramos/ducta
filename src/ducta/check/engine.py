@@ -198,9 +198,24 @@ class QualityReporter:
 
         return Console()
 
+    @staticmethod
+    def _compact_view() -> Any:
+        """The CLI's compact view, when it is on: it counts passing checks on the
+        node's line and prints only the ones that fail or warn."""
+        try:
+            from ducta.console.ux import view
+
+            return view if view.is_compact() else None
+        except Exception:  # noqa: BLE001 — presentation must never break a check
+            return None
+
     def render_report(self, report: QualityReport, verbose: bool = False) -> None:
         if not report:
             logger.warning("No quality report to render")
+            return
+        compact = self._compact_view()
+        if compact is not None:
+            compact.quality_report(report)
             return
 
         if self.rich_available:
@@ -243,6 +258,10 @@ class QualityReporter:
     def render_summary(self, reports: List[QualityReport], verbose: bool = False) -> None:
         if not reports:
             logger.warning("No quality reports to render")
+            return
+        compact = self._compact_view()
+        if compact is not None:
+            compact.quality_summary(reports)
             return
         total_passed = sum(1 for r in reports if r.passed)
         total_errors = sum(r.errors_count for r in reports)

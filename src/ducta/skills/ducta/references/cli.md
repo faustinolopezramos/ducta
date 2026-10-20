@@ -38,8 +38,8 @@ Start data pipelines directly without orchestration
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `--log-level` | Logging level — one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `--log-file` | Custom log file path |
-| `--verbose` | Enable verbose output (DEBUG) |
-| `--quiet` | Reduce output (ERROR only) |
+| `-v`, `--verbose` | Debug log lines too |
+| `-q`, `--quiet` | Errors only |
 | `--model-version` | Model version for ML pipelines |
 | `--hyperparams` | Hyperparameters as JSON string |
 | `--sweep` | Hyperparameter sweep spec (YAML/JSON file). List values are expanded into the cartesian product and one run is executed per combination, all tagged with a common sweep_id in the experiment tracker |
@@ -93,7 +93,7 @@ Stop streaming pipeline
 | `--config`, `-c` | ducta.yaml, or any file or directory inside the project (default: the project containing the current directory) |
 | `--env`, `-e` | Execution environment — default `base` |
 | `--execution-id`, `-i` | Execution ID to stop — *(required)* |
-| `--timeout`, `-t` | Timeout in seconds — default `60` |
+| `--timeout`, `-t` | Seconds to wait for each query to stop gracefully (default: 60); under 5 stops them at once — default `60` |
 
 ## ducta template
 
@@ -124,9 +124,10 @@ List available pipelines
 
 | Option | What it does |
 |---|---|
-| `--env` | Environment to use for listing |
+| `-e`, `--env` | Environment to use for listing |
 | `--filter` | Filter pipelines by name (case-insensitive substring match) |
 | `--output-format`, `--format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config pipeline-info
 
@@ -134,8 +135,9 @@ Show pipeline information
 
 | Option | What it does |
 |---|---|
-| `--pipeline` | Pipeline name — *(required)* |
-| `--env` | Environment to use |
+| `-p`, `--pipeline` | Pipeline name — *(required)* |
+| `-e`, `--env` | Environment to use |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config validate
 
@@ -143,9 +145,10 @@ Import node functions, check signatures, and resolve I/O keys without running Sp
 
 | Option | What it does |
 |---|---|
-| `--pipeline` | Pipeline to validate (default: all pipelines) |
-| `--env` | Environment to use |
+| `-p`, `--pipeline` | Pipeline to validate (default: all pipelines) |
+| `-e`, `--env` | Environment to use |
 | `--output-format` | json: one JSON document on stdout — every problem with its file, line, node and suggested fix — for CI and AI assistants — one of `rich`, `json`; default `rich` |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config show
 
@@ -153,11 +156,12 @@ The project after templates (extends), defaults and the environment's overrides 
 
 | Option | What it does |
 |---|---|
-| `--env` | Environment to resolve (default: the base project) |
-| `--pipeline` | Only this pipeline and the datasets it touches |
+| `-e`, `--env` | Environment to resolve (default: the base project) |
+| `-p`, `--pipeline` | Only this pipeline and the datasets it touches |
 | `--format` | Output format (default: yaml) — one of `yaml`, `toml`, `json`; default `yaml` |
 | `--engine` | Print the five documents the engine reads instead of the project's shape |
 | `--ml` | What each ML node will be given: its split and where it was declared, whether it must apply it, its merged hyperparameters and model version |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config explain
 
@@ -166,7 +170,8 @@ Follows a value through the file, the pipeline template, defaults and the enviro
 | Option | What it does |
 |---|---|
 | `<path>` | e.g. settings.max_parallel_nodes or pipelines.etl.nodes.load.retry — *(required)* |
-| `--env` | Environment to resolve (default: base) |
+| `-e`, `--env` | Environment to resolve (default: base) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config diff
 
@@ -176,6 +181,7 @@ Show what differs between two environments
 |---|---|
 | `<env_a>` | First environment (use 'base' for none) — *(required)* |
 | `<env_b>` | Second environment — *(required)* |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config convert
 
@@ -185,6 +191,7 @@ Rewrites ducta, catalog, pipelines/ and templates/ as YAML, TOML or JSON in a ne
 |---|---|
 | `--to` | one of `yaml`, `toml`, `json`; *(required)* |
 | `--out` | New directory to write into — *(required)* |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config schema
 
@@ -319,8 +326,8 @@ List recent experiments
 | Option | What it does |
 |---|---|
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. Omit to look at the environment's shared/default MLOps directory instead. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. Omit to look at the environment's shared/default MLOps directory instead. |
 | `--limit` | Maximum number of experiments to show (default: all) |
 
 ### ducta experiment runs
@@ -331,8 +338,8 @@ List the runs of one experiment
 |---|---|
 | `<experiment_id>` | Experiment id (see `experiment list`) — *(required)* |
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
 | `--status` | Only runs in this status — one of `running`, `completed`, `failed`, `scheduled` |
 | `--limit` | Maximum number of runs (newest first) |
 | `--output-format` | Output format: a text table or JSON (default: rich) — one of `rich`, `json`; default `rich` |
@@ -345,8 +352,8 @@ Show one run: parameters, metrics, artifacts
 |---|---|
 | `<run_id>` | Run id, or a unique prefix of it — *(required)* |
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
 | `--output-format` | Output format: text or JSON (default: rich) — one of `rich`, `json`; default `rich` |
 
 ### ducta experiment compare
@@ -357,8 +364,8 @@ Compare the parameters and metrics of runs
 |---|---|
 | `<run_ids>` | Two or more run ids (or unique prefixes) — *(required)* |
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
 | `--output-format` | Output format: a text table or JSON (default: rich) — one of `rich`, `json`; default `rich` |
 
 ## ducta model
@@ -375,8 +382,8 @@ Promote a model version to a new stage
 | `<version>` | Model version: the whole number the registry assigned (3 or v3) — *(required)* |
 | `<stage>` | Target stage — one of `staging`, `production`, `archived`; *(required)* |
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
 | `--force` | Bypass the promotion policy gate (the bypass is audit-logged) |
 
 ### ducta model gc
@@ -387,8 +394,8 @@ Garbage collect old model versions
 |---|---|
 | `--dry-run` | Show what would be deleted without deleting |
 | `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
-| `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
-| `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. Omit to garbage-collect the environment's shared/default MLOps directory instead. |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. Omit to garbage-collect the environment's shared/default MLOps directory instead. |
 
 ## ducta init
 
@@ -445,7 +452,8 @@ List run certificates
 | Option | What it does |
 |---|---|
 | `--dir` | Runs directory (default: resolved per environment from config) |
-| `--env` | Environment to scope the search to (default: search all environments) |
+| `-e`, `--env` | Environment to scope the search to (default: search all environments) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta certify show
 
@@ -455,8 +463,9 @@ Show a certificate (human-readable by default)
 |---|---|
 | `--run-id` | Run id (or a unique prefix) — *(required)* |
 | `--dir` | Runs directory (default: resolved per environment from config) |
-| `--env` | Environment to scope the search to (default: search all environments) |
+| `-e`, `--env` | Environment to scope the search to (default: search all environments) |
 | `--json` | Print the full certificate as raw JSON |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta certify verify
 
@@ -466,10 +475,11 @@ Verify a certificate (tamper check, optionally re-run to prove reproducibility)
 |---|---|
 | `--run-id` | Run id (or a unique prefix) — *(required)* |
 | `--dir` | Runs directory (default: resolved per environment from config) |
-| `--env` | Environment to scope the search to (default: search all environments) |
+| `-e`, `--env` | Environment to scope the search to (default: search all environments) |
 | `--reproduce` | Re-run the pipeline and confirm every output reproduces the certificate |
 | `--start-date` | Start date for the reproduction run |
 | `--end-date` | End date for the reproduction run |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta certify diff
 
@@ -480,7 +490,8 @@ Compare two run certificates (config, outputs, quality)
 | `<run_a>` | First run id (or a unique prefix) — *(required)* |
 | `<run_b>` | Second run id (or a unique prefix) — *(required)* |
 | `--dir` | Runs directory (default: resolved per environment from config) |
-| `--env` | Environment to scope the search to (default: search all environments) |
+| `-e`, `--env` | Environment to scope the search to (default: search all environments) |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ## ducta ai
 
@@ -548,6 +559,21 @@ Draft a fix for a pipeline: its validation problems, a run's error, or a note
 | `--force` | Write even if it does not validate |
 | `--output-format` | Output format (json prints the draft) — one of `rich`, `json`; default `rich` |
 
+### ducta ai extend
+
+The model reads the pipeline's file and the code its nodes run, and adds what you describe: new nodes, functions and datasets. Ducta checks — without a model — that every existing node, function and setting is unchanged; the draft is reviewed and applied like any other.
+
+| Option | What it does |
+|---|---|
+| `<pipeline>` | Pipeline to add nodes to — *(required)* |
+| `<request>` | What the new nodes should do — *(required)* |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--attempts` | Times the model may fix what is found (default 3) |
+| `--write` | Write the draft once it validates |
+| `--yes` | Do not ask before writing |
+| `--force` | Write even if it does not validate |
+| `--output-format` | Output format (json prints the draft) — one of `rich`, `json`; default `rich` |
+
 ### ducta ai quality
 
 Ducta measures the node's output in --env (column statistics only: the model never sees a row), the model proposes the node's `quality` block, and Ducta runs it on that data — a check that would fail goes back to the model.
@@ -556,7 +582,7 @@ Ducta measures the node's output in --env (column statistics only: the model nev
 |---|---|
 | `<pipeline>` | Pipeline holding the node — *(required)* |
 | `<node>` | Node whose output to check — *(required)* |
-| `--env` | Environment whose data is measured — default `dev` |
+| `-e`, `--env` | Environment whose data is measured — default `dev` |
 | `--note` | What matters to you (e.g. "order_id is the key") |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `--attempts` | Times the model may fix what is found (default 3) |
@@ -571,7 +597,7 @@ Adds a one-line description where there is none, and lists the columns that hold
 
 | Option | What it does |
 |---|---|
-| `--env` | Environment whose data gives columns — default `dev` |
+| `-e`, `--env` | Environment whose data gives columns — default `dev` |
 | `--note` | Anything the model should know (e.g. "in Spanish") |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `--attempts` | Times the model may fix what is found (default 3) |
@@ -593,13 +619,13 @@ Ducta diagnoses the error (the kind of failure, the line of your code it was rai
 
 ### ducta ai review
 
-Ducta checks the node first (a retried node that appends, runs near their timeout, I/O or collect() inside the function, credentials in the code…); the model adds what it sees in the code, the effective settings and the last runs. A finding of the model's that cites a line or setting that does not exist is dropped. Nothing is changed.
+Ducta checks first (a retried node that appends, runs near their timeout, I/O or collect() inside a function, credentials in the code, a pipeline with no owner or nothing checking its data…); the model adds what it sees in the code, the effective settings and the last runs. A finding of the model's that cites a node, line or setting that does not exist is dropped. Without NODE, the whole pipeline is reviewed and the model may suggest nodes to add (`ducta ai extend`). Nothing is changed.
 
 | Option | What it does |
 |---|---|
-| `<pipeline>` | Pipeline holding the node — *(required)* |
-| `<node>` | Node to review — *(required)* |
-| `--env` | Environment whose settings and runs to use — default `dev` |
+| `<pipeline>` | Pipeline to review (or holding the node) — *(required)* |
+| `<node>` | Node to review (default: the whole pipeline) |
+| `-e`, `--env` | Environment whose settings and runs to use — default `dev` |
 | `--note` | What worries you (e.g. "it got slow last week") |
 | `--no-ai` | Only Ducta's own checks: no model is asked |
 | `--fail-on` | Exit 3 when a finding is this severe or more (for CI) — one of `high`, `medium`, `low` |
@@ -699,7 +725,7 @@ Validate built pipelines; run them in dev and snapshot their tests
 | Option | What it does |
 |---|---|
 | `<pipelines>` | Pipelines to verify (default: all) |
-| `--env` | Where to run them (never a protected one) — default `dev` |
+| `-e`, `--env` | Where to run them (never a protected one) — default `dev` |
 | `--run` | Run them, in dependency order |
 | `--tests` | Write snapshot tests once they ran |
 | `--start-date` | For pipelines that require dates (YYYY-MM-DD) |
@@ -727,7 +753,7 @@ The project's incidents, newest first
 | Option | What it does |
 |---|---|
 | `--status` | Which incidents (default: active) — one of `active`, `open`, `remediating`, `escalated`, `resolved`, `ignored`; default `active` |
-| `--env` | Only this environment's |
+| `-e`, `--env` | Only this environment's |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `--output-format` | Output format (json for scripts and assistants) — one of `rich`, `json`; default `rich` |
 
@@ -748,7 +774,7 @@ What Sentinel would do about a run, without a model and without acting
 | Option | What it does |
 |---|---|
 | `<run_id>` | The run's certificate id — *(required)* |
-| `--env` | Its environment (default: searched) |
+| `-e`, `--env` | Its environment (default: searched) |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `--output-format` | Output format (json for scripts and assistants) — one of `rich`, `json`; default `rich` |
 
@@ -758,7 +784,7 @@ Run Sentinel: a pass every --interval seconds
 
 | Option | What it does |
 |---|---|
-| `--env` | Environment to watch (repeatable; default: all) |
+| `-e`, `--env` | Environment to watch (repeatable; default: all) |
 | `--interval` | Seconds between passes — default `60.0` |
 | `--once` | One pass, then exit (for cron) |
 | `--rerun-timeout` | Seconds one re-run may take before it is stopped (default: 4 hours) — default `14400.0` |

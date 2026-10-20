@@ -41,6 +41,7 @@ them (:func:`rerun_nodes`); "appended" is judged on all of those.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -60,6 +61,10 @@ _NOT_TRANSIENT = (
     "classnotfound",
     "no suitable driver",
 )
+
+
+#: "lock … held" as words, near each other (not "block" … "shelled").
+_LOCK_HELD = re.compile(r"\block\b[^.\n]{0,60}\bheld\b|\bheld\b[^.\n]{0,60}\block\b")
 
 
 @dataclass
@@ -82,6 +87,8 @@ class RunEvent:
     certificate: Optional[Dict[str, Any]] = None
     #: Runs that were earlier steps of this one (a re-run node by node): seen, not triaged.
     earlier_runs: List[str] = field(default_factory=list)
+    #: The nodes this run ran successfully, when known (empty: not known, as if all).
+    nodes_run: List[str] = field(default_factory=list)
 
     @property
     def failed(self) -> bool:
@@ -102,6 +109,7 @@ def event_from_certificate(env: str, cert: Dict[str, Any]) -> RunEvent:
             cert.get("error") or next((n.get("error") for n in failed if n.get("error")), "") or ""
         ),
         failed_nodes=[str(n.get("name")) for n in failed],
+        nodes_run=[str(n.get("name")) for n in nodes if str(n.get("status")) == "success"],
         errors=[
             {"node_id": n.get("name"), "message": n.get("error"), "error_type": n.get("status")}
             for n in failed
@@ -125,6 +133,7 @@ def event_from_execution(
         error=str(record.get("error_message") or ""),
         failed_nodes=[str(e.get("node_id")) for e in errors if e.get("node_id")],
         exit_code=record.get("exit_code"),
+        nodes_run=[str(n) for n in (record.get("node_names") or [record.get("node_name")]) if n],
         actor="sentinel" if record.get("user_id") == "sentinel" else record.get("user_id"),
         errors=errors,
     )
@@ -291,7 +300,7 @@ def decide(
         return Decision("rerun_stale", L1, "its code changed since the last success", nodes=nodes)
 
     text = f"{event.error} {diagnosis.get('message') or ''}".lower()
-    if event.exit_code == 7 or ("lock" in text and "held" in text):
+    if event.exit_code == 7 or _LOCK_HELD.search(text):
         return Decision("retry_later", L1, "another run held the lock: nothing ran")
     found = str(diagnosis.get("kind") or "unknown")
     if found == "infra" and any(p in text for p in _NOT_TRANSIENT):

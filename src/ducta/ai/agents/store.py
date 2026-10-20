@@ -87,8 +87,8 @@ class RecordStore:
         data = read_json(self.path(record_id))
         return data if isinstance(data, dict) else None
 
-    def list(self, limit: int = 200) -> List[Dict[str, Any]]:
-        """The newest *limit* records first (ids sort by time)."""
+    def list(self, limit: Optional[int] = 200) -> List[Dict[str, Any]]:
+        """The newest *limit* records first (ids sort by time); all of them for ``None``."""
         if not self.folder.is_dir():
             return []
         out: List[Dict[str, Any]] = []

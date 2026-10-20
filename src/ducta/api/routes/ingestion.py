@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from fastapi import APIRouter, Depends, HTTPException
 from loguru import logger
@@ -181,6 +181,26 @@ async def get_connection_usage(
     return ConnectionUsageResponse(pipelines=pipelines, executions=executions[:20])
 
 
+def _test_response(result: Optional[bool]) -> ConnectionTestResponse:
+    """``ok`` only when the connection answered.
+
+    The messages used to be swapped: a refused connection read "inconclusive
+    (Spark unavailable)", and one nobody had contacted (no Spark session) read
+    "verified".
+    """
+    if result is None:
+        return ConnectionTestResponse(
+            ok=False,
+            message="Not verified: there is no Spark session to test it with. "
+            "It is checked when a pipeline that uses it runs.",
+        )
+    if result:
+        return ConnectionTestResponse(ok=True, message="Connection verified")
+    return ConnectionTestResponse(
+        ok=False, message="Connection failed: check the host, port and credentials"
+    )
+
+
 @router.post(
     "/connections/{name}/test",
     response_model=ConnectionTestResponse,
@@ -192,10 +212,7 @@ async def retest_connection(name: str, manager: WorkspaceManagerDep) -> Connecti
         ok = _service(manager).test_connection(name)
     except IngestionServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    return ConnectionTestResponse(
-        ok=ok,
-        message="Connection verified" if ok else "Connection test inconclusive (Spark unavailable)",
-    )
+    return _test_response(ok)
 
 
 @router.post(
@@ -222,10 +239,7 @@ async def test_connection(
         ok = _service(manager).test_spec(spec)
     except IngestionServiceError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return ConnectionTestResponse(
-        ok=ok,
-        message="Connection verified" if ok else "Connection test inconclusive (Spark unavailable)",
-    )
+    return _test_response(ok)
 
 
 @router.post(

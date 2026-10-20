@@ -88,6 +88,23 @@ const builtDraft = {
   ],
 };
 
+const extendDraft = {
+  ...base,
+  id: "ext",
+  kind: "extend",
+  pipeline: "silver.sales",
+  ok: true,
+  files: ["pipelines/silver.sales.yaml", "pipelines/sales.py", "catalog.yaml"],
+  file_contents: [{ path: "pipelines/silver.sales.yaml", content: "x", change: "modified" }],
+  blocking: [],
+  attempts: [{ number: 1, files: [], errors: 0, warnings: 0, rejected: [], usage: {} }],
+  added: {
+    nodes: [{ name: "latest_customers", inputs: ["silver.sales.orders"], outputs: ["silver.sales.customers"], description: "" }],
+    functions: ["pipelines/sales.py: latest_customers()"],
+    datasets: ["silver.sales.customers"],
+  },
+};
+
 let job: Record<string, unknown>;
 const posts: { url: string; body: any }[] = [];
 
@@ -98,6 +115,7 @@ vi.mock("../../api/client", () => ({
       if (url.endsWith("/ai/drafts")) return Promise.resolve({ data: [blueprintDraft, builtDraft] });
       if (url.endsWith("/ai/drafts/bp")) return Promise.resolve({ data: blueprintDraft });
       if (url.endsWith("/ai/drafts/built")) return Promise.resolve({ data: builtDraft });
+      if (url.endsWith("/ai/drafts/ext")) return Promise.resolve({ data: extendDraft });
       if (url.includes("/ai/jobs/")) return Promise.resolve({ data: job });
       if (url === "/environments") return Promise.resolve({ data: { environments: ["dev"] } });
       return Promise.reject(new Error(`unexpected GET ${url}`));
@@ -269,5 +287,35 @@ describe("a module's problem, in short", () => {
       "`toPandas()` brings every row to one machine",
     );
     expect(problemTitle("reads a file itself")).toBe("reads a file itself");
+  });
+});
+
+// ── Add nodes with AI (extend) ───────────────────────────────────────────────
+
+describe("Add nodes with AI", () => {
+  it("drafts new nodes for the pipeline it was opened on", async () => {
+    job = { ...job, kind: "extend", draft_id: "ext" };
+    renderDialog({ mode: { kind: "extend", pipeline: "silver.sales", nodes: [{ name: "clean_orders", outputs: ["silver.sales.orders"] }] } });
+    expect(await screen.findByText("clean_orders → silver.sales.orders")).toBeInTheDocument();
+    const draftIt = screen.getByRole("button", { name: "Draft the nodes" });
+    expect(draftIt).toBeDisabled(); // it needs to know what to add
+    fireEvent.change(screen.getByLabelText(/what should the new nodes do/i), { target: { value: "one row per customer" } });
+    fireEvent.click(draftIt);
+    await waitFor(() =>
+      expect(posts.at(-1)?.body).toEqual({ kind: "extend", pipeline: "silver.sales", request: "one row per customer" }),
+    );
+  });
+
+  it("starts from an idea of the pipeline's review", async () => {
+    renderDialog({ mode: { kind: "extend", pipeline: "silver.sales", request: "Orders per store and day" } });
+    expect(await screen.findByDisplayValue("Orders per store and day")).toBeInTheDocument();
+  });
+
+  it("shows what an extension adds and what Ducta checked", async () => {
+    renderDialog({ initialDraftId: "ext" });
+    expect(await screen.findByText("What it adds")).toBeInTheDocument();
+    expect(screen.getByText("latest_customers")).toBeInTheDocument();
+    expect(screen.getByText(/reads silver.sales.orders → writes silver.sales.customers/)).toBeInTheDocument();
+    expect(screen.getByText("Existing nodes and functions unchanged")).toBeInTheDocument();
   });
 });

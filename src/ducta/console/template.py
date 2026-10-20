@@ -167,12 +167,12 @@ class BaseTemplate:
             f"# Run the {pipeline} pipeline",
             f"ducta start -e dev -p {pipeline}",
             "",
-            "# Run one node, or turn on debug logging",
+            "# Run one node, or see every log line",
             f"ducta start -e dev -p {pipeline} -n <node>",
-            f"ducta start -e dev -p {pipeline} --log-level DEBUG",
+            f"ducta start -e dev -p {pipeline} -v",
             "",
-            "# Validate config, no Spark",
-            "ducta config validate --env dev",
+            "# Check the project without running it (no Spark)",
+            "ducta config validate -e dev",
         ]
 
     # ── shared by the texts ──────────────────────────────────────────────────
@@ -755,8 +755,8 @@ class MLBasicTemplate(BaseTemplate):
             "# Override a hyperparameter for one run",
             f"ducta start -e dev -p {pipeline} --hyperparams '{{\"max_depth\": 3}}'",
             "",
-            "# Validate config, no Spark",
-            "ducta config validate --env dev",
+            "# Check the project without running it (no Spark)",
+            "ducta config validate -e dev",
         ]
 
     def project_yaml(self) -> str:
@@ -1438,8 +1438,8 @@ class HybridBasicTemplate(BaseTemplate):
             "# Run the batch phase, then the stream, to completion",
             f"ducta start -e dev -p {pipeline} --mode sync",
             "",
-            "# Validate config, no Spark",
-            "ducta config validate --env dev",
+            "# Check the project without running it (no Spark)",
+            "ducta config validate -e dev",
         ]
 
     def project_yaml(self) -> str:
@@ -1755,7 +1755,7 @@ class TemplateGenerator:
         evidence_level: str = "record",
     ) -> None:
         """Generate a project: ducta.yaml + catalog.yaml + pipelines/*.yaml, and code."""
-        logger.info("Generating {} template for project '{}'", template_type.value, project_name)
+        logger.debug("Generating {} template for project '{}'", template_type.value, project_name)
 
         template = TemplateFactory.create_template(template_type, project_name, self.config_format)
         template.evidence_level = evidence_level
@@ -1770,7 +1770,7 @@ class TemplateGenerator:
         self._generate_project_files(template)
         self._write_text_file(self.output_path / "README.md", template.readme())
 
-        logger.success("Project '{}' generated successfully at {}", project_name, self.output_path)
+        logger.debug("Project '{}' generated successfully at {}", project_name, self.output_path)
 
     def _write_config_files(self, template: BaseTemplate) -> None:
         """``ducta.*``, ``catalog.*``, ``pipelines/*.*`` and the editor schemas."""
@@ -2442,38 +2442,59 @@ class TemplateCommand:
         a batch template (``ducta start``) and a streaming one (``ducta
         stream run``)."""
         ext = self.generator.config_format.value if self.generator else "yaml"
-        logger.success("✅ Project '{}' created successfully!", project_name)
-        logger.info("📁 Location: {}", output_dir.absolute())
-        logger.info("\n📋 Next steps:")
-        logger.info("1️⃣  cd {}", output_dir)
-        logger.info("2️⃣  pip install -r requirements.txt")
-        if self.generator and self.generator.layout == "split":
-            logger.info("3️⃣  Point catalog/ at your data")
-        else:
-            logger.info("3️⃣  Point catalog.{} at your data", ext)
-        logger.info(
-            "4️⃣  Customize {} and pipelines/{}.{}",
-            "/".join(template.SAMPLE_MODULE_PATH),
-            template.DEFAULT_PIPELINE,
-            ext,
-        )
-        logger.info("5️⃣  Per-environment differences go under `environments:` in ducta.{}", ext)
+        split = bool(self.generator and self.generator.layout == "split")
+        logger.debug("Project '{}' created at {}", project_name, output_dir.absolute())
 
-        logger.info("\n🚀 Quick start:")
+        from ducta.console.ux.view import console, display_path, is_compact
+
+        if not is_compact():
+            logger.success("Project '{}' created at {}", project_name, output_dir.absolute())
+
+        from rich.text import Text
+
+        out = console()
+        head = Text()
+        head.append("✓ ", style="bold green")
+        head.append(f"Created {project_name}", style="bold")
+        head.append(f" in {display_path(output_dir)}/", style="dim")
+        out.print(head, soft_wrap=True)
+
+        generated = [
+            (f"ducta.{ext}", "project, paths, settings, per-environment overrides"),
+            ("catalog/" if split else f"catalog.{ext}", "every dataset, once"),
+        ]
+        if split:
+            generated.append(("quality/", f"reusable quality profiles (profiles.{ext})"))
+        generated += [
+            ("pipelines/", "one file per pipeline, plus the Python it runs"),
+            (".ducta/schema/", "JSON Schemas: editor autocompletion and inline errors"),
+        ]
+        width = max(len(name) for name, _ in generated) + 3
+        out.print()
+        for name, what in generated:
+            line = Text("  ")
+            line.append(name.ljust(width), style="cyan")
+            line.append(what, style="dim")
+            out.print(line, soft_wrap=True)
+
+        out.print()
+        out.print(Text("Next:", style="bold"))
+        for step in (f"cd {display_path(output_dir)}", "pip install -r requirements.txt", ""):
+            out.print(Text(f"  {step}" if step else ""), soft_wrap=True)
         for line in template.quick_start():
-            logger.info("   {}", line)
-
-        logger.info("\n🗂  What was generated:")
-        logger.info("   ducta.{}     project, paths, settings, per-environment overrides", ext)
-        if self.generator and self.generator.layout == "split":
-            logger.info("   catalog/       every dataset, once, one file per layer")
-            logger.info("   quality/       reusable quality profiles (profiles.{})", ext)
-        else:
-            logger.info("   catalog.{}   every dataset, once (format, path, contracts)", ext)
-        logger.info("   pipelines/     one file per pipeline, plus the Python it runs")
-        logger.info("   .ducta/schema/ JSON Schemas: editor autocompletion and inline errors")
-
-        logger.info("\n📖 More info: Check README.md or run 'ducta --help'")
+            style = "dim" if line.startswith("#") else ""
+            out.print(Text(f"  {line}" if line else "", style=style), soft_wrap=True)
+        out.print()
+        tip = Text("  ")
+        tip.append("Then point ", style="dim")
+        tip.append("catalog/" if split else f"catalog.{ext}", style="cyan")
+        tip.append(" at your data and edit ", style="dim")
+        tip.append(
+            f"{'/'.join(template.SAMPLE_MODULE_PATH)}",
+            style="cyan",
+        )
+        tip.append(". README.md walks through it.", style="dim")
+        out.print(tip, soft_wrap=True)
 
 
 def handle_template_command(parsed_args) -> int:

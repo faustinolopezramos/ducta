@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 from rich.console import Console
@@ -101,7 +101,10 @@ class RichLoggerManager:
     Professional logger configuration using Rich for elegant terminal output.
     """
 
-    console = Console(theme=Ducta_THEME, stderr=True, force_terminal=True)
+    # Rich decides colour: a terminal gets it; a pipe, a file or a CI log gets
+    # plain text (FORCE_COLOR=1 brings it back). force_terminal=True wrote
+    # escape codes into every redirected log.
+    console = Console(theme=Ducta_THEME, stderr=True)
     _lock = threading.RLock()  # Reentrant lock for thread-safety
 
     @classmethod
@@ -148,9 +151,15 @@ class RichLoggerManager:
         show_path: bool = False,
         enable_rich_tracebacks: bool = True,
         file_logging: bool = True,
+        compact: bool = False,
     ) -> None:
         """
         Configure application logging with professional Rich formatting.
+
+        *compact* is the CLI's default view (see ``ducta.console.ux.view``):
+        the terminal shows the CLI's own messages, the engine's warnings and
+        errors, and what the user's node code logs — without the time and level
+        prefix. The log file still gets everything.
         """
         logger.enable("ducta")  # Library is disabled by default (see ducta/__init__.py)
         logger.remove()
@@ -172,6 +181,21 @@ class RichLoggerManager:
                 max_frames=10,
             )
 
+        if compact:
+            logger.add(
+                _compact_sink,
+                format="{message}",
+                level=console_level,
+                filter=_compact_filter,
+                colorize=False,
+            )
+        else:
+            cls._add_rich_handler(console_level, verbose, show_path)
+
+        cls._add_file_sink(log_file, file_logging, console_level)
+
+    @classmethod
+    def _add_rich_handler(cls, console_level: str, verbose: bool, show_path: bool) -> None:
         rich_handler = RichHandler(
             console=cls.console,
             show_time=False,
@@ -193,16 +217,14 @@ class RichLoggerManager:
             colorize=False,  # Rich handles colors via markup
         )
 
-        # The default sink is deliberately project-relative: `ducta template`
-        # scaffolds a `logs/` directory and gitignores it, so a run inside a
-        # project leaves its log next to the data it produced. That only holds
-        # for commands that *operate on* a project. `ducta template` runs before
-        # one exists, so creating `./logs/ducta.log` there wrote into whatever
-        # directory the user happened to be standing in — and then
-        # `validate_template_arguments` saw that very directory as "not empty"
-        # and refused `--output-path .`, in a directory that had been empty a
-        # moment earlier. Such commands pass file_logging=False; an explicit
-        # --log-file still wins, since that names a destination outright.
+    @classmethod
+    def _add_file_sink(
+        cls, log_file: Optional[str], file_logging: bool, console_level: str
+    ) -> None:
+        # The CLI always names the file: the project's `logs/ducta.log`, or none
+        # outside a project (see `cli._log_file_for`). The cwd-relative default
+        # below is for direct callers only. *file_logging* turns that default
+        # off; an explicit *log_file* still wins, since it names a destination.
         if not file_logging and not log_file:
             logger.debug("Rich logger initialized (console only, console_level={})", console_level)
             return
@@ -232,6 +254,50 @@ class RichLoggerManager:
     def get_lock(cls) -> threading.RLock:
         """Get the thread-safe lock for console operations."""
         return cls._lock
+
+
+#: Below WARNING, the engine speaks to the log file, not the terminal.
+_WARNING_NO = 30
+
+
+def _compact_filter(record: Dict[str, Any]) -> bool:
+    """What the compact terminal shows (the log file is not filtered)."""
+    extra = record["extra"]
+    if extra.get("console") is False or extra.get("node_error"):
+        return False  # shown by ux.view instead (a node's error block)
+    if extra.get("console") is True:
+        return True
+    name = record["name"] or ""
+    if name.startswith("ducta.console"):
+        return True  # the CLI's own messages are written for this terminal
+    if name == "ducta" or name.startswith("ducta."):
+        return record["level"].no >= _WARNING_NO
+    return True  # the user's node code: what it logs is about their data
+
+
+_COMPACT_STYLES = {
+    "SUCCESS": ("✓ ", "bold green", ""),
+    "WARNING": ("! ", "bold yellow", ""),
+    "ERROR": ("✗ ", "bold red", ""),
+    "CRITICAL": ("✗ ", "bold red", "bold"),
+    "DEBUG": ("", "dim", "dim"),
+}
+
+
+def _compact_sink(message: Any) -> None:
+    record = message.record
+    level = record["level"].name
+    name = record["name"] or ""
+    text = Text()
+    if not (name == "ducta" or name.startswith("ducta.")) and level in ("INFO", "DEBUG"):
+        text.append("    · ", style="dim")  # under the node that logged it
+        text.append(record["message"], style="dim")
+    else:
+        prefix, prefix_style, body_style = _COMPACT_STYLES.get(level, ("", "", ""))
+        text.append(prefix, style=prefix_style)
+        text.append(record["message"], style=body_style)
+    with RichLoggerManager.get_lock():
+        RichLoggerManager.console.print(text, soft_wrap=True)
 
 
 def print_execution_header(
@@ -294,6 +360,10 @@ def print_process_separator(
     """
     Print a simple text separator for process groups without borders.
     """
+    from ducta.console.ux import view
+
+    if view.is_compact():
+        return  # banners are classic-view furniture
     if console is None:
         console = RichLoggerManager.console
 
@@ -314,6 +384,11 @@ def print_process_separator(
 
 def log_node_start(node_name: str, node_type: str = "") -> None:
     """Log node execution start with elegant formatting."""
+    from ducta.console.ux import view
+
+    if view.is_compact():
+        view.node_started(node_name)  # its line is printed when it ends
+        return
     console = RichLoggerManager.get_console()
 
     line = Text("  ")
@@ -325,8 +400,22 @@ def log_node_start(node_name: str, node_type: str = "") -> None:
     console.print(line)
 
 
-def log_node_complete(node_name: str, duration: float = 0.0, records: int = 0) -> None:
-    """Log node execution completion with metrics."""
+def log_node_complete(
+    node_name: str,
+    duration: float = 0.0,
+    records: int = 0,
+    outputs: Optional[List[Tuple[str, Optional[int]]]] = None,
+) -> None:
+    """Log node execution completion with metrics.
+
+    *outputs* — ``(dataset, rows)`` for each dataset the node wrote — is what
+    the compact view shows on the node's line.
+    """
+    from ducta.console.ux import view
+
+    if view.is_compact():
+        view.node_finished(node_name, duration, outputs or [])
+        return
     console = RichLoggerManager.get_console()
 
     line = Text("  ")

@@ -14,6 +14,7 @@ import {
   watchAIJobInBackground,
   type AIDocsGaps,
   type AIDraft,
+  type AIExtensionAdded,
   type AIDraftSummary,
   type AIJobRequest,
 } from "../../api/aiApi";
@@ -36,6 +37,14 @@ import "./AIDraftDialog.css";
 export type AIDraftMode =
   | { kind: "new" }
   | { kind: "fix"; pipeline: string; executionId?: string; problems?: number; note?: string }
+  | {
+      kind: "extend";
+      pipeline: string;
+      /** The pipeline's nodes and what each writes, shown as what the model reads. */
+      nodes?: { name: string; outputs: string[] }[];
+      /** A request to start from (an idea from the pipeline's review). */
+      request?: string;
+    }
   | { kind: "quality"; pipeline: string; node: string; env: string }
   | { kind: "docs"; gaps?: AIDocsGaps };
 
@@ -125,13 +134,17 @@ export function AIDraftDialog({
             ? `Blueprint · ${opened.blueprint?.name ?? opened.request}`
             : opened?.kind === "architect"
               ? `Built · ${opened.request}`
-              : "Draft"
+              : opened?.kind === "extend"
+                ? `New nodes for ${opened.pipeline}`
+                : "Draft"
           : step === "progress" && job?.kind === "architect_plan"
             ? "Designing with Ducta Architect"
             : step === "progress" && job?.kind === "architect_build"
               ? "Building with Ducta Architect"
               : mode.kind === "fix"
                 ? `Fix ${mode.pipeline} with AI`
+                : mode.kind === "extend"
+                  ? `Add nodes to ${mode.pipeline}`
                 : mode.kind === "quality"
                   ? `Propose checks for ${mode.pipeline}.${mode.node}`
                   : mode.kind === "docs"
@@ -232,13 +245,15 @@ function DescribeStep({
   onCancel: () => void;
   onShowDrafts: () => void;
 }) {
-  const [text, setText] = useState(mode.kind === "fix" ? (mode.note ?? "") : "");
+  const [text, setText] = useState(
+    mode.kind === "fix" ? (mode.note ?? "") : mode.kind === "extend" ? (mode.request ?? "") : "",
+  );
   const { data: settings, isLoading } = useAISettings();
   const { data: drafts } = useAIDrafts(projectId);
   const ready = Boolean(settings?.configured && settings.model);
   const isFix = mode.kind === "fix";
-  // A note is optional for everything but a new pipeline.
-  const optional = mode.kind !== "new";
+  // A note is optional for everything but a new pipeline and new nodes.
+  const optional = mode.kind !== "new" && mode.kind !== "extend";
   const [env, setEnv] = useState(mode.kind === "quality" ? mode.env : "");
   // A new pipeline, or several designed first (Ducta Architect).
   const [scale, setScale] = useState<"one" | "several">("one");
@@ -255,6 +270,8 @@ function DescribeStep({
     onSubmit(
       mode.kind === "fix"
         ? { kind: "fix", pipeline: mode.pipeline, note, execution_id: mode.executionId }
+        : mode.kind === "extend"
+          ? { kind: "extend", pipeline: mode.pipeline, request: text.trim() }
         : mode.kind === "quality"
           ? { kind: "quality", pipeline: mode.pipeline, node: mode.node, env, note }
           : mode.kind === "docs"
@@ -275,6 +292,23 @@ function DescribeStep({
               ? `${mode.problems === 1 ? "The problem the validator reports is" : `The ${mode.problems} problems the validator reports are`} sent along, with the pipeline's file and the code its nodes run.`
               : "The pipeline's file and the code its nodes run are sent along."}
         </p>
+      )}
+      {mode.kind === "extend" && (
+        <>
+          <p className="ai-context">
+            The model reads this pipeline — its file, the code its nodes run and the catalog — and continues it.
+          </p>
+          {mode.nodes && mode.nodes.length > 0 && (
+            <ul className="ai-node-chips" aria-label="Its nodes">
+              {mode.nodes.map((n) => (
+                <li key={n.name}>
+                  {n.name}
+                  {n.outputs.length ? ` → ${n.outputs.join(", ")}` : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
       {mode.kind === "quality" && (
         <div className="ai-context ai-env">
@@ -319,7 +353,11 @@ function DescribeStep({
         </fieldset>
       )}
       <label className="projects-modal__label" htmlFor="ai-request">
-        {optional ? "Anything the model should know? (optional)" : "Describe it"}
+        {optional
+          ? "Anything the model should know? (optional)"
+          : mode.kind === "extend"
+            ? "What should the new nodes do?"
+            : "Describe it"}
       </label>
       <textarea
         id="ai-request"
@@ -330,6 +368,8 @@ function DescribeStep({
         placeholder={
           isFix
             ? "Tuition comes in cents"
+            : mode.kind === "extend"
+              ? "After clean_orders, a node that keeps one row per customer (latest order wins)"
             : mode.kind === "quality"
               ? "order_id is the key"
               : mode.kind === "docs"
@@ -348,6 +388,8 @@ function DescribeStep({
         <p className="projects-modal__hint">
           {isFix
             ? "It may change this pipeline's file and its modules, nothing else."
+            : mode.kind === "extend"
+              ? "It may add nodes, functions and datasets to this pipeline. Existing nodes and functions stay as they are — Ducta checks it before you see the draft."
             : mode.kind === "quality"
               ? "It may change this node's quality block, nothing else. The checks are run on the data before you see them."
               : several
@@ -383,6 +425,7 @@ function DescribeStep({
 const SUBMIT: Record<AIDraftMode["kind"], string> = {
   new: "Generate draft",
   fix: "Draft a fix",
+  extend: "Draft the nodes",
   quality: "Propose checks",
   docs: "Propose descriptions",
 };
@@ -604,6 +647,7 @@ function ReviewStep({
   const count = draft.files.length;
   // Built from a blueprint: changes are asked of the blueprint, then built again.
   const built = draft.kind === "architect";
+  const extension = draft.kind === "extend" ? draft.added : null;
   const blueprintId = built ? (draft.target ?? null) : null;
 
   return (
@@ -619,6 +663,7 @@ function ReviewStep({
       <div className={`ai-review${built ? " ai-review--built" : ""}`}>
         {built && <ModulesList attempts={draft.attempts} />}
         <nav className="ai-files" aria-label="Files in the draft">
+          {extension && <ExtensionSummary added={extension} ok={draft.ok} />}
           {draft.file_contents.map((f) => (
             <button
               key={f.path}
@@ -878,6 +923,7 @@ function DraftsStep({
 
 export function draftLabel(d: AIDraftSummary): string {
   if (d.kind === "fix") return `Fix · ${d.pipeline}`;
+  if (d.kind === "extend") return `Add nodes · ${d.pipeline}`;
   if (d.kind === "quality") return `Checks · ${d.pipeline}.${d.target}`;
   if (d.kind === "docs") return "Descriptions";
   if (d.kind === "blueprint") return "Blueprint";
@@ -886,6 +932,50 @@ export function draftLabel(d: AIDraftSummary): string {
     return `Architect · ${n} pipeline${n === 1 ? "" : "s"}`;
   }
   return "New pipeline";
+}
+
+/** What an extension adds, and what Ducta checked of it (P3). */
+function ExtensionSummary({ added, ok }: { added: AIExtensionAdded; ok: boolean }) {
+  return (
+    <div className="ai-added">
+      <h3>What it adds</h3>
+      <ul>
+        {added.nodes.map((n) => (
+          <li key={n.name}>
+            <span className="ai-added__kind">New node</span> <code>{n.name}</code>
+            <span className="ai-dim ai-fine">
+              {n.inputs.length ? `reads ${n.inputs.join(", ")}` : "reads nothing"}
+              {n.outputs.length ? ` → writes ${n.outputs.join(", ")}` : ""}
+            </span>
+          </li>
+        ))}
+        {added.datasets.map((d) => (
+          <li key={d}>
+            <span className="ai-added__kind">New dataset</span> <code>{d}</code>
+          </li>
+        ))}
+        {added.functions.map((f) => (
+          <li key={f}>
+            <span className="ai-added__kind">New function</span> <code>{f}</code>
+          </li>
+        ))}
+      </ul>
+      {ok && (
+        <>
+          <h3>Checked by Ducta</h3>
+          <ul className="ai-added__checks">
+            <li>
+              <IconCircleCheck size={14} className="ai-ok" aria-hidden="true" /> Existing nodes and functions unchanged
+            </li>
+            <li>
+              <IconCircleCheck size={14} className="ai-ok" aria-hidden="true" /> No I/O, collect() or credentials in the
+              new code
+            </li>
+          </ul>
+        </>
+      )}
+    </div>
+  );
 }
 
 function DraftState({ draft }: { draft: AIDraftSummary }) {

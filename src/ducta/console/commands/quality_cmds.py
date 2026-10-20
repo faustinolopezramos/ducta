@@ -162,8 +162,12 @@ class QualityCommands:
             else:
                 print(json.dumps(report, indent=2, default=str))
 
+        # A failing check is a validation failure, as for sanity checks and
+        # `config validate` — not the "unexpected error" code 1.
         return (
-            ExitCode.SUCCESS.value if report.get("passed", False) else ExitCode.GENERAL_ERROR.value
+            ExitCode.SUCCESS.value
+            if report.get("passed", False)
+            else ExitCode.VALIDATION_ERROR.value
         )
 
     @staticmethod
@@ -239,7 +243,8 @@ class QualityCommands:
             )
         except Exception as e:
             logger.error("Validation failed: {}", e)
-            return ExitCode.GENERAL_ERROR.value
+            # No project here is a configuration problem (2), as everywhere else.
+            return int(getattr(e, "exit_code", ExitCode.GENERAL_ERROR.value))
 
         if not result["valid"]:
             logger.error("Quality config validation FAILED for node '{}'", node_name)

@@ -88,7 +88,7 @@ edit over long explanations.
 | Structured Streaming pipelines | [streaming](references/streaming.md) |
 | the web UI, the API server, auth and permissions | [server-and-ui](references/server-and-ui.md) |
 | run on Databricks / Unity Catalog | [databricks](references/databricks.md) |
-| draft or fix pipelines with `ducta ai` | [ai-builder](references/ai-builder.md) |
+| draft, fix, extend (add nodes) or review pipelines with `ducta ai` | [ai-builder](references/ai-builder.md) |
 | design several pipelines, or handle failed/late runs (Architect, Sentinel) | [agents](references/agents.md) |
 | conventions, testing, production readiness | [best-practices](references/best-practices.md) |
 | an error message or something that does not work | [troubleshooting](references/troubleshooting.md) |
@@ -145,12 +145,14 @@ profile, environments) to copy patterns from.
    `ducta start --env dev --pipeline NAME --start-date YYYY-MM-DD --end-date YYYY-MM-DD`.
 3. `--validate-only`, `--dry-run` and `--node NAME` narrow a first run.
 4. Read the exit code (0 ok, 2 configuration, 3 arguments, 4 the run failed,
-   5 missing extra, 7 locked — retry later). See [execution](references/execution.md).
+   5 nodes skipped for a missing input, 7 locked — retry later). See [execution](references/execution.md).
 
 ### Diagnose a failed run
 
-1. Re-run the failing node alone with `--node NAME --verbose`, or read the log the
-   user has.
+1. Re-run the failing node alone with `-n NAME -v`, or read `logs/ducta.log` (every
+   line, at debug level). With `DUCTA_CONSOLE=compact` a failure ends with one block —
+   the error, the file and line of the user's code, the command to re-run the node —
+   and the full traceback goes to `logs/last-error.txt`.
 2. Match the error in [troubleshooting](references/troubleshooting.md) (Java/Arrow,
    missing extra, import errors, dates, locks, quality gates).
 3. `ducta certify list --env dev` and `ducta certify show --run-id ID` show what ran,

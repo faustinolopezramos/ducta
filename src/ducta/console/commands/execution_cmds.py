@@ -29,6 +29,21 @@ from ducta.console.config import ConfigManager
 from ducta.console.core import CLIConfig, ExitCode
 
 
+def _trial_outcome(future, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """A worker's answer, or a failed trial when the worker process died."""
+    try:
+        return future.result()
+    except Exception as e:  # noqa: BLE001 — a dead worker is one failed trial
+        return {
+            "index": payload["trial_index"],
+            "params": payload["params"],
+            "metrics": {},
+            "gate_blocked": [],
+            "failed": True,
+            "reason": f"worker process died: {type(e).__name__}: {e}",
+        }
+
+
 class ExecutionCommands:
     """Pipeline execution commands (ducta start).
 
@@ -81,11 +96,13 @@ class ExecutionCommands:
 
         self.config = self._parse_config(parsed_args)
         logger.info("Starting Ducta pipeline execution")
-        self._try_print_header()
 
         self.config_manager = ConfigManager(
             base_path=getattr(parsed_args, "base_path", self.config.base_path),
         )
+        # After the project is found: a header for a run that cannot start
+        # (no project here) only delayed the error that says so.
+        self._try_print_header()
         self.config_manager.change_to_config_directory()
         context_init = execution.ContextInitializer(self.config_manager)
 
@@ -136,7 +153,12 @@ class ExecutionCommands:
             quiet=getattr(parsed_args, "quiet", False),
             model_version=getattr(parsed_args, "model_version", None),
             hyperparams=getattr(parsed_args, "hyperparams", None),
-            sweep=getattr(parsed_args, "sweep", None),
+            # Resolved now: the command moves to the project root before reading it.
+            sweep=(
+                str(Path(parsed_args.sweep).expanduser().resolve())
+                if getattr(parsed_args, "sweep", None)
+                else None
+            ),
             search=getattr(parsed_args, "search", False),
             search_metric=getattr(parsed_args, "search_metric", None),
             search_trials=getattr(parsed_args, "search_trials", None),
@@ -153,6 +175,18 @@ class ExecutionCommands:
 
     def _try_print_header(self) -> None:
         try:
+            from ducta.console.ux import view
+
+            if view.is_compact():
+                view.print_header(
+                    self.config.pipeline,
+                    self.config.env,
+                    self.config_manager.project_root,
+                    start_date=self.config.start_date,
+                    end_date=self.config.end_date,
+                    node=self.config.node,
+                )
+                return
             from ducta.console.ux.rich_logger import print_execution_header
 
             print_execution_header(
@@ -194,7 +228,7 @@ class ExecutionCommands:
         if self.config.node:
             if pipeline_nodes and self.config.node not in pipeline_nodes:
                 logger.warning(
-                    f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
+                    "Node '{}' is not part of pipeline '{}'", self.config.node, self.config.pipeline
                 )
             else:
                 logger.info("  Single node execution: {}", self.config.node)
@@ -282,6 +316,30 @@ class ExecutionCommands:
                 logger.exception("Full traceback:")
             return ExitCode.GENERAL_ERROR.value
 
+    def _node_is_known(self, exec_obj) -> bool:
+        """``--node`` names a node the project defines; say so and which, when not.
+
+        A node of another pipeline still runs (the engine finds it in the
+        project), so that is only a warning. A name the project does not
+        define at all used to get the same warning, then start the run and
+        fail inside it with "Unknown Error in node".
+        """
+        node, pipeline = self.config.node, self.config.pipeline
+        pipeline_nodes = exec_obj.get_pipeline_info(pipeline).get("nodes", [])
+        if not pipeline_nodes or node in pipeline_nodes:
+            return True
+        known = getattr(exec_obj.context, "nodes_config", None) or {}
+        if node in known:
+            logger.warning("Node '{}' is not part of pipeline '{}'", node, pipeline)
+            return True
+        import difflib
+
+        close = difflib.get_close_matches(node, pipeline_nodes, n=1)
+        hint = f" Did you mean '{close[0]}'?" if close else ""
+        logger.error("Node '{}' does not exist.{}", node, hint)
+        logger.info("Nodes of '{}': {}", pipeline, ", ".join(pipeline_nodes))
+        return False
+
     def _handle_dry_run(self, context_init) -> int:
         logger.info("DRY-RUN MODE: Pipeline will not be executed, only validated and logged")
         context = context_init.initialize(self.config.env)
@@ -295,6 +353,8 @@ class ExecutionCommands:
                 logger.info("Available: {}", ", ".join(available))
             else:
                 logger.info("No pipelines are defined in this configuration")
+            return ExitCode.VALIDATION_ERROR.value
+        if self.config.node and not self._node_is_known(exec_obj):
             return ExitCode.VALIDATION_ERROR.value
         try:
             pipeline_info = exec_obj.get_pipeline_info(self.config.pipeline)
@@ -323,13 +383,8 @@ class ExecutionCommands:
                 logger.info("No pipelines are defined in this configuration")
             return ExitCode.VALIDATION_ERROR.value
 
-        if self.config.node:
-            pipeline_info = exec_obj.get_pipeline_info(self.config.pipeline)
-            pipeline_nodes = pipeline_info.get("nodes", [])
-            if pipeline_nodes and self.config.node not in pipeline_nodes:
-                logger.warning(
-                    f"Node '{self.config.node}' may not exist in pipeline '{self.config.pipeline}'"
-                )
+        if self.config.node and not self._node_is_known(exec_obj):
+            return ExitCode.VALIDATION_ERROR.value
 
         base_hyperparams: Optional[Dict[str, Any]] = None
         if self.config.hyperparams:
@@ -345,17 +400,29 @@ class ExecutionCommands:
         if self.config.sweep:
             return self._execute_sweep(exec_obj, base_hyperparams)
 
-        result = exec_obj.run_pipeline_chain(
-            pipeline_name=self.config.pipeline,
-            node_name=self.config.node,
-            start_date=self.config.start_date,
-            end_date=self.config.end_date,
-            model_version=self.config.model_version,
-            hyperparams=base_hyperparams,
-            execution_mode=self.config.execution_mode,
-            reuse_upstream=self.config.reuse_upstream,
-            rerun_all=self.config.rerun_all,
-        )
+        import time
+
+        from ducta.console.ux import view
+
+        all_nodes = exec_obj.get_pipeline_info(self.config.pipeline).get("nodes", []) or []
+        view.reset_run(all_nodes, self._output_names(exec_obj, all_nodes))
+        started = time.monotonic()
+        try:
+            result = exec_obj.run_pipeline_chain(
+                pipeline_name=self.config.pipeline,
+                node_name=self.config.node,
+                start_date=self.config.start_date,
+                end_date=self.config.end_date,
+                model_version=self.config.model_version,
+                hyperparams=base_hyperparams,
+                execution_mode=self.config.execution_mode,
+                reuse_upstream=self.config.reuse_upstream,
+                rerun_all=self.config.rerun_all,
+            )
+        except Exception as e:
+            if not view.is_compact():
+                raise
+            return self._report_run_failure(e, all_nodes)
 
         from ducta.console.execution import _stay_in_foreground, report_run_outcome
         from ducta.core.results import RunStatus
@@ -366,7 +433,44 @@ class ExecutionCommands:
             return _stay_in_foreground(
                 exec_obj, self.config.pipeline, result.streaming_execution_ids[0]
             )
-        return report_run_outcome(result, pipeline=self.config.pipeline)
+        return report_run_outcome(
+            result, pipeline=self.config.pipeline, elapsed=time.monotonic() - started
+        )
+
+    @staticmethod
+    def _output_names(exec_obj, nodes: List[str]) -> List[str]:
+        """Every dataset the pipeline's nodes write (for the compact view's columns)."""
+        configs = getattr(exec_obj.context, "nodes_config", None) or {}
+        names: List[str] = []
+        for node in nodes:
+            outputs = (configs.get(node) or {}).get("output") or []
+            names += [outputs] if isinstance(outputs, str) else [str(o) for o in outputs]
+        return names
+
+    def _report_run_failure(self, error: Exception, all_nodes: List[str]) -> int:
+        """The compact view of a run that raised: one block, then the exit code."""
+        from ducta.console.cli import _report_error
+        from ducta.console.ux import view
+
+        logger.bind(console=False).opt(exception=error).error("Run failed: {}", error)
+        failed_nodes = getattr(error, "failed_nodes", None)
+        if failed_nodes or view.nodes_seen()[1]:
+            project = self.config_manager.project_root
+            log_file = None
+            if project is not None:
+                log_file = self.config.log_file or (project / "logs" / "ducta.log")
+            view.print_run_failure(
+                error,
+                pipeline=self.config.pipeline,
+                env=self.config.env,
+                project=project,
+                all_nodes=all_nodes,
+                log_file=str(log_file) if log_file else None,
+            )
+        else:
+            # Not a node's failure (a lock, a configuration problem): say it plainly.
+            _report_error(str(error), list(getattr(error, "hints", None) or []))
+        return int(getattr(error, "exit_code", ExitCode.EXECUTION_ERROR.value))
 
     def _execute_sweep(self, exec_obj, base_hyperparams) -> int:
         from ducta.core.sweep import SweepError, expand_sweep, load_sweep_spec, new_sweep_id
@@ -459,7 +563,8 @@ class ExecutionCommands:
         )
         if failures:
             logger.error("Sweep completed with {} failed run(s)", failures)
-            return ExitCode.GENERAL_ERROR.value
+            # The code a failed `ducta start` run exits with.
+            return ExitCode.EXECUTION_ERROR.value
         logger.success("Ducta sweep execution completed successfully")
         return ExitCode.SUCCESS.value
 
@@ -473,11 +578,15 @@ class ExecutionCommands:
             )
         except Exception as e:
             logger.debug("Could not resolve output_path for trial isolation: {}", e)
+        # The project root, not --base-path as typed: a relative --base-path was
+        # relative to where the user stood, and the workers start from the
+        # project root this process has already moved to.
+        project_root = self._config_manager.project_root if self._config_manager else None
         return {
             "env": self.config.env,
             "pipeline": self.config.pipeline,
             "base_output_path": str(base_output_path) if base_output_path else None,
-            "base_path": self.config.base_path,
+            "base_path": str(project_root) if project_root else self.config.base_path,
             "node": self.config.node,
             "start_date": self.config.start_date,
             "end_date": self.config.end_date,
@@ -520,55 +629,48 @@ class ExecutionCommands:
         )
         first_payload = build_payloads([first_trial], search_id=search_id, **worker_args)[0]
         first_payload["output_path"] = shared_path
-        first_outcome = run_trial_in_process(first_payload)
-        outcomes = [first_outcome]
-
-        read_fallback_paths: List[str] = []
-        if first_outcome.get("failed"):
-            logger.warning(
-                "Trial {} failed ({}); the rest will run without the read fallback "
-                "(each trial resolves its inputs entirely on its own).",
-                first_trial["index"],
-                first_outcome.get("reason"),
-            )
-        else:
-            read_fallback_paths = [shared_path]
-
-        if not rest_trials:
-            return sorted(outcomes, key=lambda o: o.get("index") or 0)
-
-        payloads = build_payloads(
-            rest_trials,
-            search_id=search_id,
-            read_fallback_paths=read_fallback_paths,
-            **worker_args,
-        )
-        logger.info(
-            "Running {} more trial(s) across {} worker process(es); each writes to "
-            "its own directory under {}/_trials/{}",
-            len(payloads),
-            workers,
-            worker_args["base_output_path"],
-            search_id,
-        )
 
         with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as pool:
+            # Trial 1 runs alone, but in a worker like the rest. A trial takes
+            # over the process it runs in — it removes every log sink,
+            # redirects stdout and changes directory — so running it here left
+            # the CLI with no logging at all for the rest of the sweep.
+            first_outcome = _trial_outcome(
+                pool.submit(run_trial_in_process, first_payload), first_payload
+            )
+            outcomes = [first_outcome]
+
+            read_fallback_paths: List[str] = []
+            if first_outcome.get("failed"):
+                logger.warning(
+                    "Trial {} failed ({}); the rest will run without the read fallback "
+                    "(each trial resolves its inputs entirely on its own).",
+                    first_trial["index"],
+                    first_outcome.get("reason"),
+                )
+            else:
+                read_fallback_paths = [shared_path]
+
+            if not rest_trials:
+                return outcomes
+
+            payloads = build_payloads(
+                rest_trials,
+                search_id=search_id,
+                read_fallback_paths=read_fallback_paths,
+                **worker_args,
+            )
+            logger.info(
+                "Running {} more trial(s) across {} worker process(es); each writes to "
+                "its own directory under {}/_trials/{}",
+                len(payloads),
+                workers,
+                worker_args["base_output_path"],
+                search_id,
+            )
             futures = {pool.submit(run_trial_in_process, payload): payload for payload in payloads}
             for future in as_completed(futures):
-                payload = futures[future]
-                try:
-                    outcomes.append(future.result())
-                except Exception as e:  # noqa: BLE001 — a dead worker is one failed trial
-                    outcomes.append(
-                        {
-                            "index": payload["trial_index"],
-                            "params": payload["params"],
-                            "metrics": {},
-                            "gate_blocked": [],
-                            "failed": True,
-                            "reason": f"worker process died: {type(e).__name__}: {e}",
-                        }
-                    )
+                outcomes.append(_trial_outcome(future, futures[future]))
         return sorted(outcomes, key=lambda o: o.get("index") or 0)
 
     @staticmethod
@@ -587,6 +689,11 @@ class ExecutionCommands:
 
     def _run_trial(self, exec_obj, hyperparams: Dict[str, Any], trial_index: int):
         """Execute one sweep/search trial."""
+        from ducta.console.ux import view
+
+        # Each trial is a run of its own: its own node lines and check counts.
+        nodes = exec_obj.get_pipeline_info(self.config.pipeline).get("nodes", []) or []
+        view.reset_run(nodes, self._output_names(exec_obj, nodes))
         if not self.config.sweep_reuse_upstream:
             return exec_obj.run_pipeline(
                 pipeline_name=self.config.pipeline,
@@ -718,11 +825,11 @@ class ExecutionCommands:
                 "training node logs that metric to the experiment tracker.",
                 metric,
             )
-            return ExitCode.GENERAL_ERROR.value
+            return ExitCode.EXECUTION_ERROR.value
 
         if outcome.failures:
             logger.error("Search completed with {} failed trial(s)", outcome.failures)
-            return ExitCode.GENERAL_ERROR.value
+            return ExitCode.EXECUTION_ERROR.value
         logger.success("Ducta search execution completed successfully")
         return ExitCode.SUCCESS.value
 

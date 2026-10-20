@@ -593,7 +593,9 @@ The Ducta registry provides version-controlled model management. Newly registere
    ducta model gc --dry-run --env prod
 
 ``--env`` finds the registry of that environment (its ``settings.mlops_path``) and
-its promotion policy; without it, ``ducta model`` looks in ``./mlops_data``.
+its promotion policy; without it, ``ducta model`` looks in ``./mlops_data`` and
+applies the base project's policy. ``gc`` keeps what ``settings.mlops.gc`` allows
+(``max_versions_per_model``, ``model_retention_days``).
 
 Promotion to ``production`` is checked against your promotion policy; use
 ``--force`` to bypass it (the bypass is audit-logged). See :doc:`cli_usage` for

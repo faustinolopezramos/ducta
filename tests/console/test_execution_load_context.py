@@ -48,7 +48,7 @@ class TestLoadContext:
         loader.assert_called_once_with(project.resolve(), "base")
 
     def test_a_directory_without_a_project_is_refused(self, tmp_path, loader):
-        with pytest.raises(ConfigurationError, match="No Ducta project found"):
+        with pytest.raises(ConfigurationError, match="No Ducta project"):
             load_context(tmp_path)
         loader.assert_not_called()
 

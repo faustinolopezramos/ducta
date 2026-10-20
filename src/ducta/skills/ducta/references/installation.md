@@ -31,7 +31,7 @@ else is an extra — install only what the project needs:
 | `database` | SQLAlchemy and Postgres/SQLite drivers | persisting server history in a database |
 | `mlops` | mlflow, scikit-learn, numpy, scipy, optuna | ML pipelines, `ducta experiment`, `ducta model` |
 | `boost` | xgboost, lightgbm | gradient-boosting models, native model formats |
-| `ai` | httpx, anthropic, keyring | `ducta ai` (also needs `api`) |
+| `ai` | httpx, anthropic, keyring, ruamel.yaml | `ducta ai` |
 | `databricks` | databricks-connect | `mode: databricks` |
 | `monitoring` | prometheus-client | metrics export |
 | `all` | every extra above except `databricks` | |

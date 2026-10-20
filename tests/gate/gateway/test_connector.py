@@ -300,7 +300,8 @@ class TestJDBCConnectorTestConnection:
     def test_no_active_spark(self, MockSS):
         MockSS.getActiveSession.return_value = None
         c = JDBCConnector("postgresql", "h", 1, "d", "u", "p")
-        assert c.test_connection() is True
+        # Nothing was tested: None, not the True that read as "it works".
+        assert c.test_connection() is None
 
     @patch("pyspark.sql.SparkSession")
     def test_connection_success(self, MockSS, spark_session):

@@ -46,6 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local model proposes; a remote one needs `sentinel.propose.remote: true`. In the
   UI: *Runs → Reliability*, an incident drawer, and a note on each failed run;
   Architect is *Build with AI → Several pipelines — design first*.
+- **`ducta ai extend` and pipeline reviews: grow a pipeline, review all of it.**
+  `ducta ai extend PIPELINE "…"` drafts new nodes, functions and datasets for an
+  existing pipeline; Ducta refuses — without a model, and again at `apply`, even
+  forced — any change to an existing node, key, function or import, and holds the
+  added code to the review's rules (no I/O, `collect()` or credentials). `ducta ai
+  review PIPELINE` (no node) reviews the whole pipeline: every node's checks, the
+  pipeline's own (owner, descriptions, data checks), the model's findings tied to a
+  node and checked, and ideas for new nodes. AI job kinds `extend` and
+  `review_pipeline`; `GET`/`POST …/ai/reviews/{pipeline}[/checks]`. In the UI:
+  *Review pipeline* and *Add nodes with AI* on a pipeline; a pipeline built with
+  AI opens with its review.
 - **Both agents for Claude Code**: `ducta skill install --agents` adds
   `ducta-architect` and `ducta-sentinel` to `.claude/agents/`; the skill's new
   `references/agents.md` documents them for any assistant.
@@ -135,6 +146,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An optional compact view of a run** (`DUCTA_CONSOLE=compact`): a header, one
+  line per node (rows written, time, checks passed), a summary with the run's
+  certificate, and for a failure one block with the line of your code that raised
+  it, a hint ("did you mean 'amount'?"), the nodes that did not run and the command
+  to re-run the node; the full error goes to `logs/last-error.txt` and the JVM's
+  own console output is silenced. The classic log stays the default; `-v`/`-q` work
+  before or after the command.
+- **`ducta` alone says where you are and what to run**: the project, its
+  pipelines and environments, and the next commands — or, outside a project, how
+  to create one (it used to log "Unknown subcommand: None" and exit 1).
+  `ducta --help` groups the commands by what they are for; `ducta --version` (and
+  `-V`) prints `ducta X.Y.Z` instead of an ASCII banner; a command group without
+  its command (`ducta config`) lists its commands instead of "required:
+  config_command".
+- **Errors say what to do.** `ducta start` without `--pipeline` lists the
+  project's pipelines; outside a project the CLI says how to create one or point at
+  one, before printing any run header; `config validate` lists each problem under
+  its pipeline. `ducta init project` prints what it generated and the first
+  commands as one block.
+- **`-e` and `-p` work in every command** that takes `--env` or `--pipeline`
+  (`ducta config validate -e dev` was "unrecognized arguments").
+- **CLI exit codes are consistent.** A failed `--sweep`/`--search` trial exits `4`, as
+  a failed run does (was `1`); a failing `quality run` check exits `3`, as sanity
+  checks and `config validate` do (was `1`); `quality validate-config` outside a
+  project exits `2`; `ducta ai apply` without a terminal and without `--yes` exits `3`
+  (it wrote nothing; was `0`).
+- **`ducta init ingestion test` exits `5` when it could not try the connection** and
+  `4` when it failed. Testing needs a Spark session, which the CLI does not start.
+- **CLI logs go to the project's `logs/ducta.log`**, wherever in the project the
+  command runs or whatever `--base-path` names; outside a project (and for
+  `skill`) there is no log file. Output is coloured only on a terminal
+  (`FORCE_COLOR=1` keeps it in a pipe).
+- **`--base-path` everywhere it makes sense**: after the `config` subcommand
+  (`ducta config validate --base-path p`, not only `ducta config --base-path p
+  validate`) and on `certify list/show/verify/diff`.
+- **`ducta[ai]` no longer needs `ducta[api]`**: it adds `ruamel.yaml`, and the
+  shared services import FastAPI only where a response is built.
+- **`ducta.console` exports what `__all__` names**: the argument validators stay in
+  `ducta.console.validation` (`from ducta.console import *` raised). The unused
+  `validate_mode`, `validate_format` and `validate_timeout` were removed.
 - **`ducta.MLNodeContext` is public** — the type of the `ml_context` an ML node
   receives, as `docs/mlops.rst` already imported it.
 
@@ -165,6 +216,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per environment every time a project was validated).
 
 ### Fixed
+
+- **The CLI kept logging after a parallel sweep's first trial.** Trial 1 ran in the
+  CLI's own process, and a trial removes every log sink: the rest of the sweep, and
+  its summary, printed nothing and wrote nothing to the log file. Every trial now
+  runs in a worker.
+- **`ducta init ingestion test` and `setup` reported "✓ Connection successful!" for a
+  connection nobody had contacted** — with no Spark session the test was skipped and
+  counted as a pass — and a refused connection as "inconclusive". The same swap was
+  in the web app's messages: an untested connection read "Connection verified".
+  `setup` now asks before saving a connection that failed, finds the project from a
+  subfolder, and its next steps show a `kind: ingest` node instead of the format-1
+  `config/node/nodes.yml`. TOML and JSON projects keep their connections where
+  `settings.ingestion.sources_path` says (only `ducta.yaml` was read).
+- **`ducta model promote … production` without `--env` skipped the promotion
+  policy**, and so did any failure to read it. The base project's policy now
+  applies without `--env`; a policy that cannot be read refuses the promotion
+  (exit `2`, `--force` to bypass).
+- **`ducta model gc` ignored `settings.mlops.gc`** (the web app applied it), so a
+  project keeping models longer than the 90-day default lost them. It now applies
+  them, and deletes nothing when the project cannot be read.
+- **`ducta config convert --out DIR` wrote relative to the project root** instead of
+  the current directory; `start --sweep FILE` is read from the current directory too.
+- **`ducta config pipeline-info` exited `0` for a pipeline that does not exist**; it
+  exits `3` with the closest name. `ducta start --node` with a name the project does
+  not define fails before running, with the closest node, instead of failing inside
+  the run with "Unknown Error".
+- **`ducta ai …` found the project only in the current directory**, not above it.
+- **`ducta ui` did not detect TOML or JSON projects.**
+- **`ducta certify` printed the configuration banner once per environment** and
+  never searched an environment the project declares beyond the canonical ones
+  (`qa`, `sandbox_alice`).
+- **`ducta stream stop --timeout` never reached the engine**, which always waited 30
+  seconds.
+- **A missing optional package named the right extra**: `databricks`, `httpx`,
+  `ruamel` and others pointed at the wrong one or at none; `ducta ui` without the
+  `api` extra says `pip install "ducta[api]"` instead of "Ducta-app".
 
 - **No error toast for an answer that is simply "none yet".** Opening a failed run
   showed "No explanation for run …" and a node's *Review* tab "No review of … yet" as

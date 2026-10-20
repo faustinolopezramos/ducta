@@ -119,3 +119,64 @@ class TestIngestionSetupNextStepsMessage:
         assert "nano .env" not in out
         assert "/project/.env" in out
         assert "already saved" in out
+
+
+class TestConnectionTestIsHonest:
+    """Regression: with no Spark session (always, from the CLI) the connector
+    skipped the test and returned True, and `ducta init ingestion test` printed
+    "✓ Connection successful!" with exit 0 for a host nobody had contacted. A
+    real failure returned False and was reported as "inconclusive", also exit 0."""
+
+    def _test(self, verified):
+        service = MagicMock()
+        service.test_connection.return_value = verified
+        with patch("ducta.console.commands.ingestion_setup.IngestionService", return_value=service):
+            return IngestionSetupCommands._test(Namespace(source="db"))
+
+    def test_untested_is_not_a_pass(self):
+        assert self._test(None) == ExitCode.DEPENDENCY_ERROR.value
+
+    def test_failed_is_a_failure(self):
+        assert self._test(False) == ExitCode.EXECUTION_ERROR.value
+
+    def test_verified_passes(self):
+        assert self._test(True) == ExitCode.SUCCESS.value
+
+    def test_setup_asks_before_saving_a_connection_that_failed(self):
+        from ducta.gate.gateway import IngestionServiceError
+
+        service = MagicMock()
+        service.get_connection.side_effect = IngestionServiceError("not found")
+        service.test_spec.return_value = False
+        inputs = iter(["2", "new_db", "localhost", "", "mydb", "myuser", "n"])
+
+        with patch("ducta.console.commands.ingestion_setup.IngestionService", return_value=service):
+            with patch("builtins.input", side_effect=lambda *_: next(inputs)):
+                with patch("getpass.getpass", return_value="pw"):
+                    result = IngestionSetupCommands._setup(Namespace())
+
+        assert result == ExitCode.EXECUTION_ERROR.value
+        service.create_connection.assert_not_called()
+
+    def test_setup_saves_an_untested_connection_without_claiming_it_works(self, capsys):
+        from ducta.gate.gateway import IngestionServiceError
+
+        service = MagicMock()
+        service.get_connection.side_effect = IngestionServiceError("not found")
+        service.test_spec.return_value = None
+        inputs = iter(["2", "new_db", "localhost", "", "mydb", "myuser"])
+
+        with patch("ducta.console.commands.ingestion_setup.IngestionService", return_value=service):
+            with patch("ducta.console.commands.ingestion_setup.logger") as log:
+                with patch("builtins.input", side_effect=lambda *_: next(inputs)):
+                    with patch("getpass.getpass", return_value="pw"):
+                        result = IngestionSetupCommands._setup(Namespace())
+
+        assert result == ExitCode.SUCCESS.value
+        service.create_connection.assert_called_once()
+        logged = " ".join(str(c.args[0]) for c in log.mock_calls if c.args)
+        text = logged + capsys.readouterr().out
+        assert "Not verified" in text
+        assert "successful" not in text.lower()
+        assert "nodes.yml" not in text  # format-1 layout, no longer read
+        assert "kind: ingest" in text

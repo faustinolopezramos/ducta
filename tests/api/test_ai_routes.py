@@ -553,3 +553,29 @@ def test_a_review_needs_its_node(home, project):
         json={"kind": "review", "pipeline": "etl"},
     )
     assert r.status_code == 400
+
+
+# ── drafts need to read the project, not only to use AI ──────────────────────
+
+
+class _AiOnly(User):
+    """Holds ai.use and nothing about reading pipelines."""
+
+    def has_permission(self, permission: str) -> bool:
+        return permission in ("ai.use", "project.read")
+
+
+def test_listing_reading_and_discarding_drafts_need_pipeline_read(home, project):
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: _AiOnly(
+        id="x", username="x", email="x@example.com", roles=["developer"]
+    )
+    client = TestClient(app)
+    src = {"source": str(project)}
+    for method, url in (
+        ("get", "/api/projects/proj/ai/drafts"),
+        ("get", "/api/projects/proj/ai/drafts/20261019-000000-abcdef"),
+        ("delete", "/api/projects/proj/ai/drafts/20261019-000000-abcdef"),
+        ("get", "/api/projects/proj/ai/docs-gaps"),
+    ):
+        assert getattr(client, method)(url, params=src).status_code == 403, url

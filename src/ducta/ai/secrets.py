@@ -52,7 +52,12 @@ def keychain_user(provider: str, base_url: Optional[str] = None) -> str:
     url = (base_url or "").rstrip("/")
     if not url or url == default:
         return provider
-    return f"{provider}@{urlparse(url).netloc or url}"
+    parsed = urlparse(url)
+    # Host and port only: a user or password in the URL is never part of the entry's name.
+    where = (
+        f"{parsed.hostname}:{parsed.port}" if parsed.hostname and parsed.port else parsed.hostname
+    )
+    return f"{provider}@{where or url}"
 
 
 @dataclass(frozen=True)

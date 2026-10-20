@@ -99,17 +99,23 @@ class DuctaError(EngineError):
 
 
 class ConfigurationError(DuctaError):
-    """Raised when configuration is invalid or missing."""
+    """Raised when configuration is invalid or missing (*hints*: as ValidationError's)."""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, hints: Optional[List[Tuple[str, str]]] = None):
         super().__init__(message, ExitCode.CONFIGURATION_ERROR)
+        self.hints: List[Tuple[str, str]] = list(hints or [])
 
 
 class ValidationError(DuctaError):
-    """Raised when input validation fails."""
+    """Raised when input validation fails.
 
-    def __init__(self, message: str):
+    *hints* are ``(label, text)`` lines shown under the message — what exists,
+    what to type — e.g. ``("pipelines", "etl, sales")``.
+    """
+
+    def __init__(self, message: str, hints: Optional[List[Tuple[str, str]]] = None):
         super().__init__(message, ExitCode.VALIDATION_ERROR)
+        self.hints: List[Tuple[str, str]] = list(hints or [])
 
 
 ExecutionError = EngineExecutionError
@@ -271,8 +277,11 @@ class LoggerManager:
         verbose: bool = False,
         quiet: bool = False,
         file_logging: bool = True,
+        compact: bool = False,
     ) -> None:
         """Configure console logging, and a file sink unless *file_logging* is off.
+
+        *compact* is the CLI's default view (``ducta.console.ux.view``).
 
         Both branches default the file sink to a project-relative path, so it has
         to be suppressible for commands that run outside a project — see the note
@@ -286,8 +295,9 @@ class LoggerManager:
                 quiet=quiet,
                 show_time=True,
                 show_path=verbose,
-                enable_rich_tracebacks=True,
+                enable_rich_tracebacks=not compact,
                 file_logging=file_logging,
+                compact=compact,
             )
         else:
             logger.remove()
@@ -300,7 +310,7 @@ class LoggerManager:
             )
             if not file_logging and not log_file:
                 return
-            log_path = Path(log_file) if log_file else Path("logs/log")
+            log_path = Path(log_file) if log_file else Path("logs/ducta.log")
             log_path.parent.mkdir(parents=True, exist_ok=True)
             logger.add(
                 log_path,

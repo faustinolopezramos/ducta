@@ -673,7 +673,12 @@ class Draft:
             for a in data.get("attempts") or []
         ]
         known = set(cls.__dataclass_fields__)
-        return cls(**{k: v for k, v in data.items() if k in known})
+        draft = cls(**{k: v for k, v in data.items() if k in known})
+        # The id names files (the draft's own, an apply's temporary ones): a draft
+        # file anyone could edit does not get to pick a path with it.
+        if not _DRAFT_ID.match(str(draft.id)):
+            raise ValueError(f"'{draft.id}' is not a draft id")
+        return draft
 
 
 _DRAFT_ID = re.compile(r"^[0-9A-Za-z-]{1,64}$")
@@ -684,10 +689,10 @@ def drafts_dir(root: Path) -> Path:
 
 
 def save_draft(root: Path, draft: Draft) -> Path:
+    from ducta.ai.fsutil import atomic_write_text
+
     path = drafts_dir(root) / f"{draft.id}.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(draft.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
+    return atomic_write_text(path, json.dumps(draft.to_dict(), indent=2, ensure_ascii=False))
 
 
 def list_drafts(root: Path, limit: int = 50) -> List[Draft]:
@@ -742,6 +747,11 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
     # The draft is a file on disk anyone could edit: hold its paths to the rules
     # a draft of its kind was made under, rather than trust them.
     unsafe = _unwritable(root, draft)
+    if not unsafe and draft.kind == "extend":
+        # New nodes only: asked again of the files as they are, even with force.
+        from ducta.ai.extend import existing_changes
+
+        unsafe = existing_changes(root, draft.pipeline or "", draft.files)
     if unsafe:
         raise AIConflictError(f"Draft {draft.id} cannot be applied: {'; '.join(unsafe[:5])}")
     changed = [rel for rel, sha in draft.base.items() if _sha(_read(root / rel)) != sha]
@@ -776,8 +786,13 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
         for tmp, _ in staged:
             tmp.unlink(missing_ok=True)
         raise AIEnvironmentError(f"Could not write draft {draft.id}: {e}", cause=e) from e
-    for tmp, target in staged:
-        os.replace(tmp, target)
+    try:
+        for tmp, target in staged:
+            os.replace(tmp, target)
+    except OSError as e:
+        for tmp, _ in staged:
+            tmp.unlink(missing_ok=True)
+        raise AIEnvironmentError(f"Could not write draft {draft.id}: {e}", cause=e) from e
     draft.applied_at = _now()
     if (drafts_dir(root) / f"{draft.id}.json").exists():
         save_draft(root, draft)
@@ -800,6 +815,10 @@ def _apply_scope(root: Path, draft: Draft) -> Scope:
     """What a draft of *draft*'s kind may touch, worked out again from the project."""
     if draft.kind == "fix":
         return fix_scope(root, draft.pipeline or "")
+    if draft.kind == "extend":
+        from ducta.ai.extend import extend_scope
+
+        return extend_scope(root, draft.pipeline or "")
     if draft.kind == "quality":
         rel = _pipeline_file(root, draft.pipeline or "").relative_to(root).as_posix()
         return Scope(kind="proposal", editable=frozenset({rel}), purpose="quality")
@@ -890,8 +909,12 @@ def _key(p: Dict[str, Any]) -> Tuple[Any, ...]:
 
 
 def _concerns(p: Dict[str, Any], scope: Scope) -> bool:
-    """Whether problem *p* is on the pipeline a fix is about."""
-    if scope.kind != "fix":
+    """Whether problem *p* is on the pipeline a fix is about.
+
+    Not for an extension: it adds to the pipeline as it is, problems included —
+    only the errors it adds are its own.
+    """
+    if scope.kind != "fix" or scope.purpose == "extend":
         return False
     return p.get("pipeline") == scope.pipeline or p.get("file") in scope.editable
 
@@ -1274,6 +1297,10 @@ def revise(
     if draft.kind == "fix":
         scope = fix_scope(root, draft.pipeline or "")
         system = FIX_PROMPT
+    elif draft.kind == "extend":
+        from ducta.ai.extend import extend_setup
+
+        scope, system, assembler, again = extend_setup(root, draft)
     elif draft.kind in ("quality", "docs"):
         from ducta.ai.proposals import proposal_setup
 
@@ -1292,9 +1319,10 @@ def revise(
             f"These files changed after draft {draft.id} was made: {', '.join(changed)}. "
             "Draft the fix again."
         )
-    # A fix's prompt holds its files whole and is re-sent as it was made: drafted
-    # with a local model, a file may hold a credential this provider must not get.
-    if draft.kind == "fix":
+    # A fix's (or an extension's) prompt holds its files whole and is re-sent as it
+    # was made: drafted with a local model, a file may hold a credential this
+    # provider must not get.
+    if draft.kind in ("fix", "extend"):
         for rel in sorted(seen):
             _refuse_credentials(rel, _read(root / rel), provider)
     prior = [

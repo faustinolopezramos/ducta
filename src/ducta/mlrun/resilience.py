@@ -199,7 +199,10 @@ def _handle_retry_exception(
     Handle a retry exception by logging and sleeping.
     """
     if not should_retry(exc, config):
-        logger.warning(f"Non-retryable exception in '{name}': {exc}")
+        # Raised as it is, for the caller to handle: a missing registry index on
+        # a first run is "empty", not a problem. Warning here put it on the
+        # terminal of every first run.
+        logger.debug("Non-retryable exception in '{}': {}", name, exc)
         raise exc  # NOSONAR
 
     if attempt + 1 >= config.max_attempts:

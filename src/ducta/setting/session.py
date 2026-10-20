@@ -25,6 +25,7 @@ import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from loguru import logger  # type: ignore
@@ -479,6 +480,12 @@ class SparkSessionFactory:
                 builder, SparkSessionFactory.LOCAL_DEFAULT_CONFIGS
             )
             builder = SparkSessionFactory._apply_jdbc_jars(builder)
+            quiet = _quiet_log4j_file()
+            if quiet is not None:
+                builder = builder.config(
+                    "spark.driver.extraJavaOptions",
+                    f"{SparkSessionFactory._JAVA_ADD_OPENS} -Dlog4j2.configurationFile={quiet.as_uri()}",
+                )
 
             if ml_config and isinstance(ml_config, dict):
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
@@ -527,3 +534,39 @@ class SparkSessionFactory:
             except Exception:
                 logger.debug("Failed to apply Spark config {}={}", k, v, exc_info=True)
         return builder
+
+
+#: The JVM's own console logging when the CLI asks for quiet (``DUCTA_SPARK_QUIET``).
+#: Root and ``org.apache.spark`` at the same level: Spark prints "Setting default
+#: log level…" whenever they differ. Errors still reach Python as exceptions.
+_QUIET_LOG4J2 = """\
+rootLogger.level = fatal
+rootLogger.appenderRef.stderr.ref = console
+appender.console.type = Console
+appender.console.name = console
+appender.console.target = SYSTEM_ERR
+appender.console.layout.type = PatternLayout
+appender.console.layout.pattern = %d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n%ex
+logger.spark.name = org.apache.spark
+logger.spark.level = fatal
+"""
+
+
+def _quiet_log4j_file() -> Optional[Path]:
+    """A log4j2 file that silences the JVM's console, when ``DUCTA_SPARK_QUIET`` is set.
+
+    The JVM writes straight to the terminal — hostname warnings, native-hadoop,
+    an unconfigured scheduler pool for every node — before and outside any
+    Python logging, so only its own configuration can quiet it.
+    """
+    if os.environ.get("DUCTA_SPARK_QUIET", "").lower() not in ("1", "true", "yes"):
+        return None
+    try:
+        import tempfile
+
+        path = Path(tempfile.gettempdir()) / "ducta-spark-quiet-log4j2.properties"
+        if not path.is_file() or path.read_text(encoding="utf-8") != _QUIET_LOG4J2:
+            path.write_text(_QUIET_LOG4J2, encoding="utf-8")
+        return path
+    except OSError:
+        return None

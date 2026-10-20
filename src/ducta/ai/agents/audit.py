@@ -78,15 +78,47 @@ def entries(root: Path, agent: str) -> Iterator[Dict[str, Any]]:
                 yield entry
 
 
+def _newest_first(path: Path, block: int = 64 * 1024) -> Iterator[Dict[str, Any]]:
+    """The entries of *path*, last line first, reading the file backwards in blocks.
+
+    The log only grows and is in time order, so the last day's entries are at its
+    end: counting them never reads the months before.
+    """
+    with path.open("rb") as f:
+        f.seek(0, 2)
+        pos = f.tell()
+        tail = b""
+        while pos > 0:
+            step = min(block, pos)
+            pos -= step
+            f.seek(pos)
+            tail = f.read(step) + tail
+            lines = tail.split(b"\n")
+            # The first piece may be the end of a line that starts in the block before.
+            tail, complete = (lines[0], lines[1:]) if pos > 0 else (b"", lines)
+            for raw in reversed(complete):
+                try:
+                    entry = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(entry, dict):
+                    yield entry
+
+
 def count_since(root: Path, agent: str, hours: float, **match: Any) -> int:
     """Entries of the last *hours* whose keys equal *match* (``action="rerun"``)."""
+    path = audit_path(root, agent)
+    if not path.is_file():
+        return 0
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     total = 0
-    for entry in entries(root, agent):
+    for entry in _newest_first(path):
         try:
             at = datetime.fromisoformat(str(entry.get("at")))
         except ValueError:
             continue
-        if at >= since and all(entry.get(k) == v for k, v in match.items()):
+        if at < since:
+            break  # everything before it is older still
+        if all(entry.get(k) == v for k, v in match.items()):
             total += 1
     return total

@@ -23,6 +23,23 @@ from loguru import logger
 from ducta.console.core import ExitCode
 from ducta.gate.gateway import ConnectionSpec, IngestionService, IngestionServiceError
 
+#: What a skipped test means. The CLI never has a Spark session, so this is the
+#: usual answer here; it used to read "✓ Connection successful!".
+_NOT_VERIFIED = (
+    "Not verified: there is no Spark session to test the connection with. "
+    "It is checked when a pipeline that uses it runs."
+)
+
+
+def _workspace() -> str:
+    """The project the current directory is in (its root), else the current directory."""
+    from pathlib import Path
+
+    from ducta.setting.project_context import find_nearest_project
+
+    root = find_nearest_project(Path.cwd())
+    return str(root) if root is not None else "."
+
 
 class IngestionSetupCommands:
     """Handle ingestion setup commands."""
@@ -79,7 +96,7 @@ class IngestionSetupCommands:
             # was always called with overwrite=True below, silently replacing
             # its credentials with no warning at all. Confirm before
             # continuing to collect new credentials.
-            probe_service = IngestionService(".")
+            probe_service = IngestionService(_workspace())
             try:
                 existing = probe_service.get_connection(source_name)
             except IngestionServiceError:
@@ -153,22 +170,26 @@ class IngestionSetupCommands:
                 password=password,
             )
 
-            if not service.test_spec(spec):
-                logger.warning(
-                    "⚠️  Connection test could not verify (Spark not available)\n"
-                    "   Will validate at pipeline runtime"
-                )
+            verified = service.test_spec(spec)
+            if verified is None:
+                logger.warning(_NOT_VERIFIED)
+            elif verified:
+                logger.info("✓ Connection verified")
             else:
-                logger.info("✓ Connection successful!")
+                logger.error("✗ Connection failed: check the host, port and credentials")
+                again = input("Save it anyway? [y/N]: ").strip().lower()
+                if again not in ("y", "yes"):
+                    print("Nothing saved.")
+                    return ExitCode.EXECUTION_ERROR.value
 
-            # Save configuration + credentials (config/sources.yaml, .env, .gitignore)
+            # Save configuration + credentials (sources file, .env, .gitignore)
             print("\n" + "=" * 70)
             print("📝 Saving Configuration".center(70))
             print("=" * 70 + "\n")
 
             service.create_connection(spec, overwrite=True)
-            logger.info(f"✓ Configuration saved: {service.config_path}")
-            logger.info(f"✓ Credentials saved: {service.env_path}")
+            logger.info("✓ Configuration saved: {}", service.config_path)
+            logger.info("✓ Credentials saved: {}", service.env_path)
 
             # Next steps
             print("\n" + "=" * 70)
@@ -180,26 +201,16 @@ class IngestionSetupCommands:
             print(f"   {service.env_path}")
             print("   (keep this file out of version control; it's already gitignored)\n")
 
-            print("2. In your code, use the connection:")
-            print("   from ducta.gate.gateway import ConnectionManager")
-            print("   connections = ConnectionManager('config/sources.yaml')")
-            print(f"   conn = connections.get('{source_name}')\n")
+            print("2. Copy a table with an ingest node (no Python), in a pipeline file:")
+            print("   land_my_table:")
+            print("     kind: ingest")
+            print("     ingest:")
+            print(f"       source: {source_name}")
+            print('       table: dbo.my_table          # or query: "SELECT …"')
+            print("     outputs: [bronze.my_table]\n")
 
-            print("3. Example in src/ingestion.py:")
-            print("   def ingest_my_table(**kwargs) -> DataFrame:")
-            print(f"       conn = connections.get('{source_name}')")
-            print("       return spark.read.jdbc(")
-            print("           url=conn.jdbc_url,")
-            print("           table='dbo.MyTable',")
-            print("           properties=conn.jdbc_properties")
-            print("       )\n")
-
-            print("4. Add to config/node/nodes.yml:")
-            print("   bronze.ingest_my_table:")
-            print("     module: 'src.ingestion'")
-            print("     function: 'ingest_my_table'")
-            print("     output:")
-            print("       - bronze.my_table\n")
+            print("3. Check it:")
+            print("   ducta config validate --env dev\n")
 
             return ExitCode.SUCCESS.value
 
@@ -211,10 +222,10 @@ class IngestionSetupCommands:
     def _list(parsed_args) -> int:
         """List all configured connections."""
         try:
-            connections = IngestionService(".").list_connections()
+            connections = IngestionService(_workspace()).list_connections()
 
             if not connections:
-                logger.info("No connections configured. Run: Ducta init ingestion setup")
+                logger.info("No connections configured. Run: ducta init ingestion setup")
                 return ExitCode.SUCCESS.value
 
             print("\n📋 Configured Database Connections:\n")
@@ -239,14 +250,20 @@ class IngestionSetupCommands:
         try:
             source_name = getattr(parsed_args, "source", None)
             if not source_name:
-                logger.error("Specify connection: Ducta init ingestion test --source <name>")
+                logger.error("Specify connection: ducta init ingestion test --source <name>")
                 return ExitCode.VALIDATION_ERROR.value
 
             logger.info("Testing connection: {}", source_name)
-            if IngestionService(".").test_connection(source_name):
-                logger.info("✓ Connection successful!")
-            else:
-                logger.warning("⚠️  Connection test inconclusive (Spark not available)")
+            verified = IngestionService(_workspace()).test_connection(source_name)
+            if verified is None:
+                # Not a pass: a script checking a connection must not read
+                # "nothing was tried" as "it works".
+                logger.warning(_NOT_VERIFIED)
+                return ExitCode.DEPENDENCY_ERROR.value
+            if not verified:
+                logger.error("✗ Connection failed: check the host, port and credentials")
+                return ExitCode.EXECUTION_ERROR.value
+            logger.info("✓ Connection verified")
             return ExitCode.SUCCESS.value
 
         except IngestionServiceError as e:
@@ -262,10 +279,10 @@ class IngestionSetupCommands:
         try:
             source_name = getattr(parsed_args, "source", None)
             if not source_name:
-                logger.error("Specify connection: Ducta init ingestion info --source <name>")
+                logger.error("Specify connection: ducta init ingestion info --source <name>")
                 return ExitCode.VALIDATION_ERROR.value
 
-            info = IngestionService(".").get_connection(source_name)
+            info = IngestionService(_workspace()).get_connection(source_name)
 
             print(f"\n📊 Connection: {info['name']}\n")
             print(f"  Type:     {info['type']}")

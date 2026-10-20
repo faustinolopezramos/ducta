@@ -134,6 +134,8 @@ export const qk = {
     docsGaps: (projectId: string) => ["ai", sourceKey(), projectId, "docs-gaps"] as const,
     review: (projectId: string, pipeline: string, node: string) =>
       ["ai", sourceKey(), projectId, "reviews", pipeline, node] as const,
+    pipelineReview: (projectId: string, pipeline: string) =>
+      ["ai", sourceKey(), projectId, "pipeline-reviews", pipeline] as const,
   },
 
   mlops: {

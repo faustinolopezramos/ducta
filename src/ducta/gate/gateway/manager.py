@@ -378,15 +378,16 @@ class Connection:
             "driver": self.connector.get_driver_class(),
         }
 
-    def test_connection(self, timeout_seconds: int = 10) -> bool:
-        """Test if connection is valid."""
+    def test_connection(self, timeout_seconds: int = 10) -> Optional[bool]:
+        """Whether the connection answers; ``None`` when it could not be tested."""
         if self._breaker is not None and self._breaker.is_open():
             raise JDBCCircuitOpenError(
                 "Circuit open for this source (too many consecutive failures); "
                 "still within cooldown."
             )
         result = self.connector.test_connection(timeout_seconds)
-        if self._breaker is not None:
+        # An untested connection is neither a success nor a failure for the breaker.
+        if self._breaker is not None and result is not None:
             if result:
                 self._breaker.record_success()
             else:

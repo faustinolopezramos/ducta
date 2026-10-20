@@ -516,7 +516,8 @@ class ArtifactValidator:
             framework_key in ArtifactValidator._PICKLE_BASED_FRAMEWORKS
             and not trust_artifact_source
         ):
-            logger.warning(
+            # The safe default on every run, not a problem: info, not a warning.
+            logger.info(
                 f"Skipping deserialization of '{framework}' artifact at {artifact_path}: "
                 "loading a pickle/joblib artifact executes it, so this requires "
                 "trust_artifact_source=True. Falling back to a lightweight check."

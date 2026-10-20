@@ -109,9 +109,24 @@ def install_to(parent: Path, force: bool = False) -> Tuple[Path, str]:
                 f"{dest} holds version {there} of the skill; this Ducta ships {wanted}. "
                 "Pass --force to replace it"
             )
-        shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source, dest, ignore=_ignore)
+    # Copied beside it first and swapped in after: a copy that fails (a full disk, a
+    # read-only folder) leaves the skill that was there, not an empty place.
+    fresh = dest.with_name(f".{SKILL_NAME}.new")
+    old = dest.with_name(f".{SKILL_NAME}.old")
+    for leftover in (fresh, old):
+        shutil.rmtree(leftover, ignore_errors=True)
+    try:
+        shutil.copytree(source, fresh, ignore=_ignore)
+        if dest.exists():
+            dest.rename(old)
+        fresh.rename(dest)
+    except OSError:
+        shutil.rmtree(fresh, ignore_errors=True)
+        if old.exists() and not dest.exists():
+            old.rename(dest)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
     return dest, f"installed (version {wanted})"
 
 
@@ -209,14 +224,9 @@ def export_zip(destination: Path) -> Path:
 
 def _project_root(start: Optional[Path] = None) -> Optional[Path]:
     """The project at or above *start* (the current directory): where its ``ducta.yaml`` is."""
-    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project_context import find_nearest_project
 
-    here = (start or Path.cwd()).resolve()
-    for folder in (here, *here.parents):
-        root = find_project_root(folder)
-        if root is not None:
-            return root
-    return None
+    return find_nearest_project(start or Path.cwd())
 
 
 class SkillCommands:

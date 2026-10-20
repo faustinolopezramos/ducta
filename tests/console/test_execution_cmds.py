@@ -257,6 +257,30 @@ class TestMaxSweepSize:
         assert config.max_sweep_size == 200
 
 
+class _RecordingPool:
+    """A ProcessPoolExecutor stand-in that runs each submission inline and
+    records it, so a test can tell "ran in a worker" from "ran in this process"."""
+
+    submitted: list = []
+
+    def __init__(self, *a, **k):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def submit(self, fn, payload):
+        from concurrent.futures import Future
+
+        _RecordingPool.submitted.append(payload)
+        future: Future = Future()
+        future.set_result(fn(payload))
+        return future
+
+
 class TestRunTrialsParallelSharedPrefix:
     """Trial 1 runs first, sequentially, into a shared prefix directory —
     only afterward do trials 2..N run in parallel, each given that directory
@@ -272,12 +296,9 @@ class TestRunTrialsParallelSharedPrefix:
         )
         return cmd, exec_obj
 
-    def test_single_trial_materializes_shared_prefix_without_touching_the_pool(
-        self, tmp_path, monkeypatch
-    ):
-        # A single-trial sweep never has a "rest" to parallelize — it must
-        # return right after the sequential trial 1, never constructing a
-        # ProcessPoolExecutor at all.
+    def test_single_trial_materializes_shared_prefix_in_a_worker(self, tmp_path, monkeypatch):
+        # A single-trial sweep has no "rest" to parallelize: it returns right
+        # after trial 1 — which still runs in a worker, never in this process.
         cmd, exec_obj = self._cmd(tmp_path)
 
         calls = []
@@ -296,15 +317,13 @@ class TestRunTrialsParallelSharedPrefix:
         monkeypatch.setattr(
             "ducta.core.sweep_worker.run_trial_in_process", fake_run_trial_in_process
         )
-
-        def _pool_should_not_be_used(*a, **k):
-            raise AssertionError("ProcessPoolExecutor must not be constructed for one trial")
-
-        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _pool_should_not_be_used)
+        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _RecordingPool)
+        _RecordingPool.submitted = []
 
         trials = [{"index": 1, "params": {"depth": 3}, "hyperparams": {"depth": 3}}]
         outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)
 
+        assert [p["trial_index"] for p in _RecordingPool.submitted] == [1]
         assert len(calls) == 1
         from ducta.core.sweep_worker import shared_prefix_path
 
@@ -319,6 +338,43 @@ class TestRunTrialsParallelSharedPrefix:
                 "reason": None,
             }
         ]
+
+    def test_no_trial_runs_in_the_cli_process(self, tmp_path, monkeypatch):
+        # Regression: trial 1 ran in this process, and a trial removes every
+        # loguru sink — the CLI then logged nothing for the rest of the sweep.
+        from loguru import logger
+
+        cmd, exec_obj = self._cmd(tmp_path)
+        calls = []
+
+        def fake_run_trial_in_process(payload):
+            calls.append(payload["trial_index"])
+            return {
+                "index": payload["trial_index"],
+                "params": {},
+                "metrics": {},
+                "gate_blocked": [],
+                "failed": False,
+                "reason": None,
+            }
+
+        monkeypatch.setattr(
+            "ducta.core.sweep_worker.run_trial_in_process", fake_run_trial_in_process
+        )
+        monkeypatch.setattr("concurrent.futures.ProcessPoolExecutor", _RecordingPool)
+        _RecordingPool.submitted = []
+        sink = logger.add(lambda _m: None)
+        try:
+            trials = [{"index": i, "params": {}, "hyperparams": {}} for i in range(1, 4)]
+            outcomes = cmd._run_trials_parallel(exec_obj, trials, "search-1", workers=2)
+            assert sink in logger._core.handlers  # type: ignore[attr-defined]
+        finally:
+            logger.remove(sink)
+
+        submitted = [p["trial_index"] for p in _RecordingPool.submitted]
+        assert submitted[0] == 1  # the shared prefix is built before the rest start
+        assert sorted(submitted) == sorted(calls) == [1, 2, 3]
+        assert [o["index"] for o in outcomes] == [1, 2, 3]
 
     def test_failed_trial_one_disables_fallback_for_the_rest(self, tmp_path, monkeypatch):
         cmd, exec_obj = self._cmd(tmp_path)

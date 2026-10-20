@@ -49,7 +49,7 @@ class TestFindingTheProject:
         assert ConfigManager(str(wrapper)).project_root == (wrapper / "config").resolve()
 
     def test_no_project_is_an_error_that_names_the_directory(self, tmp_path):
-        with pytest.raises(ConfigurationError, match="No Ducta project found"):
+        with pytest.raises(ConfigurationError, match="No Ducta project"):
             ConfigManager(str(tmp_path))
 
     def test_no_project_is_accepted_when_not_required(self, tmp_path):
