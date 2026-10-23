@@ -163,6 +163,9 @@ def module_problems(source: str, rel: str, pipe: PipelineSpec) -> List[str]:
             problems.append(f"{rel}: write the signature exactly as `{signature(pipe, node)}`")
             continue
         required_extra = [a.arg for a in args.args[len(want) : len(args.args) - len(args.defaults)]]
+        required_extra += [
+            a.arg for a, default in zip(args.kwonlyargs, args.kw_defaults) if default is None
+        ]
         if required_extra:
             problems.append(
                 f"{rel}: {node.function}() also requires {', '.join(required_extra)}, "

@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { IconAlertTriangle, IconArrowLeft, IconCircleCheck, IconCircleX, IconSparkles } from "@tabler/icons-react";
+import {
+  IconAlertTriangle,
+  IconArrowLeft,
+  IconCheck,
+  IconCircleCheck,
+  IconCircleX,
+  IconCopy,
+  IconSparkles,
+} from "@tabler/icons-react";
 import {
   useAIDraft,
   useAIDrafts,
@@ -28,6 +36,7 @@ import { formatRelative } from "../../utils/timeLabels";
 import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
+import { Skeleton } from "../ui/Skeleton";
 import { gapsSentence, useElapsed } from "./aiText";
 import { ArchitectStepLine, BlueprintStep, ModulesList, QuestionsStep } from "./Architect";
 import { pipelineOf, splitDiff } from "./diff";
@@ -228,6 +237,35 @@ export function AIDraftDialog({
 
 // ── 1. Describe ──────────────────────────────────────────────────────────────
 
+const PROMPT_STARTERS: Record<AIDraftMode["kind"], string[]> = {
+  new: [
+    "Deduplicate & clean bronze raw to silver",
+    "Aggregate hourly & daily metrics to gold",
+    "Customer dimensional enrichment",
+    "Anomaly detection and quarantine",
+  ],
+  extend: [
+    "Aggregate latest per customer",
+    "Calculate rolling 7-day average",
+    "Filter outliers and log statistics",
+  ],
+  quality: [
+    "Primary key uniqueness & not null",
+    "Numeric ranges and thresholds",
+    "Categorical allowed values set",
+  ],
+  docs: [
+    "Document column business definitions",
+    "Identify PII and sensitive data",
+    "Document transformation logic",
+  ],
+  fix: [
+    "Handle missing or null values gracefully",
+    "Fix data type conversion mismatch",
+    "Add fallback for empty partitions",
+  ],
+};
+
 function DescribeStep({
   projectId,
   mode,
@@ -384,6 +422,27 @@ function DescribeStep({
           if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit(e);
         }}
       />
+      <div className="ai-starters" role="region" aria-label="Suggested prompt starters">
+        <span className="ai-starters__label">Quick ideas:</span>
+        <div className="ai-starters__chips">
+          {PROMPT_STARTERS[mode.kind].map((starter) => (
+            <button
+              key={starter}
+              type="button"
+              className="ai-starter-chip"
+              onClick={() => {
+                setText((prev) => {
+                  const trimmed = prev.trim();
+                  if (!trimmed) return starter;
+                  return `${trimmed}\n- ${starter}`;
+                });
+              }}
+            >
+              + {starter}
+            </button>
+          ))}
+        </div>
+      </div>
       {mode.kind !== "docs" && (
         <p className="projects-modal__hint">
           {isFix
@@ -625,6 +684,7 @@ function ReviewStep({
   const discard = useDeleteAIDraft(projectId);
   const canWrite = usePermission("pipeline.write");
   const [selected, setSelected] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [asking, setAsking] = useState(false);
   const [note, setNote] = useState("");
   const [force, setForce] = useState(false);
@@ -632,6 +692,16 @@ function ReviewStep({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
 
   const diffs = useMemo(() => splitDiff(draft?.diff ?? ""), [draft?.diff]);
+
+  const handleCopy = (path: string) => {
+    const fileContent = draft?.file_contents.find((f) => f.path === path)?.content;
+    const textToCopy = fileContent ?? shown?.lines.map((l) => l.text).join("\n") ?? "";
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(textToCopy);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   if (isLoading || !draft) return <div className="ai-step ai-dim">Loading the draft…</div>;
 
@@ -664,20 +734,31 @@ function ReviewStep({
         {built && <ModulesList attempts={draft.attempts} />}
         <nav className="ai-files" aria-label="Files in the draft">
           {extension && <ExtensionSummary added={extension} ok={draft.ok} />}
-          {draft.file_contents.map((f) => (
-            <button
-              key={f.path}
-              type="button"
-              className={`ai-file${f.path === current ? " is-active" : ""}`}
-              aria-current={f.path === current ? "true" : undefined}
-              onClick={() => setSelected(f.path)}
-            >
-              <span className="ai-file__path" title={f.path}>
-                {f.path}
-              </span>
-              <span className={`ai-chip ai-chip--${f.change}`}>{f.change}</span>
-            </button>
-          ))}
+          {draft.file_contents.map((f) => {
+            const fileDiff = diffs.find((d) => d.path === f.path);
+            return (
+              <button
+                key={f.path}
+                type="button"
+                className={`ai-file${f.path === current ? " is-active" : ""}`}
+                aria-current={f.path === current ? "true" : undefined}
+                onClick={() => setSelected(f.path)}
+              >
+                <span className="ai-file__path" title={f.path}>
+                  {f.path}
+                </span>
+                <span className="ai-file__badges">
+                  {fileDiff && (fileDiff.additions > 0 || fileDiff.deletions > 0) && (
+                    <span className="ai-file__stats">
+                      {fileDiff.additions > 0 && <span className="ai-stat ai-stat--add">+{fileDiff.additions}</span>}
+                      {fileDiff.deletions > 0 && <span className="ai-stat ai-stat--del">-{fileDiff.deletions}</span>}
+                    </span>
+                  )}
+                  <span className={`ai-chip ai-chip--${f.change}`}>{f.change}</span>
+                </span>
+              </button>
+            );
+          })}
           <div className="ai-summary">
             {draft.ok ? (
               <p>
@@ -703,25 +784,60 @@ function ReviewStep({
         </nav>
 
         <div className="ai-diff" role="region" aria-label={`Changes to ${current ?? "the draft"}`}>
+          {current && (
+            <div className="ai-diff__header">
+              <span className="ai-diff__file-title mono" title={current}>
+                {current}
+              </span>
+              <div className="ai-diff__header-actions">
+                {shown && (shown.additions > 0 || shown.deletions > 0) && (
+                  <span className="ai-diff__header-stats">
+                    {shown.additions > 0 && <span className="ai-stat ai-stat--add">+{shown.additions}</span>}
+                    {shown.deletions > 0 && <span className="ai-stat ai-stat--del">-{shown.deletions}</span>}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="ai-diff__copy-btn"
+                  onClick={() => current && handleCopy(current)}
+                  title="Copy file content to clipboard"
+                  aria-label="Copy file content"
+                >
+                  {copied ? <IconCheck size={13} aria-hidden="true" /> : <IconCopy size={13} aria-hidden="true" />}
+                  <span>{copied ? "Copied" : "Copy"}</span>
+                </button>
+              </div>
+            </div>
+          )}
           {applied ? (
             <>
               <p className="ai-dim ai-diff__applied">
                 Applied {formatRelative(draft.applied_at)} — this is what was written.
               </p>
-              <pre>
+              <pre className="ai-diff__pre">
                 {(draft.file_contents.find((f) => f.path === current)?.content ?? "").split("\n").map((l, i) => (
-                  <span key={i} className="ai-line ai-line--ctx">
-                    {l}
-                  </span>
+                  <div key={i} className="ai-line ai-line--ctx">
+                    <span className="ai-line__num ai-line__num--old" aria-hidden="true" />
+                    <span className="ai-line__num ai-line__num--new" aria-hidden="true">
+                      {i + 1}
+                    </span>
+                    <span className="ai-line__text">{l}</span>
+                  </div>
                 ))}
               </pre>
             </>
           ) : shown ? (
-            <pre>
+            <pre className="ai-diff__pre">
               {shown.lines.map((l, i) => (
-                <span key={i} className={`ai-line ai-line--${l.kind}`}>
-                  {l.text}
-                </span>
+                <div key={i} className={`ai-line ai-line--${l.kind}`}>
+                  <span className="ai-line__num ai-line__num--old" aria-hidden="true">
+                    {l.oldLineNumber ?? ""}
+                  </span>
+                  <span className="ai-line__num ai-line__num--new" aria-hidden="true">
+                    {l.newLineNumber ?? ""}
+                  </span>
+                  <span className="ai-line__text">{l.text}</span>
+                </div>
               ))}
             </pre>
           ) : (
@@ -893,7 +1009,10 @@ function DraftsStep({
   return (
     <div className="ai-step">
       {isLoading ? (
-        <p className="ai-dim">Loading…</p>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: "8px 0" }}>
+          <Skeleton width="100%" height="48px" />
+          <Skeleton width="100%" height="48px" />
+        </div>
       ) : !drafts || drafts.length === 0 ? (
         <p className="ai-dim">No drafts yet.</p>
       ) : (

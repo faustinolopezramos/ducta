@@ -45,7 +45,19 @@ class HybridExecutor(BaseExecutor):
     def __init__(self, context: Context, settings: Optional[CoreSettings] = None):
         super().__init__(context, settings=settings)
         max_streaming_pipelines = self.settings.max_streaming_pipelines
+        self._max_streaming_pipelines = max_streaming_pipelines
         self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
+
+    def shutdown(self) -> None:
+        """Stop the streaming pipelines this executor started and release its manager."""
+        self.streaming_manager.shutdown()
+
+    def _ensure_manager(self) -> None:
+        """Replace a manager that a previous :meth:`shutdown` closed."""
+        if getattr(self.streaming_manager, "is_shut_down", False):
+            self.streaming_manager = StreamingPipelineManager(
+                self.context, self._max_streaming_pipelines
+            )
 
     def execute(
         self,
@@ -60,6 +72,8 @@ class HybridExecutor(BaseExecutor):
         self.node_executor.pipeline_name = pipeline_name
         self.node_executor.begin_run()
         logger.info("Executing hybrid pipeline: {}", pipeline_name)
+        self._ensure_manager()
+        keep_streams_running = False
 
         pipeline = self._get_pipeline_config(pipeline_name)
         pipeline_nodes = extract_pipeline_nodes(pipeline)
@@ -119,6 +133,9 @@ class HybridExecutor(BaseExecutor):
                 execution_mode,
             )
             succeeded = result.get("status") != "failed"
+            # Asynchronous mode returns right after the streams start; they keep
+            # running (stop them through the manager), not die with this call.
+            keep_streams_running = succeeded and execution_mode != "sync"
             self.unified_state.set_pipeline_status("completed" if succeeded else "failed")
             self._end_mlops_run(
                 success=succeeded,
@@ -137,7 +154,7 @@ class HybridExecutor(BaseExecutor):
             raise
         finally:
             if self.unified_state:
-                self.unified_state.cleanup()
+                self.unified_state.cleanup(stop_streaming=not keep_streams_running)
             from ducta.gate import handoff
 
             handoff.clear(self.context)
@@ -433,11 +450,18 @@ class HybridExecutor(BaseExecutor):
             )
         return started
 
-    def _wait_for_streaming_completion(self, execution_ids: List[str], timeout_minutes=60):
-        """Wait for all streaming executions to reach a terminal state."""
-        deadline = time.time() + timeout_minutes * 60
+    def _wait_for_streaming_completion(
+        self, execution_ids: List[str], timeout_minutes: Optional[float] = None
+    ):
+        """Wait for all streaming executions to reach a terminal state.
+
+        Unbounded by default, like a streaming run: a continuous stream outlives
+        any fixed deadline, and ``execute`` stops its pipelines when this returns,
+        so a timeout here would kill a healthy stream.
+        """
+        deadline = None if timeout_minutes is None else time.time() + timeout_minutes * 60
         for eid in execution_ids:
-            remaining = max(0.0, deadline - time.time())
+            remaining = None if deadline is None else max(0.0, deadline - time.time())
             if not self.streaming_manager.wait_for_pipeline_done(eid, timeout=remaining):
                 logger.warning("Timeout reached while waiting for streaming queries")
                 return

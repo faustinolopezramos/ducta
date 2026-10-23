@@ -27,7 +27,7 @@ A trimmed real certificate, from a batch ingestion run:
 .. code-block:: json
 
    {
-     "schema_version": "1.6",
+     "schema_version": "1.7",
      "run_id": "f9fb815596a74bf2a66d6cf3570b5493",
      "pipeline": "bronze.ingestion",
      "environment_name": "base",
@@ -84,6 +84,10 @@ certificate:
      - Per-dataset fingerprints: ``row_count``, ``schema_hash``,
        ``algorithm``, ``mode``, ``content_hash``. This is the part that
        actually proves something about the *data*, not just that a node ran.
+   * - ``mlops_run_id``
+     - Only on ML pipelines: the id of the tracked run (``ducta experiment show``) this
+       certificate attests. The run carries the certificate's ``run_id`` as its
+       ``ducta_run_id`` tag, so each finds the other.
    * - ``evidence_complete`` / ``evidence_gaps``
      - ``False`` (plus a reason) when the run's ledger failed to record
        something it was asked to. The certificate still gets written — a

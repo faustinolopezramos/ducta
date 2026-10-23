@@ -370,6 +370,17 @@ class StreamingNodeStatus(BaseModel):
     trigger_execution_ms: Optional[float] = None
     #: The model the query was pinned to when it started (`model:` on the node).
     model: Optional[Dict[str, Any]] = None
+    #: What the node reads / writes / how often it fires / where it checkpoints, in
+    #: one line each ("kafka topic events", "every 5 seconds"). Never connection options.
+    source: Optional[str] = None
+    sink: Optional[str] = None
+    trigger: Optional[str] = None
+    checkpoint: Optional[str] = None
+    #: Why an active query deserves a second look: "idle" (no new input for a while:
+    #: normal for a quiet source) or "stalled" (no progress report at all: a hang).
+    health: Optional[str] = None
+    #: Seconds the query has reported without input rows.
+    idle_seconds: Optional[float] = None
 
 
 class StreamingPipelineStatus(BaseModel):
@@ -384,6 +395,13 @@ class StreamingPipelineStatus(BaseModel):
     failed_queries: int = 0
     error: Optional[str] = None
     nodes: List[StreamingNodeStatus] = Field(default_factory=list)
+
+
+class StreamingRestartResponse(BaseModel):
+    """`POST .../nodes/{node}/restart`: whether the node's query was started again."""
+
+    restarted: bool
+    node: str
 
 
 class StreamingStatusResponse(BaseModel):

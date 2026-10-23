@@ -59,3 +59,41 @@ class TestMLNodeCommandSplitWasApplied:
         )
         cmd.execute()
         assert cmd.split_was_applied() is False
+
+
+class TestTheRunsOwnHyperparameters:
+    """What a run was explicitly asked to use reaches the node apart from the merged
+    ``hyperparams``, so a search inside the node can tell what is fixed."""
+
+    def _run(self, cli_hyperparams, node_hyperparams=None):
+        seen = {}
+
+        def node(df, start_date=None, end_date=None, ml_context=None):
+            seen["cli"] = dict(ml_context.cli_hyperparams)
+            seen["merged"] = dict(ml_context.hyperparams)
+            return df
+
+        MLNodeCommand(
+            function=node,
+            input_dfs=[pd.DataFrame({"x": range(3)})],
+            start_date="2026-01-01",
+            end_date="2026-01-01",
+            node_name="n1",
+            model_version="v1",
+            hyperparams={"max_depth": 6, "n_estimators": 100},
+            node_config={"hyperparams": node_hyperparams or {}},
+            cli_hyperparams=cli_hyperparams,
+        ).execute()
+        return seen
+
+    def test_the_run_overrides_are_kept_apart_and_merged_into_hyperparams(self):
+        seen = self._run({"max_depth": 3})
+
+        assert seen["cli"] == {"max_depth": 3}
+        assert seen["merged"] == {"max_depth": 3, "n_estimators": 100}
+
+    def test_the_pipelines_own_hyperparams_are_not_overrides(self):
+        assert self._run({}, node_hyperparams={"n_estimators": 50})["cli"] == {}
+
+    def test_a_plain_run_has_none(self):
+        assert self._run(None)["cli"] == {}

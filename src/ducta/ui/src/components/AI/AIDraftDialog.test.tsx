@@ -263,6 +263,20 @@ describe("AIDraftDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(await screen.findByLabelText(/Describe it/)).toBeInTheDocument();
   });
+
+  it("populates prompt from quick idea starter chip", async () => {
+    renderDialog();
+    const chip = await screen.findByRole("button", { name: "+ Deduplicate & clean bronze raw to silver" });
+    fireEvent.click(chip);
+    const textarea = screen.getByLabelText(/Describe it/) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("Deduplicate & clean bronze raw to silver");
+  });
+
+  it("renders diff viewer with line numbers and copy button in review step", async () => {
+    renderDialog({ initialDraftId: "d1" });
+    expect(await screen.findByRole("button", { name: "Copy file content" })).toBeInTheDocument();
+    expect(screen.getAllByText("+2").length).toBeGreaterThanOrEqual(1);
+  });
 });
 
 describe("AIDraftDialog proposals", () => {

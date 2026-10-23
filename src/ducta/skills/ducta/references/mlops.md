@@ -105,6 +105,35 @@ ducta start --env dev --pipeline ml.churn --search --search-trials 30 # uses hyp
 `hyperparams_config` (in the pipeline) defines `algorithm: grid|random|bayesian`,
 `n_trials` and `objective.metric`. Optimise a **validation** metric, never a test one.
 
+What each option does (`ducta start --help` keeps them to one line):
+
+- `--sweep FILE`: list values in the YAML/JSON are expanded into their cartesian
+  product; one run per combination, all tagged with one `sweep_id`.
+- `--search`: a real strategy from `hyperparams_config` instead of that flat product.
+  Each trial's objective value is fed back, so Bayesian search learns between trials.
+  Each trial is a whole run with its values as `--hyperparams`; `train_with_search` fits
+  exactly those values (it searches only what the run left free). `hyperparams_config` is a
+  key in the file at `hyperparams_config_path` (or `{path, key}`), never the search itself.
+  `--search-metric` overrides `objective.metric`; `--search-trials` overrides `n_trials`.
+- By default the trial-invariant upstream nodes run once and are reused;
+  `--no-sweep-reuse` recomputes them on every trial.
+- `--sweep-parallel N` runs N trials at once, each in its own process and output
+  directory. It excludes upstream reuse and does not apply to Bayesian search (each
+  trial needs the previous result). Use it when training dominates the runtime.
+- `--max-sweep-size N` caps how many combinations a grid may expand to (default 50).
+
+## One table of all the runs
+
+`ducta.mlrun.run_summary(ml_context, pipeline=…)` returns one row per tracked run of a
+pipeline — `param_*`, `metric_*`, the registered model, `code_hash`, `data_hash`,
+`certificate_id` — as a pandas DataFrame. A node returns it and Ducta writes it where the
+catalog says (`format: parquet | delta | csv | json`, the user's choice).
+`ducta init project --type ml` scaffolds it as the `<project>_runs` pipeline and
+`gold.churn.runs`. Build it after training: `ducta start -e dev -p churn_runs`. The
+pipeline that builds it and the one it reads must share `settings.mlops_path`.
+The app shows it as Models › Experiments › All runs, and the server as
+`GET /api/mlops/run-table` (`sort_by`, `ascending`, `verify_certificates`).
+
 ## Experiments and the registry
 
 ```bash

@@ -61,6 +61,7 @@ from ducta.api.models.execution import (
     ExecutionResponse,
     LogEntry,
     QueueStatusResponse,
+    StreamingRestartResponse,
     StreamingStatusResponse,
 )
 
@@ -174,6 +175,33 @@ async def get_execution_streaming_status(
     await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
     engine = exec_manager.get_active_engine(execution_id)
     return await run_in_threadpool(streaming_status, execution_id, engine)
+
+
+@router.post(
+    "/{execution_id}/streaming/{stream_execution_id}/nodes/{node}/restart",
+    response_model=StreamingRestartResponse,
+    dependencies=[Depends(require_permission("execution.write"))],
+    summary="Restart one node's streaming query",
+    description=(
+        "Stops the node's query and starts it again from its checkpoint, leaving the rest "
+        "of the pipeline running. `stream_execution_id` is the pipeline id that "
+        "`GET /executions/{id}/streaming` reports."
+    ),
+)
+async def restart_execution_streaming_node(
+    execution_id: str,
+    stream_execution_id: str,
+    node: str,
+    exec_manager: ExecutionManagerDep,
+    current_user: Annotated[User, Depends(get_current_user)] = None,
+) -> StreamingRestartResponse:
+    user_id = current_user.id if current_user else None
+    await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
+    engine = exec_manager.get_active_engine(execution_id)
+    if engine is None or not hasattr(engine, "restart_streaming_node"):
+        raise HTTPException(status_code=409, detail="This execution holds no running stream")
+    restarted = await run_in_threadpool(engine.restart_streaming_node, stream_execution_id, node)
+    return StreamingRestartResponse(restarted=bool(restarted), node=node)
 
 
 @router.get(

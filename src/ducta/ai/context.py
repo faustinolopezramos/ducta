@@ -117,14 +117,14 @@ def _fit_functions(functions: List[str], budget: int) -> str:
 #: Credentials that commonly end up in a failed run's error text: a URL's
 #: password, ``password=…``-style settings, and bearer tokens.
 _SECRETS = (
-    (re.compile(r"(\b[a-zA-Z][\w+.-]*://[^/\s:@]+:)[^/\s@]+@"), r"\1***@"),
+    (re.compile(r"(\b[a-zA-Z][\w+.-]{0,32}://[^/\s:@]+:)[^/\s@]+@"), r"\1***@"),
     (
         # A name that *contains* a credential word (``db_password``, ``PGPASSWORD``,
         # ``AWS_SECRET_ACCESS_KEY``, ``fs.s3a.secret.key``), not only one that starts with it.
         re.compile(
-            r"(?i)(?<![A-Za-z0-9])([\w.-]*"
+            r"(?i)(?<![A-Za-z0-9])([\w.-]{0,64}"
             r"(?:password|passwd|pwd|secret|token(?!s\b)|api[_-]?key|access[_-]?key|account[_-]?key)"
-            r"[\w.-]*[\"']?\s*[=:]\s*[\"']?)[^\s\"';,&]+"
+            r"[\w.-]{0,64}[\"']?\s*[=:]\s*[\"']?)[^\s\"';,&]+"
         ),
         r"\1***",
     ),
@@ -180,7 +180,9 @@ def is_secret_name(name: Any) -> bool:
 
 
 #: Values that are placeholders, not secrets.
-_PLACEHOLDER = re.compile(r"^(?:\*+|x+|changeme|password|secret|<[^>]*>|\{[^}]*\})$", re.I)
+_PLACEHOLDER = re.compile(
+    r"^(?:\*+|x+|changeme|password|secret|none|null|nan|todo|empty|<[^>]*>|\{[^}]*\})$", re.I
+)
 #: YAML scalars that cannot be a credential (``use_token: true``).
 _YAML_WORDS = re.compile(r"^(?:true|false|yes|no|on|off|null|~)$", re.I)
 
@@ -198,10 +200,14 @@ _CODE_SECRETS = (
     (
         "a quoted password, secret, token or key",
         re.compile(
-            r"(?P<k>[A-Za-z_][\w.-]*)[\"']?\s*[=:]\s*(?P<q>[\"'])(?P<v>[^\"'\s$]{6,})(?P=q)"
+            r"(?<![\w.-])(?P<k>[A-Za-z_][\w.-]{0,63})[\"']?\s*[=:]\s*(?P<q>[\"'])"
+            r"(?P<v>[^\"'\s$]{4,})(?P=q)"
         ),
     ),
-    ("a URL with a password", re.compile(r"\b[a-zA-Z][\w+.-]*://[^/\s:@]+:(?P<v>[^/\s@$]+)@")),
+    (
+        "a URL with a password",
+        re.compile(r"\b[a-zA-Z][\w+.-]{0,32}://[^/\s:@]+:(?P<v>[^/\s@$]+)@"),
+    ),
     ("a bearer token", re.compile(r"(?i)\bbearer\s+(?P<v>[\w.~+/-]{16,}=*)")),
     (
         "an API key",
@@ -227,8 +233,44 @@ _YAML_SECRETS = (
 )
 
 
+#: ``name=value`` inside a text: a connection string (``jdbc:…;password=X``, ODBC ``PWD=X``,
+#: libpq ``host=h password=X``), a SAS URL (``?sig=X``). The name must be a credential's.
+_INNER_SECRET = re.compile(
+    r"(?<![\w.-])(?P<k>[A-Za-z][\w.-]{0,63})[ \t]*=[ \t]*(?P<v>[^\s\"';,&$\\{}()\[\]]{4,})"
+)
+#: Whatever has a shape of its own, in code or in YAML.
+_SHAPED_SECRETS = (
+    (
+        "a private key",
+        re.compile(
+            r"(?P<v>-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z))",
+            re.DOTALL,
+        ),
+    ),
+    ("a token", re.compile(r"\b(?P<v>eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,})")),
+)
+
+
+def _inside_string(text: str, at: int) -> bool:
+    """Whether *at* is, by its line, in a string (an odd number of one quote before it) or a comment."""
+    prefix = text[text.rfind("\n", 0, at) + 1 : at]
+    return prefix.count('"') % 2 == 1 or prefix.count("'") % 2 == 1 or "#" in prefix
+
+
 def _secret_spans(text: str, yaml: bool = False) -> List[tuple]:
     spans: List[tuple] = []
+    for label, pattern in _SHAPED_SECRETS:
+        for m in pattern.finditer(text):
+            spans.append((m.start("v"), m.end("v"), label))
+    for m in _INNER_SECRET.finditer(text):
+        value = m.group("v")
+        if _is_placeholder(value) or _YAML_WORDS.match(value) or not is_secret_name(m.group("k")):
+            continue
+        # In Python only inside a string (``password=os.environ[…]`` is code); YAML values are text.
+        if yaml or _inside_string(text, m.start("k")):
+            span = (m.start("v"), m.end("v"), "a password, secret or key inside a text")
+            if span not in spans:
+                spans.append(span)
     for label, pattern in _CODE_SECRETS + (_YAML_SECRETS if yaml else ()):
         for m in pattern.finditer(text):
             value = m.group("v")
@@ -252,8 +294,12 @@ def find_secrets(text: str, yaml: bool = False) -> List[str]:
 
 def redact_code(text: str, yaml: bool = False) -> str:
     """*text* (code or, with *yaml*, YAML) with what :func:`find_secrets` sees replaced by ``***``."""
+    limit = len(text)
     for start, end, _ in sorted(_secret_spans(text, yaml), reverse=True):
+        if end > limit:
+            continue  # inside a span already masked
         text = text[:start] + "***" + text[end:]
+        limit = start
     return text
 
 

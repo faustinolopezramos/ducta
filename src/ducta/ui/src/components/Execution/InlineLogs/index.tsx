@@ -89,6 +89,7 @@ export function InlineLogs({
     levelCounts,
     totalCount,
     anyFilter,
+    newLogsCount,
     collapsedSections,
     toggleSection,
   } = useInlineLogsState(propsLogs);
@@ -399,7 +400,7 @@ export function InlineLogs({
                 />
               )}
 
-              {/* Scroll to latest button */}
+              {/* Sticky Scroll to latest button with new count */}
               {!autoScroll && flattenedItems.length > 0 && (
                 <div className="ilog__scroll-to-latest">
                   <button
@@ -407,10 +408,18 @@ export function InlineLogs({
                       setAutoScroll(true);
                       virtuosoRef.current?.scrollToIndex({ index: flattenedItems.length - 1, behavior: "smooth" });
                     }}
-                    className="ilog__scroll-btn"
+                    className={`ilog__scroll-btn${newLogsCount > 0 ? " ilog__scroll-btn--has-new" : ""}`}
+                    title="Jump to latest output (or press G)"
                   >
                     <IconArrowDown size={12} stroke={2.5} />
-                    Latest
+                    {newLogsCount > 0 ? (
+                      <>
+                        <span className="ilog__scroll-new-badge">+{newLogsCount}</span>
+                        <span>New logs · Latest</span>
+                      </>
+                    ) : (
+                      "Scroll to bottom"
+                    )}
                   </button>
                 </div>
               )}

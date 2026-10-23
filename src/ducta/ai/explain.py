@@ -79,7 +79,9 @@ def _code_around(root: Path, frame: Optional[Dict[str, Any]], remote: bool) -> s
     if not frame or not frame.get("file") or not frame.get("line"):
         return ""
     path = (root / str(frame["file"])).resolve()
-    if not path.is_relative_to(root.resolve()) or not path.is_file():
+    # The frame comes from the run's own error text: only a Python file of the project is read
+    # (not ``.env`` or ``sources.yaml``, whatever the text names).
+    if path.suffix != ".py" or not path.is_relative_to(root.resolve()) or not path.is_file():
         return ""
     try:
         lines = path.read_text(encoding="utf-8").splitlines()

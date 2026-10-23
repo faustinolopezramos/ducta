@@ -115,4 +115,21 @@ describe("PipelineReview", () => {
     await waitFor(() => expect(posts.at(-1)?.body).toEqual({ kind: "review_pipeline", pipeline: "silver.sales", env: "dev" }));
     expect(await screen.findByText(/Reviewing silver.sales/)).toBeInTheDocument();
   });
+
+  it("filters findings by severity and area chips", async () => {
+    renderIt();
+    expect(await screen.findByText("Compares amount before casting it")).toBeInTheDocument();
+    expect(screen.getByText("No owner")).toBeInTheDocument();
+
+    // Filter to high only
+    const highBtn = screen.getByRole("button", { name: /^high/i });
+    fireEvent.click(highBtn);
+    expect(screen.getByText("Compares amount before casting it")).toBeInTheDocument();
+    expect(screen.queryByText("No owner")).not.toBeInTheDocument();
+
+    // Reset to all
+    const allSevBtn = screen.getAllByRole("button", { name: /^all/i })[0];
+    fireEvent.click(allSevBtn);
+    expect(screen.getByText("No owner")).toBeInTheDocument();
+  });
 });

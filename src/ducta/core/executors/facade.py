@@ -210,6 +210,7 @@ class PipelineExecutor:
                 ended_at=datetime.now(timezone.utc),
                 status=result.status.value,
                 error=result.primary_error,
+                mlops_run_id=result.mlops_run_id,
             )
             result.certificate_path = cert_path
             result.certificate_error = cert_error
@@ -312,6 +313,7 @@ class PipelineExecutor:
         ended_at: Any,
         status: str,
         error: Optional[str],
+        mlops_run_id: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Assemble and persist the Run Certificate."""
         try:
@@ -343,6 +345,7 @@ class PipelineExecutor:
                 ended_at=ended_at,
                 ducta_version=ducta_version,
                 error=error,
+                mlops_run_id=mlops_run_id,
             )
             signing_key = cert_mod.resolve_signing_key(self.context)
             if signing_key is not None:
@@ -470,11 +473,18 @@ class PipelineExecutor:
         )
 
     def restart_streaming_node(self, execution_id: str, node_name: str) -> bool:
-        """Restart a specific node in a running streaming pipeline."""
-        return self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.restart_node(execution_id, node_name),
-            False,
-        )
+        """Restart a specific node in a running streaming pipeline.
+
+        The execution belongs to whichever executor started it (a streaming run, or the
+        streaming phase of a hybrid one); neither is created just to be asked.
+        """
+        for executor in (self._streaming_executor, self._hybrid_executor):
+            manager = getattr(executor, "streaming_manager", None)
+            if manager is not None and manager.has_execution(execution_id):
+                return self._safe_streaming(
+                    lambda m=manager: m.restart_node(execution_id, node_name), False
+                )
+        return False
 
     def get_streaming_pipeline_metrics(self, execution_id: str) -> Dict[str, Any]:
         """Get metrics for a streaming pipeline."""
@@ -1036,12 +1046,13 @@ class PipelineExecutor:
     def _stop_streaming_queries(self) -> None:
         """Stop active streaming queries if the manager supports it"""
 
-        if self._streaming_executor is None:
-            return
-        try:
-            self.streaming_executor.shutdown()
-        except Exception:
-            pass
+        for executor in (self._streaming_executor, self._hybrid_executor):
+            if executor is None:
+                continue
+            try:
+                executor.shutdown()
+            except Exception:
+                pass
 
     def _release_connection_pools(self) -> None:
         """Release all database connections"""

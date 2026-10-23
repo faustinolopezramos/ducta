@@ -45,6 +45,20 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
   const isConnected = useLogsStore((s) => s.isConnected);
   const bumpReconnect = useLogsStore((s) => s.bumpReconnectSignal);
   const wasEverConnected = useRef(false);
+  const [prevAutoScroll, setPrevAutoScroll] = useState(autoScroll);
+  const [frozenLogCount, setFrozenLogCount] = useState<number | null>(autoScroll ? null : currentLogs.length);
+
+  if (autoScroll !== prevAutoScroll) {
+    setPrevAutoScroll(autoScroll);
+    setFrozenLogCount(autoScroll ? null : currentLogs.length);
+  } else if (!autoScroll && frozenLogCount !== null && currentLogs.length < frozenLogCount) {
+    // A new run cleared the logs while we were paused
+    setFrozenLogCount(currentLogs.length);
+  }
+
+  const newLogsCount = !autoScroll && frozenLogCount !== null
+    ? Math.max(0, currentLogs.length - frozenLogCount)
+    : 0;
   // Both the set and the reset live here: writing a ref during render is not
   // safe under concurrent rendering, and splitting the two halves across a
   // render-phase write and an effect made their ordering depend on it.
@@ -162,6 +176,7 @@ export function useInlineLogsState(propsLogs?: LogEntry[]) {
     levelCounts,
     totalCount,
     anyFilter,
+    newLogsCount,
     collapsedSections,
     toggleSection,
   };

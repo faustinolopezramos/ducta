@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ducta.mlrun.persistence import infer_schema, persist_model
+from ducta.mlrun.persistence import infer_schema, log_run_metrics, persist_model
 
 
 class _FakeDataFrame:
@@ -231,3 +231,84 @@ class TestNativeFormat:
         assert seen["artifact_path"].endswith("m.json")
         assert seen["artifact_type"] == "xgboost"
         assert seen["existed"] is True
+
+
+class _FakeTracker:
+    def __init__(self, fail_on=()):
+        self.logged = []
+        self._fail_on = fail_on
+
+    def log_metric(self, run_id, key, value):
+        if key in self._fail_on:
+            raise ValueError("NaN")
+        self.logged.append((run_id, key, value))
+
+
+def _tracked(tracker, registry=None):
+    mlops = SimpleNamespace(experiment_tracker=tracker, model_registry=registry)
+    return SimpleNamespace(mlops_context=mlops, mlops_run_id="run-1", model_version=None)
+
+
+class TestMetricsReachTheRun:
+    """`persist_model(metrics=...)` used to feed the registry only, leaving the run with
+    no metrics: `ducta experiment show` printed "(none)" and a sweep could not be ranked."""
+
+    def test_persist_model_logs_its_metrics_to_the_tracked_run(self, tmp_path):
+        tracker = _FakeTracker()
+
+        persist_model(
+            {"w": 1},
+            _tracked(tracker),
+            "m",
+            metrics={"val_auc": 0.9, "test_f1": 0.7},
+            base_dir=str(tmp_path),
+        )
+
+        assert tracker.logged == [("run-1", "val_auc", 0.9), ("run-1", "test_f1", 0.7)]
+
+    def test_log_to_run_false_leaves_the_run_alone(self, tmp_path):
+        tracker = _FakeTracker()
+
+        persist_model(
+            {"w": 1},
+            _tracked(tracker),
+            "m",
+            metrics={"val_auc": 0.9},
+            base_dir=str(tmp_path),
+            log_to_run=False,
+        )
+
+        assert tracker.logged == []
+
+    def test_a_bad_metric_is_skipped_and_the_rest_are_logged(self):
+        tracker = _FakeTracker(fail_on=("bad",))
+
+        log_run_metrics(_tracked(tracker), {"bad": float("nan"), "good": 0.5, "text": "x"})
+
+        assert tracker.logged == [("run-1", "good", 0.5)]
+
+    def test_a_boolean_is_not_a_metric(self):
+        tracker = _FakeTracker()
+
+        log_run_metrics(_tracked(tracker), {"flag": True, "n": 3})
+
+        assert tracker.logged == [("run-1", "n", 3)]
+
+    def test_without_a_tracked_run_nothing_happens(self, tmp_path):
+        ml_context = SimpleNamespace(mlops_context=None, mlops_run_id=None, model_version=None)
+
+        persist_model({"w": 1}, ml_context, "m", metrics={"a": 1.0}, base_dir=str(tmp_path))
+        log_run_metrics(None, {"a": 1.0})  # no context at all
+
+    def test_the_registry_still_receives_the_metrics(self):
+        registered = SimpleNamespace(version=1, artifact_uri="x")
+
+        class _Registry:
+            def register_model(self, **kwargs):
+                self.kwargs = kwargs
+                return registered
+
+        registry = _Registry()
+        persist_model({"w": 1}, _tracked(_FakeTracker(), registry), "m", metrics={"a": 1.0})
+
+        assert registry.kwargs["metrics"] == {"a": 1.0}

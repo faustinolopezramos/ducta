@@ -39,7 +39,7 @@ from ducta.stream.exceptions import StreamingValidationError, handle_streaming_e
 INPUT_OPTIONS_FIELD = "input.options"
 NON_EMPTY_STRING = "non-empty string"
 TRIGGER_INTERVAL_FIELD = "streaming.trigger.interval"
-DEFAULT_SUPPORTED_OUTPUT_FORMATS = ["console", "delta", "parquet", "kafka", "json", "csv"]
+DEFAULT_SUPPORTED_OUTPUT_FORMATS = ["console", "memory", "delta", "parquet", "kafka", "json", "csv"]
 ALLOWED_FILE_FORMATS = {"parquet", "json", "csv", "orc", "text", "avro"}
 RESERVED_OUTPUT_KEYS = {"trigger", "outputMode", "checkpointLocation", "queryName"}
 
@@ -194,6 +194,14 @@ class StreamingValidator:
                         f"Node '{node_name}' input list cannot be empty",
                         field="input/inputs",
                     )
+                if len(final_inputs) > 1:
+                    raise StreamingValidationError(
+                        f"Node '{node_name}' declares {len(final_inputs)} inputs; a streaming "
+                        "node reads exactly one source",
+                        field="input/inputs",
+                        expected="a single input",
+                        actual=str(len(final_inputs)),
+                    )
                 for idx, input_spec in enumerate(final_inputs):
                     self._validate_streaming_input_config(input_spec, f"{node_name}[input:{idx}]")
             else:
@@ -217,6 +225,14 @@ class StreamingValidator:
                     raise StreamingValidationError(
                         f"Node '{node_name}' output list cannot be empty",
                         field="output/outputs",
+                    )
+                if len(final_outputs) > 1:
+                    raise StreamingValidationError(
+                        f"Node '{node_name}' declares {len(final_outputs)} outputs; a streaming "
+                        "node writes to exactly one sink",
+                        field="output/outputs",
+                        expected="a single output",
+                        actual=str(len(final_outputs)),
                     )
                 for idx, output_spec in enumerate(final_outputs):
                     self._validate_streaming_output_config(
@@ -255,20 +271,15 @@ class StreamingValidator:
         Supports both dictionary configurations and simplified string references (paths/tables).
         """
         try:
-            # Handle shorthand string configuration (treat as path/reference)
-            if isinstance(input_config, str):
-                if not input_config.strip():
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' input configuration cannot be an empty string",
-                        field="input",
-                    )
-                return  # Basic string references are valid shorthands
-
+            # A bare string used to pass here as a "path shorthand", but the
+            # engine needs the format and options a string cannot carry and
+            # failed later with an AttributeError.
             if not isinstance(input_config, dict):
                 raise StreamingValidationError(
-                    f"Node '{node_name}' input configuration must be a dictionary or string",
+                    f"Node '{node_name}' input configuration must be a dictionary "
+                    "with at least a 'format'",
                     field="input",
-                    expected="dict or str",
+                    expected="dict",
                     actual=str(type(input_config)),
                 )
 
@@ -279,6 +290,8 @@ class StreamingValidator:
                     f"Node '{node_name}' input must specify 'format'",
                     field="input.format",
                 )
+            # The factories resolve formats case-insensitively; so does this.
+            format_type = str(format_type).strip().lower()
 
             # Use policy if available, otherwise use default enums
             valid_formats = (
@@ -353,20 +366,12 @@ class StreamingValidator:
         Supports both dictionary configurations and simplified string references.
         """
         try:
-            # Handle shorthand string configuration
-            if isinstance(output_config, str):
-                if not output_config.strip():
-                    raise StreamingValidationError(
-                        f"Node '{node_name}' output configuration cannot be an empty string",
-                        field="output",
-                    )
-                return
-
             if not isinstance(output_config, dict):
                 raise StreamingValidationError(
-                    f"Node '{node_name}' output configuration must be a dictionary or string",
+                    f"Node '{node_name}' output configuration must be a dictionary "
+                    "with at least a 'format'",
                     field="output",
-                    expected="dict or str",
+                    expected="dict",
                     actual=str(type(output_config)),
                 )
 
@@ -377,6 +382,7 @@ class StreamingValidator:
                     f"Node '{node_name}' output must specify 'format'",
                     field="output.format",
                 )
+            format_type = str(format_type).strip().lower()
 
             # Optional policy validation for output formats
             valid_outputs = (
@@ -611,7 +617,7 @@ class StreamingValidator:
 
         # Validate bootstrap servers format
         bootstrap_servers = options.get("kafka.bootstrap.servers")
-        if bootstrap_servers:
+        if bootstrap_servers is not None:
             if not isinstance(bootstrap_servers, str):
                 raise StreamingValidationError(
                     f"Node '{node_name}' kafka.bootstrap.servers must be a string",
@@ -897,11 +903,11 @@ class StreamingValidator:
         delay_minutes = self._parse_time_to_minutes(delay)
         max_delay = STREAMING_VALIDATIONS["max_watermark_delay_minutes"]
         if delay_minutes > max_delay:
-            raise StreamingValidationError(
-                f"Node '{node_name}' watermark delay '{delay}' exceeds maximum allowed delay of {max_delay} minutes",
-                field=f"{field_prefix}.delay",
-                expected=f"<= {max_delay} minutes",
-                actual=f"{delay_minutes} minutes",
+            # Late-arriving data can legitimately need hours; the cost is state
+            # kept for that long, so say so instead of refusing the pipeline.
+            logger.warning(
+                f"Node '{node_name}' watermark delay '{delay}' exceeds {max_delay} minutes: "
+                "Spark keeps aggregation state for that long, which grows memory use"
             )
 
     def _validate_trigger_config(self, trigger: Dict[str, Any], node_name: str) -> None:
@@ -916,7 +922,7 @@ class StreamingValidator:
 
         # Validate trigger type — defaults to processing_time when omitted,
         # matching TriggerScheduler.configure_trigger's runtime behavior.
-        trigger_type = trigger.get("type", StreamingTrigger.PROCESSING_TIME.value)
+        trigger_type = str(trigger.get("type", StreamingTrigger.PROCESSING_TIME.value)).lower()
 
         valid_triggers = [t.value for t in StreamingTrigger]
         if trigger_type not in valid_triggers:

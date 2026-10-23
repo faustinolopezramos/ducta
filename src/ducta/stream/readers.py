@@ -92,7 +92,7 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
             missing_options = [
                 opt
                 for opt in required_options
-                if provided_options.get(opt) is None and config.get(opt) is None
+                if provided_options.get(opt) in (None, "") and config.get(opt) in (None, "")
             ]
             if missing_options:
                 raise StreamingError(
@@ -212,7 +212,9 @@ class KafkaStreamingReader(BaseStreamingReader):
             logger.info(f"Creating Kafka streaming reader (bootstrap servers: {bs})")
 
             subscription_options = ["subscribe", "subscribePattern", "assign"]
-            provided_subscriptions = [opt for opt in subscription_options if opt in options]
+            provided_subscriptions = [
+                opt for opt in subscription_options if options.get(opt) not in (None, "")
+            ]
             if len(provided_subscriptions) != 1:
                 raise StreamingError(
                     f"Exactly one of {subscription_options} must be provided for Kafka stream"
@@ -247,7 +249,13 @@ class KafkaStreamingReader(BaseStreamingReader):
 
 
 class DeltaStreamingReader(BaseStreamingReader):
-    """Streaming reader for Delta Lake change data feed."""
+    """Streaming reader for Delta Lake tables.
+
+    A plain read streams the table's appended data. Set
+    ``input.options.readChangeFeed: true`` to stream its change data feed
+    instead; only then does ``auto_enable_cdf`` (default true) turn the feed on
+    for a table that lacks it. A read never touches the source table otherwise.
+    """
 
     FORMAT_NAME = StreamingFormat.DELTA_STREAM.value
 
@@ -262,10 +270,16 @@ class DeltaStreamingReader(BaseStreamingReader):
 
             path_str = str(path)
 
-            if self._coerce_bool(config.get("auto_enable_cdf", True)):
+            # The source table is only altered when the change feed was asked
+            # for: enabling CDF is a write to a table this node merely reads, and
+            # the ``startingVersion=latest`` it implies would skip every row the
+            # table already holds on a plain read.
+            if self._coerce_bool(options.get("readChangeFeed", False)) and self._coerce_bool(
+                config.get("auto_enable_cdf", True)
+            ):
                 self._ensure_cdf_enabled(path_str, options)
 
-            logger.info(f"Creating Delta CDF streaming reader with options: {list(options.keys())}")
+            logger.info(f"Creating Delta streaming reader with options: {list(options.keys())}")
 
             reader = self._spark_read_stream().format("delta")
             reader = self._apply_options(reader, self._merge_backpressure_defaults(options))
@@ -280,9 +294,9 @@ class DeltaStreamingReader(BaseStreamingReader):
     def _ensure_cdf_enabled(self, path: str, options: dict) -> None:
         """Enable CDF on an existing Delta table if it was created without it.
 
-        When CDF was not active for historical versions, also injects
-        startingVersion=latest so the reader skips non-CDF history and starts
-        clean from the current table state.
+        Called only for ``readChangeFeed`` reads. When CDF was not active for
+        historical versions, also injects startingVersion=latest so the reader
+        skips non-CDF history and starts clean from the current table state.
         """
         try:
             from delta.tables import DeltaTable  # type: ignore
@@ -407,8 +421,63 @@ class KinesisStreamingReader(BaseStreamingReader):
         except StreamingError:
             raise
         except Exception as e:
-            logger.error(f"Error creating Kinesis streaming reader: {str(e)}")
-            raise StreamingError(f"Failed to create Kinesis stream: {str(e)}") from e
+            message = str(e)
+            if "failed to find data source: kinesis" in message.lower():
+                message += (
+                    ". Spark has no built-in Kinesis source: add a connector that "
+                    "provides the 'kinesis' format to global_config.spark_config "
+                    "('spark.jars.packages') before using it"
+                )
+            logger.error(f"Error creating Kinesis streaming reader: {message}")
+            raise StreamingError(f"Failed to create Kinesis stream: {message}") from e
+
+
+class RateStreamingReader(BaseStreamingReader):
+    """Streaming reader for Spark's built-in ``rate`` source (synthetic rows).
+
+    Generates ``timestamp`` and ``value`` columns at ``rowsPerSecond``. Handy for
+    trying a pipeline, a transform or a sink without any external system.
+    """
+
+    FORMAT_NAME = StreamingFormat.RATE.value
+
+    def read_stream(self, config: Dict[str, Any]) -> DataFrame:
+        try:
+            self._validate_options(config, self.FORMAT_NAME)
+            options = config.get("options", {}) or {}
+            logger.info(f"Creating rate streaming reader with options: {list(options.keys())}")
+            reader = self._apply_options(self._spark_read_stream().format("rate"), options)
+            return reader.load()
+        except StreamingError:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating rate streaming reader: {str(e)}")
+            raise StreamingError(f"Failed to create rate stream: {str(e)}") from e
+
+
+class SocketStreamingReader(BaseStreamingReader):
+    """Streaming reader for Spark's built-in ``socket`` source (text lines over TCP).
+
+    For development only: Spark documents it as not fault tolerant.
+    """
+
+    FORMAT_NAME = StreamingFormat.SOCKET.value
+
+    def read_stream(self, config: Dict[str, Any]) -> DataFrame:
+        try:
+            self._validate_options(config, self.FORMAT_NAME)
+            options = config.get("options", {}) or {}
+            logger.warning(
+                "Socket source is for development only: it is not fault tolerant and "
+                "cannot resume from a checkpoint"
+            )
+            reader = self._apply_options(self._spark_read_stream().format("socket"), options)
+            return reader.load()
+        except StreamingError:
+            raise
+        except Exception as e:
+            logger.error(f"Error creating socket streaming reader: {str(e)}")
+            raise StreamingError(f"Failed to create socket stream: {str(e)}") from e
 
 
 class StreamingReaderFactory(StreamingHandlerFactory):
@@ -424,6 +493,11 @@ class StreamingReaderFactory(StreamingHandlerFactory):
             StreamingFormat.DELTA_STREAM.value: (DeltaStreamingReader, (), {}),
             StreamingFormat.FILE_STREAM.value: (FileStreamReader, (), {}),
             StreamingFormat.KINESIS.value: (KinesisStreamingReader, (), {}),
+            StreamingFormat.RATE.value: (RateStreamingReader, (), {}),
+            StreamingFormat.SOCKET.value: (SocketStreamingReader, (), {}),
+            # The default FormatPolicy lists "delta" as a streaming input; it
+            # means the same source as "delta_stream".
+            "delta": (DeltaStreamingReader, (), {}),
         }
 
     def get_reader(self, format_name: str) -> BaseStreamingReader:

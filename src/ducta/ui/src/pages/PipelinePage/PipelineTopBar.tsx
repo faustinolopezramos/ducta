@@ -1,11 +1,12 @@
 import { Link } from "react-router-dom";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconCheck, IconChevronDown, IconPlayerPlay, IconPlayerStop } from "@tabler/icons-react";
+import { IconCheck, IconChevronDown, IconPlayerPlay, IconPlayerStop, IconShieldExclamation, IconWaveSine } from "@tabler/icons-react";
 import { Button } from "../../components/ui/Button";
 import { envKind } from "../../components/Shell/envKind";
 import { useSourceStore } from "../../store/workspace";
 import { routes } from "../../utils/routes";
 import { useCommandMenu } from "../../components/Shell/commandStore";
+import { formatRowRate, runningText, type StreamSummary } from "../../utils/streaming";
 
 interface PipelineTopBarProps {
   projectId: string;
@@ -31,6 +32,10 @@ interface PipelineTopBarProps {
   runBlocked?: string | null;
   /** What the AI offers on this pipeline (review it, add nodes), before Validate. */
   aiActions?: ReactNode;
+  /** A streaming pipeline that is running: how many queries are up and what they process. */
+  streamSummary?: StreamSummary | null;
+  /** Open the dedicated streaming telemetry tab in the dock. */
+  onOpenStream?: () => void;
 }
 
 export interface RunOption {
@@ -114,7 +119,12 @@ export function PipelineTopBar({
   chain,
   chainStatus,
   runOptions,
+  streamSummary = null,
+  onOpenStream,
 }: PipelineTopBarProps) {
+  // A stream is started and stopped, not run: it has no end, no dates and no "only what
+  // changed", so the batch wording and partial-run menu would be wrong for it.
+  const isStream = pipelineType.toLowerCase() === "streaming";
   // Chosen once for the whole app, in the header; the Run button names it.
   const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
   // A long chain scrolls: keep this pipeline's pill in view.
@@ -142,7 +152,11 @@ export function PipelineTopBar({
         >
           <IconChevronDown size={12} stroke={1.8} aria-hidden="true" />
         </button>
-        <span className="pipeline-type-tag" title="Pipeline type — change it in the YAML lens">
+        <span
+          className={`pipeline-type-tag${isStream ? " pipeline-type-tag--stream" : ""}`}
+          title={isStream ? "Streaming pipeline (Spark Structured Streaming)" : "Pipeline type — change it in the YAML lens"}
+        >
+          {isStream && <IconWaveSine size={12} stroke={2} aria-hidden="true" />}
           {pipelineType.toLowerCase() === "ml" ? "ML" : pipelineType}
         </span>
       </nav>
@@ -175,6 +189,12 @@ export function PipelineTopBar({
       )}
 
       <div className="pipeline-topbar-actions">
+        {envKind(activeEnv) === "prod" && (
+          <span className="pipeline-prod-shield" title="Protected production environment">
+            <IconShieldExclamation size={14} stroke={2} aria-hidden="true" />
+            <span>PROD</span>
+          </span>
+        )}
         {aiActions}
         <Button
           variant="ghost"
@@ -185,9 +205,50 @@ export function PipelineTopBar({
         >
           Validate
         </Button>
+        {isStream && isExecuting && (
+          <span
+            className="stream-pill-wrap"
+            role="status"
+            data-state={streamSummary?.status ?? "starting"}
+          >
+            {onOpenStream ? (
+              <button
+                type="button"
+                className="stream-pill stream-pill--interactive"
+                onClick={onOpenStream}
+                title="Click to open live stream monitor"
+              >
+                <span className="stream-pill-dot" aria-hidden="true" />
+                {streamSummary
+                  ? `${runningText(streamSummary.up, streamSummary.total)}${
+                      streamSummary.rate != null ? ` · ${formatRowRate(streamSummary.rate)}` : ""
+                    }`
+                  : "Starting…"}
+              </button>
+            ) : (
+              <span
+                className="stream-pill"
+                title="Live state of the stream's queries"
+              >
+                <span className="stream-pill-dot" aria-hidden="true" />
+                {streamSummary
+                  ? `${runningText(streamSummary.up, streamSummary.total)}${
+                      streamSummary.rate != null ? ` · ${formatRowRate(streamSummary.rate)}` : ""
+                    }`
+                  : "Starting…"}
+              </span>
+            )}
+          </span>
+        )}
         {isExecuting ? (
-          <Button variant="danger" size="sm" onClick={onCancel} leftIcon={<IconPlayerStop size={15} stroke={1.75} />}>
-            Stop
+          <Button
+            variant="danger"
+            size="sm"
+            onClick={onCancel}
+            title={isStream ? "Stop the stream: the queries finish their current batch and stop" : undefined}
+            leftIcon={<IconPlayerStop size={15} stroke={1.75} />}
+          >
+            {isStream ? "Stop stream" : "Stop"}
           </Button>
         ) : (
           <Button
@@ -195,13 +256,13 @@ export function PipelineTopBar({
             size="sm"
             onClick={onExecute}
             disabled={!hasNodes || !!runBlocked}
-            title={runBlocked ?? `Run pipeline in ${activeEnv}`}
+            title={runBlocked ?? (isStream ? `Start the stream in ${activeEnv}` : `Run pipeline in ${activeEnv}`)}
             leftIcon={<IconPlayerPlay size={15} stroke={1.75} />}
           >
-            Run <span className="pipeline-run-env" data-env-kind={envKind(activeEnv)}>{activeEnv}</span>
+            {isStream ? "Start stream" : "Run"} <span className="pipeline-run-env" data-env-kind={envKind(activeEnv)}>{activeEnv}</span>
           </Button>
         )}
-        {!isExecuting && !runBlocked && runOptions && runOptions.length > 0 && (
+        {!isStream && !isExecuting && !runBlocked && runOptions && runOptions.length > 0 && (
           <RunMenu options={runOptions} />
         )}
       </div>

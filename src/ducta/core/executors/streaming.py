@@ -41,6 +41,7 @@ class StreamingExecutor(BaseExecutor):
     def __init__(self, context: Context, settings: Optional[CoreSettings] = None):
         super().__init__(context, settings=settings)
         max_streaming_pipelines = self.settings.max_streaming_pipelines
+        self._max_streaming_pipelines = max_streaming_pipelines
         self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
         self._exit_stack = ExitStack()
         self._active_execution_id = None
@@ -54,8 +55,12 @@ class StreamingExecutor(BaseExecutor):
         self.node_executor.pipeline_name = pipeline_name
         logger.info("Executing streaming pipeline: {}", pipeline_name)
 
+        self._ensure_manager()
         pipeline = self._get_pipeline_config(pipeline_name)
-        running_pipelines = self.streaming_manager.list_running_pipelines()
+        # Definitions, not status snapshots: the snapshots do not carry them.
+        running_pipelines = [
+            {"pipeline_config": cfg} for cfg in self.streaming_manager.running_pipeline_configs()
+        ]
         conflicts = self._check_resource_conflicts(pipeline, running_pipelines)
 
         if conflicts:
@@ -87,6 +92,14 @@ class StreamingExecutor(BaseExecutor):
             self.shutdown()
 
         return execution_id
+
+    def _ensure_manager(self) -> None:
+        """Replace a manager that a previous run shut down (a synchronous run
+        ends with :meth:`shutdown`), so the executor can run again."""
+        if getattr(self.streaming_manager, "is_shut_down", False):
+            self.streaming_manager = StreamingPipelineManager(
+                self.context, self._max_streaming_pipelines
+            )
 
     @property
     def active_execution_id(self) -> Optional[str]:
@@ -230,6 +243,13 @@ class StreamingExecutor(BaseExecutor):
     def _wait_for_streaming_pipeline(
         self, execution_id: str, timeout_seconds: Optional[int] = None
     ) -> None:
-        """Wait for streaming pipeline to reach a terminal state."""
-        _timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
-        self.streaming_manager.wait_for_pipeline_done(execution_id, timeout=float(_timeout))
+        """Wait for streaming pipeline to reach a terminal state.
+
+        Without *timeout_seconds* it waits as long as the queries run: a
+        continuous stream is meant to, and ``execution_timeout_seconds`` bounds
+        batch work, not a stream (stopping it silently after an hour is what the
+        server-side run used to do). Cancelling the run stops the pipeline, which
+        ends the wait.
+        """
+        timeout = float(timeout_seconds) if timeout_seconds is not None else None
+        self.streaming_manager.wait_for_pipeline_done(execution_id, timeout=timeout)

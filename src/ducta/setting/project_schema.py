@@ -743,7 +743,7 @@ class IngestNode(_NodeBase):
     ingest: IngestSpec
 
 
-_TRIGGER_TYPES = ("processing_time", "once", "continuous", "available_now")
+_TRIGGER_TYPES = ("processing_time", "once", "continuous", "available_now", "adaptive")
 _INTERVAL_UNITS = {
     "s": "seconds",
     "sec": "seconds",
@@ -766,7 +766,7 @@ def _normalise_trigger(value: Any) -> Dict[str, Any]:
     """``10s`` / ``5 minutes`` / ``available_now`` / ``{type, interval}`` → ``{type, interval}``."""
     if isinstance(value, str):
         text = value.strip().lower()
-        if text in ("available_now", "once"):
+        if text in ("available_now", "once", "adaptive"):
             return {"type": text}
         match = re.fullmatch(r"(\d+)\s*([a-z]+)", text)
         if match and match.group(2) in _INTERVAL_UNITS:
@@ -775,8 +775,8 @@ def _normalise_trigger(value: Any) -> Dict[str, Any]:
                 "interval": f"{match.group(1)} {_INTERVAL_UNITS[match.group(2)]}",
             }
         raise ValueError(
-            f"trigger {value!r} is not an interval ('10s', '5 minutes'), 'available_now' "
-            "or 'once'; use {type: ..., interval: ...} for a continuous trigger"
+            f"trigger {value!r} is not an interval ('10s', '5 minutes'), 'available_now', "
+            "'once' or 'adaptive'; use {type: ..., interval: ...} for a continuous trigger"
         )
     if not isinstance(value, dict):
         raise ValueError("trigger must be an interval like '10s' or a {type, interval} mapping")
@@ -808,7 +808,7 @@ class StreamingSpec(_Strict):
     )
     trigger: Optional[Union[str, Dict[str, Any]]] = Field(
         default=None,
-        description="'10s' | '5 minutes' | 'available_now' | 'once' | {type, interval}",
+        description="'10s' | '5 minutes' | 'available_now' | 'once' | 'adaptive' | {type, interval}",
     )
     output_mode: Optional[Literal["append", "update", "complete"]] = None
     query_name: Optional[str] = None

@@ -1051,7 +1051,15 @@ def _run(
             interrupted = f"Attempt {number} did not complete: {e.message}"
             break
         answer = parse_answer(completion.text)
-        assembled = assembler(answer) if assembler else assemble(root, ctx, answer, scope)
+        if assembler:
+            assembled = assembler(answer)
+        else:
+            # ``new`` and ``fix``: the code the draft adds is held to the same review as an
+            # extension's or Architect's (what was already in a file is not the draft's).
+            from ducta.ai.extend import new_code_problems
+
+            assembled = assemble(root, ctx, answer, scope)
+            assembled.rejected += new_code_problems(root, assembled.files)
         assembled.base.update({rel: sha for rel, sha in seen.items() if rel in assembled.files})
         problems = _validate(root, assembled.files) if assembled.files else []
         blocking = _judge(problems, baseline, scope)

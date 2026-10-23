@@ -216,7 +216,14 @@ export function RunPage() {
           }
         />
       )}
-      {failed && canUseAI && <AIExplanation projectId={projectId} executionId={run.id} requested={explainAsked} />}
+      {failed && canUseAI && (
+        <AIExplanation
+          projectId={projectId}
+          executionId={run.id}
+          requested={explainAsked}
+          onDraftFix={() => setAiFixOpen(true)}
+        />
+      )}
 
       <section className="run-page__section" aria-labelledby="run-graph">
         <h2 id="run-graph" className="run-page__h">On the graph</h2>

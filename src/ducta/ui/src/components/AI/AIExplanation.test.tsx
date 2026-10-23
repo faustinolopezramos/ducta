@@ -28,11 +28,11 @@ const { AIExplanation, renderExplanation } = await import("./AIExplanation");
 
 const TEXT = "**What happened** load failed.\n**What to do**\n1. Use `.agg(...)` in pipelines/etl.py\n2. Run it in dev";
 
-function renderIt(requested = 0) {
+function renderIt(requested = 0, onDraftFix?: () => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (n: number) => (
     <QueryClientProvider client={client}>
-      <AIExplanation projectId="shop" executionId="run-1" requested={n} />
+      <AIExplanation projectId="shop" executionId="run-1" requested={n} onDraftFix={onDraftFix} />
     </QueryClientProvider>
   );
   const view = render(ui(requested));
@@ -80,6 +80,16 @@ describe("AIExplanation", () => {
     const { rerender } = renderIt();
     rerender(1);
     expect(await screen.findByRole("alert")).toHaveTextContent("Cannot reach");
+  });
+
+  it("shows action buttons and triggers onDraftFix", async () => {
+    kept = { execution_id: "run-1", text: TEXT, model: "qwen", created_at: new Date().toISOString() };
+    const onDraftFix = vi.fn();
+    renderIt(0, onDraftFix);
+    expect(await screen.findByRole("button", { name: "Copy explanation" })).toBeInTheDocument();
+    const fixBtn = screen.getByRole("button", { name: "Draft fix with AI" });
+    fireEvent.click(fixBtn);
+    expect(onDraftFix).toHaveBeenCalledTimes(1);
   });
 });
 

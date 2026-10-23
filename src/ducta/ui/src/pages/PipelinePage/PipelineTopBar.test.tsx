@@ -67,3 +67,61 @@ describe("PipelineTopBar", () => {
     expect(screen.queryByRole("combobox", { name: "Environment" })).toBeNull();
   });
 });
+
+describe("PipelineTopBar for a streaming pipeline", () => {
+  const stream = { pipelineType: "streaming" };
+
+  it("starts a stream rather than running a pipeline, with no partial-run menu", () => {
+    renderBar({ ...stream, runOptions: [{ label: "Only what changed", onSelect: () => {} }] } as never);
+    expect(screen.getByRole("button", { name: /Start stream/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Run/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Run part of the pipeline" })).toBeNull();
+  });
+
+  it("keeps the partial-run menu for a batch pipeline", () => {
+    renderBar({ runOptions: [{ label: "Only what changed", onSelect: () => {} }] } as never);
+    expect(screen.getByRole("button", { name: "Run part of the pipeline" })).toBeInTheDocument();
+  });
+
+  it("says how many queries are up and what they process while it runs", () => {
+    renderBar({
+      ...stream,
+      isExecuting: true,
+      streamSummary: { status: "running", up: 2, total: 2, rate: 280 },
+    } as never);
+    expect(screen.getByRole("status")).toHaveTextContent("2 nodes running · 280 rows/s");
+    expect(screen.getByRole("button", { name: /Stop stream/ })).toBeInTheDocument();
+  });
+
+  it("says so when a node is down", () => {
+    renderBar({
+      ...stream,
+      isExecuting: true,
+      streamSummary: { status: "partial_failure", up: 1, total: 2, rate: null },
+    } as never);
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 2 nodes running");
+  });
+
+  it("says it is starting before the first status arrives", () => {
+    renderBar({ ...stream, isExecuting: true } as never);
+    expect(screen.getByRole("status")).toHaveTextContent("Starting…");
+  });
+
+  it("invokes onOpenStream when clicking the stream pill", () => {
+    const onOpenStream = vi.fn();
+    renderBar({
+      ...stream,
+      isExecuting: true,
+      streamSummary: { status: "running", up: 2, total: 2, rate: 280 },
+      onOpenStream,
+    } as never);
+    screen.getByRole("button", { name: /2 nodes running/ }).click();
+    expect(onOpenStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("still says Stop, plainly, for a batch run", () => {
+    renderBar({ isExecuting: true });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+});

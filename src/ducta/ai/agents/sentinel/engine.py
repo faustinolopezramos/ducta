@@ -520,11 +520,20 @@ class Sentinel:
             try:
                 outcome = self.executor.rerun(self.root, env, pipeline, nodes, reuse)
             except Exception as e:  # noqa: BLE001 — a re-run that cannot start is escalated
-                with engine_lock(self.root, wait=LOCK_WAIT):
-                    fresh = self.incidents.get(incident_id)
+                with engine_lock(self.root, wait=LOCK_WAIT) as got:
+                    fresh = self.incidents.get(incident_id) if got else None
                     if fresh is not None and fresh.active:
                         self._escalate(fresh, f"the re-run could not start: {e}")
                         self._save(fresh)
+                    elif not got:
+                        # Never change an incident without the lock. It stays "running" and a
+                        # pass escalates it after a day if its outcome never arrives.
+                        logger.warning(
+                            "Sentinel: the re-run of incident {} could not start ({}) and "
+                            "the engine lock was busy; not recorded",
+                            incident_id,
+                            e,
+                        )
                 continue
             if outcome is not None:
                 with engine_lock(self.root, wait=LOCK_WAIT) as got:

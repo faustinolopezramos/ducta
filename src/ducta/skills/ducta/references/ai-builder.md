@@ -60,7 +60,10 @@ every environment, run in `dev`, and let the user commit.
 With a remote provider the project's configuration and code are sent to it (never data
 rows, `.env` or connection settings); credentials written in settings (an ingest's
 `options`, `spark_config`) go as `***`. A fix — or a revision of one — whose files
-contain a credential (quoted or not) is refused for remote providers. Say where the
+contain a credential (a quoted or unquoted password or key, one inside a connection
+string such as `jdbc:…;password=…`, a private key, a JWT) is refused for remote providers.
+The code a `new`, `fix` or `extend` draft adds is reviewed (commands, network, file or
+table I/O, `collect()`); it is a net for the obvious, not a sandbox. Say where the
 request goes before running it.
 
 For several pipelines at once, designed first and built after, use Ducta Architect;

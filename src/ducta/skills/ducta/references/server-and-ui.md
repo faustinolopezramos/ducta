@@ -35,6 +35,7 @@ or SQLite. Before anyone else can reach it:
 | `ENVIRONMENT` | `production` (turns the checks below into startup errors) |
 | `AUTH_ENABLED` | `true` |
 | `JWT_SECRET_KEY` | a long random value (never the default) |
+| `DUCTA_ADMIN_PASSWORD` | the `admin` user's password; required in production, `admin` is refused |
 | `CORS_ORIGINS` | an explicit list, not `*` |
 | `RATE_LIMIT_ENABLED` | `true` |
 | `DATABASE_URL` | `postgresql+asyncpg://…` for shared/persistent history |
@@ -75,5 +76,5 @@ Returns `202` with an execution id; poll `GET /api/executions/{id}`;
 | port already in use | `--port 8010`, or stop the other process |
 | the UI shows no project | start with `--source /path/to/project`, or select the workspace in the app |
 | a save is refused with problems | the edit would make some environment invalid: fix what it lists |
-| startup refuses in production | set `AUTH_ENABLED=true` and a real `JWT_SECRET_KEY` |
+| startup refuses in production | set `AUTH_ENABLED=true`, a real `JWT_SECRET_KEY` and a `DUCTA_ADMIN_PASSWORD` (not `admin`) |
 | SQLite rejected | it is refused with `WORKERS > 1`: keep one worker or use PostgreSQL |

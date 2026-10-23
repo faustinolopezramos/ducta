@@ -91,7 +91,7 @@ def print_home() -> None:
     if summary.problem:
         out.print(Text(f"  ! the project does not load: {summary.problem}", style="yellow"))
         out.print()
-        _commands([("ducta config validate", "see every problem, with file and line")])
+        _commands([("ducta check", "see every problem, with file and line")])
         return
     envs = ["base", *summary.environments]
     details = Text("  ")
@@ -106,7 +106,7 @@ def print_home() -> None:
     _commands(
         [
             (f"ducta start -e {env} -p {pipeline}", "run a pipeline"),
-            (f"ducta config validate -e {env}", "check the project without running it"),
+            (f"ducta check -e {env}", "check the project without running it"),
             ("ducta certify list", "the runs recorded here"),
             ("ducta ui", "open the web app"),
             ("ducta --help", "every command"),

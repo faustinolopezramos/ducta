@@ -22,7 +22,7 @@ import re
 import threading
 import unicodedata
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -201,6 +201,7 @@ class CheckpointManager:
         node_name: str,
         active_queries: Dict[str, Dict[str, Any]],
         active_queries_lock: threading.Lock,
+        is_active: Optional[Callable[[Any], bool]] = None,
     ) -> None:
         """Atomically validate and reserve a checkpoint path to prevent concurrent-start races.
 
@@ -209,8 +210,22 @@ class CheckpointManager:
         collisions and reuses the same lock so reservation state and active
         queries stay consistent under one critical section, exactly as before
         this class existed.
+
+        *is_active* tells a live query from one that already ended (it failed,
+        or finished on its own under a terminating trigger). An ended query no
+        longer owns its checkpoint: its entry is dropped here instead of
+        blocking every later start — notably a restart of the very node that
+        failed — with a misleading "already in use".
         """
         with active_queries_lock:
+            if is_active is not None:
+                for stale_key in [
+                    key
+                    for key, info in active_queries.items()
+                    if info.get("resolved_checkpoint") == checkpoint_path
+                    and not self._query_alive(info.get("query"), is_active)
+                ]:
+                    del active_queries[stale_key]
             for query_key, query_info in active_queries.items():
                 existing_checkpoint = query_info.get("resolved_checkpoint")
                 if existing_checkpoint and existing_checkpoint == checkpoint_path:
@@ -235,6 +250,17 @@ class CheckpointManager:
                     context={"current_node": node_name},
                 )
             self._reserved_checkpoints.add(checkpoint_path)
+
+    @staticmethod
+    def _query_alive(query: Any, is_active: Callable[[Any], bool]) -> bool:
+        """Whether *query* still runs; an unreadable state counts as alive (never
+        free a checkpoint on a guess)."""
+        if query is None:
+            return False
+        try:
+            return bool(is_active(query))
+        except Exception:
+            return True
 
     def release_reservation(
         self, checkpoint_path: str, active_queries_lock: threading.Lock

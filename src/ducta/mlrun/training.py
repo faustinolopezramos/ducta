@@ -21,12 +21,12 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger
 
 from ducta.mlrun.baseline import compare_to_baseline, trivial_baseline_metrics
-from ducta.mlrun.persistence import _ctx_get, persist_model
+from ducta.mlrun.persistence import _ctx_get, log_run_metrics, log_run_params, persist_model
 from ducta.mlrun.split import split_dataframe, tag_partitions
 
 _TARGET = "__ducta_target__"
@@ -105,22 +105,54 @@ def _evaluate(model: Any, X_test: Any, y_test: Any, task: str) -> Dict[str, floa
     return out
 
 
-def _build_searcher(estimator, param_grid, hp_cfg, scoring, cv, seed, task) -> Any:
+def _pin(space: Any, pinned: Mapping[str, Any]) -> Any:
+    """``space`` (a grid, or the sub-grids of conditional parameters, or distributions)
+    with every pinned parameter reduced to its one given value."""
+    if isinstance(space, list):
+        return [_pin(sub, pinned) for sub in space]
+    return {name: ([pinned[name]] if name in pinned else values) for name, values in space.items()}
+
+
+def _plan_search(hp_cfg, param_grid, pinned: Mapping[str, Any]) -> Tuple[Any, Any]:
+    """The ``(param_grid, distributions)`` this run searches, with pinned values fixed.
+
+    A value the run was explicitly given (``--hyperparams``, a ``--sweep`` or ``--search``
+    trial) is not searched: the search inside the node covers only the rest. When the run
+    pins every parameter of the search space, that is a search of one point: it still
+    cross-validates it, so the run reports the score a search over it would.
+    """
+    if param_grid is not None:
+        return _pin(param_grid, pinned), None
+    if hp_cfg is None or not hp_cfg.search_space:
+        return None, None
+    if set(hp_cfg.search_space) <= set(pinned):
+        # Not built from the config: a bayesian space may hold ranges, not a grid.
+        return {name: [pinned[name]] for name in hp_cfg.search_space}, None
+    algorithm = hp_cfg.algorithm
+    if algorithm == "grid":
+        return _pin(hp_cfg.build_param_grid(), pinned), None
+    if algorithm == "random":
+        return None, _pin(hp_cfg.build_distributions(), pinned)
+    return None, None  # bayesian with free parameters: _build_searcher says what to do
+
+
+def _build_searcher(estimator, param_grid, distributions, hp_cfg, scoring, cv, seed, task) -> Any:
     from sklearn.model_selection import GridSearchCV, KFold, RandomizedSearchCV, StratifiedKFold
 
     folds = (StratifiedKFold if task == "classification" else KFold)(
         n_splits=cv, shuffle=True, random_state=seed
     )
-    algorithm = hp_cfg.algorithm if hp_cfg is not None else "grid"
-    if algorithm == "bayesian":
+    if param_grid is None and distributions is None:
         raise ValueError(
             "train_with_search runs grid and random searches inside the node; a 'bayesian' "
-            "search drives whole runs, so use `ducta start --search` for it."
+            "search drives whole runs, so use `ducta start --search` for it. (Under "
+            "`--search` every parameter of the search space is fixed by the trial, so this "
+            "message means some are not: check that the space and the search agree.)"
         )
-    if algorithm == "random" and param_grid is None:
+    if distributions is not None:
         return RandomizedSearchCV(
             estimator,
-            param_distributions=hp_cfg.build_distributions(),
+            param_distributions=distributions,
             n_iter=hp_cfg.n_trials,
             scoring=scoring,
             cv=folds,
@@ -132,16 +164,7 @@ def _build_searcher(estimator, param_grid, hp_cfg, scoring, cv, seed, task) -> A
 
 def _log_metrics(ml_context: Any, metrics: Mapping[str, float]) -> None:
     """Best-effort: record each metric on the run, if this run is tracked."""
-    mlops = _ctx_get(ml_context, "mlops_context")
-    run_id = _ctx_get(ml_context, "mlops_run_id")
-    tracker = getattr(mlops, "experiment_tracker", None) if mlops else None
-    if tracker is None or not run_id:
-        return
-    try:
-        for key, value in metrics.items():
-            tracker.log_metric(run_id, key, value)
-    except Exception as error:  # noqa: BLE001 — tracking must not fail a training run
-        logger.warning("Could not log metrics to run {}: {}", run_id, error)
+    log_run_metrics(ml_context, metrics)
 
 
 def train_with_search(
@@ -197,23 +220,35 @@ def train_with_search(
             estimator = estimator()
     objective = getattr(hp_cfg, "objective", None) or {}
     scoring = scoring or objective.get("metric") or None
-    if param_grid is None and hp_cfg is not None and hp_cfg.search_space:
-        if hp_cfg.algorithm == "grid":
-            param_grid = hp_cfg.build_param_grid()
-    if param_grid is not None or (hp_cfg is not None and hp_cfg.search_space):
-        searcher = _build_searcher(estimator, param_grid, hp_cfg, scoring, cv, seed, task)
+    accepted = estimator.get_params() if hasattr(estimator, "get_params") else {}
+    pinned = {
+        k: v for k, v in (_ctx_get(ml_context, "cli_hyperparams") or {}).items() if k in accepted
+    }
+    param_grid, distributions = _plan_search(hp_cfg, param_grid, pinned)
+    bayesian_free = hp_cfg is not None and hp_cfg.search_space and hp_cfg.algorithm == "bayesian"
+    if param_grid is not None or distributions is not None or bayesian_free:
+        if pinned:
+            estimator.set_params(**pinned)
+        searcher = _build_searcher(
+            estimator, param_grid, distributions, hp_cfg, scoring, cv, seed, task
+        )
         searcher.fit(X_train, y_train, **(fit_params or {}))
-        model, best_params = searcher.best_estimator_, dict(searcher.best_params_)
+        model = searcher.best_estimator_
+        # What the model really is: the search's winner, and the values it was given.
+        best_params = {**{k: _plain(v) for k, v in pinned.items()}, **dict(searcher.best_params_)}
         cv_score = float(searcher.best_score_)
         logger.info("Best params: {} (CV {}={:.4f})", best_params, scoring or "score", cv_score)
     else:
         fixed = _ctx_get(ml_context, "hyperparams") or {}
-        accepted = estimator.get_params() if hasattr(estimator, "get_params") else {}
         if fixed and accepted:
             estimator.set_params(**{k: v for k, v in fixed.items() if k in accepted})
         model = estimator.fit(X_train, y_train, **(fit_params or {}))
         best_params = {k: _plain(v) for k, v in fixed.items()}
         cv_score = None
+
+    # The values the model really has, on the run as well as on the model it registers:
+    # a run table or `ducta experiment compare` reads hyperparameters from the run.
+    log_run_params(ml_context, {k: _plain(v) for k, v in best_params.items()})
 
     # ── evaluate, gate, track, register ────────────────────────────────────────
     metrics = _evaluate(model, X_test, y_test, task)
@@ -254,6 +289,7 @@ def train_with_search(
             X=X_train,
             y=y_train,
             native=native,
+            log_to_run=False,  # logged just above
         )
 
     return TrainResult(

@@ -94,17 +94,19 @@ class _SuggestingParser(argparse.ArgumentParser):
 #: The same line is the command's summary wherever argparse lists it.
 COMMAND_GROUPS = (
     (
+        "Essentials",
+        (
+            ("list", "Show the project's pipelines"),
+            ("check", "Validate the project without running it"),
+            ("start", "Run a batch, ML or hybrid pipeline"),
+            ("stream", "Run, inspect and stop a streaming pipeline"),
+        ),
+    ),
+    (
         "Get started",
         (
             ("init", "Create a project (init project) or a database connection"),
             ("template", "Create a project from a named template"),
-        ),
-    ),
-    (
-        "Run",
-        (
-            ("start", "Run a batch, ML or hybrid pipeline"),
-            ("stream", "Run, inspect and stop a streaming pipeline"),
         ),
     ),
     (
@@ -139,16 +141,29 @@ COMMAND_GROUPS = (
     ),
 )
 
-#: One command per group in ``ducta --help``: the simplest thing that group does.
-#: A test parses each one, so they cannot drift from the real options.
+#: The simplest thing each group does in ``ducta --help``: one command, or a tuple of
+#: them (shown on one line). A test parses each one, so they cannot drift from the
+#: real options.
 GROUP_EXAMPLES = {
+    "Essentials": ("ducta list", "ducta check -e dev", "ducta start -e dev -p etl"),
     "Get started": "ducta init project --name sales",
-    "Run": "ducta start -e dev -p etl",
-    "Inspect": "ducta config validate -e dev",
+    "Inspect": "ducta config show -e dev",
     "MLOps": "ducta experiment list -e dev",
     "AI": 'ducta ai new "clean the orders and count them by day"',
     "Web app": "ducta ui",
 }
+
+
+def group_examples(group: str) -> "tuple[str, ...]":
+    """The example commands of a help group, always as a tuple."""
+    example = GROUP_EXAMPLES[group]
+    return (example,) if isinstance(example, str) else tuple(example)
+
+
+def example_line(group: str) -> str:
+    """How a group's examples read in ``ducta --help``."""
+    return "  ·  ".join(group_examples(group))
+
 
 _GLOBAL_OPTIONS = (
     ("-h, --help", "Show this help"),
@@ -192,7 +207,7 @@ class _DuctaParser(_SuggestingParser):
             lines += ["", f"{group}:"]
             lines += [f"  {name.ljust(width)}{summary}" for name, summary in commands]
             if group in GROUP_EXAMPLES:
-                lines.append(f"  {'e.g.'.ljust(width)}{GROUP_EXAMPLES[group]}")
+                lines.append(f"  {'e.g.'.ljust(width)}{example_line(group)}")
         opt_width = max(len(flag) for flag, _ in _GLOBAL_OPTIONS) + 3
         lines += ["", "Options:"]
         lines += [f"  {flag.ljust(opt_width)}{text}" for flag, text in _GLOBAL_OPTIONS]
@@ -230,6 +245,8 @@ class UnifiedArgumentParser:
             dest="subcommand", metavar="<command>", help="Command", required=False
         )
 
+        UnifiedArgumentParser._add_list_subcommand(subparsers)
+        UnifiedArgumentParser._add_check_subcommand(subparsers)
         UnifiedArgumentParser._add_start_subcommand(subparsers)
         UnifiedArgumentParser._add_stream_subcommand(subparsers)
         UnifiedArgumentParser._add_template_subcommand(subparsers)
@@ -256,6 +273,69 @@ class UnifiedArgumentParser:
         """``--base-path``: where to look for the project (default: the current
         directory, then its parents)."""
         parser.add_argument("--base-path", help=HELP_BASE_PATH)
+
+    @staticmethod
+    def _add_list_args(parser: argparse.ArgumentParser) -> None:
+        """Options of ``config list-pipelines`` and of its shortcut ``list``."""
+        parser.add_argument("--env", help="Environment to use for listing")
+        parser.add_argument(
+            "--filter",
+            dest="filter_pattern",
+            default=None,
+            help="Filter pipelines by name (case-insensitive substring match)",
+        )
+        parser.add_argument(
+            "--output-format",
+            "--format",
+            dest="output_format",
+            choices=["table", "json", "list"],
+            default="table",
+            action=_renamed_option("--format", "--output-format"),
+            help="Output format: table (default), json, or list",
+        )
+
+    @staticmethod
+    def _add_validate_args(parser: argparse.ArgumentParser) -> None:
+        """Options of ``config validate`` and of its shortcut ``check``."""
+        parser.add_argument(
+            "--pipeline",
+            default=None,
+            help="Pipeline to validate (default: all pipelines)",
+        )
+        parser.add_argument("--env", help="Environment to use")
+        UnifiedArgumentParser._add_output_format_arg(
+            parser,
+            "json: one JSON document on stdout — every problem with its file, line, node "
+            "and suggested fix — for CI and AI assistants",
+        )
+
+    @staticmethod
+    def _add_list_subcommand(subparsers):
+        """``ducta list``: ``config list-pipelines``, one word shorter."""
+        list_parser = subparsers.add_parser(
+            "list",
+            help="Show the project's pipelines",
+            description="Show the project's pipelines (the same as `ducta config list-pipelines`).",
+        )
+        list_parser.set_defaults(config_command="list-pipelines")
+        UnifiedArgumentParser._add_discovery_args(list_parser)
+        UnifiedArgumentParser._add_list_args(list_parser)
+
+    @staticmethod
+    def _add_check_subcommand(subparsers):
+        """``ducta check``: ``config validate``, one word shorter."""
+        check_parser = subparsers.add_parser(
+            "check",
+            help="Validate the project without running it",
+            description=(
+                "Import node functions, check signatures, and resolve I/O keys without "
+                "running Spark; reports every configuration error up front "
+                "(the same as `ducta config validate`)."
+            ),
+        )
+        check_parser.set_defaults(config_command="validate")
+        UnifiedArgumentParser._add_discovery_args(check_parser)
+        UnifiedArgumentParser._add_validate_args(check_parser)
 
     @staticmethod
     def _add_output_format_arg(parser: argparse.ArgumentParser, help_text: str) -> None:
@@ -287,132 +367,133 @@ class UnifiedArgumentParser:
         start_parser = subparsers.add_parser(
             "start",
             help="Start pipelines directly",
-            description="Start data pipelines directly without orchestration",
+            description=(
+                "Run a pipeline, and the pipelines it depends on, directly and "
+                "without orchestration."
+            ),
+            usage="ducta start -e ENV -p PIPELINE [options]",
         )
 
-        start_parser.add_argument(
+        # Grouped by how often they are needed; every option keeps its name and meaning.
+        common = start_parser.add_argument_group("Common")
+        common.add_argument(
             "--env",
             "-e",
             default="base",
-            help="Execution environment (base, dev, sandbox, prod, or sandbox_<developer>). "
-            "Defaults to 'base' when omitted.",
+            help="Environment: base (default), dev, sandbox, prod or sandbox_<developer>",
         )
-        start_parser.add_argument("--pipeline", "-p", help=HELP_PIPELINE_NAME_TO_EXECUTE)
-        start_parser.add_argument("--node", "-n", help="Specific node to execute (optional)")
-        start_parser.add_argument(
+        common.add_argument("--pipeline", "-p", help="Pipeline to run (see: ducta list)")
+        common.add_argument("--node", "-n", help="Run only this node")
+        common.add_argument(
+            "--dry-run", action="store_true", help="Show what would run, execute nothing"
+        )
+        common.add_argument(
+            "--validate-only",
+            action="store_true",
+            help="Check the configuration, execute nothing",
+        )
+        common.add_argument(
+            "--sanity-only",
+            action="store_true",
+            help="Check every node's inputs, execute nothing",
+        )
+        UnifiedArgumentParser._add_discovery_args(common)
+
+        reruns = start_parser.add_argument_group("Dates and re-runs")
+        reruns.add_argument("--start-date", help="First day to process (YYYY-MM-DD)")
+        reruns.add_argument("--end-date", help="Last day to process (YYYY-MM-DD)")
+        reruns.add_argument(
+            "--reuse-upstream",
+            action="store_true",
+            help="In a depends_on chain, skip upstream pipelines whose outputs are "
+            "already materialized (reads them from disk instead of recomputing)",
+        )
+        reruns.add_argument(
+            "--rerun-all",
+            action="store_true",
+            help="Re-run the whole depends_on chain, ignoring chain reuse",
+        )
+
+        streaming = start_parser.add_argument_group("Streaming and hybrid pipelines")
+        streaming.add_argument(
             "--mode",
             "-m",
             choices=["sync", "async"],
             default="async",
-            help="Execution mode for streaming/hybrid pipelines. Either way the command "
-            "runs while the queries do (they live in its process): 'async' (default) "
+            help="Either way the command runs while the queries do: 'async' (default) "
             "reports their status and stops them on Ctrl+C; 'sync' waits inside the engine",
         )
-        start_parser.add_argument("--start-date", help="Start date (YYYY-MM-DD)")
-        start_parser.add_argument("--end-date", help="End date (YYYY-MM-DD)")
-        UnifiedArgumentParser._add_discovery_args(start_parser)
-        start_parser.add_argument(
+
+        tuning = start_parser.add_argument_group(
+            "ML tuning (ML pipelines only)",
+            "How the search options combine is explained in the documentation: "
+            "https://ducta.readthedocs.io/ (CLI usage, ML tuning).",
+        )
+        tuning.add_argument("--model-version", help="Model version")
+        tuning.add_argument("--hyperparams", help="Hyperparameters as a JSON string")
+        tuning.add_argument(
+            "--sweep",
+            help="Grid file (YAML/JSON): one run per combination, tagged with one sweep_id",
+        )
+        tuning.add_argument(
+            "--search",
+            action="store_true",
+            help="Search with the strategy in the pipeline's hyperparams_config "
+            "(grid, random or bayesian)",
+        )
+        tuning.add_argument(
+            "--search-metric",
+            help="Metric to optimize (default: hyperparams_config.objective.metric); "
+            "use a validation metric, not a test one",
+        )
+        tuning.add_argument(
+            "--search-trials",
+            type=int,
+            help="Trial budget for random and bayesian search (overrides n_trials)",
+        )
+        tuning.add_argument(
+            "--no-sweep-reuse",
+            action="store_true",
+            help="Recompute every node on each trial instead of reusing upstream nodes",
+        )
+        tuning.add_argument(
+            "--sweep-parallel",
+            type=int,
+            default=1,
+            metavar="N",
+            help="Run N trials at once, each in its own process",
+        )
+        tuning.add_argument(
+            "--max-sweep-size",
+            type=int,
+            default=None,
+            metavar="N",
+            help="Largest grid a --sweep or --search may expand to (default: 50)",
+        )
+
+        logging_group = start_parser.add_argument_group("Logging")
+        logging_group.add_argument(
             "--log-level",
             default="INFO",
             choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
             help="Logging level",
         )
-        start_parser.add_argument("--log-file", help="Custom log file path")
+        logging_group.add_argument("--log-file", help="Custom log file path")
         # Also accepted before the command (`ducta -v start …`). SUPPRESS keeps an
         # absent flag here from overwriting one given there.
-        start_parser.add_argument(
+        logging_group.add_argument(
             "-v",
             "--verbose",
             action="store_true",
             default=argparse.SUPPRESS,
             help="Debug log lines too",
         )
-        start_parser.add_argument(
+        logging_group.add_argument(
             "-q",
             "--quiet",
             action="store_true",
             default=argparse.SUPPRESS,
             help="Errors only",
-        )
-
-        start_parser.add_argument("--model-version", help="Model version for ML pipelines")
-        start_parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")
-        start_parser.add_argument(
-            "--sweep",
-            help="Hyperparameter sweep spec (YAML/JSON file). List values are expanded into the cartesian product and one run is executed per combination, all tagged with a common sweep_id in the experiment tracker",
-        )
-
-        start_parser.add_argument(
-            "--search",
-            action="store_true",
-            help="Drive a real search strategy from the pipeline's hyperparams_config "
-            "(algorithm: grid|random|bayesian, honoring n_trials and objective.metric) "
-            "instead of the flat cartesian product --sweep expands. Each trial's "
-            "objective value is fed back to the strategy, so Bayesian search learns "
-            "between trials",
-        )
-        start_parser.add_argument(
-            "--search-metric",
-            help="Objective metric to optimize, overriding hyperparams_config.objective.metric. "
-            "Point it at a validation metric: selecting on a test metric invalidates it",
-        )
-        start_parser.add_argument(
-            "--search-trials",
-            type=int,
-            help="Trial budget for --search (random/bayesian), overriding n_trials",
-        )
-        start_parser.add_argument(
-            "--no-sweep-reuse",
-            action="store_true",
-            help="Recompute every node on each sweep/search trial. By default the "
-            "trial-invariant upstream nodes are materialized once and reused, since "
-            "trials differ only in hyperparameters",
-        )
-        start_parser.add_argument(
-            "--sweep-parallel",
-            type=int,
-            default=1,
-            metavar="N",
-            help="Run N sweep/search trials concurrently, each in its own process and "
-            "its own output directory. Mutually exclusive with upstream reuse (an "
-            "isolated trial has nothing shared to reuse), and not applied to Bayesian "
-            "search, which needs each trial's result before choosing the next. Use it "
-            "when training dominates the runtime, and --no-sweep-reuse off (the "
-            "default) when feature engineering does",
-        )
-        start_parser.add_argument(
-            "--max-sweep-size",
-            type=int,
-            default=None,
-            metavar="N",
-            help="Cap on the number of combinations a --sweep/--search grid may expand "
-            "to (default: 50). Mirrors the API's max_sweep_size setting for the CLI path",
-        )
-
-        start_parser.add_argument(
-            "--validate-only",
-            action="store_true",
-            help="Validate configuration without executing the pipeline",
-        )
-        start_parser.add_argument(
-            "--dry-run", action="store_true", help="Log actions without executing the pipeline"
-        )
-        start_parser.add_argument(
-            "--sanity-only",
-            action="store_true",
-            help="Run sanity checks on all node inputs without executing the pipeline",
-        )
-        start_parser.add_argument(
-            "--reuse-upstream",
-            action="store_true",
-            help="In a depends_on chain, skip upstream pipelines whose outputs are "
-            "already materialized (reads them from disk instead of recomputing)",
-        )
-        start_parser.add_argument(
-            "--rerun-all",
-            action="store_true",
-            help="Force the full depends_on chain to re-run, ignoring any chain-reuse "
-            "configuration",
         )
 
     @staticmethod
@@ -453,6 +534,36 @@ class UnifiedArgumentParser:
             metavar="MODULE",
             dest="transforms_module",
             help="Python module path(s) to import before starting the pipeline. Each module must expose a register_transforms(registry) function. Example: src.streaming_fraud_realtime",
+        )
+
+        plan_parser = stream_subparsers.add_parser(
+            "plan",
+            help="Show what a streaming pipeline would do, without starting it",
+            description="Resolve a streaming pipeline and print, per node, what it reads, "
+            "what it writes, how often it fires and where its checkpoint will be, and what "
+            "would stop it: a transform that is not registered, a source path that does not "
+            "exist, two nodes sharing a checkpoint, an invalid node. Starts no Spark; exits "
+            "non-zero when there are errors.",
+        )
+        plan_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
+        plan_parser.add_argument("--pipeline", "-p", required=True, help="Pipeline name to plan")
+        plan_parser.add_argument(
+            "--env", "-e", default="base", help="Execution environment (base, dev, prod, …)"
+        )
+        plan_parser.add_argument(
+            "--transforms-module",
+            nargs="*",
+            default=[],
+            metavar="MODULE",
+            dest="transforms_module",
+            help="Python module path(s) to import before checking transforms, as for `stream run`",
+        )
+        plan_parser.add_argument(
+            "--output-format",
+            dest="output_format",
+            default="table",
+            choices=["table", "json"],
+            help="Output format",
         )
 
         status_parser = stream_subparsers.add_parser(
@@ -544,22 +655,7 @@ class UnifiedArgumentParser:
         list_pipelines_parser = config_subparsers.add_parser(
             "list-pipelines", help="List available pipelines"
         )
-        list_pipelines_parser.add_argument("--env", help="Environment to use for listing")
-        list_pipelines_parser.add_argument(
-            "--filter",
-            dest="filter_pattern",
-            default=None,
-            help="Filter pipelines by name (case-insensitive substring match)",
-        )
-        list_pipelines_parser.add_argument(
-            "--output-format",
-            "--format",
-            dest="output_format",
-            choices=["table", "json", "list"],
-            default="table",
-            action=_renamed_option("--format", "--output-format"),
-            help="Output format: table (default), json, or list",
-        )
+        UnifiedArgumentParser._add_list_args(list_pipelines_parser)
 
         pipeline_info_parser = config_subparsers.add_parser(
             "pipeline-info", help="Show pipeline information"
@@ -575,17 +671,7 @@ class UnifiedArgumentParser:
                 "running Spark. Reports every configuration error up front."
             ),
         )
-        validate_parser.add_argument(
-            "--pipeline",
-            default=None,
-            help="Pipeline to validate (default: all pipelines)",
-        )
-        validate_parser.add_argument("--env", help="Environment to use")
-        UnifiedArgumentParser._add_output_format_arg(
-            validate_parser,
-            "json: one JSON document on stdout — every problem with its file, line, node "
-            "and suggested fix — for CI and AI assistants",
-        )
+        UnifiedArgumentParser._add_validate_args(validate_parser)
 
         show_parser = config_subparsers.add_parser(
             "show",

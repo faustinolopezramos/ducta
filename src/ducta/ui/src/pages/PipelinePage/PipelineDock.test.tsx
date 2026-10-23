@@ -10,7 +10,7 @@ vi.mock("../../components/Pipeline/SamplePreview", () => ({
   SamplePreview: () => <div>sample body</div>,
 }));
 vi.mock("../../components/Execution/StreamingStatusPanel", () => ({
-  StreamingStatusPanel: () => null,
+  StreamingStatusPanel: ({ fullView }: { fullView?: boolean }) => <div>streaming panel {fullView ? "full" : "compact"}</div>,
 }));
 vi.mock("../../components/Execution/InlineLogs", () => ({
   InlineLogs: () => <div>logs body</div>,
@@ -63,5 +63,19 @@ describe("PipelineDock tabs", () => {
 
     expect(screen.getByText("problems body")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Problems" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("offers and selects the Stream tab for a streaming pipeline", () => {
+    renderDock({
+      tab: "stream",
+      isStreamPipeline: true,
+      activeExecutionId: "e1",
+      isExecuting: true,
+      streamSummary: { status: "running", up: 3, total: 3, rate: 250 },
+    });
+
+    expect(screen.getByRole("tab", { name: /Stream/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByText("3/3")).toBeInTheDocument();
+    expect(screen.getByText("streaming panel full")).toBeInTheDocument();
   });
 });

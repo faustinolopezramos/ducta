@@ -6,7 +6,8 @@ import {
   qualitySummary,
   type ZoomTier,
 } from "../../utils/nodePresentation";
-import type { DagCanvasItem } from "./types";
+import { formatRate } from "../../utils/streaming";
+import type { DagCanvasItem, StreamNodeBadge } from "./types";
 
 interface NodeCardProps {
   node: DagCanvasItem;
@@ -28,6 +29,8 @@ interface NodeCardProps {
   onClick: () => void;
   /** Enter on the selected card: open it (its code). */
   onOpen?: () => void;
+  /** A streaming node while its stream runs: the dot and the fact come from the live query. */
+  stream?: StreamNodeBadge;
   /** Design axis — what validation says about the node's configuration and code. */
   design?: "error" | "warning";
   /** Freshness — its code (or something upstream) changed since the last good run. */
@@ -37,6 +40,23 @@ interface NodeCardProps {
 }
 
 const FAILED = new Set(["failed", "error"]);
+
+/** The dot of a live stream node: its query's state, or what deserves a look about it. */
+function streamDot(stream: StreamNodeBadge): string {
+  if (stream.state === "failed") return "failed";
+  if (stream.state !== "active") return stream.state; // skipped · stopped
+  return stream.health ?? "active";
+}
+
+/** The one fact a live stream node shows: its throughput, or why there is none. */
+function streamFact(stream: StreamNodeBadge): string {
+  if (stream.state === "failed") return "failed";
+  if (stream.state === "skipped") return "skipped";
+  if (stream.state !== "active") return "stopped";
+  if (stream.health === "stalled") return "stalled";
+  if (stream.health === "idle") return "idle";
+  return formatRate(stream.rate);
+}
 
 /**
  * A node on the canvas, reduced to what you scan a graph for: which function,
@@ -61,6 +81,7 @@ export function NodeCard({
   onClick,
   onOpen,
   design,
+  stream,
   freshness,
   comments = 0,
 }: NodeCardProps) {
@@ -70,15 +91,21 @@ export function NodeCard({
   const quality = qualitySummary(node.quality);
   const name = node.name || node.id;
 
-  const failed = execState ? FAILED.has(execState) : false;
-  const fact = failed
-    ? "failed"
-    : execState === "running"
-      ? "running"
-      : compactDuration(node.lastDuration);
+  // A live stream query outranks the run's own state: the run is "running" for as long
+  // as the stream lives, which says nothing about whether this node is healthy.
+  const live = stream ? streamDot(stream) : null;
+  const dotState = live ?? execState;
+  const failed = live ? live === "failed" : execState ? FAILED.has(execState) : false;
+  const fact = stream
+    ? streamFact(stream)
+    : failed
+      ? "failed"
+      : execState === "running"
+        ? "running"
+        : compactDuration(node.lastDuration);
 
   const label =
-    `Node ${name}${execState ? `, ${execState}` : ""}` +
+    `Node ${name}${dotState ? `, ${stream ? `stream ${dotState}` : dotState}` : ""}` +
     (design ? `, has ${design === "error" ? "errors" : "warnings"}` : "") +
     (freshness === "stale" ? ", stale since its last good run" : "") +
     (comments > 0 ? `, ${comments} open comment${comments === 1 ? "" : "s"}` : "") +
@@ -108,7 +135,7 @@ export function NodeCard({
         dimmed ? "dag-dimmed" : "",
         context ? "node-card--context" : "",
         lensDir ? `lens-${lensDir}` : "",
-        execState ? `status-${execState}` : "",
+        dotState ? `status-${dotState}` : "",
         design ? `design-${design}` : "",
         freshness ? `fresh-${freshness}` : "",
       ]
@@ -150,10 +177,10 @@ export function NodeCard({
             </span>
           )}
           <span className="node-card-run">
-            {execState && (
+            {dotState && (
               <span
-                className={`node-card-status status-dot-${execState}`}
-                title={execState}
+                className={`node-card-status status-dot-${dotState}`}
+                title={stream?.error ?? (stream ? `stream ${dotState}` : dotState)}
                 aria-hidden="true"
               />
             )}

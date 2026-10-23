@@ -755,6 +755,9 @@ class MLBasicTemplate(BaseTemplate):
             "# Override a hyperparameter for one run",
             f"ducta start -e dev -p {pipeline} --hyperparams '{{\"max_depth\": 3}}'",
             "",
+            "# Compare every run in one table (gold.churn.runs), best first",
+            "ducta start -e dev -p churn_runs",
+            "",
             "# Check the project without running it (no Spark)",
             "ducta config validate -e dev",
         ]
@@ -834,6 +837,12 @@ silver.churn.features:
 
 gold.churn.metrics:
   description: What the trained model scored, against the baseline
+
+gold.churn.runs:
+  description: One row per training run, best first - its hyperparameters, metrics, model and certificate
+  # The format is yours to choose: parquet | delta | csv | json (delta needs the
+  # `delta` extra). Each run of churn_runs rebuilds the table from the tracked runs.
+  format: parquet
 """
 
     def pipeline_yamls(self) -> Dict[str, str]:
@@ -876,7 +885,24 @@ nodes:
     ml_stage: training
     inputs: {features: silver.churn.features}
     outputs: [gold.churn.metrics]
-"""
+""",
+            "churn_runs": """\
+# yaml-language-server: $schema=../.ducta/schema/pipeline.json
+#
+# The leaderboard: one table with a row per churn_model run, joining what was
+# tracked (hyperparameters, metrics), the model it registered and its run
+# certificate. Run it after training; read it with Spark, pandas or a BI tool.
+# It sees churn_model's runs because both share `mlops_path` in ducta.yaml.
+description: "Churn: a table of every training run, best first"
+type: ml
+requires_dates: false
+
+nodes:
+  runs:
+    description: "Join tracked runs, registered models and certificates"
+    run: pipelines.churn:runs
+    outputs: [gold.churn.runs]
+""",
         }
 
     #: Customers with a blank ``monthly_spend`` and customers repeated verbatim,
@@ -1028,6 +1054,22 @@ def train(features: Any, ml_context: Any = None) -> Any:
         y=y_train,
     )
     return pd.DataFrame([metrics])
+
+
+def runs(ml_context: Any = None) -> Any:
+    """One row per ``churn_model`` run, best validation AUC first.
+
+    Joins the tracked runs, the models they registered and their certificates. Run it
+    with ``ducta start -e dev -p churn_runs``; it writes ``gold.churn.runs``, in the
+    format ``catalog.yaml`` gives that dataset. The metric to order by is yours: change
+    ``metric_val_auc`` to any ``metric_*`` column. Rank on validation, not on test.
+    """
+    from ducta.mlrun import run_summary
+
+    table = run_summary(ml_context, pipeline="churn_model")
+    if "metric_val_auc" in table.columns:
+        table = table.sort_values("metric_val_auc", ascending=False).reset_index(drop=True)
+    return table
 '''
 
     def readme(self) -> str:
@@ -1052,6 +1094,7 @@ its quality gate has something to verify.
 customers          606 rows   as they arrived
 silver features    590 rows   de-duplicated, incomplete rows dropped
 gold metrics         1 row    val / test AUC, F1 and the baseline AUC
+gold runs            1 row per run   (after `churn_runs`) hyperparameters, metrics, model
 ```
 
 ## What lives where
@@ -1063,6 +1106,21 @@ gold metrics         1 row    val / test AUC, F1 and the baseline AUC
 | Random seed | `ducta.yaml` (`random_seed`) | one number makes a run repeatable |
 | Experiment tracking, model registry | `ducta.yaml` (`mlops_*`) | `type: ml` pipelines are tracked automatically |
 | Baseline gate | `pipelines/churn.py` | the model is registered only if it beats the trivial one |
+
+## Compare your runs in one table
+
+Every `ducta start` is one tracked run. After a few (a different `--hyperparams`, or
+a `--sweep`), build the table that puts them side by side:
+
+```bash
+ducta start --env dev --pipeline churn_runs
+```
+
+It writes `gold.churn.runs`: one row per run with its hyperparameters (`param_*`),
+final metrics (`metric_*`), the model version it registered, the hash of the code and
+of the data it ran on, and its certificate id. It is ordered by validation AUC; change
+`metric_val_auc` in `runs()` to rank by another metric. The format is whatever
+`catalog.yaml` says for that dataset (`parquet` by default; `delta` or `csv` also work).
 
 ## Then look at what happened
 
@@ -1080,7 +1138,8 @@ ducta config validate                    # config check, no Spark
 ├── catalog.yaml                  # every dataset once (the source has a contract)
 ├── pipelines/
 │   ├── churn_model.yaml          # the ML pipeline: split, hyperparameters, nodes
-│   └── churn.py                  # prepare_features (Spark) and train (scikit-learn)
+│   ├── churn_runs.yaml           # the leaderboard: a table of every run
+│   └── churn.py                  # prepare_features (Spark), train (scikit-learn), runs
 ├── .ducta/schema/                # JSON Schemas: autocompletion in VS Code/JetBrains
 └── data/customers.csv            # sample source
 ```

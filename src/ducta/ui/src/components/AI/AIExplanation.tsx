@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { IconRefresh, IconSparkles } from "@tabler/icons-react";
+import { IconCheck, IconCopy, IconRefresh, IconSparkles } from "@tabler/icons-react";
 import {
   useAIExplanation,
   useAIJob,
@@ -25,11 +25,14 @@ export function AIExplanation({
   projectId,
   executionId,
   requested,
+  onDraftFix,
 }: {
   projectId: string;
   executionId: string;
   /** Counts "Explain with AI" presses; a new one asks, unless an explanation is kept. */
   requested: number;
+  /** Triggered when the user wants to draft a fix directly from the explanation */
+  onDraftFix?: () => void;
 }) {
   const { data: kept, isLoading } = useAIExplanation(projectId, executionId);
   const { data: settings } = useAISettings();
@@ -37,11 +40,20 @@ export function AIExplanation({
   const cancel = useCancelAIJob(projectId);
   const [jobId, setJobId] = useState<string | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const { data: job } = useAIJob(projectId, jobId);
   const running = start.isPending || (Boolean(jobId) && (!job || job.status === "running"));
   const elapsed = useElapsed(job?.started_at, running);
   const failed = job?.status === "failed" ? (job.error ?? "The model did not answer.") : null;
   const error = startError ?? failed;
+
+  const copyExplanation = () => {
+    if (kept?.text && navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(kept.text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
 
   const ask = () =>
     start.mutate(
@@ -106,9 +118,33 @@ export function AIExplanation({
         </p>
       )}
       {kept && !running && (
-        <p className="ai-dim ai-fine">
-          {settings?.is_local ? "Local model — nothing left this machine. " : ""}Nothing was changed.
-        </p>
+        <div className="ai-explanation__footer">
+          <div className="ai-explanation__actions">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={copyExplanation}
+              leftIcon={copied ? <IconCheck size={13} aria-hidden="true" /> : <IconCopy size={13} aria-hidden="true" />}
+            >
+              {copied ? "Copied" : "Copy explanation"}
+            </Button>
+            {onDraftFix && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={onDraftFix}
+                leftIcon={<IconSparkles size={14} aria-hidden="true" />}
+              >
+                Draft fix with AI
+              </Button>
+            )}
+          </div>
+          <p className="ai-dim ai-fine">
+            {settings?.is_local ? "Local model — nothing left this machine. " : ""}Nothing was changed.
+          </p>
+        </div>
       )}
     </section>
   );

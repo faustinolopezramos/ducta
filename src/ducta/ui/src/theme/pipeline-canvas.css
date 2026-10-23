@@ -60,6 +60,16 @@
   box-shadow: 0 0 0 3px var(--accent-a12);
 }
 
+.node-card.status-active {
+  border-color: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 20%, transparent);
+}
+
+.node-card.status-stalled {
+  border-color: var(--warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warning) 20%, transparent);
+}
+
 .node-card.status-error,
 .node-card.status-failed {
   border-color: var(--danger);
@@ -194,6 +204,10 @@
 .node-card-status.status-dot-running { background: var(--primary); }
 .node-card-status.status-dot-skipped { background: var(--text-dim); }
 .node-card-status.status-dot-pending { background: var(--border-hover); }
+/* A live stream node: healthy, quiet (idle), or possibly hung (stalled). */
+.node-card-status.status-dot-active { background: var(--success); }
+.node-card-status.status-dot-idle { background: var(--text-dim); }
+.node-card-status.status-dot-stalled { background: var(--warning); }
 
 /* ── Gate and checks ────────────────────────────────────────────────────────
  * A gate decides whether anything downstream runs at all, so it is read off
@@ -386,6 +400,12 @@
 .node-card.selected .port-dot,
 .node-card.status-running .port-dot {
   background: var(--primary);
+}
+.node-card.status-active .port-dot {
+  background: var(--success);
+}
+.node-card.status-stalled .port-dot {
+  background: var(--warning);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -592,6 +612,27 @@
   stroke-width: 2;
   stroke-dasharray: 6 5;
   animation: dag-flow 0.7s linear infinite;
+}
+
+/* Ambient motion on the canvas for streaming pipelines: continuous live flow */
+.dag-canvas-root .react-flow__edge.dag-edge-streaming .react-flow__edge-path {
+  stroke: var(--primary);
+  stroke-width: 2.25;
+  stroke-dasharray: 4 4;
+  animation: dag-stream-flow 0.5s linear infinite;
+}
+
+.dag-canvas-root .react-flow__edge.dag-edge-streaming-stalled .react-flow__edge-path {
+  stroke: var(--warning);
+  stroke-width: 2;
+  stroke-dasharray: 8 6;
+  animation: dag-stream-flow 1.5s linear infinite;
+}
+
+@keyframes dag-stream-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
 }
 
 @keyframes dag-flow {

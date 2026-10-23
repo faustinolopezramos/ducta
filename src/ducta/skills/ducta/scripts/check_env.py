@@ -2,7 +2,8 @@
 """Check the environment Ducta runs in, and print the result as JSON.
 
 Part of the Ducta agent skill. Read-only: it runs ``java -version`` and asks
-Ducta's own Python which packages it can import — it installs, writes and
+Ducta's own Python which packages it can import (from this script's folder, never
+the project's, so nothing in the project is imported or run) — it installs, writes and
 changes nothing, and never prints an environment variable's value except the
 paths in JAVA_HOME / SPARK_HOME. Standard library only, so any ``python3``
 (3.8+) can run it, on any OS.
@@ -64,9 +65,15 @@ print(json.dumps(out))
 """
 
 
+#: Where child processes run. A Python started with ``-c`` puts its working folder first on
+#: ``sys.path``, so run from the project, a ``json.py`` or ``pyspark/`` there would be
+#: imported (and run) by the probe. This folder holds only this script.
+_SAFE_CWD = str(Path(__file__).resolve().parent)
+
+
 def _run(cmd: List[str], timeout: int = 30) -> Optional[subprocess.CompletedProcess]:
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=_SAFE_CWD)
     except (OSError, subprocess.SubprocessError):
         return None
 

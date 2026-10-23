@@ -107,6 +107,7 @@ Compose Configuration
          - ENVIRONMENT=production
          - AUTH_ENABLED=true
          - JWT_SECRET_KEY=generate_a_long_random_secret_key_here
+         - DUCTA_ADMIN_PASSWORD=choose_a_strong_admin_password   # required in production; "admin" is refused
          - DATABASE_URL=postgresql+asyncpg://ducta_admin:strong_db_password@postgres:5432/ducta
          - CORS_ORIGINS=https://ducta.company.com   # a list: comma-separated or JSON
          - RATE_LIMIT_ENABLED=true

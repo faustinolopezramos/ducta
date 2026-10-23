@@ -114,3 +114,29 @@ def test_every_incident_is_listed_however_many_there_are(sales):
         )
         incidents.save(other)
     assert "20200101-000000-aaaaaa" in [i.id for i in incidents.list(status="active")]
+
+
+class _CannotStart:
+    def rerun(self, *args, **kwargs):
+        raise OSError("no process")
+
+
+def test_a_rerun_that_cannot_start_is_escalated(sales):
+    sentinel = Sentinel(sales, _CannotStart(), notify=False)
+    incident = sentinel.handle(_failed())
+    sentinel.tick()
+    now = Incidents(sales).get(incident.id)
+    assert now.status == "escalated" and "could not start" in now.reason
+
+
+def test_a_rerun_that_cannot_start_leaves_incidents_alone_without_the_lock(sales, monkeypatch):
+    from ducta.ai.agents.sentinel import engine
+
+    monkeypatch.setattr(engine, "LOCK_WAIT", 0.3)
+    sentinel = Sentinel(sales, _CannotStart(), notify=False)
+    incident = sentinel.handle(_failed())
+    with engine.engine_lock(sales) as held:
+        assert held
+        sentinel.tick()  # the lock is another pass's: nothing may be written meanwhile
+    now = Incidents(sales).get(incident.id)
+    assert now.status == "remediating" and now.pending["action"] == "running"

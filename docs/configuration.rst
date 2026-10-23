@@ -251,6 +251,7 @@ list; the ones most projects touch:
    * - ``node_timeout_seconds`` / ``execution_timeout_seconds``
      - Time limit per node (1800) and per run (3600). A node over its limit is
        cancelled — its Spark jobs are interrupted and it can no longer write.
+       Streaming pipelines are not bounded by the run limit.
    * - ``evidence_level``
      - ``off``, ``record`` (default: a Run Certificate per run), ``required``
        (a run without its certificate fails) or ``signed`` (HMAC-signed; needs

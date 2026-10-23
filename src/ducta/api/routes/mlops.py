@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from functools import cached_property
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Callable, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
@@ -237,6 +237,33 @@ class MLOpsScope:
     def global_config(self) -> Dict[str, Any]:
         return _resolve_global_config(self._source_path, self._env, self._project)
 
+    def certificate_check(self) -> Callable[[str], Optional[bool]]:
+        """Whether a run's certificate is on disk (or mirrored) and unaltered.
+
+        Looks where the certificate routes look, so a run table and the Certificates
+        view never disagree about the same run.
+        """
+        from ducta.api.services.run_certificates import load_run_certificate
+        from ducta.api.workspace.manager import WorkspaceManager
+        from ducta.core.certificate import resolve_signing_key_from_dir, verify_certificate_data
+
+        project_dir = self._source_path
+        if self._project:
+            project_dir = WorkspaceManager(self._source_path).for_project(self._project).root
+        signing_key = resolve_signing_key_from_dir(project_dir)
+
+        def check(run_id: str) -> Optional[bool]:
+            try:
+                data = load_run_certificate(project_dir, run_id, self._env)
+                if data is None:
+                    return False
+                return bool(verify_certificate_data(data, signing_key=signing_key).ok)
+            except Exception as exc:  # noqa: BLE001 — unreadable counts as not intact
+                logger.debug("Could not verify the certificate of run {}: {}", run_id, exc)
+                return False
+
+        return check
+
     def serving_references(self) -> Dict[str, List[Dict[str, Any]]]:
         """Which nodes of this project serve each registered model."""
         return serving_references(_compiled_project(self._source_path, self._env, self._project))
@@ -370,6 +397,18 @@ async def mlops_status(scope: MLOpsScopeDep) -> Dict[str, Any]:
 # ── Experiment endpoints ─────────────────────────────────────────────────────
 
 
+def _present_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    """A run as the UI shows it: ``parameters`` are the user's hyperparameters; the ones
+    Ducta records for itself (a leading ``_``: environment snapshot, input fingerprints,
+    code hash) are apart in ``internal_parameters``, so they never bury the user's."""
+    params = run.get("parameters") or {}
+    return {
+        **run,
+        "parameters": {k: v for k, v in params.items() if not str(k).startswith("_")},
+        "internal_parameters": {k: v for k, v in params.items() if str(k).startswith("_")},
+    }
+
+
 @router.get("/experiments", dependencies=[Depends(require_permission("execution.read"))])
 async def list_experiments(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """List MLOps experiments (most recent first) — only the scoped pipeline's
@@ -399,8 +438,48 @@ async def get_experiment(experiment_id: str, scope: MLOpsScopeDep) -> Dict[str, 
             "name": exp.name,
             "created_at": exp.created_at,
             "artifact_location": exp.artifact_location,
-            "runs": tracker.list_runs(experiment_id),
+            "runs": [_present_run(r) for r in tracker.list_runs(experiment_id, with_metrics=True)],
         }
+
+    return await run_in_threadpool(_run)
+
+
+@router.get("/run-table", dependencies=[Depends(require_permission("execution.read"))])
+async def run_table(
+    scope: MLOpsScopeDep,
+    sort_by: Optional[str] = Query(
+        None, description="Column to order by (newest first if omitted)"
+    ),
+    ascending: bool = Query(False, description="Direction for sort_by"),
+    verify_certificates: bool = Query(
+        False, description="Check each run's certificate; reads one file per run"
+    ),
+) -> Dict[str, Any]:
+    """One row per tracked run, joined with the model it registered and its certificate:
+    the same table ``run_summary`` writes from a pipeline node.
+
+    ``columns`` lists the keys in order (``param_*`` are hyperparameters, ``metric_*``
+    final metrics); a column no run has a value for is left out.
+    """
+
+    def _run() -> Dict[str, Any]:
+        import json
+
+        from ducta.mlrun.summary import run_summary
+
+        try:
+            frame = run_summary(
+                mlops_path=scope.storage,
+                pipeline=scope.pipeline,
+                certificate_check=scope.certificate_check() if verify_certificates else None,
+                sort_by=sort_by,
+                ascending=ascending,
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc), detail={"sort_by": sort_by}) from exc
+        # to_json writes NaN/NaT as null and numpy scalars as plain numbers.
+        rows = json.loads(frame.to_json(orient="records", date_format="iso"))
+        return {"columns": [str(c) for c in frame.columns], "rows": rows}
 
     return await run_in_threadpool(_run)
 

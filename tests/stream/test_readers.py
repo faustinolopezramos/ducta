@@ -128,7 +128,61 @@ class TestKafkaStreamingReader:
         assert result is not None
 
 
+def _install_fake_delta_table(monkeypatch, fake_cls):
+    """Make ``from delta.tables import DeltaTable`` resolve to *fake_cls*."""
+    import types
+
+    tables = types.ModuleType("delta.tables")
+    tables.DeltaTable = fake_cls
+    package = types.ModuleType("delta")
+    package.tables = tables
+    monkeypatch.setitem(sys.modules, "delta", package)
+    monkeypatch.setitem(sys.modules, "delta.tables", tables)
+
+
 class TestDeltaStreamingReader:
+    @staticmethod
+    def _table_without_cdf():
+        fake_table = MagicMock()
+        fake_table.detail.return_value.collect.return_value = [
+            {"properties": {"delta.enableChangeDataFeed": "false"}}
+        ]
+        fake_cls = MagicMock()
+        fake_cls.isDeltaTable.return_value = True
+        fake_cls.forPath.return_value = fake_table
+        return fake_cls
+
+    def test_plain_read_never_alters_the_source_table(
+        self, dict_context, spark_session, monkeypatch
+    ):
+        """Regression: with auto_enable_cdf on (the default) a plain read ALTERed
+        the table it only reads, and forced startingVersion=latest, which skipped
+        every row the table already held."""
+        _install_fake_delta_table(monkeypatch, self._table_without_cdf())
+        DeltaStreamingReader(dict_context).read_stream({"path": "/tmp/table"})
+        spark_session.sql.assert_not_called()
+        applied = {c.args[0] for c in spark_session.readStream.option.call_args_list}
+        assert "startingVersion" not in applied
+
+    def test_change_feed_read_enables_cdf_on_a_table_without_it(
+        self, dict_context, spark_session, monkeypatch
+    ):
+        _install_fake_delta_table(monkeypatch, self._table_without_cdf())
+        DeltaStreamingReader(dict_context).read_stream(
+            {"path": "/tmp/table", "options": {"readChangeFeed": "true"}}
+        )
+        assert "enableChangeDataFeed" in spark_session.sql.call_args[0][0]
+        spark_session.readStream.option.assert_any_call("startingVersion", "latest")
+
+    def test_change_feed_read_respects_auto_enable_off(
+        self, dict_context, spark_session, monkeypatch
+    ):
+        _install_fake_delta_table(monkeypatch, self._table_without_cdf())
+        DeltaStreamingReader(dict_context).read_stream(
+            {"path": "/tmp/table", "auto_enable_cdf": False, "options": {"readChangeFeed": "true"}}
+        )
+        spark_session.sql.assert_not_called()
+
     def test_missing_path_raises(self, dict_context):
         reader = DeltaStreamingReader(dict_context)
         with pytest.raises(StreamingError, match="requires 'path'"):
@@ -161,13 +215,17 @@ class TestDeltaStreamingReader:
         fake_delta_table_cls.isDeltaTable.return_value = True
         fake_delta_table_cls.forPath.return_value = fake_table
 
-        monkeypatch.setattr(
-            sys.modules["delta.tables"], "DeltaTable", fake_delta_table_cls, raising=False
-        )
+        _install_fake_delta_table(monkeypatch, fake_delta_table_cls)
 
         malicious_path = "/tmp/table`; DROP TABLE x; --"
         reader = DeltaStreamingReader(dict_context)
-        reader.read_stream({"path": malicious_path, "auto_enable_cdf": True})
+        reader.read_stream(
+            {
+                "path": malicious_path,
+                "auto_enable_cdf": True,
+                "options": {"readChangeFeed": "true"},
+            }
+        )
 
         assert spark_session.sql.call_args is not None
         executed_sql = spark_session.sql.call_args[0][0]
@@ -195,14 +253,18 @@ class TestDeltaStreamingReader:
         fake_delta_table_cls.isDeltaTable.return_value = True
         fake_delta_table_cls.forPath.return_value = fake_table
 
-        monkeypatch.setattr(
-            sys.modules["delta.tables"], "DeltaTable", fake_delta_table_cls, raising=False
-        )
+        _install_fake_delta_table(monkeypatch, fake_delta_table_cls)
         spark_session.sql.side_effect = RuntimeError("ALTER TABLE failed")
 
         with patch("ducta.stream.readers.logger") as mock_logger:
             reader = DeltaStreamingReader(dict_context)
-            reader.read_stream({"path": "/tmp/table", "auto_enable_cdf": True})
+            reader.read_stream(
+                {
+                    "path": "/tmp/table",
+                    "auto_enable_cdf": True,
+                    "options": {"readChangeFeed": True},
+                }
+            )
 
         warning_calls = [str(call) for call in mock_logger.warning.call_args_list]
         assert any("still disabled" in call for call in warning_calls)

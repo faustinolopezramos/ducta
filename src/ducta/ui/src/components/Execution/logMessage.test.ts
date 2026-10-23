@@ -1,5 +1,26 @@
 import { describe, expect, it } from "vitest";
-import { fileRefs, foldJvmFrames } from "./logMessage";
+import { fileRefs, foldJvmFrames, foldTracebackFrames } from "./logMessage";
+
+describe("foldTracebackFrames", () => {
+  it("folds long runs of site-packages python frames", () => {
+    const lines = [
+      "Traceback (most recent call last):",
+      '  File "/env/lib/python3.13/site-packages/fastapi/routing.py", line 123, in app',
+      "    await response()",
+      '  File "/env/lib/python3.13/site-packages/starlette/middleware.py", line 45, in call',
+      "    return next()",
+      '  File "/env/lib/python3.13/site-packages/anyio/runners.py", line 78, in run',
+      "    res()",
+      '  File "/my_project/src/nodes.py", line 42, in process_data',
+      "    raise ValueError('bad input')",
+      "ValueError: bad input",
+    ];
+    const { text, hidden } = foldTracebackFrames(lines.join("\n"));
+    expect(hidden).toBeGreaterThan(0);
+    expect(text).toContain("internal library frames hidden");
+    expect(text).toContain('File "/my_project/src/nodes.py", line 42, in process_data');
+  });
+});
 
 describe("foldJvmFrames", () => {
   it("keeps two frames of each run and counts the rest", () => {

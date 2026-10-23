@@ -193,6 +193,12 @@ class MLOpsExecutorIntegration:
                 }
             )
 
+            pipeline_run_id = self._pipeline_run_id()
+            if pipeline_run_id:
+                # The id of the Run Certificate this run will get: the join key between
+                # the tracked run and the certificate that attests it.
+                tags["ducta_run_id"] = pipeline_run_id
+
             env_snapshot = self._capture_environment()
             if env_snapshot is not None:
                 tags["git_commit"] = env_snapshot.git_commit or "unknown"
@@ -251,6 +257,47 @@ class MLOpsExecutorIntegration:
         except Exception as e:
             logger.error(f"Failed to start run: {e}")
             return None
+
+    def _pipeline_run_id(self) -> Optional[str]:
+        """The id of the pipeline run in progress (the certificate's ``run_id``), if any."""
+        if not self.context:
+            return None
+        try:
+            from ducta.core.ledger import ledger_for
+
+            return ledger_for(self.context).run_id
+        except Exception as e:  # noqa: BLE001 — a missing link must not stop a run
+            logger.debug("No pipeline run id for the tracked run: {}", e)
+            return None
+
+    def _log_evidence_summary(self, run_id: str) -> None:
+        """Copy two facts the certificate will attest onto the run: which code ran
+        (``_code_hash``) and whether the declared split was applied (``_split_applied``)."""
+        if not self.context:
+            return
+        import hashlib
+        import json
+
+        from ducta.core.ledger import ledger_for
+
+        ledger = ledger_for(self.context)
+        code = ledger.code_fingerprints
+        if code:
+            parts = {
+                node: (fp or {}).get("module_hash") or (fp or {}).get("source_hash")
+                for node, fp in sorted(code.items())
+            }
+            digest = hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
+            self._tracker.log_parameter(run_id, "_code_hash", f"sha256:{digest}")
+
+        bound = [
+            (n.get("ml") or {})
+            for n in ledger.node_details
+            if (n.get("ml") or {}).get("split_required")
+        ]
+        if bound:
+            applied = all(ml.get("split_applied") for ml in bound)
+            self._tracker.log_parameter(run_id, "_split_applied", "true" if applied else "false")
 
     def _get_fingerprint_policy(self) -> str:
         """Read fingerprint_policy from global config (dict or object form)."""
@@ -448,6 +495,11 @@ class MLOpsExecutorIntegration:
                     self._tracker.log_parameter(
                         run_id, "_output_fingerprints", json.dumps(out_fps, default=str)
                     )
+
+            try:
+                self._log_evidence_summary(run_id)
+            except Exception as e:  # noqa: BLE001 — evidence summary is best-effort
+                logger.debug("Could not log the evidence summary for run {}: {}", run_id, e)
 
             tracker = self._tracker
             try:

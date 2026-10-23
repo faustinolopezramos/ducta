@@ -66,6 +66,12 @@ PRESETS: Dict[str, Preset] = {
 
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
+#: Upper bounds, far above any real use: a typo (a request that never times out, a window
+#: of a trillion tokens sent as ``num_ctx``, a hundred paid attempts) is an error, not a setting.
+MAX_ATTEMPTS = 20
+MAX_TIMEOUT_SECONDS = 86_400.0
+MAX_CONTEXT_TOKENS = 10_000_000
+
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0", "host.docker.internal"}
 
 
@@ -164,12 +170,12 @@ class AIConfig:
                 )
         if self.effort is not None and self.effort not in EFFORTS:
             raise AIConfigError(f"Unknown effort '{self.effort}' (one of: {', '.join(EFFORTS)})")
-        if self.max_attempts < 1:
-            raise AIConfigError("max_attempts must be at least 1")
-        if not self.timeout_seconds > 0:
-            raise AIConfigError("timeout_seconds must be greater than 0")
-        if self.context_tokens < 1:
-            raise AIConfigError("context_tokens must be at least 1")
+        if not 1 <= self.max_attempts <= MAX_ATTEMPTS:
+            raise AIConfigError(f"max_attempts must be between 1 and {MAX_ATTEMPTS}")
+        if not 0 < self.timeout_seconds <= MAX_TIMEOUT_SECONDS:
+            raise AIConfigError(f"timeout_seconds must be between 0 and {MAX_TIMEOUT_SECONDS:,}")
+        if not 1 <= self.context_tokens <= MAX_CONTEXT_TOKENS:
+            raise AIConfigError(f"context_tokens must be between 1 and {MAX_CONTEXT_TOKENS:,}")
         return self
 
     def require_model(self) -> str:

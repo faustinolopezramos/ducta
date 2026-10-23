@@ -30,7 +30,11 @@ export interface ExperimentRun {
   start_time?: string | null;
   end_time?: string | null;
   duration_seconds?: number | null;
+  /** The user's hyperparameters. */
   parameters: Record<string, unknown>;
+  /** What Ducta records about the run for itself (environment snapshot, input
+   *  fingerprints, code hash): the parameters whose name starts with `_`. */
+  internal_parameters?: Record<string, unknown>;
   /** metric key → time series; the last point is the final value. */
   metrics: Record<string, MetricPoint[]>;
   artifacts?: string[];
@@ -77,6 +81,40 @@ export interface ModelVersion {
   artifact_sha256?: string | null;
   size_bytes?: number | null;
   experiment_run_id?: string | null;
+}
+
+/** One row of the run table (GET /mlops/run-table): a run joined with the model it
+ *  registered and its certificate. Beyond the fixed columns, `param_<name>` are its
+ *  hyperparameters and `metric_<name>` its final metrics; a column no run has a
+ *  value for is absent. */
+export interface RunTableRow {
+  run_id: string;
+  pipeline: string;
+  run_name?: string | null;
+  status: string;
+  started_at?: string | null;
+  duration_seconds?: number | null;
+  sweep_id?: string | null;
+  model_name?: string | null;
+  model_version?: number | null;
+  model_stage?: string | null;
+  model_label?: string | null;
+  artifact_sha256?: string | null;
+  git_commit?: string | null;
+  code_hash?: string | null;
+  data_hash?: string | null;
+  split_applied?: boolean | null;
+  /** The id of the run's certificate, as recorded when it ran. */
+  certificate_id?: string | null;
+  /** True: found and unaltered. False: missing or altered. Absent: not checked. */
+  certificate_ok?: boolean | null;
+  [column: string]: unknown;
+}
+
+export interface RunTable {
+  /** Column keys, in display order. */
+  columns: string[];
+  rows: RunTableRow[];
 }
 
 /** Final (last-logged) value per metric key for a run. */
@@ -151,6 +189,20 @@ export const useMlopsStatus = (env?: string, pipelineName?: string, project?: st
     queryFn: () =>
       client
         .get("/mlops/status", { params: scopeParams({ env, pipelineName, project }) })
+        .then((r) => r.data),
+    enabled: !!pipelineName,
+    staleTime: 30 * 1000,
+  });
+
+/** The run table with each run's certificate checked, newest first. */
+export const useMlopsRunTable = (env?: string, pipelineName?: string, project?: string) =>
+  useQuery<RunTable>({
+    queryKey: qk.mlops.runTable({ env, pipelineName, project }),
+    queryFn: () =>
+      client
+        .get("/mlops/run-table", {
+          params: { ...scopeParams({ env, pipelineName, project }), verify_certificates: true },
+        })
         .then((r) => r.data),
     enabled: !!pipelineName,
     staleTime: 30 * 1000,
@@ -232,6 +284,7 @@ export const usePromoteModel = () => {
       queryClient.invalidateQueries({
         queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
       });
+      queryClient.invalidateQueries({ queryKey: qk.mlops.runTable({ env, pipelineName, project }) });
       toastStore.getState().show(`Model '${name}' promoted successfully`, "success");
     },
     onError: defaultOnError,
@@ -257,6 +310,7 @@ export const useCloseMlopsRun = () => {
       queryClient.invalidateQueries({
         queryKey: qk.mlops.experiment(experimentId, { env, pipelineName, project }),
       });
+      queryClient.invalidateQueries({ queryKey: qk.mlops.runTable({ env, pipelineName, project }) });
     },
     onError: defaultOnError,
   });
@@ -275,6 +329,7 @@ export const useDeleteMlopsRun = () => {
       queryClient.invalidateQueries({
         queryKey: qk.mlops.experiment(experimentId, { env, pipelineName, project }),
       });
+      queryClient.invalidateQueries({ queryKey: qk.mlops.runTable({ env, pipelineName, project }) });
     },
     onError: defaultOnError,
   });

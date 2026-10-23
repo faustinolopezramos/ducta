@@ -167,6 +167,15 @@ export interface StreamingNodeStatus {
   trigger_execution_ms?: number | null;
   /** The model the query was pinned to when it started. */
   model?: { name?: string; version?: number; source?: string; [k: string]: unknown } | null;
+  /** What the node reads / writes / how often it fires / where it checkpoints. */
+  source?: string | null;
+  sink?: string | null;
+  trigger?: string | null;
+  checkpoint?: string | null;
+  /** "stalled" (no progress report: a hang) or "idle" (no input for a while: a quiet source). */
+  health?: "idle" | "stalled" | null;
+  /** Seconds the query has reported without input rows. */
+  idle_seconds?: number | null;
 }
 
 export interface StreamingPipelineStatus {

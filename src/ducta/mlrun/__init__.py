@@ -97,6 +97,7 @@ _EXPORTS = {
     "persist_model": ("ducta.mlrun.persistence", "persist_model"),
     "TrainResult": ("ducta.mlrun.training", "TrainResult"),
     "train_with_search": ("ducta.mlrun.training", "train_with_search"),
+    "run_summary": ("ducta.mlrun.summary", "run_summary"),
     "CircuitBreaker": ("ducta.mlrun.resilience", "CircuitBreaker"),
     "ResourceLimits": ("ducta.mlrun.resilience", "ResourceLimits"),
     "RetryConfig": ("ducta.mlrun.resilience", "RetryConfig"),
@@ -215,6 +216,7 @@ if TYPE_CHECKING:  # the same names, for type checkers and editors
         tag_partitions,
     )
     from ducta.mlrun.storage import StorageBackend, StorageMetadata  # noqa: F401
+    from ducta.mlrun.summary import run_summary  # noqa: F401
     from ducta.mlrun.training import TrainResult, train_with_search  # noqa: F401
     from ducta.mlrun.validators import (  # noqa: F401
         validate_artifact_type,
@@ -329,4 +331,5 @@ __all__ = [
     "persist_model",
     "TrainResult",
     "train_with_search",
+    "run_summary",
 ]

@@ -117,3 +117,82 @@ def test_an_unknown_enforcement_value_is_rejected_when_the_project_loads(tmp_pat
 
     with pytest.raises(ProjectConfigError, match="split_enforcement"):
         _report(tmp_path, monkeypatch, NODE, settings="settings: {split_enforcement: never}\n")
+
+
+class TestHyperparamsConfig:
+    """`hyperparams_config` names a search in a file; it does not hold one. A mapping with
+    the search itself used to pass validation and then be ignored by `--search`."""
+
+    GOOD_FILE = (
+        "churn: {algorithm: grid, objective: {metric: val_auc, type: maximize}, "
+        "search_space: {max_depth: [2, 4]}}\n"
+    )
+
+    def _run(self, tmp_path, monkeypatch, extra, settings="", file=None):
+        monkeypatch.chdir(tmp_path)
+        if file is not None:
+            (tmp_path / "search.yaml").write_text(file)
+        return _report(tmp_path, monkeypatch, NODE, pipeline_extra=extra, settings=settings)
+
+    def test_a_key_in_the_declared_file_passes(self, tmp_path, monkeypatch):
+        report = self._run(
+            tmp_path,
+            monkeypatch,
+            "hyperparams_config: churn\n",
+            settings="settings: {hyperparams_config_path: search.yaml}\n",
+            file=self.GOOD_FILE,
+        )
+
+        assert report.ok, report.errors
+
+    def test_path_and_key_pass(self, tmp_path, monkeypatch):
+        report = self._run(
+            tmp_path,
+            monkeypatch,
+            "hyperparams_config: {path: search.yaml, key: churn}\n",
+            file=self.GOOD_FILE,
+        )
+
+        assert report.ok, report.errors
+
+    def test_the_search_written_in_the_pipeline_is_an_error_that_says_where_it_goes(
+        self, tmp_path, monkeypatch
+    ):
+        report = self._run(
+            tmp_path,
+            monkeypatch,
+            "hyperparams_config:\n  algorithm: grid\n  search_space: {max_depth: [2, 4]}\n",
+        )
+
+        message = " ".join(report.errors)
+        assert "algorithm, search_space" in message
+        assert "{path, key}" in message and "hyperparams_config_path" in message
+
+    def test_a_key_with_no_file_is_an_error(self, tmp_path, monkeypatch):
+        report = self._run(tmp_path, monkeypatch, "hyperparams_config: churn\n")
+
+        assert any("no file is set" in e for e in report.errors)
+
+    def test_a_key_the_file_does_not_have_is_an_error(self, tmp_path, monkeypatch):
+        report = self._run(
+            tmp_path,
+            monkeypatch,
+            "hyperparams_config: nope\n",
+            settings="settings: {hyperparams_config_path: search.yaml}\n",
+            file=self.GOOD_FILE,
+        )
+
+        assert any("'nope' is not a key of search.yaml" in e for e in report.errors)
+
+    def test_a_file_that_does_not_exist_is_an_error(self, tmp_path, monkeypatch):
+        report = self._run(
+            tmp_path,
+            monkeypatch,
+            "hyperparams_config: churn\n",
+            settings="settings: {hyperparams_config_path: missing.yaml}\n",
+        )
+
+        assert any("missing.yaml does not exist" in e for e in report.errors)
+
+    def test_a_pipeline_with_none_is_untouched(self, tmp_path, monkeypatch):
+        assert self._run(tmp_path, monkeypatch, "").ok

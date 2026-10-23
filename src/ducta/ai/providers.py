@@ -142,6 +142,17 @@ class OpenAICompatibleProvider:
                 "(raise timeout_seconds in ~/.ducta/ai.toml for a slow local model)",
                 cause=e,
             ) from e
+        except (httpx.RequestError, httpx.InvalidURL) as e:
+            # The connection broke after it was made (a server that closes it while it loads
+            # a model, a proxy, a reset), or the URL cannot be used: not a reply to read.
+            hint = (
+                " A local server often does this while it loads or unloads a model: try again."
+                if self.config.is_local
+                else " Check the base URL and any proxy, then try again."
+            )
+            raise AIError(
+                f"The connection to {where} failed ({type(e).__name__}).{hint}", cause=e
+            ) from e
         if response.status_code in (401, 403):
             raise AIError(f"{where} rejected the API key (HTTP {response.status_code})")
         if response.status_code == 404 and path.endswith(("completions", "/api/chat")):

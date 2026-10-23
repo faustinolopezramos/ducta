@@ -438,8 +438,14 @@ def expand_sweep_grid(
 def load_hyperparams_config(
     source: Union[str, Path, Dict[str, Any]],
     pipeline_key: Optional[str] = None,
+    required: bool = True,
 ) -> Optional["HyperparamConfig"]:
-    """Load a hyperparameter configuration from a YAML file or dict."""
+    """Load a hyperparameter configuration from a YAML file or dict.
+
+    A file with several top-level keys needs ``pipeline_key``. With ``required=False`` a
+    missing key is not an error: the caller was only asking whether the file applies to a
+    pipeline that never named a key, and for one that does not search the answer is no.
+    """
     if isinstance(source, dict):
         data = source
     else:
@@ -458,9 +464,16 @@ def load_hyperparams_config(
     if pipeline_key is None:
         if len(data) == 1:
             pipeline_key = next(iter(data))
-        else:
+        elif required:
             logger.error(
                 "pipeline_key is required when the hyperparams file has {} top-level keys",
+                len(data),
+            )
+            return None
+        else:
+            logger.debug(
+                "Hyperparams file has {} top-level keys and this pipeline names none: "
+                "no search is configured for it",
                 len(data),
             )
             return None

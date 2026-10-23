@@ -241,6 +241,69 @@ class TestTrackingAndRegistration:
 
         assert set(logged) == set(result.metrics)
 
+    def test_the_winning_hyperparameters_are_logged_on_the_run(self, data):
+        # A run table / `experiment compare` reads hyperparameters from the run, not from
+        # the model it registered.
+        X, y = data
+        params = {}
+        tracker = SimpleNamespace(
+            log_metric=lambda *a: None,
+            log_parameter=lambda run, key, value: params.__setitem__(key, value),
+        )
+        context = _context(
+            mlops_context=SimpleNamespace(experiment_tracker=tracker), mlops_run_id="run-1"
+        )
+
+        result = train_with_search(
+            DecisionTreeClassifier(random_state=0),
+            X,
+            y,
+            context,
+            task="classification",
+            param_grid={"max_depth": [2, 3], "min_samples_leaf": [1, 4]},
+        )
+
+        assert params == result.best_params
+        assert set(params) == {"max_depth", "min_samples_leaf"}
+
+    def test_a_run_without_a_search_logs_the_hyperparameters_it_was_given(self, data):
+        X, y = data
+        params = {}
+        tracker = SimpleNamespace(
+            log_metric=lambda *a: None,
+            log_parameter=lambda run, key, value: params.__setitem__(key, value),
+        )
+        context = _context(
+            mlops_context=SimpleNamespace(experiment_tracker=tracker),
+            mlops_run_id="run-1",
+            hyperparams={"max_depth": 2},
+        )
+
+        train_with_search(
+            DecisionTreeClassifier(random_state=0), X, y, context, task="classification"
+        )
+
+        assert params == {"max_depth": 2}
+
+    def test_a_tracker_that_cannot_log_parameters_does_not_fail_the_node(self, data):
+        X, y = data
+
+        def boom(*args):
+            raise RuntimeError("backend down")
+
+        tracker = SimpleNamespace(log_metric=lambda *a: None, log_parameter=boom)
+        context = _context(
+            mlops_context=SimpleNamespace(experiment_tracker=tracker),
+            mlops_run_id="run-1",
+            hyperparams={"max_depth": 2},
+        )
+
+        result = train_with_search(
+            DecisionTreeClassifier(random_state=0), X, y, context, task="classification"
+        )
+
+        assert result.metrics
+
     def test_a_tracker_that_fails_does_not_fail_the_node(self, data):
         X, y = data
 
@@ -313,3 +376,139 @@ class TestResultHelpers:
         result = train_with_search(LogisticRegression(), X, y, _context(), task="classification")
 
         assert len(result.metrics_frame()) == 1
+
+
+class TestARunThatFixesHyperparameters:
+    """`--hyperparams`, a `--sweep` run and a `--search` trial give a node hyperparameters it
+    must use. A search inside the node used to ignore them: every trial of `--search` trained
+    the same model, and the run recorded values the model never had."""
+
+    @staticmethod
+    def _grid(**space):
+        return HyperparamConfig(
+            algorithm="grid",
+            cv_folds=3,
+            objective={"metric": "roc_auc", "type": "maximize"},
+            search_space=space,
+        )
+
+    def _train(self, data, cfg, cli, **context):
+        X, y = data
+        return train_with_search(
+            DecisionTreeClassifier(random_state=0),
+            X,
+            y,
+            _context(hyperparams_config=cfg, cli_hyperparams=cli, hyperparams=cli, **context),
+            task="classification",
+        )
+
+    def test_a_trial_that_fixes_the_whole_space_trains_exactly_that(self, data):
+        cfg = self._grid(max_depth=[1, 2, 3], min_samples_leaf=[1, 5])
+
+        for depth, leaf in [(1, 5), (3, 1)]:
+            result = self._train(data, cfg, {"max_depth": depth, "min_samples_leaf": leaf})
+
+            params = result.model.get_params()
+            assert (params["max_depth"], params["min_samples_leaf"]) == (depth, leaf)
+            assert result.best_params == {"max_depth": depth, "min_samples_leaf": leaf}
+
+    def test_different_trials_give_different_models(self, data):
+        cfg = self._grid(max_depth=[1, 6])
+
+        shallow = self._train(data, cfg, {"max_depth": 1})
+        deep = self._train(data, cfg, {"max_depth": 6})
+
+        assert shallow.model.get_depth() == 1 and deep.model.get_depth() > 1
+        assert shallow.best_params != deep.best_params
+
+    def test_a_trial_still_reports_the_score_a_search_reports(self, data):
+        # `--search` reads the objective's metric from the run; a one-point search is
+        # still cross-validated, so it is there.
+        result = self._train(data, self._grid(max_depth=[1, 6]), {"max_depth": 6})
+
+        assert result.cv_score is not None
+        assert result.metrics["roc_auc"] == pytest.approx(result.cv_score)
+
+    def test_a_partial_override_is_fixed_and_the_rest_is_still_searched(self, data):
+        cfg = self._grid(max_depth=[1, 2, 3], min_samples_leaf=[1, 20, 60])
+
+        result = self._train(data, cfg, {"max_depth": 2})
+
+        assert result.best_params["max_depth"] == 2
+        assert result.best_params["min_samples_leaf"] in (1, 20, 60)
+        assert result.model.get_params()["max_depth"] == 2
+
+    def test_a_value_outside_the_space_is_applied_too(self, data):
+        cfg = self._grid(max_depth=[1, 2])
+
+        result = self._train(data, cfg, {"min_samples_leaf": 7})
+
+        assert result.model.get_params()["min_samples_leaf"] == 7
+        assert result.best_params["min_samples_leaf"] == 7
+
+    def test_a_name_the_estimator_does_not_have_is_ignored(self, data):
+        cfg = self._grid(max_depth=[1, 2])
+
+        result = self._train(data, cfg, {"max_depth": 2, "sweep_extra": 1})
+
+        assert "sweep_extra" not in result.best_params
+
+    def test_without_overrides_the_whole_space_is_searched_as_before(self, data):
+        result = self._train(data, self._grid(max_depth=[1, 3]), {})
+
+        assert result.best_params["max_depth"] in (1, 3)
+
+    def test_a_random_search_keeps_what_the_run_fixed(self, data):
+        cfg = HyperparamConfig(
+            algorithm="random",
+            cv_folds=3,
+            n_trials=3,
+            objective={"metric": "roc_auc", "type": "maximize"},
+            search_space={"max_depth": [1, 2, 3], "min_samples_leaf": [1, 5, 10]},
+        )
+
+        result = self._train(data, cfg, {"max_depth": 2})
+
+        assert result.best_params["max_depth"] == 2
+        assert result.model.get_params()["max_depth"] == 2
+
+    def test_an_explicit_grid_is_fixed_by_the_run_too(self, data):
+        X, y = data
+
+        result = train_with_search(
+            DecisionTreeClassifier(random_state=0),
+            X,
+            y,
+            _context(cli_hyperparams={"max_depth": 3}),
+            task="classification",
+            param_grid={"max_depth": [1, 2], "min_samples_leaf": [1, 5]},
+            scoring="roc_auc",
+        )
+
+        assert result.best_params["max_depth"] == 3
+
+    def test_a_bayesian_trial_that_fixes_the_whole_space_runs(self, data):
+        # Under `--search` the trial fixes every parameter, so the node has nothing left to
+        # search. This used to raise, and every trial of a bayesian `--search` failed.
+        cfg = SimpleNamespace(
+            algorithm="bayesian",
+            search_space={"max_depth": {"min": 1, "max": 6}, "min_samples_leaf": [1, 5]},
+            objective={"metric": "roc_auc", "type": "maximize"},
+            cv_folds=3,
+        )
+
+        result = self._train(data, cfg, {"max_depth": 4, "min_samples_leaf": 5})
+
+        assert result.model.get_params()["max_depth"] == 4
+        assert result.best_params == {"max_depth": 4, "min_samples_leaf": 5}
+
+    def test_a_bayesian_run_that_leaves_parameters_free_still_goes_to_the_cli(self, data):
+        cfg = SimpleNamespace(
+            algorithm="bayesian",
+            search_space={"max_depth": [1, 2], "min_samples_leaf": [1, 5]},
+            objective={},
+            cv_folds=3,
+        )
+
+        with pytest.raises(ValueError, match="--search"):
+            self._train(data, cfg, {"max_depth": 2})

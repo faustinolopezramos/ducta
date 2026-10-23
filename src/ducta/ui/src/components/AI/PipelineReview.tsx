@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Link } from "react-router-dom";
 import { IconSparkles, IconX } from "@tabler/icons-react";
 import {
@@ -32,12 +32,16 @@ export function severityCount(findings: AIReviewFinding[]): string {
 }
 
 /** The findings about the pipeline itself, then each node's, in the pipeline's order. */
-export function byNode(review: AIPipelineReview): { node: string | null; findings: AIReviewFinding[] }[] {
+export function byNode(
+  review: AIPipelineReview,
+  filteredFindings?: AIReviewFinding[],
+): { node: string | null; findings: AIReviewFinding[] }[] {
+  const findings = filteredFindings ?? review.findings;
   const groups: { node: string | null; findings: AIReviewFinding[] }[] = [];
-  const own = review.findings.filter((f) => !f.node);
+  const own = findings.filter((f) => !f.node);
   if (own.length) groups.push({ node: null, findings: own });
   for (const node of review.nodes) {
-    const found = review.findings.filter((f) => f.node === node);
+    const found = findings.filter((f) => f.node === node);
     if (found.length) groups.push({ node, findings: found });
   }
   return groups;
@@ -76,11 +80,27 @@ export function PipelineReview({
   const [jobId, setJobId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [acting, setActing] = useState<Act | null>(null);
+  const [severityFilter, setSeverityFilter] = useState<"all" | "high" | "medium" | "low">("all");
+  const [areaFilter, setAreaFilter] = useState<string>("all");
   const { data: job } = useAIJob(projectId, jobId);
   const running = start.isPending || (Boolean(jobId) && (!job || job.status === "running"));
   const elapsed = useElapsed(job?.started_at, running);
   const failed = job?.status === "failed" ? (job.error ?? "The model did not answer.") : null;
   const modelReady = Boolean(settings?.configured && settings.model);
+
+  const filteredFindings = useMemo(() => {
+    if (!review) return [];
+    return review.findings.filter((f) => {
+      if (severityFilter !== "all" && f.severity !== severityFilter) return false;
+      if (areaFilter !== "all" && f.area !== areaFilter) return false;
+      return true;
+    });
+  }, [review, severityFilter, areaFilter]);
+
+  const areasPresent = useMemo(() => {
+    if (!review) return [];
+    return Array.from(new Set(review.findings.map((f) => f.area).filter(Boolean)));
+  }, [review]);
 
   const ref = useRef<HTMLElement>(null);
   useDialogA11y(ref, onClose);
@@ -143,6 +163,58 @@ export function PipelineReview({
           </PermittedButton>
         </div>
 
+        {review && review.findings.length > 0 && (
+          <div className="ai-review-filters" role="toolbar" aria-label="Filter review findings">
+            <div className="ai-review-filters__group" role="radiogroup" aria-label="Filter by severity">
+              <span className="ai-review-filters__label">Severity:</span>
+              {(["all", "high", "medium", "low"] as const).map((sev) => {
+                const count =
+                  sev === "all" ? review.findings.length : review.findings.filter((f) => f.severity === sev).length;
+                if (sev !== "all" && count === 0) return null;
+                return (
+                  <button
+                    key={sev}
+                    type="button"
+                    className={`ai-filter-chip${severityFilter === sev ? " is-active" : ""}`}
+                    onClick={() => setSeverityFilter(sev)}
+                    aria-pressed={severityFilter === sev}
+                  >
+                    {sev === "all" ? "All" : sev.slice(0, 1).toUpperCase() + sev.slice(1)}
+                    <span className="ai-filter-chip__count">{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+            {areasPresent.length > 1 && (
+              <div className="ai-review-filters__group" role="radiogroup" aria-label="Filter by area">
+                <span className="ai-review-filters__label">Area:</span>
+                <button
+                  type="button"
+                  className={`ai-filter-chip${areaFilter === "all" ? " is-active" : ""}`}
+                  onClick={() => setAreaFilter("all")}
+                  aria-pressed={areaFilter === "all"}
+                >
+                  All
+                </button>
+                {areasPresent.map((area) => (
+                  <button
+                    key={area}
+                    type="button"
+                    className={`ai-filter-chip${areaFilter === area ? " is-active" : ""}`}
+                    onClick={() => setAreaFilter(area)}
+                    aria-pressed={areaFilter === area}
+                  >
+                    {area.slice(0, 1).toUpperCase() + area.slice(1)}
+                    <span className="ai-filter-chip__count">
+                      {review.findings.filter((f) => f.area === area).length}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="ai-drawer__body" aria-live="polite">
           {running && (
             <div className="ai-explanation__busy">
@@ -180,7 +252,7 @@ export function PipelineReview({
           )}
 
           {review &&
-            byNode(review).map((group) => (
+            byNode(review, filteredFindings).map((group) => (
               <section key={group.node ?? "_pipeline"} className="ai-review-group" aria-label={group.node ?? "The pipeline"}>
                 <header>
                   {group.node ? <code>{group.node}</code> : <b>The pipeline</b>}
@@ -246,6 +318,22 @@ export function PipelineReview({
             ))}
 
           {review && review.findings.length === 0 && !running && <p className="ai-context">Nothing to report.</p>}
+
+          {review && review.findings.length > 0 && filteredFindings.length === 0 && (
+            <div className="ai-review-no-match">
+              <p className="ai-context">No findings match the selected filters.</p>
+              <button
+                type="button"
+                className="ai-link"
+                onClick={() => {
+                  setSeverityFilter("all");
+                  setAreaFilter("all");
+                }}
+              >
+                Reset filters
+              </button>
+            </div>
+          )}
 
           {review && review.ideas.length > 0 && (
             <section className="ai-ideas" aria-label="Ideas for new nodes">

@@ -35,6 +35,13 @@ export function useGlobalShortcuts() {
         return;
       }
 
+      // ⌥Z / Alt+Z: Toggle Zen Mode
+      if (e.altKey && e.key.toLowerCase() === "z" && !isTypingTarget(e.target) && !(e.target as HTMLElement | null)?.closest?.(".monaco-editor")) {
+        e.preventDefault();
+        useUIStore.getState().toggleZenMode();
+        return;
+      }
+
       if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
       // ⌘K: the command menu — from anywhere except inside an editor, where
       // Monaco uses ⌘K as the start of its own chords.

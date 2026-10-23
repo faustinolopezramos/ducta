@@ -117,6 +117,48 @@ def _ctx_get(ml_context: Any, key: str, default: Any = None) -> Any:
     return getattr(ml_context, key, default)
 
 
+def log_run_metrics(ml_context: Any, metrics: Optional[Mapping[str, Any]]) -> None:
+    """Best-effort: record each numeric metric on the tracked run, if there is one.
+
+    A metric that cannot be logged (NaN, not a number) is skipped with a warning; it
+    never fails the training node.
+    """
+    mlops = _ctx_get(ml_context, "mlops_context")
+    run_id = _ctx_get(ml_context, "mlops_run_id")
+    tracker = getattr(mlops, "experiment_tracker", None) if mlops else None
+    if tracker is None or not run_id or not metrics:
+        return
+    for key, value in metrics.items():
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            logger.warning(
+                "Metric '{}' is not a number ({}): not logged to run {}", key, value, run_id
+            )
+            continue
+        try:
+            tracker.log_metric(run_id, str(key), value)
+        except Exception as error:  # noqa: BLE001 — tracking must not fail a training run
+            logger.warning("Could not log metric '{}' to run {}: {}", key, run_id, error)
+
+
+def log_run_params(ml_context: Any, params: Optional[Mapping[str, Any]]) -> None:
+    """Best-effort: record each hyperparameter on the tracked run, if there is one.
+
+    The model a run registered carries its hyperparameters, but a run table or
+    ``ducta experiment compare`` reads them from the run, so they go there too. A value
+    already on the run (one the run was asked to use) is rewritten with the same value.
+    """
+    mlops = _ctx_get(ml_context, "mlops_context")
+    run_id = _ctx_get(ml_context, "mlops_run_id")
+    tracker = getattr(mlops, "experiment_tracker", None) if mlops else None
+    if tracker is None or not run_id or not params:
+        return
+    for key, value in params.items():
+        try:
+            tracker.log_parameter(run_id, str(key), value)
+        except Exception as error:  # noqa: BLE001 — tracking must not fail a training run
+            logger.warning("Could not log parameter '{}' to run {}: {}", key, run_id, error)
+
+
 def infer_schema(data: Any) -> Optional[Dict[str, str]]:
     """Infer a ``{column: dtype}`` contract from a pandas DataFrame/Series."""
     if data is None:
@@ -151,8 +193,13 @@ def persist_model(
     input_schema: Optional[Dict[str, str]] = None,
     output_schema: Optional[Dict[str, str]] = None,
     native: bool = False,
+    log_to_run: bool = True,
 ) -> Dict[str, Any]:
     """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``.
+
+    ``metrics`` go to the model version *and*, with ``log_to_run`` (the default), to the
+    tracked run, so ``ducta experiment show`` and a run summary can rank runs by them.
+    Pass ``log_to_run=False`` when the caller has already logged them.
 
     ``native=True`` writes an xgboost or lightgbm model in the framework's own format
     (``.json`` / ``.txt``) instead of a pickle, so it can be scored without
@@ -166,6 +213,9 @@ def persist_model(
     registry = getattr(mlops_context, "model_registry", None) if mlops_context else None
 
     stamp = _version_stamp(run_id, model_version)
+
+    if log_to_run:
+        log_run_metrics(ml_context, metrics)
 
     resolved_input_schema = input_schema if input_schema is not None else infer_schema(X)
     resolved_output_schema = output_schema if output_schema is not None else infer_schema(y)

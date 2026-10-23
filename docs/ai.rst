@@ -145,10 +145,15 @@ datasets.
 
 **Existing nodes stay as they are.** Ducta checks it without a model: every
 existing node, every key of the pipeline (``depends_on`` may only grow) and
-every function and import of its modules must come back unchanged, and at
-least one node must be new. What it finds goes back to the model like a
+every function and import of its modules must come back unchanged, nothing the
+draft adds may bind or change a name the module already has (a second ``def`` or an
+assignment of the same name would replace the original when the module is imported),
+and at least one node must be new. What it finds goes back to the model like a
 validation error; the code it adds is held to the review's rules (no I/O of its
-own, no ``collect()``, no credential, no commands, network calls or file deletions).
+own, no ``collect()``, no credential, no commands, network calls or file deletions;
+``import os as o`` and ``from os import system`` are followed). The code a ``new``
+draft or a ``fix`` adds is held to the same review; a line a file already had is not the
+draft's, so a fix is not asked to take out what was there.
 That review is a net for the obvious, **not a sandbox**: it reads the code, it does
 not confine it. Code a model wrote runs with the pipeline's own access once it is
 applied, so read the diff before you apply it. The pipeline file in the draft is
@@ -496,8 +501,9 @@ The configuration a reviewer would see in a pull request: dataset names,
 formats, descriptions and declared schemas; pipelines and their nodes; the
 *names* of ingestion sources; the signatures of the project's functions; one
 existing pipeline file and one node function as examples of house style, with
-any credential written in them (a password or key, quoted or not, a URL's
-password, a bearer token) masked. A credential written in a setting — an ingest
+any credential written in them (a password or key, quoted or not, one inside a
+connection string such as ``jdbc:…;password=…``, a URL's password, a bearer token,
+a private key, a JWT) masked. A credential written in a setting — an ingest
 node's ``options``, ``spark_config``, a node's settings in a review — is sent as
 ``***`` (``${VAR}`` placeholders go as they are).
 
@@ -507,7 +513,7 @@ password, ``password=``/``token=``-style values and bearer tokens replaced by
 ``***``; the rest of the error goes as it is. The files a fix may change go
 whole, since the model answers with whole files: one that holds a credential is
 not sent to a remote provider at all (move the value to a variable, or use a
-local model), and a pipeline whose files exceed 60,000 characters is refused.
+local model; a password with spaces in it is the one shape not recognised), and a pipeline whose files exceed 60,000 characters is refused.
 ``ducta ai revise`` checks those files again against the provider it sends them
 to. With Ollama, a request too large for ``context_tokens`` is refused before it
 is sent.

@@ -88,6 +88,13 @@ describe("AISettings", () => {
     expect(await screen.findByText(/Connected to http:\/\/localhost:11434\/v1 — 2 models/)).toBeInTheDocument();
   });
 
+  it("selects a model from available suggestions", async () => {
+    renderIt();
+    const chip = await screen.findByRole("button", { name: "llama3.2:latest" });
+    fireEvent.click(chip);
+    expect(screen.getByLabelText("Model")).toHaveValue("llama3.2:latest");
+  });
+
   it("tests what is in the form, before saving it", async () => {
     renderIt();
     await screen.findByText(/Connected to/);

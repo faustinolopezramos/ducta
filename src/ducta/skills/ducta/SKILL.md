@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Requires the ducta CLI (pip install ducta; Python 3.10-3.13). Works with any agent that can read files and run shell commands.
 metadata:
   ducta-version: "0.2"
-  skill-version: "1.1.0"
+  skill-version: "1.1.1"
   homepage: https://github.com/faustinolopezramos/ducta
 ---
 
@@ -140,7 +140,7 @@ profile, environments) to copy patterns from.
 
 ### Run in dev
 
-1. `ducta config list-pipelines` to see what can run.
+1. `ducta list` to see what can run.
 2. Pipelines default to `requires_dates: true`:
    `ducta start --env dev --pipeline NAME --start-date YYYY-MM-DD --end-date YYYY-MM-DD`.
 3. `--validate-only`, `--dry-run` and `--node NAME` narrow a first run.

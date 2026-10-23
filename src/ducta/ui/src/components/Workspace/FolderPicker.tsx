@@ -9,6 +9,7 @@ import {
 } from "@tabler/icons-react";
 import client from "../../api/client";
 import { Button } from "../ui/Button";
+import { Skeleton } from "../ui/Skeleton";
 import { qk } from "../../api/queryKeys";
 
 interface BrowseEntry {
@@ -90,7 +91,12 @@ export function FolderPicker({
       </div>
 
       <ul className="folder-picker__list">
-        {isPending && <li className="folder-picker__empty">Loading…</li>}
+        {isPending && (
+          <li className="folder-picker__empty" style={{ display: "flex", flexDirection: "column", gap: 6, padding: "8px 12px" }}>
+            <Skeleton width="90%" height="18px" />
+            <Skeleton width="65%" height="18px" />
+          </li>
+        )}
 
         {!isPending && data?.entries.length === 0 && (
           <li className="folder-picker__empty">

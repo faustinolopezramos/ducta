@@ -43,6 +43,27 @@ export const useBulkCancelExecutions = () => {
 };
 
 /**
+ * POST /executions/{executionId}/streaming/{streamExecutionId}/nodes/{node}/restart
+ * Stops one streaming node's query and starts it again from its checkpoint; the
+ * rest of the pipeline keeps running.
+ */
+export const useRestartStreamingNode = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { executionId: string; streamExecutionId: string; node: string }) =>
+      client
+        .post(
+          `/executions/${v.executionId}/streaming/${v.streamExecutionId}/nodes/${encodeURIComponent(v.node)}/restart`,
+        )
+        .then((r) => r.data as { restarted: boolean; node: string }),
+    onSuccess: (_data, v) => {
+      queryClient.invalidateQueries({ queryKey: qk.executions.streaming(v.executionId) });
+    },
+    onError: defaultOnError,
+  });
+};
+
+/**
  * POST /executions/{executionId}/cancel
  * Cancels a running or pending pipeline execution.
  */

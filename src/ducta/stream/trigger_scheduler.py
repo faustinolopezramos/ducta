@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from loguru import logger  # type: ignore
 
@@ -45,9 +45,17 @@ class TriggerScheduler:
         self.progress_sink = progress_sink
 
     def configure_trigger(
-        self, trigger_config: Dict[str, Any], query_name: Optional[str] = None
+        self,
+        trigger_config: Dict[str, Any],
+        query_name: Optional[str] = None,
+        history_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
-        """Configure streaming trigger with minimum interval validation."""
+        """Configure streaming trigger with minimum interval validation.
+
+        *history_key* identifies the node across runs (see
+        ``StreamingProgressSink.register_history_key``); the adaptive trigger
+        reads its past batch durations under it, falling back to *query_name*.
+        """
         try:
             trigger_type_raw = trigger_config.get("type", StreamingTrigger.PROCESSING_TIME.value)
             trigger_type = str(trigger_type_raw).lower()
@@ -67,7 +75,7 @@ class TriggerScheduler:
                 return {"availableNow": True}
 
             if mapped_key == "adaptive":
-                return self._build_adaptive_trigger(trigger_config, query_name)
+                return self._build_adaptive_trigger(trigger_config, query_name, history_key)
 
             raise StreamingConfigurationError(
                 f"Unhandled trigger mapping '{mapped_key}'",
@@ -143,14 +151,17 @@ class TriggerScheduler:
         return default
 
     def _build_adaptive_trigger(
-        self, trigger_config: Dict[str, Any], query_name: Optional[str]
+        self,
+        trigger_config: Dict[str, Any],
+        query_name: Optional[str],
+        history_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Build a processingTime trigger whose interval adapts to observed load.
 
         Structured Streaming fixes a query's trigger interval at start time and
         cannot change it without a restart, so "adaptive" derives the *starting*
         interval from historical batch durations captured by the progress sink
-        on previous runs of this query (proportional controller targeting ~66%
+        on previous runs of this node in the same process (proportional controller targeting ~66%
         trigger utilisation). With no history it falls back to a configurable
         base interval. The chosen value is always clamped to
         [min_trigger_interval_seconds, ceiling].
@@ -164,9 +175,10 @@ class TriggerScheduler:
 
         chosen_interval = str(base_raw)
         avg_trigger_ms = None
-        if query_name and self.progress_sink is not None:
+        lookup = history_key or query_name
+        if lookup and self.progress_sink is not None:
             try:
-                avg_trigger_ms = self.progress_sink.avg_trigger_ms(query_name)
+                avg_trigger_ms = self.progress_sink.avg_trigger_ms(lookup)
             except Exception:
                 avg_trigger_ms = None
 
@@ -220,28 +232,91 @@ class TriggerScheduler:
 
     def apply_query_scheduling(
         self, df: Any, node_name: str, streaming_config: Dict[str, Any]
-    ) -> None:
+    ) -> Callable[[], None]:
         """Pin this query to its own FAIR scheduler pool and tune shuffle partitions.
 
         Must be called by the caller inside its own query-start lock and
         immediately before ``.start()`` so the values are captured by *this*
         query's cloned SQLConf and not leaked to / clobbered by concurrent starts.
+
+        Returns a callable that undoes both settings. Spark clones the conf when
+        the query starts, so the caller restores right after ``.start()``: the
+        session-wide ``spark.sql.shuffle.partitions`` otherwise stays at the
+        streaming value for every batch job that shares the session (a hybrid
+        pipeline's batch nodes, a later run), and the scheduler pool property
+        would stay set on this thread.
         """
         spark = getattr(df, "sparkSession", None) or getattr(df, "sql_ctx", None)
         if spark is None:
-            return
+            return _noop
         spark_session = getattr(spark, "sparkSession", spark)
+        restores: list = []
         try:
             sc = spark_session.sparkContext
             # FAIR pool per query so a heavy stream can't starve the others.
+            _quiet_fair_pool_warning(sc)
+            previous_pool = sc.getLocalProperty("spark.scheduler.pool")
             sc.setLocalProperty("spark.scheduler.pool", f"streaming_{node_name}")
+            restores.append(lambda: sc.setLocalProperty("spark.scheduler.pool", previous_pool))
         except Exception as e:
             logger.debug("Could not set scheduler pool for '{}': {}", node_name, e)
 
         partitions = self._effective_shuffle_partitions(spark_session, streaming_config)
         if partitions is not None:
             try:
+                previous = self._read_conf(spark_session, "spark.sql.shuffle.partitions")
                 spark_session.conf.set("spark.sql.shuffle.partitions", str(partitions))
                 logger.info("Streaming query '{}': shuffle.partitions={}", node_name, partitions)
+                if previous is not None:
+                    restores.append(
+                        lambda: spark_session.conf.set("spark.sql.shuffle.partitions", previous)
+                    )
             except Exception as e:
                 logger.debug("Could not set shuffle.partitions for '{}': {}", node_name, e)
+
+        def restore() -> None:
+            for undo in restores:
+                try:
+                    undo()
+                except Exception as e:  # best effort: never mask the query's own outcome
+                    logger.debug("Could not restore session setting for '{}': {}", node_name, e)
+
+        return restore
+
+    @staticmethod
+    def _read_conf(spark_session: Any, key: str) -> Optional[str]:
+        try:
+            value = spark_session.conf.get(key, None)
+        except Exception:
+            return None
+        return value if isinstance(value, str) else None
+
+
+def _noop() -> None:
+    return None
+
+
+#: Spark contexts whose "pool has not been configured" warning is already silenced.
+_QUIETED_CONTEXTS: set = set()
+
+
+def _quiet_fair_pool_warning(spark_context: Any) -> None:
+    """Silence Spark's WARN for a scheduler pool missing from the allocation file.
+
+    Every streaming query gets a pool named after its node, which Spark creates on
+    the fly with default settings; it warns once per pool that the file does not
+    define it. That is the intended setup, not a misconfiguration, and the warning
+    comes out of Ducta's own startup. Only that logger is raised, and best-effort:
+    a Spark without log4j2 simply keeps the warning.
+    """
+    key = id(spark_context)
+    if key in _QUIETED_CONTEXTS:
+        return
+    _QUIETED_CONTEXTS.add(key)
+    try:
+        log4j = spark_context._jvm.org.apache.logging.log4j
+        log4j.core.config.Configurator.setLevel(
+            "org.apache.spark.scheduler.FairSchedulableBuilder", log4j.Level.ERROR
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not quiet the scheduler-pool warning: {}", e)

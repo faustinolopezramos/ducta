@@ -179,7 +179,7 @@ class TestTheEvidence:
             "artifact_sha256": mv.artifact_sha256,
             "hash_source": "registry",
         }
-        assert cert["schema_version"] == "1.6"
+        assert cert["schema_version"] == "1.7"
 
     def test_diff_reports_a_model_change(self, registry, tmp_path):
         from ducta.core.certificate import diff_certificates

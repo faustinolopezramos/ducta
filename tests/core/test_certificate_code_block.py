@@ -172,3 +172,57 @@ class TestBuildFromLedger:
         )
 
         assert "quality_extensions" not in cert.code
+
+
+class TestTheTrackedRunIsPartOfTheCertificate:
+    """``mlops_run_id`` ties a certificate to the tracked run it attests (schema 1.7)."""
+
+    def test_it_is_in_the_content_and_the_hash_when_there_is_a_run(self):
+        a = _make_cert(mlops_run_id="run-a")
+        b = _make_cert(mlops_run_id="run-b")
+
+        assert a.content()["mlops_run_id"] == "run-a"
+        assert a.compute_hash() != b.compute_hash()
+
+    def test_without_a_run_the_content_and_hash_are_what_they_always_were(self):
+        cert = _make_cert()
+
+        assert "mlops_run_id" not in cert.content()
+        assert cert.compute_hash() == _make_cert(mlops_run_id=None).compute_hash()
+        assert cert.compute_hash() == _make_cert(mlops_run_id="").compute_hash()
+
+    def test_roundtrip_verifies_and_stripping_the_link_fails(self, tmp_path):
+        path = write_certificate(_make_cert(mlops_run_id="run-a"), tmp_path)
+        assert verify_certificate(path).ok is True
+
+        data = json.loads(path.read_text())
+        del data["mlops_run_id"]
+        path.write_text(json.dumps(data))
+
+        assert verify_certificate(path).ok is False
+
+    def test_build_certificate_records_the_run(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        context = SimpleNamespace(
+            global_config={},
+            pipelines_config={},
+            nodes_config={},
+            input_config={},
+            output_config={},
+        )
+        now = datetime.now(timezone.utc)
+
+        cert = build_certificate(
+            context,
+            run_id="r1",
+            pipeline="p",
+            environment_name="dev",
+            status="success",
+            started_at=now,
+            ended_at=now,
+            ducta_version="1.0.0",
+            mlops_run_id="tracked-1",
+        )
+
+        assert cert.mlops_run_id == "tracked-1"
+        assert cert.sealed()["mlops_run_id"] == "tracked-1"

@@ -93,8 +93,8 @@ export function searchCommands(entries: CommandEntry[], query: string, limit = 4
   if (!q) {
     return [...entries].sort((a, b) => KIND_ORDER.indexOf(a.kind) - KIND_ORDER.indexOf(b.kind)).slice(0, limit);
   }
-  // ">" narrows to commands, "#" to datasets, "@" to nodes — as in an editor's palette.
-  const prefix = { ">": "command", "#": "dataset", "@": "node" }[q[0]] as CommandKind | undefined;
+  // ">" narrows to commands, "#" to datasets, "@" to nodes, "!" to runs, "/" to projects
+  const prefix = { ">": "command", "#": "dataset", "@": "node", "!": "run", "/": "project" }[q[0]] as CommandKind | undefined;
   const needle = prefix ? q.slice(1).trim() : q;
   return entries
     .filter((e) => !prefix || e.kind === prefix)

@@ -346,7 +346,8 @@ class TestPipelineStatusAndMetrics:
         # Mutate underlying state without a force refresh — cached copy should win.
         manager._running_pipelines[execution_id]["completed_nodes"] = 99
         second = manager.get_pipeline_status(execution_id)
-        assert second is first
+        assert second == first
+        assert second is not first  # a copy: callers may add keys to it
 
     def test_list_running_pipelines_only_lists_active_statuses(self, manager, mock_streaming_query):
         manager._running_pipelines["exec1"] = {

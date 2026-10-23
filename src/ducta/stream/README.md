@@ -40,11 +40,12 @@ Some data never stops arriving — clicks, transactions, sensor readings. Ducta 
 
 ### For Technical Users
 Ducta Stream is the Structured Streaming layer, implementing:
-*   **Pluggable readers/writers**: factories for Kafka, Kinesis, Delta, and file sources, and for Kafka, Delta, Parquet, JSON, CSV, and console sinks (`readers.py`, `writers.py`).
-*   **Query lifecycle management**: `StreamingQueryManager` creates and starts queries, resolves and sanitizes checkpoint paths (traversal-safe), and hosts the `TransformationRegistry` for user-registered transforms (`query_manager.py`).
+*   **Pluggable readers/writers**: factories for Kafka, Kinesis, Delta, file, `rate` and `socket` sources, and for Kafka, Delta, Parquet, JSON, CSV, console and memory sinks (`readers.py`, `writers.py`).
+*   **Query lifecycle management**: `StreamingQueryManager` creates and starts queries, resolves and sanitizes checkpoint paths (traversal-safe), releases a checkpoint when its query ends, and hosts the `TransformationRegistry` for user-registered transforms (`query_manager.py`).
 *   **Pipeline supervision**: `StreamingPipelineManager` starts nodes in dependency **waves** (independent queries launch in parallel), enforces max-concurrency, retries transient Delta warm-up errors, and drives graceful shutdown (`pipeline_manager.py`).
-*   **Health monitoring**: per-query `QueryHealthMonitor` detects stalls (no batch progress past a timeout) and surfaces query exceptions, with a short-TTL status cache to avoid excess py4j RPC.
+*   **Health monitoring**: per-query `QueryHealthMonitor` detects stalls (no progress *report* — a new batch or a new `lastProgress.timestamp` — past a timeout of at least 5 minutes and three trigger intervals, so an idle source is not a stalled one) and surfaces query exceptions, with a short-TTL status cache to avoid excess py4j RPC.
 *   **Push-model metrics**: `DuctaProgressListener` + `StreamingProgressSink` capture batch durations/throughput from Spark's `StreamingQueryListener`, feeding the adaptive trigger without polling (`progress_listener.py`).
+*   **Planning and status display**: `plan.py` resolves a pipeline without Spark (per node: what it reads and writes, trigger, effective checkpoint, and the problems that would stop it) for `ducta stream plan`, the CLI's start summary and the per-node `node_summaries` in the status; `node_state.py` reads one node out of a status snapshot (`active`/`failed`/`skipped`/`stopped`, plus `idle` or `stalled` health) so the CLI table and the API agree. Summaries name places, never connection options.
 *   **Validation**: format compatibility, checkpoint requirements, and DAG topological sort with cycle detection (`validators.py`).
 
 ---
@@ -57,15 +58,17 @@ rather than through `catalog.yaml`; the loader compiles each into the node
 document this module reads (`input`, `output`, `streaming`, `function`,
 `dependencies`):
 
-*   **`stream.input.format`**: `kafka` | `kinesis` | `delta_stream` | `file_stream` (with `file_format`) | `socket` | `rate` | `memory`, with format-specific `options`.
+*   **`stream.input.format`**: `kafka` | `kinesis` | `delta_stream` (alias `delta`) | `file_stream` (with `file_format`) | `socket` | `rate`, with format-specific `options`. A `delta_stream` streams appended data; `options.readChangeFeed: true` streams the change feed, and only then does `auto_enable_cdf` (default true) enable CDF on a table without it. The reader never alters a table it merely reads.
 *   **`stream.output.format`**: `kafka` | `delta` | `parquet` | `json` | `csv` | `console` | `memory`, with `path` and `options`.
 *   **`stream.streaming`**: `checkpoint_location`, `trigger` (`processing_time`, `once`, `available_now`, `continuous`, `adaptive`), `output_mode` (`append`/`update`/`complete`), `watermark`, `shuffle_partitions`.
 *   **`stream.transform`**: `{key, module, params}` — a transform from the registry; `module` is imported so its `register_transforms(registry)` runs first. A transform with an `ml_context` parameter receives the node's model.
 *   **`stream.model`**: a registered model (`{name, stage | version}` or `{source: mlflow, uri}`), resolved by `ducta.mlrun.serving` when the query starts and pinned for its lifetime. Without a transform the built-in scorer applies it; `StreamingPipelineManager` reports it per node under `served_models`.
-*   **`after`**: intra-pipeline ordering; independent nodes in the same wave start concurrently. When an upstream has a terminating trigger (`once`/`available_now`), its dependants start after it finishes.
+*   **`after`**: intra-pipeline ordering; independent nodes in the same wave start concurrently. When an upstream has a terminating trigger (`once`/`available_now`), its dependants start after it finishes — and are skipped if it ended with an error.
 *   **Settings** (`settings:` in `ducta.yaml`): `max_streaming_pipelines`, `checkpoints_base`, `streaming_transform_modules`, `streaming_node_start_retries`, `streaming_node_start_retry_delay_seconds`, `streaming_node_start_parallelism`, `streaming_status_cache_ttl_seconds`, `streaming_shuffle_partitions`, `streaming_adaptive_base_interval`, `streaming_adaptive_max_interval_seconds`, `streaming_disable_backpressure_defaults`.
 
-Checkpoint base resolution order: node `streaming.checkpoint` → `checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed). The latter two are resolved by `CheckpointManager.determine_checkpoint_base`, which applies the Ducta storage convention (see `ducta.core.README`): scoped by `${output_path}/${environment}`, and still env-scoped even when `checkpoints_base` doesn't reference the environment itself — otherwise every environment's checkpoints would collide in one directory. A node's own `streaming.checkpoint_location` is used verbatim — build it from `${paths.output}/${env}` as below.
+Checkpoint base resolution order: node `streaming.checkpoint_location` → `checkpoints_base` → `context.output_path/streaming_checkpoints` (a system temp fallback is deliberately **not** allowed). The latter two are resolved by `CheckpointManager.determine_checkpoint_base`, which applies the Ducta storage convention (see `ducta.core.README`): scoped by `${output_path}/${environment}`, and still env-scoped even when `checkpoints_base` doesn't reference the environment itself — otherwise every environment's checkpoints would collide in one directory. A node's own `streaming.checkpoint_location` is used as given (not env-scoped for you — build it from `${paths.output}/${env}` as below). Whichever base wins, it is only a **base**: the checkpoint of a node is `<base>/<pipeline>/<node>`, so the example below checkpoints at `…/_ckpt/enrich_events/events/enrich_events`.
+
+Pipeline `status`: `running`, `partial_failure` (a node failed to start, was skipped, or is stalled), `failed` (no node started), `completed` (every query ended cleanly), `stopped`, `error`. The trigger `adaptive` derives its start interval from the batch durations earlier runs of the same node measured in this process (`StreamingProgressSink`, keyed by `pipeline::node`), falling back to `streaming_adaptive_base_interval`.
 
 ---
 
@@ -148,8 +151,11 @@ manager.stop_pipeline(execution_id, graceful=True)
 ### Step 4: Clear checkpoints (offline maintenance)
 ```python
 # Refuses to run while the pipeline has active executions; traversal-safe.
+# Covers the project default and every node's own checkpoint_location; only a
+# directory holding checkpoint data (offsets/commits/metadata) is deleted, and
+# checkpoints on cloud storage are listed under result["manual"].
 result = manager.clear_pipeline_checkpoints("events")
-print(result["status"], result.get("path"))
+print(result["status"], result["cleared"], result.get("manual"))
 ```
 
 ### Step 5: Shut everything down

@@ -38,6 +38,7 @@ class StreamingTrigger(Enum):
     ONCE = "once"
     CONTINUOUS = "continuous"
     AVAILABLE_NOW = "available_now"
+    ADAPTIVE = "adaptive"
 
 
 class StreamingFormat(Enum):
@@ -47,6 +48,8 @@ class StreamingFormat(Enum):
     KINESIS = "kinesis"
     DELTA_STREAM = "delta_stream"
     FILE_STREAM = "file_stream"
+    RATE = "rate"
+    SOCKET = "socket"
 
 
 class StreamingOutputMode(Enum):
@@ -104,6 +107,14 @@ STREAMING_FORMAT_CONFIGS: Dict[str, Dict[str, Any]] = {
     },
     StreamingFormat.KINESIS.value: {
         "required_options": ["streamName", "region"],
+    },
+    # Test/dev sources built into Spark: ``rate`` generates rows and needs
+    # nothing; ``socket`` reads text lines from a TCP endpoint.
+    StreamingFormat.RATE.value: {
+        "required_options": [],
+    },
+    StreamingFormat.SOCKET.value: {
+        "required_options": ["host", "port"],
     },
 }
 

@@ -1,0 +1,138 @@
+/* One row per node: a dot, a name, a sentence, a trend and a rate. Detail opens on click. */
+.stream-panel { display: grid; gap: 4px; font-size: var(--text-xs); }
+.stream-panel__head { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 6px; }
+.stream-panel__name { font-family: var(--font-mono); font-weight: var(--weight-semibold); color: var(--text); }
+.stream-panel__sub { color: var(--text-muted); }
+.stream-panel__note { margin-top: 4px; color: var(--danger); word-break: break-word; }
+
+.stream-rows { list-style: none; margin: 0; padding: 0; }
+.stream-row { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 12px; border-top: 1px solid var(--border); }
+.stream-row__main {
+  display: grid; grid-template-columns: 14px 150px minmax(0, 1fr) 96px 72px; align-items: center; gap: 12px;
+  min-height: 30px; padding: 4px 0; width: 100%;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.stream-row__main:hover .stream-row__name { text-decoration: underline; text-decoration-color: var(--text-dim); }
+.stream-row__name { font-family: var(--font-mono); font-weight: var(--weight-semibold); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-row__text { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stream-row__text--warn { color: var(--warning); }
+.stream-row__text--bad { color: var(--danger); }
+.stream-row__rate { font-family: var(--font-mono); text-align: right; color: var(--text); }
+.stream-row__rate--none { color: var(--text-dim); }
+.stream-row__action { min-width: 64px; display: flex; justify-content: flex-end; }
+
+.stream-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); display: inline-block; }
+.stream-dot--active { background: var(--success); }
+.stream-dot--stalled { background: var(--warning); }
+.stream-dot--failed { background: var(--danger); }
+
+.stream-row__more { grid-column: 1 / -1; padding: 0 0 10px 26px; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); line-height: 1.7; }
+.stream-row__more b { font-weight: normal; color: var(--text); }
+.stream-row__more button { margin: 4px 0 0 -10px; } /* the button's own padding lines its label up with the text */
+
+/* ── KPI Summary Cards ── */
+.stream-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin: 6px 0 10px;
+}
+.stream-kpi-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+}
+.stream-kpi-label {
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: var(--weight-medium);
+}
+.stream-kpi-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  color: var(--text);
+}
+.stream-kpi-value--good {
+  color: var(--success);
+}
+.stream-kpi-value--warn {
+  color: var(--warning);
+}
+.stream-kpi-sub {
+  font-size: var(--text-2xs);
+  color: var(--text-muted);
+}
+
+/* ── Filter Chips ── */
+.stream-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.stream-filter-chip {
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+  transition: all var(--dur-fast) ease;
+}
+.stream-filter-chip:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+.stream-filter-chip.is-active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+.stream-filter-chip--alert.is-active {
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+/* ── Backpressure and Checkpoint Copy ── */
+.stream-row__backpressure {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--warning);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
+
+.stream-row__checkpoint-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.stream-copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-2xs);
+  cursor: pointer;
+}
+.stream-copy-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}

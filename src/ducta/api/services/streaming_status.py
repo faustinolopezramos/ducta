@@ -23,7 +23,6 @@ SPDX-License-Identifier: Apache-2.0
 # The snapshot itself carries Spark progress objects and the pipeline's config;
 # none of that leaves the server.
 
-import math
 from typing import Any, Dict, Optional
 
 from ducta.api.models.execution import (
@@ -31,15 +30,7 @@ from ducta.api.models.execution import (
     StreamingPipelineStatus,
     StreamingStatusResponse,
 )
-
-
-def _number(value: Any) -> Optional[float]:
-    """A finite float, or None: Spark reports NaN rates before the first batch."""
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if math.isfinite(number) else None
+from ducta.stream.node_state import derive_node_state, finite_number, node_names
 
 
 def _text(value: Any) -> Optional[str]:
@@ -47,50 +38,35 @@ def _text(value: Any) -> Optional[str]:
 
 
 def _node_status(node: str, snapshot: Dict[str, Any]) -> StreamingNodeStatus:
-    query = (snapshot.get("query_statuses") or {}).get(node) or {}
-    health = (snapshot.get("health_monitors") or {}).get(node) or {}
-    progress = (snapshot.get("progress_metrics") or {}).get(node) or {}
-    failed = snapshot.get("failed_nodes") or {}
-    skipped = snapshot.get("skipped_nodes") or {}
-
-    error = _text(query.get("exception") or query.get("error") or failed.get(node))
-    error = error or _text(health.get("error"))
-    if query.get("isActive"):
-        state = "active"
-    elif error:
-        state = "failed"
-    elif node in skipped:
-        state = "skipped"
-        error = _text(skipped.get(node))
-    else:
-        state = "stopped"
-
-    batch = progress.get("batchId", health.get("last_batch_id"))
+    state = derive_node_state(node, snapshot)
+    summary = (snapshot.get("node_summaries") or {}).get(node) or {}
     return StreamingNodeStatus(
         node=node,
-        state=state,
-        error=error,
-        last_batch_id=int(batch) if _number(batch) is not None else None,
-        num_input_rows=_number(progress.get("numInputRows")),
-        input_rows_per_second=_number(progress.get("inputRowsPerSecond")),
-        processed_rows_per_second=_number(progress.get("processedRowsPerSecond")),
-        trigger_execution_ms=_number(progress.get("triggerExecutionMs")),
+        state=state.state,
+        error=state.error,
+        source=_text(summary.get("source")),
+        sink=_text(summary.get("sink")),
+        trigger=_text(summary.get("trigger")),
+        checkpoint=_text(summary.get("checkpoint")),
+        health=state.health,
+        idle_seconds=state.idle_seconds,
+        last_batch_id=state.last_batch_id,
+        num_input_rows=state.num_input_rows,
+        input_rows_per_second=state.input_rows_per_second,
+        processed_rows_per_second=state.processed_rows_per_second,
+        trigger_execution_ms=state.trigger_execution_ms,
         model=(snapshot.get("served_models") or {}).get(node),
     )
 
 
 def pipeline_status(snapshot: Dict[str, Any]) -> StreamingPipelineStatus:
     """One entry of ``PipelineExecutor.streaming_snapshot()`` for the API."""
-    nodes = sorted(
-        set(snapshot.get("query_statuses") or {})
-        | set(snapshot.get("failed_nodes") or {})
-        | set(snapshot.get("skipped_nodes") or {})
-    )
+    nodes = node_names(snapshot)
     return StreamingPipelineStatus(
         stream_execution_id=str(snapshot.get("execution_id") or ""),
         pipeline_name=_text(snapshot.get("pipeline_name")),
         status=str(snapshot.get("status") or "unknown"),
-        uptime_seconds=_number(snapshot.get("uptime_seconds")),
+        uptime_seconds=finite_number(snapshot.get("uptime_seconds")),
         total_queries=int(snapshot.get("total_queries") or 0),
         active_queries=int(snapshot.get("active_queries") or 0),
         failed_queries=int(snapshot.get("failed_queries") or 0),

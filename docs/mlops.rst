@@ -500,6 +500,13 @@ What comes from the pipeline file, and what an argument overrides:
        ``param_grid`` argument. With neither, the estimator is fitted once with
        ``ml_context.hyperparams``. A ``bayesian`` search drives whole runs; use
        ``ducta start --search`` for it.
+   * - What the run fixes
+     - A hyperparameter the run was given (``--hyperparams``, a ``--sweep`` run or a
+       ``--search`` trial) is **not searched**: the model gets that value, and the search
+       inside the node covers only the parameters left free. When the run fixes the whole
+       space, as a ``--search`` trial does, the node cross-validates that one point and
+       reports its score. The values the model really has are in ``best_params`` and in the
+       registered version.
    * - Folds and seed
      - ``ml_context.cv_folds`` and ``ml_context.node_seed`` (deterministic per node).
    * - The scorer
@@ -562,6 +569,84 @@ Comparing Runs
 
 ``compare`` lays the parameters and final metrics of the runs side by side, so the
 effect of a hyperparameter is a column you read. See :doc:`cli_usage` for every flag.
+
+One Table of All Your Runs
+--------------------------
+
+``experiment compare`` needs the ids of the runs you want to see. A table of every run is
+easier to rank, filter and share. ``ducta.mlrun.run_summary`` builds it: one row per
+tracked run, joined with the model that run registered and with its run certificate.
+
+.. code-block:: python
+
+   # churn/runs.py
+   from ducta.mlrun import run_summary
+
+   def runs(ml_context=None):
+       table = run_summary(ml_context, pipeline="churn_model")
+       return table.sort_values("metric_val_auc", ascending=False)
+
+A pipeline of its own writes it as a dataset, so *you* choose where and how it is kept —
+``parquet``, ``delta``, ``csv`` or ``json`` — in the catalog, like any other dataset.
+``ducta init project --type ml`` creates exactly this, as ``churn_runs`` and
+``gold.churn.runs``:
+
+.. code-block:: yaml
+
+   # catalog/gold.yaml
+   gold.churn.runs:
+     format: parquet        # or delta, csv, json
+
+.. code-block:: yaml
+
+   # pipelines/churn_runs.yaml
+   type: ml
+   nodes:
+     runs:
+       run: pipelines.churn:runs
+       outputs: [gold.churn.runs]
+
+.. code-block:: bash
+
+   ducta start -e dev -p churn_model --sweep sweep.yaml
+   ducta start -e dev -p churn_runs          # rebuilds gold.churn.runs
+
+.. list-table::
+   :widths: 28 72
+   :header-rows: 1
+
+   * - Columns
+     - What they hold
+   * - ``run_id``, ``pipeline``, ``status``, ``started_at``, ``duration_seconds``
+     - The tracked run. ``sweep_id`` groups the runs of one ``--sweep``.
+   * - ``param_*``
+     - The run's hyperparameters and split, one column each. A parameter that is a
+       number in some runs and text in others is text, so the table can be written as
+       parquet or Delta.
+   * - ``metric_*``
+     - The run's final metrics. A run whose metrics were only recorded on its model (a run
+       from before ``persist_model`` logged them to the run) takes them from the model.
+   * - ``model_name``, ``model_version``, ``model_stage``, ``artifact_sha256``
+     - The registered model version this run produced; empty when it registered none.
+   * - ``code_hash``, ``data_hash``, ``split_applied``, ``git_commit``
+     - What the run's certificate attests, copied onto the run: a digest of the code of its
+       nodes, a digest of its input datasets, and whether the declared split was applied.
+   * - ``certificate_id``
+     - The run's certificate: ``ducta certify show --run-id <certificate_id>``. Pass
+       ``certificates_dir`` to ``run_summary`` to also fill ``certificate_ok``, which
+       says whether that certificate is on disk and unaltered.
+
+A column no run has a value for is left out. The pipeline that builds the table reads the
+tracking store of the others, so they must share ``settings.mlops_path`` (the template
+sets one). Outside a pipeline, pass the path itself:
+``run_summary(pipeline="churn_model", mlops_path="mlops_data")``.
+
+The same table is in the app, under **Models › Experiments › All runs**: every run in one
+sortable table, with its final metrics first, then the hyperparameters that differ between
+runs (**Show all** adds the ones every run shares), the model it registered and whether its
+certificate is intact. Tick runs to compare them, open one for its **Evidence** (certificate,
+model, code and data hash, whether the split was applied), or download every column as
+**CSV**. The server exposes it as ``GET /api/mlops/run-table``.
 
 Model Registry
 --------------

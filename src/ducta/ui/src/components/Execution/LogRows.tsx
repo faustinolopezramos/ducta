@@ -5,7 +5,7 @@ import type { LogEntry } from "../../store/logsStore";
 import { HighlightedText } from "./HighlightedText";
 import { AnsiText } from "./AnsiText";
 import { Link, useInRouterContext } from "react-router-dom";
-import { fileRefs, foldJvmFrames } from "./logMessage";
+import { fileRefs, foldTracebackFrames } from "./logMessage";
 import { projectIdFromPath, routes } from "../../utils/routes";
 import {
   fmt,
@@ -177,7 +177,7 @@ export function LogRow({
 }) {
   const [hovered, setHovered] = useState(false);
   const [unfolded, setUnfolded] = useState(false);
-  const folded = useMemo(() => foldJvmFrames(entry.message), [entry.message]);
+  const folded = useMemo(() => foldTracebackFrames(entry.message), [entry.message]);
   const shown = unfolded ? entry.message : folded.text;
   // Read from the address bar: log rows also render outside the router (tests, portals).
   const projectId = projectIdFromPath(window.location.pathname);

@@ -137,3 +137,35 @@ describe("NodeCard", () => {
     expect(onClick).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("NodeCard on a running stream", () => {
+  const dot = (c: HTMLElement) => c.querySelector(".node-card-status")!.className;
+  const fact = (c: HTMLElement) => c.querySelector(".node-card-fact")?.textContent;
+
+  it("shows the query's throughput instead of the last run's duration", () => {
+    const { container } = render(
+      <NodeCard node={node} {...base} execState="running" stream={{ state: "active", rate: 140 }} />,
+    );
+    expect(fact(container)).toBe("140/s");
+    expect(dot(container)).toContain("status-dot-active");
+  });
+
+  it("calls a quiet source idle and a silent query stalled, not failed", () => {
+    const idle = render(<NodeCard node={node} {...base} stream={{ state: "active", health: "idle" }} />);
+    expect(fact(idle.container)).toBe("idle");
+    expect(dot(idle.container)).toContain("status-dot-idle");
+    idle.unmount();
+    const stalled = render(<NodeCard node={node} {...base} stream={{ state: "active", health: "stalled" }} />);
+    expect(fact(stalled.container)).toBe("stalled");
+    expect(dot(stalled.container)).toContain("status-dot-stalled");
+  });
+
+  it("marks a failed query as failed, with its error on the dot", () => {
+    const { container } = render(
+      <NodeCard node={node} {...base} execState="running" stream={{ state: "failed", error: "AnalysisException" }} />,
+    );
+    expect(fact(container)).toBe("failed");
+    expect(container.querySelector(".node-card-fact--failed")).not.toBeNull();
+    expect(container.querySelector(".node-card-status")).toHaveAttribute("title", "AnalysisException");
+  });
+});

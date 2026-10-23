@@ -15,22 +15,33 @@ export function RunTimeline({
   const { bars, total } = timelineBars(nodes);
   if (bars.length === 0) return <p className="focus-empty">This run recorded no node.</p>;
   return (
-    <ol className="run-timeline" aria-label="Node timeline">
-      {bars.map((b) => (
-        <li key={b.name} className="run-timeline__row">
-          <button type="button" className="run-timeline__name" onClick={() => onSelect?.(b.name)} title={b.name}>
-            {b.name}
-          </button>
-          <span className="run-timeline__track">
-            <span
-              className={`run-timeline__bar status-${b.status}`}
-              style={{ left: `${(b.start / total) * 100}%`, width: `${Math.max((b.duration / total) * 100, 0.6)}%` }}
-              aria-label={`${b.name}: ${b.status}, ${formatDuration(b.duration, "precise")}`}
-            />
-          </span>
-          <span className="run-timeline__dur">{formatDuration(b.duration, "precise")}</span>
-        </li>
-      ))}
-    </ol>
+    <div className="run-timeline-wrap">
+      <div className="run-timeline__axis">
+        <span />
+        <div className="run-timeline__ticks">
+          <span>0s</span>
+          <span>{formatDuration(total / 2, "precise")}</span>
+          <span>{formatDuration(total, "precise")}</span>
+        </div>
+        <span />
+      </div>
+      <ol className="run-timeline" aria-label="Node timeline">
+        {bars.map((b) => (
+          <li key={b.name} className="run-timeline__row">
+            <button type="button" className="run-timeline__name" onClick={() => onSelect?.(b.name)} title={b.name}>
+              {b.name}
+            </button>
+            <span className="run-timeline__track">
+              <span
+                className={`run-timeline__bar status-${b.status}`}
+                style={{ left: `${(b.start / total) * 100}%`, width: `${Math.max((b.duration / total) * 100, 0.6)}%` }}
+                aria-label={`${b.name}: ${b.status}, ${formatDuration(b.duration, "precise")}`}
+              />
+            </span>
+            <span className="run-timeline__dur">{formatDuration(b.duration, "precise")}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }

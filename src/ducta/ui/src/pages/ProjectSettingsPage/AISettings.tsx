@@ -18,6 +18,7 @@ import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { toastStore } from "../../hooks/useModalStack";
 import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import "../../components/AI/AIDraftDialog.css";
+import { Skeleton, SkeletonText } from "../../components/ui/Skeleton";
 import "./AISettings.css";
 
 const HINT: Record<string, string> = {
@@ -44,7 +45,15 @@ const providerName = (p: AIProviderInfo) => p.label.replace(/ \((local|Claude)\)
  */
 export function AISettings() {
   const { data: settings, isLoading } = useAISettings();
-  if (isLoading || !settings) return <p className="ai-dim">Loading…</p>;
+  if (isLoading || !settings) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", maxWidth: 540, padding: "var(--space-4) 0" }}>
+        <Skeleton width="180px" height="24px" />
+        <SkeletonText lines={3} />
+        <Skeleton width="120px" height="36px" />
+      </div>
+    );
+  }
   // Keyed on what was saved: a save (or another admin's) starts the form afresh.
   return <AISettingsForm key={`${settings.provider}|${settings.model}|${settings.base_url}`} settings={settings} />;
 }
@@ -201,6 +210,26 @@ function AISettingsForm({ settings }: { settings: AISettingsData }) {
                 ? "A code model of 7B or more works best (e.g. qwen2.5-coder)."
                 : "As the provider names it."}
             </p>
+          )}
+
+          {modelList.length > 0 && (
+            <div className="ai-model-suggestions" aria-label="Available models">
+              <span className="ai-model-suggestions__label">Available:</span>
+              <div className="ai-model-suggestions__list">
+                {modelList.slice(0, 8).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`ai-model-chip${model === m ? " is-active" : ""}`}
+                    onClick={() => setModel(m)}
+                    disabled={!canConfigure}
+                    title={`Select ${m}`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
           )}
         </div>
 

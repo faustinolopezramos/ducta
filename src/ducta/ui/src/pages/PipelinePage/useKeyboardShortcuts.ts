@@ -156,6 +156,23 @@ export function usePipelineKeyboardShortcuts(params: {
         if (node && !isExecuting && !runningNodeId) handleRunNode(node);
         return;
       }
+      if (onCanvas && e.key === "Tab") {
+        e.preventDefault();
+        const nodeIds = pipelineNodes.map((n) => n.id);
+        if (nodeIds.length === 0) return;
+        const currentIdx = selectedNodeId ? nodeIds.indexOf(selectedNodeId) : -1;
+        const nextIdx = e.shiftKey
+          ? (currentIdx <= 0 ? nodeIds.length - 1 : currentIdx - 1)
+          : (currentIdx >= nodeIds.length - 1 ? 0 : currentIdx + 1);
+        select(nodeIds[nextIdx]);
+        return;
+      }
+      if (onCanvas && e.key === " " && !target?.closest("button, a, input, textarea")) {
+        e.preventDefault();
+        if (selectedNodeId) centerOnNode(selectedNodeId);
+        else fitCanvas();
+        return;
+      }
       if (!e.key.startsWith("Arrow")) return;
       e.preventDefault();
 

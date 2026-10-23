@@ -25,7 +25,17 @@ const SHORTCUT_GROUPS: ShortcutGroup[] = [
     items: [
       { label: "Toggle Explorer", keys: "mod+b", description: "Show or hide the workspace and dataset file tree" },
       { label: "Toggle Bottom Dock", keys: "mod+j", description: "Show or hide the execution logs and problems panel" },
+      { label: "Zen Mode (Fullscreen)", keys: "alt+z", description: "Collapse all panels for maximum canvas focus" },
       { label: "Jump Node ↔ Code", keys: "mod+shift+g", description: "Navigate between selected DAG node and its Python definition" },
+    ],
+  },
+  {
+    category: "DAG Canvas",
+    items: [
+      { label: "Cycle Nodes", keys: "Tab", description: "Select next node (Shift+Tab for previous)" },
+      { label: "Center Node / Fit Graph", keys: "Space", description: "Focus viewport on selected node or fit view" },
+      { label: "Run Selected Node", keys: "r", description: "Trigger individual node execution" },
+      { label: "Find on Canvas", keys: "/", description: "Filter nodes by name, status, layer or problem" },
     ],
   },
   {

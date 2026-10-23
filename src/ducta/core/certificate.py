@@ -37,7 +37,8 @@ from ducta.setting.environments import sanitize_env_for_path
 
 # 1.6: an ML node that scored with a registered model records it under ``ml.model``
 # (source, name, the version the run pinned, artifact hash).
-SCHEMA_VERSION = "1.6"
+# 1.7: ``mlops_run_id``, the tracked run of an ML pipeline (absent when there is none).
+SCHEMA_VERSION = "1.7"
 DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
 LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
@@ -180,6 +181,7 @@ class RunCertificate:
     quality: List[Dict[str, Any]] = field(default_factory=list)
     code: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
+    mlops_run_id: Optional[str] = None
     evidence_complete: bool = True
     evidence_gaps: List[str] = field(default_factory=list)
     signed: bool = False
@@ -213,6 +215,10 @@ class RunCertificate:
             "signed": self.signed,
             "evidence_level": self.evidence_level,
         }
+        # Only when there is a tracked run: a certificate without one keeps the exact
+        # content (and hash) it always had.
+        if self.mlops_run_id:
+            data["mlops_run_id"] = self.mlops_run_id
         return data
 
     def compute_hash(self) -> str:
@@ -271,6 +277,7 @@ def build_certificate(
     ended_at: datetime,
     ducta_version: str,
     error: Optional[str] = None,
+    mlops_run_id: Optional[str] = None,
 ) -> RunCertificate:
     """Assemble a certificate from the evidence the run left on ``context``."""
     try:
@@ -302,6 +309,7 @@ def build_certificate(
         quality=_quality_summary(context),
         code=_build_code_block(context, ledger),
         error=error,
+        mlops_run_id=mlops_run_id or None,
         evidence_complete=ledger.evidence_complete,
         evidence_gaps=ledger.record_failures,
         evidence_level=_evidence_level(context),

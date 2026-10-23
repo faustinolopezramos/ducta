@@ -27,9 +27,10 @@ describe("command index", () => {
     expect(hits[0].label).toBe("silver.clean");
   });
 
-  it("narrows by prefix: > commands, # datasets, @ nodes", () => {
+  it("narrows by prefix: > commands, # datasets, @ nodes, ! runs", () => {
     expect(searchCommands(index, ">dens").map((e) => e.kind)).toEqual(["command"]);
     expect(searchCommands(index, "#student").map((e) => e.kind)).toEqual(["dataset"]);
     expect(searchCommands(index, "@student").map((e) => e.kind)).toEqual(["node"]);
+    expect(searchCommands(index, "!silver").map((e) => e.kind)).toEqual(["run"]);
   });
 });

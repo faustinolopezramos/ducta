@@ -225,4 +225,41 @@ describe("NodeFocus", () => {
     renderFocus();
     expect(screen.queryByRole("region", { name: "ML" })).toBeNull();
   });
+
+  it("shows live streaming query details when streamStatus is present", () => {
+    const onRestartStreamNode = vi.fn();
+    renderFocus({
+      isStreamPipeline: true,
+      streamStatus: {
+        node: "clean_results",
+        state: "failed",
+        error: "Stream crashed",
+        last_batch_id: 12,
+        input_rows_per_second: 1500,
+        processed_rows_per_second: 1200,
+        trigger_execution_ms: 180,
+        checkpoint: "data/_ckpt/clean",
+      },
+      onRestartStreamNode,
+    });
+
+    const streamRegion = screen.getByRole("region", { name: "Streaming Query Status" });
+    expect(streamRegion).toHaveTextContent("Failed");
+    expect(streamRegion).toHaveTextContent("1.2k rows/s");
+    expect(streamRegion).toHaveTextContent("1.5k/s"); // input
+    expect(streamRegion).toHaveTextContent("#12"); // batch
+    expect(streamRegion).toHaveTextContent("180 ms"); // latency
+    expect(streamRegion).toHaveTextContent("data/_ckpt/clean");
+
+    const restartBtn = screen.getByRole("button", { name: "Restart query" });
+    fireEvent.click(restartBtn);
+    expect(onRestartStreamNode).toHaveBeenCalled();
+  });
+
+  it("shows streaming node card when in a stream pipeline but idle", () => {
+    renderFocus({ isStreamPipeline: true, streamStatus: null });
+    const streamRegion = screen.getByRole("region", { name: "Streaming Query Status" });
+    expect(streamRegion).toHaveTextContent("Streaming Node");
+    expect(streamRegion).toHaveTextContent("Continuous streaming node");
+  });
 });

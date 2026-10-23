@@ -147,6 +147,64 @@ def _check_ml_contract(
             )
 
 
+def _check_hyperparams_config(
+    report: PreflightReport, context: Any, pipeline_name: str, raw_pipeline: Any
+) -> None:
+    """``hyperparams_config`` names a search, it does not contain one.
+
+    It is a key in the search file (``hyperparams_config_path``), or ``{path, key}`` to
+    point at another file. A mapping holding the search itself (``algorithm``,
+    ``search_space``...) used to pass validation and then be ignored by ``--search``.
+    """
+    declared = raw_pipeline.get("hyperparams_config") if isinstance(raw_pipeline, dict) else None
+    if declared is None:
+        return
+    where = f"Pipeline '{pipeline_name}': hyperparams_config"
+    default_path = (getattr(context, "global_config", {}) or {}).get("hyperparams_config_path")
+    path: Any
+    key: Any
+
+    if isinstance(declared, str):
+        path, key = default_path, declared
+        if not path:
+            report.error(
+                f"{where} names the key '{declared}' in the search file, but no file is set. "
+                "Add `hyperparams_config_path: <file>` to the project settings, or write "
+                "`hyperparams_config: {path: <file>, key: <key>}`."
+            )
+            return
+    elif isinstance(declared, dict):
+        extra = sorted(set(declared) - {"path", "key"})
+        path, key = declared.get("path", default_path), declared.get("key")
+        if extra or not key or not path:
+            held = f" (it holds {', '.join(extra)})" if extra else ""
+            report.error(
+                f"{where} is a mapping{held}, but a mapping is only {{path, key}}: which file "
+                "and which key in it. The search itself (algorithm, search_space, objective) "
+                "goes in that file, under the key, and the pipeline names it: "
+                "`hyperparams_config: <key>` with `hyperparams_config_path` set."
+            )
+            return
+    else:
+        report.error(f"{where} must be a key name or {{path, key}}, got {type(declared).__name__}.")
+        return
+
+    from pathlib import Path
+
+    from ducta.mlrun.hyperparams import load_hyperparams_config
+
+    if not Path(str(path)).is_file():
+        report.error(f"{where} '{key}': the search file {path} does not exist.")
+        return
+    try:
+        loaded = load_hyperparams_config(str(path), pipeline_key=str(key))
+    except Exception as e:  # noqa: BLE001 — whatever stops it loading stops the run too
+        report.error(f"{where} '{key}' cannot be loaded from {path}: {e}")
+        return
+    if loaded is None:  # the loader answers a missing key with None and a warning
+        report.error(f"{where} '{key}' is not a key of {path}.")
+
+
 def _check_ingestion_node(
     report: PreflightReport, node_name: str, node_config: Dict[str, Any]
 ) -> None:
@@ -752,6 +810,7 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
             report.error(f"Pipeline '{pipeline_name}': invalid split config — {e}")
 
     _check_ml_contract(report, context, pipeline_name, split_config, node_configs, loader)
+    _check_hyperparams_config(report, context, pipeline_name, raw_pipeline)
     _check_serving_models(report, context, node_configs)
 
     streaming_nodes = [n for n in pipeline_nodes if _is_streaming_node(node_configs[n])]

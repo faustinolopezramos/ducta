@@ -181,10 +181,16 @@ export function SchedulePicker({
       {cronError ? (
         <p className="projects-modal__hint schedule-form__error">{cronError}</p>
       ) : (
-        <p className="projects-modal__hint">
-          <code>{cron}</code> — {describeCron(cron)}
-          {nextRun && <> — next run {formatUtc(nextRun.toISOString())}</>}
-        </p>
+        <div className="schedule-preview-box" style={{ marginTop: 12, padding: "8px 12px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-sm)" }}>
+          <p className="projects-modal__hint" style={{ margin: 0 }}>
+            <code>{cron}</code> — <strong>{describeCron(cron)}</strong>
+          </p>
+          {nextRun && (
+            <p className="projects-modal__hint" style={{ margin: "4px 0 0 0", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
+              Next run: <strong>{formatUtc(nextRun.toISOString())}</strong> ({nextRun.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} local)
+            </p>
+          )}
+        </div>
       )}
     </div>
   );

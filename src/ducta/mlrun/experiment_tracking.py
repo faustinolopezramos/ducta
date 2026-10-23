@@ -890,9 +890,14 @@ class ExperimentTracker:
         experiment_id: str,
         status_filter: Optional[RunStatus] = None,
         tag_filter: Optional[Dict[str, str]] = None,
+        with_metrics: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List runs in experiment.
+
+        ``with_metrics`` adds ``metrics``: each metric's latest point, as
+        ``{key: [{"key", "value", "step", "timestamp"}]}``, so a caller can show
+        final values without loading every run again.
         """
         runs_df = self._load_runs_index()
         runs = runs_df[runs_df["experiment_id"] == experiment_id]
@@ -911,18 +916,30 @@ class ExperimentTracker:
                 if tag_filter and not all(run.tags.get(k) == v for k, v in tag_filter.items()):
                     continue
 
-                result.append(
-                    {
-                        "run_id": run.run_id,
-                        "name": run.name,
-                        "status": run.status.value,
-                        "created_at": run.created_at,
-                        "duration_seconds": run.duration_seconds,
-                        "parameters": run.parameters,
-                        "metric_keys": list(run.metrics.keys()),
-                        "tags": run.tags,
-                    }
-                )
+                item: Dict[str, Any] = {
+                    "run_id": run.run_id,
+                    "name": run.name,
+                    "status": run.status.value,
+                    "created_at": run.created_at,
+                    "duration_seconds": run.duration_seconds,
+                    "parameters": run.parameters,
+                    "metric_keys": list(run.metrics.keys()),
+                    "tags": run.tags,
+                }
+                if with_metrics:
+                    item["metrics"] = {}
+                    for key in run.metrics:
+                        latest = run.metric_index.get_latest(key)
+                        if latest is not None:
+                            item["metrics"][key] = [
+                                {
+                                    "key": key,
+                                    "value": latest.value,
+                                    "step": latest.step,
+                                    "timestamp": latest.timestamp,
+                                }
+                            ]
+                result.append(item)
             except Exception as e:
                 logger.warning(f"Could not load run {row['run_id']}: {e}")
                 continue

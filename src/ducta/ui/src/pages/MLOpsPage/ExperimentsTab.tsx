@@ -11,11 +11,13 @@ import {
   useMlopsExperiments,
   useMlopsExperiment,
   useMlopsStatus,
+  useMlopsRunTable,
   useCloseMlopsRun,
   useDeleteMlopsRun,
   lastMetricValues,
   type ExperimentSummary,
   type ExperimentRun,
+  type RunTableRow,
 } from "../../api/mlopsApi";
 import { useExecutePipeline } from "../../api/mutations";
 import { RunDetailPanel } from "../../components/MLOps/RunDetailPanel";
@@ -29,9 +31,13 @@ import {
   IconPlayerPlay,
   IconAlertTriangle,
   IconArrowsDiff,
+  IconDownload,
 } from "@tabler/icons-react";
 import { findProjectForPipeline } from "./shared";
 import { MlopsEmptyState } from "./MlopsDiagnosis";
+import { RunStatusLabel } from "./RunBits";
+import { RunTableView } from "./RunTableView";
+import { downloadText, runTableToCsv } from "./runTable";
 import { formatDate } from "../../utils/formatDate";
 import { routes } from "../../utils/routes";
 
@@ -237,14 +243,6 @@ function runColumns({
   ];
 }
 
-/** Status word, coloured by outcome. Colour is never the only signal — the
- *  word itself carries the meaning (WCAG 1.4.1). */
-function RunStatusLabel({ status }: Readonly<{ status?: string }>) {
-  const tone =
-    status === "COMPLETED" ? "success" : status === "FAILED" ? "danger" : "warning";
-  return <span className={`mlops-run-status mlops-run-status--${tone}`}>{status}</span>;
-}
-
 function ExperimentRow({
   exp,
   compareSelection,
@@ -323,6 +321,30 @@ function ExperimentRow({
   );
 }
 
+/** The detail panel of a run chosen in the run table: the table row only has the final
+ *  values, so the full run (tags, Ducta's own parameters) is read from its experiment. */
+function OpenedRunRow({
+  row,
+  experiments,
+  env,
+  pipeline,
+  project,
+  onClose,
+}: {
+  row: RunTableRow;
+  experiments: ExperimentSummary[];
+  env?: string;
+  pipeline?: string;
+  project?: string;
+  onClose: () => void;
+}) {
+  const experimentId = experiments.find((e) => e.name === row.pipeline)?.experiment_id ?? "";
+  const { data: detail } = useMlopsExperiment(experimentId, env, pipeline, project);
+  const run = detail?.runs.find((r) => r.run_id === row.run_id);
+  if (!run) return null;
+  return <RunDetailPanel run={run} onClose={onClose} evidence={row} project={project} />;
+}
+
 export function ExperimentsTab({
   env,
   pipeline,
@@ -335,8 +357,11 @@ export function ExperimentsTab({
   const { data, isLoading, isError, refetch } = useMlopsExperiments(env, pipeline, project);
   const experiments = data ?? [];
   const { data: status } = useMlopsStatus(env, pipeline, project);
+  const { data: runTable } = useMlopsRunTable(env, pipeline, project);
+  const [view, setView] = useState<"experiments" | "runs">("experiments");
   const [compareSelection, setCompareSelection] = useState<Map<string, ExperimentRun>>(new Map());
   const [openRun, setOpenRun] = useState<ExperimentRun | null>(null);
+  const [openRow, setOpenRow] = useState<RunTableRow | null>(null);
   const [showCompare, setShowCompare] = useState(false);
 
   const toggleCompare = (run: ExperimentRun) =>
@@ -368,10 +393,32 @@ export function ExperimentsTab({
           marginBottom: 16,
         }}
       >
-        <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
-          {experiments.length} experiment{experiments.length !== 1 ? "s" : ""}
-          {compareSelection.size > 0 && ` · ${compareSelection.size} run(s) selected`}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="mlops-view-switch" role="group" aria-label="Experiments view">
+            <Button
+              size="sm"
+              variant={view === "experiments" ? "primary" : "ghost"}
+              aria-pressed={view === "experiments"}
+              onClick={() => setView("experiments")}
+            >
+              By experiment
+            </Button>
+            <Button
+              size="sm"
+              variant={view === "runs" ? "primary" : "ghost"}
+              aria-pressed={view === "runs"}
+              onClick={() => setView("runs")}
+            >
+              All runs
+            </Button>
+          </div>
+          <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
+            {view === "runs"
+              ? `${runTable?.rows.length ?? 0} run${runTable?.rows.length === 1 ? "" : "s"}`
+              : `${experiments.length} experiment${experiments.length !== 1 ? "s" : ""}`}
+            {compareSelection.size > 0 && ` · ${compareSelection.size} run(s) selected`}
+          </span>
+        </div>
         <div style={{ display: "flex", gap: 8 }}>
           {compareSelection.size >= 2 && (
             <Button variant="primary" size="sm" onClick={() => setShowCompare(true)}>
@@ -382,6 +429,22 @@ export function ExperimentsTab({
           {compareSelection.size > 0 && (
             <Button variant="ghost" size="sm" onClick={() => setCompareSelection(new Map())}>
               Clear selection
+            </Button>
+          )}
+          {view === "runs" && runTable && runTable.rows.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<IconDownload size={14} />}
+              title="Every column of the run table, as CSV"
+              onClick={() =>
+                downloadText(
+                  `${pipeline}-runs.csv`,
+                  runTableToCsv(runTable.columns, runTable.rows)
+                )
+              }
+            >
+              CSV
             </Button>
           )}
           <Button variant="ghost" size="sm" onClick={() => refetch()} leftIcon={<IconRefresh size={14} />}>
@@ -405,7 +468,16 @@ export function ExperimentsTab({
       {!isLoading && !isError && experiments.length === 0 && (
         <MlopsEmptyState status={status} env={env} what="experiments" icon={IconFlask} />
       )}
-      {experiments.map((exp) => (
+      {view === "runs" && runTable && experiments.length > 0 && (
+        <RunTableView
+          table={runTable}
+          selection={compareSelection}
+          onToggle={toggleCompare}
+          onOpen={setOpenRow}
+          project={project}
+        />
+      )}
+      {view === "experiments" && experiments.map((exp) => (
         <ExperimentRow
           key={exp.experiment_id}
           exp={exp}
@@ -418,7 +490,24 @@ export function ExperimentsTab({
         />
       ))}
 
-      {openRun && <RunDetailPanel run={openRun} onClose={() => setOpenRun(null)} />}
+      {openRun && (
+        <RunDetailPanel
+          run={openRun}
+          onClose={() => setOpenRun(null)}
+          evidence={runTable?.rows.find((r) => r.run_id === openRun.run_id)}
+          project={project}
+        />
+      )}
+      {openRow && (
+        <OpenedRunRow
+          row={openRow}
+          experiments={experiments}
+          env={env}
+          pipeline={pipeline}
+          project={project}
+          onClose={() => setOpenRow(null)}
+        />
+      )}
       {showCompare && (
         <RunCompareModal runs={[...compareSelection.values()]} onClose={() => setShowCompare(false)} />
       )}

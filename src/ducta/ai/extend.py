@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
@@ -143,25 +143,76 @@ def _name_of(node: ast.stmt) -> str:
     return "a statement at module level"
 
 
+def _root_name(node: ast.AST) -> Optional[str]:
+    """``a`` for ``a``, ``a.b`` and ``a[0].b``."""
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _touched(node: ast.AST) -> Set[str]:
+    """The names a top-level statement binds or mutates, apart from what a function or class
+    body does inside itself: ``def f`` / ``class C`` bind their name, ``x = …`` / ``import y as x``
+    bind ``x``, and ``x.attr = …`` / ``x[k] = …`` change the object ``x`` names."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return {node.name}
+    out: Set[str] = set()
+    if isinstance(node, ast.Import):
+        out |= {(a.asname or a.name.split(".")[0]) for a in node.names}
+    elif isinstance(node, ast.ImportFrom):
+        out |= {(a.asname or a.name) for a in node.names}
+    elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+        out.add(node.id)
+    elif isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(
+        node.ctx, (ast.Store, ast.Del)
+    ):
+        root = _root_name(node)
+        if root:
+            out.add(root)
+    for child in ast.iter_child_nodes(node):
+        out |= _touched(child)
+    return out
+
+
 def _module_changes(rel: str, before: str, after: str) -> List[str]:
-    """What changed in an existing module: every statement it had must still be there."""
-    new = _statements(after)
-    if new is None:
-        return []  # not Python: the validator says so
+    """What changed in an existing module: every statement it had must still be there,
+    and nothing added may bind or mutate a name the module already had (a later ``def``
+    or assignment would replace the original when the module is imported)."""
+    new_nodes: List[ast.stmt]
     try:
-        old_tree = ast.parse(before)
+        new_nodes = ast.parse(after).body
+        old_nodes = ast.parse(before).body
     except SyntaxError:
-        return []
-    remaining = list(new)
+        return []  # not Python (the validator says so), or an existing module that does not parse
+    old_dumps = [ast.dump(n) for n in old_nodes]
     out: List[str] = []
-    for node in old_tree.body:
-        dumped = ast.dump(node)
-        if dumped in remaining:
-            remaining.remove(dumped)
-        else:
+    # Statement by statement: each old one must be matched by one of the new.
+    unmatched = [(ast.dump(n), n) for n in new_nodes]
+    for node, dumped in zip(old_nodes, old_dumps):
+        found = next((i for i, (d, _n) in enumerate(unmatched) if d == dumped), None)
+        if found is None:
             out.append(
                 f"{rel}: {_name_of(node)} changed or is missing; keep existing code as it is "
                 "and add new functions"
+            )
+        else:
+            del unmatched[found]
+    added = [n for _d, n in unmatched]
+    taken: Set[str] = set()
+    for node in old_nodes:
+        taken |= _touched(node)
+    taken.discard("__all__")
+    known_imports = set(old_dumps)
+    for node in added:
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and ast.dump(node) in known_imports:
+            continue  # the same import again
+        clash = sorted(_touched(node) & taken)
+        if clash:
+            out.append(
+                f"{rel}: {', '.join(clash)} already exist{'s' if len(clash) == 1 else ''} in this "
+                "module and the draft binds or changes "
+                f"{'it' if len(clash) == 1 else 'them'} again; keep existing code as it is and "
+                "give new functions and constants new names"
             )
     return out
 
@@ -197,7 +248,11 @@ def new_code_problems(root: Path, files: Dict[str, str]) -> List[str]:
     for rel, text in files.items():
         if not rel.endswith(".py"):
             continue
-        before = set(_statements(_read(root / rel) or "") or [])
+        old_source = _read(root / rel) or ""
+        before = set(_statements(old_source) or [])
+        # A line the file already had is not the draft's: a fix that touches a function
+        # which reads a file does not have to take that read out.
+        old_lines = {line.strip() for line in old_source.splitlines()}
         try:
             tree = ast.parse(text)
         except SyntaxError:
@@ -214,6 +269,7 @@ def new_code_problems(root: Path, files: Dict[str, str]) -> List[str]:
             out += [
                 f"{rel}:{f.line or first}: {f.title} — {f.suggestion}"
                 for f in _code_findings(facts)
+                if not (f.code and f.code in old_lines)
             ]
     return out
 

@@ -122,9 +122,35 @@ DEFAULT_PROCESSING_TIME_INTERVAL = "10 seconds"
 
 
 @lru_cache(maxsize=256)
-def _cached_signature(func: Callable) -> Signature:
-    """Cache inspect.signature results to avoid repeated introspection per batch."""
+def _signature_cached(func: Callable) -> Signature:
     return signature(func)
+
+
+def _cached_signature(func: Callable) -> Signature:
+    """Cache inspect.signature results to avoid repeated introspection per batch.
+
+    ``lru_cache`` needs a hashable key; a callable object that defines ``__eq__``
+    without ``__hash__`` is not, and is inspected uncached rather than rejected.
+    """
+    try:
+        return _signature_cached(func)
+    except TypeError:
+        return signature(func)
+
+
+def single_spec(node_config: Dict[str, Any], singular: str) -> Any:
+    """The node's one ``input`` / ``output`` config.
+
+    A node may spell it ``input`` or ``inputs`` (likewise ``output``/``outputs``),
+    the latter as a one-element list; the validator rejects longer ones, since a
+    streaming query has exactly one source and one sink.
+    """
+    value = node_config.get(singular)
+    if not value:
+        value = node_config.get(f"{singular}s")
+    if isinstance(value, list):
+        return value[0] if len(value) == 1 else None
+    return value
 
 
 _TIMESTAMP_CASTABLE_TYPES = frozenset(
@@ -277,6 +303,8 @@ class StreamingQueryManager:
         policy = getattr(context, "format_policy", None)
         self.validator = validator or StreamingValidator(policy)
         self.transformation_registry = TransformationRegistry()
+        # function.module values whose register_transforms() already ran.
+        self._registered_transform_modules: set = set()
         # Optional StreamingProgressSink used to make the "adaptive" trigger
         # consult historical batch durations from prior runs of a query.
         self.progress_sink = progress_sink
@@ -378,7 +406,7 @@ class StreamingQueryManager:
         Load streaming input DataFrame with error handling.
         """
         try:
-            input_config = node_config.get("input", {})
+            input_config = single_spec(node_config, "input")
             if not input_config:
                 raise StreamingConfigurationError(
                     "Streaming node must have input configuration",
@@ -501,6 +529,17 @@ class StreamingQueryManager:
             serving.resolved.version,
         )
         return models, serving
+
+    def forget_execution(self, execution_id: str) -> None:
+        """Drop the bookkeeping of an execution's queries that are no longer running."""
+        with self._active_queries_lock:
+            for key in [
+                k
+                for k, info in self._active_queries.items()
+                if info.get("execution_id") == execution_id
+                and not self._is_query_active(info.get("query"))
+            ]:
+                del self._active_queries[key]
 
     def served_models(self, execution_id: str) -> Dict[str, Dict[str, Any]]:
         """node name → the model its running query scores with."""
@@ -674,7 +713,7 @@ class StreamingQueryManager:
 
     def _get_transform_function(self, function_config: Dict[str, Any]) -> Callable:
         """
-        Get transformation function from registry.
+        Get transformation from registry.
 
         If ``function_config["module"]`` is set the module is imported first so
         its ``register_transforms(registry)`` call has a chance to populate the
@@ -688,21 +727,24 @@ class StreamingQueryManager:
             )
 
         module_path = function_config.get("module")
-        if module_path:
-            self._auto_import_transform_module(str(module_path))
+        module_error = self._auto_import_transform_module(str(module_path)) if module_path else None
 
-        return self._get_registered_transformation(transformation_key)
+        return self._get_registered_transformation(transformation_key, module_error)
 
-    def _auto_import_transform_module(self, module_path: str) -> None:
+    def _auto_import_transform_module(self, module_path: str) -> Optional[str]:
         """Import *module_path* and call register_transforms(registry) if defined.
 
-        Idempotent: repeated calls for the same already-registered key are no-ops
-        because TransformationRegistry.register raises on duplicate names, so we
-        only call register_transforms when the registry is still empty.
+        ``register_transforms`` runs once per module for this manager; later
+        nodes naming the same module reuse what it registered. Returns a message
+        when the import or the registration failed, so a lookup that then misses
+        can report the real cause instead of only "not registered".
         """
         import importlib
         import os
         import sys
+
+        if module_path in self._registered_transform_modules:
+            return None
 
         cwd = os.getcwd()
         if cwd not in sys.path:
@@ -716,7 +758,7 @@ class StreamingQueryManager:
                 module_path,
                 exc,
             )
-            return
+            return f"function.module '{module_path}' could not be imported: {exc}"
 
         fn = getattr(module, "register_transforms", None)
         if callable(fn):
@@ -729,8 +771,13 @@ class StreamingQueryManager:
                     module_path,
                     exc,
                 )
+                return f"register_transforms() in '{module_path}' raised: {exc}"
+        self._registered_transform_modules.add(module_path)
+        return None
 
-    def _get_registered_transformation(self, transformation_key: str) -> Callable:
+    def _get_registered_transformation(
+        self, transformation_key: str, module_error: Optional[str] = None
+    ) -> Callable:
         """
         Get transformation from the per-manager registry first, then fall back to global registry.
         """
@@ -753,9 +800,12 @@ class StreamingQueryManager:
             hint = (
                 "To register a transform, call "
                 "query_manager.transformation_registry.register(key, fn) "
-                "before start_pipeline (see run_streaming_fraud.py for an example), "
-                "or TransformationRegistry.class_register(key, fn) for the process-wide registry."
+                "before start_pipeline, or expose register_transforms(registry) in the "
+                "module named by function.module, or use "
+                "TransformationRegistry.class_register(key, fn) for the process-wide registry."
             )
+            if module_error:
+                hint = f"{module_error}. {hint}"
             available = sorted(set(available_local) | set(available_global))
             available_str = ", ".join(available) if available else "(none)"
             raise StreamingConfigurationError(
@@ -780,7 +830,7 @@ class StreamingQueryManager:
     ) -> Tuple[StreamingQuery, str]:
         """Configure and start the streaming query with comprehensive error handling."""
         try:
-            output_config = node_config.get("output", {})
+            output_config = single_spec(node_config, "output")
             if not output_config:
                 raise StreamingConfigurationError(
                     "Streaming node must have output configuration",
@@ -805,6 +855,14 @@ class StreamingQueryManager:
                 streaming_config.get("query_name") or f"{pipeline_name}_{node_name}_{execution_id}"
             )
 
+            # Identifies the node across runs (the query name carries the
+            # execution id): the adaptive trigger reads past batch durations here.
+            history_key = f"{pipeline_name}::{node_name}"
+            if self.progress_sink is not None:
+                register = getattr(self.progress_sink, "register_history_key", None)
+                if callable(register):
+                    register(query_name, history_key)
+
             checkpoint_location = self._get_checkpoint_location(
                 streaming_config.get("checkpoint_location"),
                 pipeline_name,
@@ -825,12 +883,16 @@ class StreamingQueryManager:
                 output_mode = streaming_config.get("output_mode", StreamingOutputMode.APPEND.value)
 
                 trigger_config = streaming_config.get("trigger", {})
-                trigger = self._configure_trigger(trigger_config, query_name)
+                trigger = self._configure_trigger(trigger_config, query_name, history_key)
 
-                logger.info(f"Configuring streaming query '{query_name}':")
-                logger.info(f"  - Output mode: {output_mode}")
-                logger.info(f"  - Trigger: {trigger_config}")
-                logger.info(f"  - Checkpoint: {checkpoint_location}")
+                trigger_text = ", ".join(
+                    key if value is True else f"{key} {value}"
+                    for key, value in (trigger or {}).items()
+                )
+                logger.info(
+                    f"Configuring streaming query '{query_name}': mode={output_mode}, "
+                    f"trigger={trigger_text or 'default'}, checkpoint={checkpoint_location}"
+                )
 
                 write_stream = (
                     df.writeStream.outputMode(output_mode)
@@ -852,8 +914,14 @@ class StreamingQueryManager:
                 # Serialize the scheduling-conf + .start() window so each query
                 # captures its own FAIR pool and shuffle.partitions value.
                 with self._query_start_lock:
-                    self._apply_query_scheduling(df, node_name, streaming_config)
-                    query = writer.write_stream(write_stream, output_config)
+                    restore_scheduling = self._apply_query_scheduling(
+                        df, node_name, streaming_config
+                    )
+                    try:
+                        query = writer.write_stream(write_stream, output_config)
+                    finally:
+                        # The started query keeps its own copy of these settings.
+                        restore_scheduling()
                 reservation_committed = True
                 return query, checkpoint_location
             finally:
@@ -917,7 +985,11 @@ class StreamingQueryManager:
     def _validate_and_reserve_checkpoint(self, checkpoint_path: str, node_name: str) -> None:
         """Atomically validate and reserve a checkpoint path to prevent concurrent-start races."""
         self.checkpoint_manager.validate_and_reserve(
-            checkpoint_path, node_name, self._active_queries, self._active_queries_lock
+            checkpoint_path,
+            node_name,
+            self._active_queries,
+            self._active_queries_lock,
+            is_active=self._is_query_active,
         )
 
     def _release_checkpoint_reservation(self, checkpoint_path: str) -> None:
@@ -927,21 +999,25 @@ class StreamingQueryManager:
     # ── Delegation to TriggerScheduler ──────────────────────────────────────────
 
     def _configure_trigger(
-        self, trigger_config: Dict[str, Any], query_name: Optional[str] = None
+        self,
+        trigger_config: Dict[str, Any],
+        query_name: Optional[str] = None,
+        history_key: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """Configure streaming trigger with minimum interval validation."""
-        return self.trigger_scheduler.configure_trigger(trigger_config, query_name)
+        return self.trigger_scheduler.configure_trigger(trigger_config, query_name, history_key)
 
     def _apply_query_scheduling(
         self, df: DataFrame, node_name: str, streaming_config: Dict[str, Any]
-    ) -> None:
+    ) -> Callable[[], None]:
         """Pin this query to its own FAIR scheduler pool and tune shuffle partitions.
 
         Must be called inside ``self._query_start_lock`` and immediately before
         ``.start()`` so the values are captured by *this* query's cloned SQLConf
-        and not leaked to / clobbered by concurrent starts.
+        and not leaked to / clobbered by concurrent starts. Returns the callable
+        that restores the session settings it changed.
         """
-        self.trigger_scheduler.apply_query_scheduling(df, node_name, streaming_config)
+        return self.trigger_scheduler.apply_query_scheduling(df, node_name, streaming_config)
 
     def stop_query(
         self,
@@ -955,9 +1031,12 @@ class StreamingQueryManager:
         try:
             if not self._is_query_active(query):
                 logger.info(f"Query '{self._get_query_name(query)}' is already stopped")
+                # It no longer owns its checkpoint; keeping the entry would block
+                # every later start on the same path.
+                self._remove_query_from_active(query)
                 return True
 
-            logger.info(
+            logger.debug(
                 f"Stopping streaming query '{self._get_query_name(query)}' (ID: {self._get_query_id(query)})"
             )
 
@@ -979,7 +1058,7 @@ class StreamingQueryManager:
 
             self._remove_query_from_active(query)
 
-            logger.info(f"Query '{self._get_query_name(query)}' stopped successfully")
+            logger.debug(f"Query '{self._get_query_name(query)}' stopped successfully")
             return True
 
         except Exception as e:

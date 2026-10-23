@@ -31,6 +31,10 @@ class MLNodeContext(Mapping):
 
     model_version: Optional[str] = None
     hyperparams: Dict[str, Any] = field(default_factory=dict)
+    # What this run was explicitly asked to use (`--hyperparams`, a `--sweep` or `--search`
+    # trial). Already merged into ``hyperparams``; kept apart so a search inside the node
+    # knows which values are fixed.
+    cli_hyperparams: Dict[str, Any] = field(default_factory=dict)
     hyperparams_config: Optional[HyperparamConfig] = None
     seed: Optional[int] = None
     node_seed: Optional[int] = None

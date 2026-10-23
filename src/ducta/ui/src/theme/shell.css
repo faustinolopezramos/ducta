@@ -214,6 +214,74 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 }
 .pipeline-run-env[data-env-kind="prod"] { background: var(--env-prod); color: #fff; }
 
+.pipeline-prod-shield {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--status-warning-bg);
+  border: 1px solid var(--status-warning-border);
+  color: var(--status-warning-fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  letter-spacing: 0.05em;
+}
+
+/* The top bar's live line for a running stream: a dot and a sentence. */
+.stream-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: var(--text-xs); color: var(--text-muted); white-space: nowrap;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
+}
+.stream-pill--interactive {
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+}
+button.stream-pill--interactive:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.stream-pill--interactive:hover {
+  background: var(--surface-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+.stream-pill-dot {
+  position: relative;
+  width: 7px; height: 7px; border-radius: 50%; background: var(--success);
+}
+.stream-pill[data-state="running"] .stream-pill-dot::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px solid var(--success);
+  opacity: 0.8;
+  animation: stream-dot-pulse 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+@keyframes stream-dot-pulse {
+  0% { transform: scale(1); opacity: 0.9; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+.stream-pill[data-state="starting"] .stream-pill-dot { background: var(--text-dim); }
+.stream-pill[data-state="partial_failure"] .stream-pill-dot { background: var(--warning); }
+.stream-pill[data-state="failed"] .stream-pill-dot,
+.stream-pill[data-state="error"] .stream-pill-dot { background: var(--danger); }
+
+.pipeline-type-tag--stream {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
 /* Toolbar labels never wrap inside their buttons. */
 .canvas-controls .canvas-text-btn, .canvas-controls .canvas-segment { white-space: nowrap; }
 
@@ -232,6 +300,17 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .pipeline-dock__count { padding: 0 6px; border-radius: 999px; font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: #fff; }
 .pipeline-dock__count.is-bad { background: var(--danger); }
 .pipeline-dock__count.is-warn { background: var(--warning); }
+.pipeline-dock__count.is-good { background: var(--success); }
+
+.stream-idle-panel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
 .pipeline-dock__close {
   margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-lg); line-height: 1;
@@ -397,6 +476,9 @@ a.focus-run:hover, a.focus-run:focus-visible { background: var(--surface-hover);
 .breakpoint-banner__close { border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-lg); }
 
 /* Run timeline */
+.run-timeline-wrap { display: flex; flex-direction: column; width: 100%; }
+.run-timeline__axis { display: grid; grid-template-columns: minmax(140px, 240px) 1fr 64px; gap: var(--space-2); margin-bottom: 4px; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-dim); }
+.run-timeline__ticks { display: flex; justify-content: space-between; padding: 0 2px; }
 .run-timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
 .run-timeline__row { display: grid; grid-template-columns: minmax(140px, 240px) 1fr 64px; align-items: center; gap: var(--space-2); font-size: var(--text-xs); }
 .run-timeline__name { border: 0; background: none; padding: 0; text-align: left; font-family: var(--font-mono); color: var(--text); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

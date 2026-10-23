@@ -2,7 +2,7 @@ import { memo } from "react";
 import { Handle, Position, useStore, type NodeProps } from "@xyflow/react";
 import { NodeCard } from "./NodeCard";
 import { zoomTier, type ZoomTier } from "../../utils/nodePresentation";
-import type { DagCanvasItem } from "./types";
+import type { DagCanvasItem, StreamNodeBadge } from "./types";
 
 export interface DuctaNodeData extends Record<string, unknown> {
   item: DagCanvasItem;
@@ -24,6 +24,8 @@ export interface DuctaNodeData extends Record<string, unknown> {
   /** Editable canvas: show the handles that connect this node to another. */
   connectable?: boolean;
   design?: "error" | "warning";
+  /** Live state of a streaming node while its stream runs. */
+  stream?: StreamNodeBadge;
   freshness?: "stale" | "never";
   /** Open comment threads on it. */
   comments?: number;
@@ -126,6 +128,7 @@ export const DuctaNode = memo(function DuctaNode({ data }: NodeProps) {
           onClick={() => onSelect(item.id)}
           onOpen={onOpen ? () => onOpen(item.id) : undefined}
           design={d.design}
+          stream={d.stream}
           freshness={d.freshness}
           comments={d.comments}
         />

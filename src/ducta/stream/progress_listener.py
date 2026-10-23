@@ -18,6 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import time
 from collections import deque
 from threading import Lock
 from typing import Any, Deque, Dict, Optional
@@ -56,6 +57,15 @@ class StreamingProgressSink:
         self._trigger_ms: Dict[str, Deque[float]] = {}
         # query_id -> query_name
         self._id_to_name: Dict[str, str] = {}
+        # query_name -> stable history key. A query's name carries its execution
+        # id, so it differs on every run; durations are therefore windowed under
+        # a key that identifies the *node* (pipeline + node) and survives runs.
+        self._history_key: Dict[str, str] = {}
+        # query_name -> when a report last showed input rows (or the first report)
+        self._last_data: Dict[str, float] = {}
+        # query_name -> running totals: input rows seen, batches that had any, and the
+        # last batch id counted (idle reports repeat a batch id and must not recount it)
+        self._totals: Dict[str, Dict[str, Any]] = {}
 
     @staticmethod
     def _duration(progress: Any, key: str) -> Optional[float]:
@@ -77,6 +87,16 @@ class StreamingProgressSink:
         if isinstance(progress, dict):
             return progress.get(name)
         return getattr(progress, name, None)
+
+    def register_history_key(self, query_name: str, history_key: str) -> None:
+        """Window *query_name*'s batch durations under *history_key*.
+
+        Lets the adaptive trigger find what earlier runs of the same node
+        measured, even though each run's query has a different name. The
+        history lives in this process only.
+        """
+        with self._lock:
+            self._history_key[query_name] = history_key
 
     def record(self, progress: Any) -> None:
         """Record a single StreamingQueryProgress event."""
@@ -100,13 +120,31 @@ class StreamingProgressSink:
                 "walCommitMs": self._duration(progress, "walCommit"),
             }
 
+            now = time.time()
+            rows = summary["numInputRows"]
             with self._lock:
+                if (
+                    isinstance(rows, (int, float)) and rows > 0
+                ) or query_name not in self._last_data:
+                    self._last_data[query_name] = now
+                totals = self._totals.setdefault(
+                    query_name, {"rows": 0.0, "batches": 0, "last_batch": None}
+                )
+                if (
+                    isinstance(rows, (int, float))
+                    and rows > 0
+                    and summary["batchId"] != totals["last_batch"]
+                ):
+                    totals["rows"] += rows
+                    totals["batches"] += 1
+                    totals["last_batch"] = summary["batchId"]
                 self._latest[query_name] = summary
                 if query_id is not None:
                     self._id_to_name[str(query_id)] = query_name
                 if trigger_ms is not None:
                     window = self._trigger_ms.setdefault(
-                        query_name, deque(maxlen=self._max_history)
+                        self._history_key.get(query_name, query_name),
+                        deque(maxlen=self._max_history),
                     )
                     window.append(trigger_ms)
         except Exception as e:  # never let a metrics callback break the stream
@@ -115,10 +153,28 @@ class StreamingProgressSink:
     def get_latest(self, query_name: str) -> Optional[Dict[str, Any]]:
         with self._lock:
             value = self._latest.get(query_name)
-            return dict(value) if value is not None else None
+            if value is None:
+                return None
+            result = dict(value)
+            # How long the query has been reporting without input rows: an idle
+            # source, which is healthy, as opposed to a stall, which is not.
+            last_data = self._last_data.get(query_name)
+            result["idleSeconds"] = 0.0 if last_data is None else max(0.0, time.time() - last_data)
+            return result
+
+    def totals(self, query_name: str) -> Optional[Dict[str, float]]:
+        """Input rows and batches (with data) this query has processed so far."""
+        with self._lock:
+            value = self._totals.get(query_name)
+            if value is None:
+                return None
+            return {"rows": value["rows"], "batches": value["batches"]}
 
     def avg_trigger_ms(self, query_name: str) -> Optional[float]:
-        """Mean triggerExecution (ms) over the rolling window, or None if no data."""
+        """Mean triggerExecution (ms) over the rolling window, or None if no data.
+
+        *query_name* is a query name, or the history key it was registered under.
+        """
         with self._lock:
             window = self._trigger_ms.get(query_name)
             if not window:
@@ -137,7 +193,13 @@ class StreamingProgressSink:
     def forget(self, query_name: str) -> None:
         with self._lock:
             self._latest.pop(query_name, None)
-            self._trigger_ms.pop(query_name, None)
+            self._last_data.pop(query_name, None)
+            self._totals.pop(query_name, None)
+            # A window under a stable history key outlives the query: it is what
+            # the next run of the node reads. One keyed by the query's own name
+            # can only ever belong to it, so it goes with it.
+            if self._history_key.pop(query_name, None) is None:
+                self._trigger_ms.pop(query_name, None)
             stale_ids = [qid for qid, name in self._id_to_name.items() if name == query_name]
             for qid in stale_ids:
                 self._id_to_name.pop(qid, None)

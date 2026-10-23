@@ -31,6 +31,47 @@ export function foldJvmFrames(message: string): { text: string; hidden: number }
   return hidden ? { text: out.join("\n"), hidden } : { text: message, hidden: 0 };
 }
 
+/** Python external stack frames: File ".../site-packages/...". */
+const PYTHON_INTERNAL_FRAME = /^\s*File ".*(?:site-packages|dist-packages|\/lib\/python\d*\.?\d*)\/.*", line \d+/;
+
+/**
+ * Fold long runs of external/library frames (JVM or Python site-packages), keeping project code prominent.
+ */
+export function foldTracebackFrames(message: string): { text: string; hidden: number } {
+  const jvmFolded = foldJvmFrames(message);
+  const lines = jvmFolded.text.split("\n");
+  const out: string[] = [];
+  let internalRun = 0;
+  let totalHidden = jvmFolded.hidden;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (PYTHON_INTERNAL_FRAME.test(line)) {
+      internalRun++;
+      // Also consume the code line following the File line if indented
+      if (i + 1 < lines.length && /^\s{4,}\S/.test(lines[i + 1])) {
+        i++;
+      }
+    } else {
+      if (internalRun > 2) {
+        out.push(`        … ${internalRun} internal library frames hidden`);
+        totalHidden += internalRun;
+      } else if (internalRun > 0) {
+        out.push(`        … ${internalRun} internal frame(s)`);
+      }
+      internalRun = 0;
+      out.push(line);
+    }
+  }
+  if (internalRun > 2) {
+    out.push(`        … ${internalRun} internal library frames hidden`);
+    totalHidden += internalRun;
+  } else if (internalRun > 0) {
+    out.push(`        … ${internalRun} internal frame(s)`);
+  }
+  return { text: out.join("\n"), hidden: totalHidden };
+}
+
 /** Folders a project's own files live under — where a path in a trace becomes project-relative. */
 const PROJECT_DIRS = ["src/", "pipelines/", "catalog/", "tests/", "lib/", "jobs/", "notebooks/"];
 

@@ -386,6 +386,28 @@
   transform: translateY(-1px);
 }
 
+.ilog__scroll-btn--has-new {
+  background: var(--primary);
+  animation: ilog-pulse 2s infinite ease-in-out;
+}
+
+.ilog__scroll-new-badge {
+  background: rgba(255, 255, 255, 0.25);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+}
+
+@keyframes ilog-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 40%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--primary) 0%, transparent);
+  }
+}
+
 /* ── Connection lost banner ──────────────────────────────────────────────── */
 
 .ilog__footer-error {

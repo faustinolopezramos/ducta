@@ -10,14 +10,18 @@ lists every option of a command.
 
    ducta template --template medallion_basic --project-name sales   # create a project
    cd sales
-   ducta config validate --env dev                                  # check it
+   ducta check --env dev                                            # check it
    ducta start --env dev --pipeline etl \
      --start-date 2026-01-01 --end-date 2026-01-31                  # run it
    ducta certify list                                               # what ran, with evidence
 
 ``ducta`` on its own shows the project you are in, its pipelines and the commands
 to run next (outside a project: how to create one). ``ducta --help`` lists the
-commands by what they are for; ``ducta --version`` prints ``ducta X.Y.Z``.
+commands by what they are for, the four you use every day first: ``list`` (the
+project's pipelines), ``check`` (validate without running), ``start`` and
+``stream``. ``ducta list`` and ``ducta check`` are shortcuts for
+``ducta config list-pipelines`` and ``ducta config validate`` and take the same
+options. ``ducta --version`` prints ``ducta X.Y.Z``.
 ``-e`` and ``-p`` are short for ``--env`` and ``--pipeline`` in every command.
 
 What the terminal shows
@@ -93,12 +97,54 @@ error to ``logs/last-error.txt``:
    * - ``--log-level LEVEL``, ``-v/--verbose``, ``-q/--quiet``, ``--log-file PATH``
      - How much the terminal shows (see above) and where the log goes.
 
-ML pipelines add ``--model-version``, ``--hyperparams JSON``, and
-hyperparameter search: ``--sweep FILE`` (the cartesian product of a grid),
-``--search`` (grid, random or Bayesian search driven by the pipeline's
-``hyperparams_config``), ``--search-metric``, ``--search-trials``,
-``--sweep-parallel N``, ``--max-sweep-size N`` and ``--no-sweep-reuse``. See
-:doc:`mlops`.
+ML pipelines add ``--model-version`` and ``--hyperparams JSON`` (shown in
+``ducta start --help`` under *ML tuning*), and hyperparameter search. See
+:doc:`mlops` for the experiments they produce.
+
+.. list-table:: ML tuning options of ``ducta start``
+   :widths: 30 70
+   :header-rows: 1
+
+   * - Option
+     - Meaning
+   * - ``--sweep FILE``
+     - A YAML or JSON grid. List values are expanded into their cartesian
+       product and one run is executed per combination, all tagged with a
+       common ``sweep_id`` in the experiment tracker.
+   * - ``--search``
+     - Drives a real search strategy from the pipeline's ``hyperparams_config``
+       (``algorithm: grid|random|bayesian``, honouring ``n_trials`` and
+       ``objective.metric``) instead of the flat cartesian product ``--sweep``
+       expands. Each trial's objective value is fed back to the strategy, so
+       Bayesian search learns between trials. Each trial is a run of the whole
+       pipeline with the trial's values as ``--hyperparams``; a training node that
+       uses ``train_with_search`` fits exactly those values (see :doc:`mlops`), and
+       a node that reads ``ml_context.hyperparams`` does the same. The objective
+       metric must be one the run logs (``train_with_search`` logs it, as does a
+       ``persist_model(metrics=...)`` call); a search file's ``hyperparams_config``
+       is a key in the file at ``hyperparams_config_path``, which
+       ``ducta config validate`` checks.
+   * - ``--search-metric NAME``
+     - The objective metric to optimize, overriding
+       ``hyperparams_config.objective.metric``. Point it at a validation
+       metric: selecting on a test metric invalidates it.
+   * - ``--search-trials N``
+     - The trial budget of ``--search`` (random and Bayesian), overriding
+       ``n_trials``.
+   * - ``--no-sweep-reuse``
+     - Recompute every node on each sweep or search trial. By default the
+       trial-invariant upstream nodes are materialized once and reused, since
+       trials differ only in hyperparameters.
+   * - ``--sweep-parallel N``
+     - Run N trials concurrently, each in its own process and its own output
+       directory. Mutually exclusive with upstream reuse (an isolated trial has
+       nothing shared to reuse), and not applied to Bayesian search, which needs
+       each trial's result before choosing the next. Use it when training
+       dominates the runtime, and leave ``--no-sweep-reuse`` off (the default)
+       when feature engineering does.
+   * - ``--max-sweep-size N``
+     - Cap on the number of combinations a ``--sweep`` or ``--search`` grid may
+       expand to (default: 50). Mirrors the API's ``max_sweep_size`` setting.
 
 .. code-block:: bash
 
@@ -207,6 +253,8 @@ comments).
 
 .. code-block:: bash
 
+   ducta check [--env ENV] [--pipeline NAME] [--output-format rich|json]   # = config validate
+   ducta list [--env ENV] [--filter TEXT] [--output-format table|json|list] # = config list-pipelines
    ducta config validate [--env ENV] [--pipeline NAME] [--output-format rich|json]
    ducta config list-pipelines [--env ENV] [--filter TEXT] [--output-format table|json|list]
    ducta config pipeline-info --pipeline NAME [--env ENV]
@@ -240,13 +288,24 @@ comments).
 
 .. code-block:: bash
 
+   ducta stream plan --pipeline events [--env ENV] [--output-format table|json]
    ducta stream run --pipeline events [--env ENV] [--mode async|sync]
    ducta stream status [--env ENV] [--execution-id ID] [--output-format table|json]
    ducta stream stop --execution-id ID [--env ENV] [--timeout SECONDS]
 
+``plan`` says what the stream would do without starting Spark: per node, what it
+reads, what it writes, how often it fires and the checkpoint it will use, and
+what would stop it (a transform that is not registered, a source path that does
+not exist, an invalid node). It exits non-zero when there are errors.
+
 ``run`` keeps running while the queries do — they live in its process — and
 stops them on Ctrl+C; a terminating trigger (``available_now``) ends it on its
-own. ``status`` and ``stop`` only see streams of their own process: a stream
+own. It prints one header and a line per node (source → sink, trigger) and then, once a
+node has reported, every 30 seconds and whenever a node changes state, a small table
+with each node's state, rows per second and batch; a quiet source is shown as ``idle``,
+a hung query as ``stalled``. When it ends it prints how long it ran and what each node
+processed. ``DUCTA_STREAM_REPORT_SECONDS`` sets the interval; the checkpoints are in
+``ducta stream plan``. ``status`` and ``stop`` only see streams of their own process: a stream
 started by another command, or by the server, is managed in that terminal (Ctrl+C)
 or through the server (``GET /api/executions/{id}/streaming``,
 ``POST /api/executions/{id}/cancel``).

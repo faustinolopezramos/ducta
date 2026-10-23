@@ -552,21 +552,60 @@ logger.spark.level = fatal
 """
 
 
+#: ``DUCTA_SPARK_QUIET=known``: Spark keeps logging at WARN, except four warnings that are
+#: noise on a local run and say nothing the user can act on. Everything else Spark
+#: warns about, and every error, still reaches the terminal.
+_KNOWN_NOISE_LOG4J2 = """\
+rootLogger.level = warn
+rootLogger.appenderRef.stderr.ref = console
+appender.console.type = Console
+appender.console.name = console
+appender.console.target = SYSTEM_ERR
+appender.console.layout.type = PatternLayout
+appender.console.layout.pattern = %d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n%ex
+logger.spark.name = org.apache.spark
+logger.spark.level = warn
+# "Your hostname … resolves to a loopback address": every laptop.
+logger.hostname.name = org.apache.spark.util.Utils
+logger.hostname.level = error
+# "Unable to load native-hadoop library": the pure-Java fallback is fine.
+logger.nativehadoop.name = org.apache.hadoop.util.NativeCodeLoader
+logger.nativehadoop.level = error
+# "To enable non-built-in garbage collector(s)…": printed in the middle of the live table.
+logger.gcmetrics.name = org.apache.spark.metrics.GarbageCollectionMetrics
+logger.gcmetrics.level = error
+# "spark.sql.adaptive.enabled is not supported in streaming…": Spark disables it itself.
+logger.adaptive.name = org.apache.spark.sql.execution.streaming.ResolveWriteToStream
+logger.adaptive.level = error
+# "scheduler pool … has not been configured": the per-node pools Ducta creates on purpose.
+logger.fairpool.name = org.apache.spark.scheduler.FairSchedulableBuilder
+logger.fairpool.level = error
+"""
+
+
 def _quiet_log4j_file() -> Optional[Path]:
-    """A log4j2 file that silences the JVM's console, when ``DUCTA_SPARK_QUIET`` is set.
+    """A log4j2 file for the JVM's console, chosen by ``DUCTA_SPARK_QUIET``.
 
     The JVM writes straight to the terminal — hostname warnings, native-hadoop,
     an unconfigured scheduler pool for every node — before and outside any
-    Python logging, so only its own configuration can quiet it.
+    Python logging, so only its own configuration can quiet it. ``1`` silences
+    it entirely (the compact view); ``known`` only the warnings listed above.
+    Applied to local sessions only: on a cluster the hostname warning can point at
+    a real misconfiguration.
     """
-    if os.environ.get("DUCTA_SPARK_QUIET", "").lower() not in ("1", "true", "yes"):
+    mode = os.environ.get("DUCTA_SPARK_QUIET", "").lower()
+    if mode in ("1", "true", "yes"):
+        name, content = "ducta-spark-quiet-log4j2.properties", _QUIET_LOG4J2
+    elif mode == "known":
+        name, content = "ducta-spark-known-noise-log4j2.properties", _KNOWN_NOISE_LOG4J2
+    else:
         return None
     try:
         import tempfile
 
-        path = Path(tempfile.gettempdir()) / "ducta-spark-quiet-log4j2.properties"
-        if not path.is_file() or path.read_text(encoding="utf-8") != _QUIET_LOG4J2:
-            path.write_text(_QUIET_LOG4J2, encoding="utf-8")
+        path = Path(tempfile.gettempdir()) / name
+        if not path.is_file() or path.read_text(encoding="utf-8") != content:
+            path.write_text(content, encoding="utf-8")
         return path
     except OSError:
         return None

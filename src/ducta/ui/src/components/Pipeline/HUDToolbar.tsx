@@ -5,6 +5,8 @@ import {
   IconArrowForwardUp,
   IconArrowRight,
   IconCode,
+  IconEye,
+  IconEyeOff,
   IconLayoutList,
   IconMap,
   IconMaximize,
@@ -15,7 +17,7 @@ import {
   IconZoomOut,
 } from "@tabler/icons-react";
 import { useBuilderStore } from "../../store/builderStore";
-import type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
+import { useUIStore, type PipelineLens, type PipelineOrientation } from "../../store/uiStore";
 
 export type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
 
@@ -82,6 +84,8 @@ export function HUDToolbar({
   const canRedo = history ? history.canRedo : builderCanRedo;
   const undo = history ? history.undo : builderUndo;
   const redo = history ? history.redo : builderRedo;
+  const zenMode = useUIStore((s) => s.zenMode);
+  const toggleZenMode = useUIStore((s) => s.toggleZenMode);
 
   // The zoom controls act on React Flow's own viewport, passed up from the
   // canvas. They used to call into `builderStore`, which nothing applied to the
@@ -193,6 +197,16 @@ export function HUDToolbar({
           </button>
           <button type="button" className="canvas-icon-btn" onClick={onFitView} title="Fit graph (F)" aria-label="Fit graph">
             <IconMaximize size={15} stroke={1.75} />
+          </button>
+          <button
+            type="button"
+            className="canvas-icon-btn"
+            onClick={toggleZenMode}
+            aria-pressed={zenMode}
+            title={zenMode ? "Exit Zen mode (⌥Z)" : "Zen mode — fullscreen canvas (⌥Z)"}
+            aria-label="Zen mode"
+          >
+            {zenMode ? <IconEyeOff size={16} stroke={1.75} /> : <IconEye size={16} stroke={1.75} />}
           </button>
           {onToggleMinimap && (
             <>

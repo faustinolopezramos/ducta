@@ -25,6 +25,7 @@ from typing import Optional, Union
 
 from loguru import logger  # type: ignore
 
+from ducta.console import stream_view
 from ducta.console.config import ConfigManager
 from ducta.console.core import ConfigurationError, ExitCode
 from ducta.console.ux.error_analyzer import try_format_error
@@ -183,7 +184,20 @@ _OTHER_PROCESS_HINT = (
 _FOREGROUND_POLL_SECONDS = 5.0
 
 
-def _stay_in_foreground(executor: PipelineExecutor, pipeline: str, execution_id: str) -> int:
+def _print_closing_summary(executor: PipelineExecutor, execution_id: str) -> None:
+    """What the stream processed, once it has stopped (best effort: never changes the exit code)."""
+    try:
+        status = executor.get_streaming_pipeline_status(execution_id)
+        text = stream_view.render_final_summary(status) if isinstance(status, dict) else ""
+        if text:
+            print(text)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("Could not print the closing summary: {}", e)
+
+
+def _stay_in_foreground(
+    executor: PipelineExecutor, pipeline: str, execution_id: str, env: str = "base"
+) -> int:
     """Keep this process — and the queries running inside it — alive until they end.
 
     The queries run in this process's Spark session. Returning after startup, as
@@ -193,30 +207,46 @@ def _stay_in_foreground(executor: PipelineExecutor, pipeline: str, execution_id:
     # Before the first look: right after starting, no query is active yet, and
     # "none active" would read as "all done".
     executor.wait_for_streaming_startup(execution_id, timeout=300.0)
-    print(
-        f"Streaming pipeline '{pipeline}' is running (execution ID: {execution_id}). "
-        "Press Ctrl+C to stop it."
-    )
+    # What started, then a table now and then (and when a node changes): the log stays
+    # as it was, this is added to it.
+    reporter = stream_view.LiveReporter()
+    first = executor.get_streaming_pipeline_status(execution_id)
+    if isinstance(first, dict):
+        print(stream_view.render_start_summary(first, pipeline, env))
+    else:
+        print(
+            f"Streaming pipeline '{pipeline}' is running (execution ID: {execution_id}). "
+            "Press Ctrl+C to stop it."
+        )
     try:
         while True:
             status = executor.get_streaming_pipeline_status(execution_id)
             if not isinstance(status, dict) or int(status.get("active_queries") or 0) == 0:
                 break
+            table = reporter.tick(status)
+            if table:
+                print(table)
             time.sleep(_FOREGROUND_POLL_SECONDS)
     except KeyboardInterrupt:
         logger.info("Stopping streaming pipeline '{}'...", pipeline)
         if executor.stop_streaming_pipeline(execution_id, graceful=True):
             logger.info("Streaming pipeline '{}' stopped.", pipeline)
+            _print_closing_summary(executor, execution_id)
             return ExitCode.SUCCESS.value
         logger.error("Streaming pipeline '{}' did not stop cleanly.", pipeline)
         return ExitCode.EXECUTION_ERROR.value
 
     final = executor.get_streaming_pipeline_status(execution_id)
     final = final if isinstance(final, dict) else {}
-    if int(final.get("failed_queries") or 0) or final.get("status") in (
-        "failed",
-        "error",
-        "partial_failure",
+    if final:
+        print(stream_view.render_final_summary(final))
+    # A node that never started, or was skipped behind a failed one, is a failure
+    # even though no query of it ever existed to fail.
+    if (
+        int(final.get("failed_queries") or 0)
+        or final.get("failed_nodes")
+        or final.get("skipped_nodes")
+        or final.get("status") in ("failed", "error", "partial_failure")
     ):
         logger.error(
             "Streaming pipeline '{}' ended with failed queries (status: {}).",
@@ -286,12 +316,39 @@ def run_streaming_pipeline_cli(
             # The engine already waited for the queries to end.
             print(f"Streaming pipeline '{pipeline}' finished (execution ID: {execution_id})")
             return ExitCode.SUCCESS.value
-        return _stay_in_foreground(executor, pipeline, execution_id)
+        return _stay_in_foreground(executor, pipeline, execution_id, env)
     except json.JSONDecodeError as e:
         logger.error("Invalid hyperparams JSON: {}", e)
         return ExitCode.VALIDATION_ERROR.value
     except Exception as e:
         logger.error("Error running streaming pipeline: {}", e)
+        return ExitCode.GENERAL_ERROR.value
+
+
+def plan_streaming_pipeline_cli(
+    config: Optional[Union[str, Path]],
+    pipeline: str,
+    env: str = "base",
+    transforms_modules: Optional[list] = None,
+    format_type: str = "table",
+) -> int:
+    """`ducta stream plan`: what the stream would do and what would stop it. Starts no Spark."""
+    try:
+        context = _load_streaming_context(config, env)
+        from ducta.stream.plan import plan_pipeline
+
+        if pipeline not in (context.pipelines_config or {}):
+            known = ", ".join(sorted(context.pipelines_config or {})) or "none"
+            logger.error("Pipeline '{}' not found (pipelines: {})", pipeline, known)
+            return ExitCode.VALIDATION_ERROR.value
+        plan = plan_pipeline(context, pipeline, extra_transform_modules=transforms_modules or [])
+        if format_type == "json":
+            print(json.dumps(plan.to_dict(), indent=2, default=str))
+        else:
+            print(stream_view.render_plan(plan))
+        return ExitCode.VALIDATION_ERROR.value if plan.errors else ExitCode.SUCCESS.value
+    except Exception as e:
+        logger.error("Error planning streaming pipeline: {}", e)
         return ExitCode.GENERAL_ERROR.value
 
 

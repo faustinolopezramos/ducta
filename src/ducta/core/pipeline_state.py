@@ -618,8 +618,13 @@ class UnifiedPipelineState:
         except Exception as e:
             logger.error(f"Error releasing resource for '{node.node_name}': {str(e)}")
 
-    def cleanup(self) -> None:
-        """Clean up all resources and stop active streaming queries"""
+    def cleanup(self, stop_streaming: bool = True) -> None:
+        """Clean up all resources and, unless *stop_streaming* is false, stop the
+        active streaming queries.
+
+        A hybrid run that returns while its streams are meant to keep going
+        (asynchronous mode) releases its bookkeeping and leaves them running.
+        """
         with self._lock:
             queries_to_stop = list(self._streaming_queries.items())
             resources_to_release = [
@@ -635,8 +640,9 @@ class UnifiedPipelineState:
         # the lock, same pattern as stop_dependent_streaming_nodes, so
         # another thread touching pipeline state isn't blocked for however
         # long these take.
-        for node_name, query in queries_to_stop:
-            self._stop_query(node_name, query)
+        if stop_streaming:
+            for node_name, query in queries_to_stop:
+                self._stop_query(node_name, query)
 
         for node, res_type, resource in resources_to_release:
             self._release_resource(node, res_type, resource)

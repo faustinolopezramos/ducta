@@ -205,7 +205,9 @@ class MLConfigMixin:
             return load_hyperparams_config(str(hp_path), pipeline_key=hp_info)
 
         if hp_path and pipeline.get("type") == "ml":
-            return load_hyperparams_config(str(hp_path))
+            # A pipeline that names no key uses a one-key file as it is; with several
+            # keys it simply has no search (a pipeline that only reads runs, say).
+            return load_hyperparams_config(str(hp_path), required=False)
 
         return None
 

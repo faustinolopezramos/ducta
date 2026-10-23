@@ -11,6 +11,8 @@ import {
   ConnectionModal,
 } from "../../components/Pipeline";
 import { useMlPlan } from "../../api/queries";
+import { useExecutionStreaming } from "../../api/queries/executions";
+import { streamBadges, streamSummary } from "../../utils/streaming";
 import { NodeCodePane } from "../../components/Pipeline/NodeCodePane";
 import { PipelineExplorer } from "../../components/Explorer/PipelineExplorer";
 import { ResizeHandle } from "../../components/ui/ResizeHandle";
@@ -56,7 +58,7 @@ import { usePipelineGraph } from "./usePipelineGraph";
 import { usePipelineRun } from "./usePipelineRun";
 import { usePipelineView } from "./usePipelineView";
 import { routes } from "../../utils/routes";
-import { apiErrorMessage, useExtractNodeTemplate, useExtractSubpipeline } from "../../api/mutations";
+import { apiErrorMessage, useExtractNodeTemplate, useExtractSubpipeline, useRestartStreamingNode } from "../../api/mutations";
 import { ExtractSubpipelineDialog } from "./ExtractSubpipelineDialog";
 import { toastStore } from "../../hooks/useModalStack";
 import { ExtractTemplateDialog } from "./ExtractTemplateDialog";
@@ -94,6 +96,7 @@ export function PipelinePage() {
     inspectorWidth, setInspectorWidth,
     codePaneWidth, setCodePaneWidth,
     bottomPanelHeight, setBottomPanelHeight,
+    zenMode,
   } = useUIStore();
   const [inspectorHidden, setInspectorHidden] = useState(false);
   const {
@@ -326,6 +329,34 @@ export function PipelinePage() {
     });
   }, []);
   const canvasItems = useMemo(() => collapseGroups(dagItems, collapsedGroups), [dagItems, collapsedGroups]);
+
+  // A streaming (or hybrid) run: the top bar says how many queries are up, and each
+  // stream node on the canvas shows its own query. Same poll as the status panel's.
+  const pipelineKind = (rawPipelineSpec?.type ?? "batch").toLowerCase();
+  const { data: streamingData } = useExecutionStreaming(
+    activeExecutionId ?? "",
+    isExecuting && (pipelineKind === "streaming" || pipelineKind === "hybrid"),
+  );
+  const streamStates = useMemo(() => streamBadges(streamingData), [streamingData]);
+  const runStreamSummary = useMemo(() => streamSummary(streamingData), [streamingData]);
+  const isStreamPipeline = pipelineKind === "streaming" || pipelineKind === "hybrid";
+  const restartStreamingNode = useRestartStreamingNode();
+  const streamNodeStatus = useMemo(
+    () =>
+      selectedNodeId
+        ? streamingData?.pipelines
+            .flatMap((p) => p.nodes)
+            .find((n) => n.node === selectedNodeId) ?? null
+        : null,
+    [selectedNodeId, streamingData],
+  );
+  const streamPipelineStatus = useMemo(
+    () =>
+      selectedNodeId
+        ? streamingData?.pipelines.find((p) => p.nodes.some((n) => n.node === selectedNodeId)) ?? null
+        : null,
+    [selectedNodeId, streamingData],
+  );
   const canvasStates = useMemo(() => {
     if (collapsedGroups.size === 0) return nodeStates;
     const out: Record<string, string> = { ...(nodeStates ?? {}) };
@@ -602,7 +633,7 @@ export function PipelinePage() {
   const showCode = codeOpen && Boolean(projectId) && Boolean(selectedNodeId);
   // With the node's code open the code pane is its inspector (run, sample,
   // show in graph): a fourth column left the canvas a sliver.
-  const inspectorOpen = Boolean(selection) && lens !== "yaml" && !inspectorHidden && !showCode;
+  const inspectorOpen = !zenMode && Boolean(selection) && lens !== "yaml" && !inspectorHidden && !showCode;
   const selectedItem = selectedNodeId ? itemById.get(selectedNodeId) : undefined;
 
   /** From the explorer: here when it is drawn here, on its own pipeline otherwise. */
@@ -719,6 +750,20 @@ export function PipelinePage() {
           : undefined
       }
       splitEnforcement={mlPlan?.split_enforcement}
+      streamStatus={streamNodeStatus}
+      isStreamPipeline={isStreamPipeline}
+      onRestartStreamNode={
+        activeExecutionId && streamPipelineStatus && streamNodeStatus
+          ? () => {
+              restartStreamingNode.mutate({
+                executionId: activeExecutionId,
+                streamExecutionId: streamPipelineStatus.stream_execution_id,
+                node: selectedNodeId,
+              });
+            }
+          : undefined
+      }
+      isRestartingStream={restartStreamingNode.isPending}
     />
   );
 
@@ -751,6 +796,11 @@ export function PipelinePage() {
         runOptions={runOptions}
         runBlocked={runBlocked}
         aiActions={aiActions}
+        streamSummary={runStreamSummary}
+        onOpenStream={() => {
+          setLogsOpen(true);
+          setBottomPanelTab("stream");
+        }}
       />
       {reviewOpen && projectId && pipelineId && (
         <PipelineReview
@@ -786,7 +836,7 @@ export function PipelinePage() {
       )}
 
       <div className="pipeline-workbench">
-        {explorerOpen && projectId && (
+        {!zenMode && explorerOpen && projectId && (
           <>
             <div className="pipeline-explorer" style={{ flexBasis: explorerWidth }}>
               <PipelineExplorer
@@ -895,6 +945,7 @@ export function PipelinePage() {
                       datasets={datasetMap}
                       edgeClassName={(from: string, to: string) => lensEdgeClass(lineage, from, to)}
                       executionStates={canvasStates}
+                      streamStates={isExecuting ? streamStates : undefined}
                       selection={selection}
                       lineage={lineage}
                       onSelect={(next) => {
@@ -1005,7 +1056,7 @@ export function PipelinePage() {
             )}
           </div>
 
-          {logsOpen && (
+          {!zenMode && logsOpen && (
             <PipelineDock
               height={bottomPanelHeight}
               onHeightChange={setBottomPanelHeight}
@@ -1026,6 +1077,8 @@ export function PipelinePage() {
               isExecuting={isExecuting}
               pipelineNodes={pipelineNodes}
               executionStates={executionStates}
+              isStreamPipeline={isStreamPipeline}
+              streamSummary={runStreamSummary}
             />
           )}
         </div>

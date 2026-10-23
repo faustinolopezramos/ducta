@@ -41,7 +41,9 @@ from ducta.stream.exceptions import (
     create_error_context,
     handle_streaming_error,
 )
+from ducta.stream.node_state import NodeState, derive_node_state
 from ducta.stream.pipeline_manager import QueryHealthMonitor, StreamingPipelineManager
+from ducta.stream.plan import NodePlan, PipelinePlan, plan_pipeline
 from ducta.stream.progress_listener import (
     DuctaProgressListener,
     StreamingProgressSink,
@@ -54,6 +56,8 @@ from ducta.stream.readers import (
     FileStreamReader,
     KafkaStreamingReader,
     KinesisStreamingReader,
+    RateStreamingReader,
+    SocketStreamingReader,
     StreamingReaderFactory,
 )
 from ducta.stream.validators import StreamingValidator
@@ -65,6 +69,7 @@ from ducta.stream.writers import (
     DeltaStreamingWriter,
     JSONStreamingWriter,
     KafkaStreamingWriter,
+    MemoryStreamingWriter,
     ParquetStreamingWriter,
     StreamingWriterFactory,
 )
@@ -94,6 +99,11 @@ __all__ = [
     "listener_available",
     "StreamingPipelineManager",
     "QueryHealthMonitor",
+    "NodePlan",
+    "NodeState",
+    "PipelinePlan",
+    "derive_node_state",
+    "plan_pipeline",
     "StreamingQueryManager",
     "TransformationRegistry",
     "BaseStreamingReader",
@@ -101,6 +111,8 @@ __all__ = [
     "FileStreamReader",
     "KafkaStreamingReader",
     "KinesisStreamingReader",
+    "RateStreamingReader",
+    "SocketStreamingReader",
     "StreamingReaderFactory",
     "StreamingValidator",
     "BasePathStreamingWriter",
@@ -110,6 +122,7 @@ __all__ = [
     "DeltaStreamingWriter",
     "JSONStreamingWriter",
     "KafkaStreamingWriter",
+    "MemoryStreamingWriter",
     "ParquetStreamingWriter",
     "StreamingWriterFactory",
 ]

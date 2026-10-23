@@ -155,6 +155,30 @@ class ConsoleStreamingWriter(BaseStreamingWriter):
             raise StreamingError(f"Failed to start console writer: {str(e)}") from e
 
 
+class MemoryStreamingWriter(BaseStreamingWriter):
+    """Streaming writer for Spark's in-memory table sink (debugging/testing).
+
+    The result is queryable as a temporary view named after the query
+    (``spark.table(<query name>)``). Held in the driver: never use it for real
+    volumes.
+    """
+
+    def write_stream(
+        self, write_stream: DataStreamWriter, config: Dict[str, Any]
+    ) -> StreamingQuery:
+        """Write to the in-memory table."""
+        try:
+            self._validate_config(config)
+            logger.info("Starting memory streaming writer")
+            writer = self._apply_common(write_stream.format("memory"), config)
+            return writer.start()
+        except StreamingError:
+            raise
+        except Exception as e:
+            logger.error(f"Error starting memory streaming writer: {str(e)}")
+            raise StreamingError(f"Failed to start memory writer: {str(e)}") from e
+
+
 class BasePathStreamingWriter(BaseStreamingWriter):
     """Base class for streaming writers that write to file paths."""
 
@@ -295,6 +319,7 @@ class StreamingWriterFactory(StreamingHandlerFactory):
         """Register built-in writer classes without instantiating them."""
         self._classes = {
             "console": (ConsoleStreamingWriter, (), {}),
+            "memory": (MemoryStreamingWriter, (), {}),
             "delta": (DeltaStreamingWriter, (), {}),
             "parquet": (ParquetStreamingWriter, (), {}),
             "kafka": (KafkaStreamingWriter, (), {}),

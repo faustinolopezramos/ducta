@@ -211,6 +211,15 @@ def _wants_compact(parsed_args: argparse.Namespace) -> bool:
     return (getattr(parsed_args, "log_level", None) or "INFO").upper() != "DEBUG"
 
 
+def _wants_known_spark_noise_quieted(parsed_args: argparse.Namespace) -> bool:
+    """`ducta stream run`, unless ``-v`` / ``--log-level DEBUG`` asks to see everything."""
+    if parsed_args.subcommand != "stream" or getattr(parsed_args, "stream_command", None) != "run":
+        return False
+    if getattr(parsed_args, "verbose", False):
+        return False
+    return (getattr(parsed_args, "log_level", None) or "INFO").upper() != "DEBUG"
+
+
 def _report_error(message: str, hints: Optional[List[tuple]] = None) -> None:
     """An error the user must act on: compact block, or the classic log line."""
     from ducta.console.ux import view
@@ -294,6 +303,12 @@ class UnifiedCLI:
             # configuration quiets it (see setting.session._quiet_log4j_file).
             os.environ["DUCTA_SPARK_QUIET"] = "1"
             self._set_spark_quiet = True
+        if _wants_known_spark_noise_quieted(parsed_args) and "DUCTA_SPARK_QUIET" not in os.environ:
+            # Four harmless Spark warnings (hostname, native-hadoop, GC metrics, the
+            # adaptive-execution notice) that land in the middle of a running stream's
+            # output; see setting.session._KNOWN_NOISE_LOG4J2. `-v` shows them again.
+            os.environ["DUCTA_SPARK_QUIET"] = "known"
+            self._set_spark_quiet = True
         log_file = _log_file_for(parsed_args) if parsed_args.subcommand else None
         LoggerManager.setup(
             level=getattr(parsed_args, "log_level", "INFO") or "INFO",
@@ -312,6 +327,9 @@ class UnifiedCLI:
             "stream": (None, self._handle_stream_command),
             "template": (validate_template_arguments, self._handle_template_command),
             "config": (validate_config_arguments, lambda a: handle_config(a)),
+            # Shortcuts: their parser sets `config_command`, so they are the config commands.
+            "list": (None, lambda a: handle_config(a)),
+            "check": (None, lambda a: handle_config(a)),
             "ui": (validate_ui_arguments, self._handle_ui_command),
             "server": (validate_server_arguments, self._handle_server_command),
             "quality": (validate_quality_arguments, lambda a: QualityCommands.handle(a)),
@@ -441,6 +459,14 @@ class UnifiedCLI:
                     hyperparams=getattr(parsed_args, "hyperparams", None),
                     transforms_modules=getattr(parsed_args, "transforms_module", []) or [],
                     env=getattr(parsed_args, "env", "base") or "base",
+                )
+            elif stream_cmd == "plan":
+                return execution.plan_streaming_pipeline_cli(
+                    config=getattr(parsed_args, "config", None),
+                    pipeline=parsed_args.pipeline,
+                    env=getattr(parsed_args, "env", "base") or "base",
+                    transforms_modules=getattr(parsed_args, "transforms_module", []) or [],
+                    format_type=getattr(parsed_args, "output_format", "table"),
                 )
             elif stream_cmd == "status":
                 validate_stream_status_arguments(parsed_args)

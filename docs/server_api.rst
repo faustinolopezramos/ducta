@@ -94,7 +94,11 @@ Key API resources:
      - Experiments and runs, the model registry, promotion and garbage
        collection. Each model lists the project nodes that serve it
        (``served_by``); each version its stage, metrics, features and artifact
-       hash.
+       hash. A run carries its final ``metrics``, its ``parameters`` (the
+       hyperparameters) and, apart, the ``internal_parameters`` Ducta records
+       for itself. ``GET /api/mlops/run-table`` is every run of a pipeline in
+       one table, joined with the model it registered and its certificate
+       (``sort_by``, ``ascending``, ``verify_certificates``).
    * - ``/api/schedules``
      - Cron schedules for pipelines.
    * - ``/api/ingestion``
@@ -263,7 +267,8 @@ warnings — and work through this checklist:
      - Why
    * - ``ENVIRONMENT``
      - ``production``
-     - Enforces ``AUTH_ENABLED=true`` and a non-default ``JWT_SECRET_KEY``.
+     - Enforces ``AUTH_ENABLED=true``, a non-default ``JWT_SECRET_KEY`` and a
+       ``DUCTA_ADMIN_PASSWORD``.
    * - ``AUTH_ENABLED``
      - ``true``
      - Requires a valid JWT for every domain endpoint. Off by default. The
@@ -273,6 +278,11 @@ warnings — and work through this checklist:
      - strong random value
      - Signs access tokens. The default ``change-me-in-production`` is refused
        in production.
+   * - ``DUCTA_ADMIN_PASSWORD``
+     - strong password
+     - Password of the ``admin`` user that is created at startup when auth is on.
+       Outside production an unset value falls back to ``admin``; in production
+       an unset value, or ``admin``, stops the server from starting.
    * - ``CORS_ORIGINS``
      - explicit allow-list
      - Avoid ``*``. Wildcard origins with credentials are rejected outside

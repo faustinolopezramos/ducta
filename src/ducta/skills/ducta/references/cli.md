@@ -8,6 +8,8 @@ run `ducta <command> --help`. Options marked *(required)* must be given.
 
 ## Contents
 
+- [`ducta list`](#ducta-list)
+- [`ducta check`](#ducta-check)
 - [`ducta start`](#ducta-start)
 - [`ducta stream`](#ducta-stream)
 - [`ducta template`](#ducta-template)
@@ -23,37 +25,59 @@ run `ducta <command> --help`. Options marked *(required)* must be given.
 - [`ducta ai`](#ducta-ai)
 - [`ducta skill`](#ducta-skill)
 
-## ducta start
+## ducta list
 
-Start data pipelines directly without orchestration
+Show the project's pipelines (the same as `ducta config list-pipelines`).
 
 | Option | What it does |
 |---|---|
-| `--env`, `-e` | Execution environment (base, dev, sandbox, prod, or sandbox_<developer>). Defaults to 'base' when omitted. — default `base` |
-| `--pipeline`, `-p` | Pipeline name to execute |
-| `--node`, `-n` | Specific node to execute (optional) |
-| `--mode`, `-m` | Execution mode for streaming/hybrid pipelines. Either way the command runs while the queries do (they live in its process): 'async' (default) reports their status and stops them on Ctrl+C; 'sync' waits inside the engine — one of `sync`, `async`; default `async` |
-| `--start-date` | Start date (YYYY-MM-DD) |
-| `--end-date` | End date (YYYY-MM-DD) |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `-e`, `--env` | Environment to use for listing |
+| `--filter` | Filter pipelines by name (case-insensitive substring match) |
+| `--output-format`, `--format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
+
+## ducta check
+
+Import node functions, check signatures, and resolve I/O keys without running Spark; reports every configuration error up front (the same as `ducta config validate`).
+
+| Option | What it does |
+|---|---|
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `-p`, `--pipeline` | Pipeline to validate (default: all pipelines) |
+| `-e`, `--env` | Environment to use |
+| `--output-format` | json: one JSON document on stdout — every problem with its file, line, node and suggested fix — for CI and AI assistants — one of `rich`, `json`; default `rich` |
+
+## ducta start
+
+Run a pipeline, and the pipelines it depends on, directly and without orchestration.
+
+| Option | What it does |
+|---|---|
+| `--env`, `-e` | Environment: base (default), dev, sandbox, prod or sandbox_<developer> — default `base` |
+| `--pipeline`, `-p` | Pipeline to run (see: ducta list) |
+| `--node`, `-n` | Run only this node |
+| `--dry-run` | Show what would run, execute nothing |
+| `--validate-only` | Check the configuration, execute nothing |
+| `--sanity-only` | Check every node's inputs, execute nothing |
+| `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
+| `--start-date` | First day to process (YYYY-MM-DD) |
+| `--end-date` | Last day to process (YYYY-MM-DD) |
+| `--reuse-upstream` | In a depends_on chain, skip upstream pipelines whose outputs are already materialized (reads them from disk instead of recomputing) |
+| `--rerun-all` | Re-run the whole depends_on chain, ignoring chain reuse |
+| `--mode`, `-m` | Either way the command runs while the queries do: 'async' (default) reports their status and stops them on Ctrl+C; 'sync' waits inside the engine — one of `sync`, `async`; default `async` |
+| `--model-version` | Model version |
+| `--hyperparams` | Hyperparameters as a JSON string |
+| `--sweep` | Grid file (YAML/JSON): one run per combination, tagged with one sweep_id |
+| `--search` | Search with the strategy in the pipeline's hyperparams_config (grid, random or bayesian) |
+| `--search-metric` | Metric to optimize (default: hyperparams_config.objective.metric); use a validation metric, not a test one |
+| `--search-trials` | Trial budget for random and bayesian search (overrides n_trials) |
+| `--no-sweep-reuse` | Recompute every node on each trial instead of reusing upstream nodes |
+| `--sweep-parallel` | Run N trials at once, each in its own process — default `1` |
+| `--max-sweep-size` | Largest grid a --sweep or --search may expand to (default: 50) |
 | `--log-level` | Logging level — one of `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`; default `INFO` |
 | `--log-file` | Custom log file path |
 | `-v`, `--verbose` | Debug log lines too |
 | `-q`, `--quiet` | Errors only |
-| `--model-version` | Model version for ML pipelines |
-| `--hyperparams` | Hyperparameters as JSON string |
-| `--sweep` | Hyperparameter sweep spec (YAML/JSON file). List values are expanded into the cartesian product and one run is executed per combination, all tagged with a common sweep_id in the experiment tracker |
-| `--search` | Drive a real search strategy from the pipeline's hyperparams_config (algorithm: grid\|random\|bayesian, honoring n_trials and objective.metric) instead of the flat cartesian product --sweep expands. Each trial's objective value is fed back to the strategy, so Bayesian search learns between trials |
-| `--search-metric` | Objective metric to optimize, overriding hyperparams_config.objective.metric. Point it at a validation metric: selecting on a test metric invalidates it |
-| `--search-trials` | Trial budget for --search (random/bayesian), overriding n_trials |
-| `--no-sweep-reuse` | Recompute every node on each sweep/search trial. By default the trial-invariant upstream nodes are materialized once and reused, since trials differ only in hyperparameters |
-| `--sweep-parallel` | Run N sweep/search trials concurrently, each in its own process and its own output directory. Mutually exclusive with upstream reuse (an isolated trial has nothing shared to reuse), and not applied to Bayesian search, which needs each trial's result before choosing the next. Use it when training dominates the runtime, and --no-sweep-reuse off (the default) when feature engineering does — default `1` |
-| `--max-sweep-size` | Cap on the number of combinations a --sweep/--search grid may expand to (default: 50). Mirrors the API's max_sweep_size setting for the CLI path |
-| `--validate-only` | Validate configuration without executing the pipeline |
-| `--dry-run` | Log actions without executing the pipeline |
-| `--sanity-only` | Run sanity checks on all node inputs without executing the pipeline |
-| `--reuse-upstream` | In a depends_on chain, skip upstream pipelines whose outputs are already materialized (reads them from disk instead of recomputing) |
-| `--rerun-all` | Force the full depends_on chain to re-run, ignoring any chain-reuse configuration |
 
 ## ducta stream
 
@@ -72,6 +96,18 @@ Run streaming pipeline
 | `--model-version` | Model version for ML pipelines |
 | `--hyperparams` | Hyperparameters as JSON string |
 | `--transforms-module` | Python module path(s) to import before starting the pipeline. Each module must expose a register_transforms(registry) function. Example: src.streaming_fraud_realtime |
+
+### ducta stream plan
+
+Resolve a streaming pipeline and print, per node, what it reads, what it writes, how often it fires and where its checkpoint will be, and what would stop it: a transform that is not registered, a source path that does not exist, two nodes sharing a checkpoint, an invalid node. Starts no Spark; exits non-zero when there are errors.
+
+| Option | What it does |
+|---|---|
+| `--config`, `-c` | ducta.yaml, or any file or directory inside the project (default: the project containing the current directory) |
+| `--pipeline`, `-p` | Pipeline name to plan — *(required)* |
+| `--env`, `-e` | Execution environment (base, dev, prod, …) — default `base` |
+| `--transforms-module` | Python module path(s) to import before checking transforms, as for `stream run` |
+| `--output-format` | Output format — one of `table`, `json`; default `table` |
 
 ### ducta stream status
 

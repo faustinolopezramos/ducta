@@ -10,7 +10,7 @@ export type PipelineLens = "flow" | "list" | "yaml";
 export type Density = "compact" | "comfortable";
 
 /** What the panel under the canvas shows. */
-export type BottomPanelTab = "logs" | "problems" | "preview";
+export type BottomPanelTab = "logs" | "problems" | "preview" | "stream";
 
 /** The operating system's light/dark preference, light when it cannot be read. */
 function systemTheme(): "light" | "dark" {
@@ -43,6 +43,8 @@ interface UIState {
   codePaneWidth: number;
   /** Row height: compact for scanning, comfortable for reading. */
   density: Density;
+  /** Zen / Focus mode: hides surrounding panels for an unobstructed DAG canvas. */
+  zenMode: boolean;
   setTheme: (theme: "light" | "dark") => void;
   toggleTheme: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -57,6 +59,7 @@ interface UIState {
   setBottomPanelTab: (tab: BottomPanelTab) => void;
   setCodePaneWidth: (px: number) => void;
   setDensity: (density: Density) => void;
+  toggleZenMode: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -75,6 +78,7 @@ export const useUIStore = create<UIState>()(
       bottomPanelTab: "logs",
       codePaneWidth: 560,
       density: "compact",
+      zenMode: false,
       setTheme: (theme) => {
         document.documentElement.setAttribute("data-theme", theme);
         set({ theme, themeChosen: true });
@@ -96,6 +100,7 @@ export const useUIStore = create<UIState>()(
       setBottomPanelTab: (bottomPanelTab) => set({ bottomPanelTab }),
       setCodePaneWidth: (codePaneWidth) => set({ codePaneWidth }),
       setDensity: (density) => set({ density }),
+      toggleZenMode: () => set((state) => ({ zenMode: !state.zenMode })),
     }),
     {
       name: "ducta-ui-state",

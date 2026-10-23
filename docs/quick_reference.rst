@@ -19,10 +19,10 @@ Core CLI Commands
        ``--format yaml|toml|json``, ``--layout split|single``).
    * - ``ducta template``
      - Scaffolds a new project from a professional template, with every dataset in one catalog file.
-   * - ``ducta config list-pipelines``
-     - Shows all available pipelines in your current directory.
-   * - ``ducta config validate``
-     - Checks every file against the schema and every reference, reporting all problems.
+   * - ``ducta list``
+     - Shows the project's pipelines (the same as ``ducta config list-pipelines``).
+   * - ``ducta check``
+     - Checks every file against the schema and every reference, reporting all problems (the same as ``ducta config validate``).
    * - ``ducta config schema [--out DIR]``
      - Prints (or writes) the JSON Schemas used for editor autocompletion.
    * - ``ducta config show [--env ENV] [--pipeline NAME] [--format F]``

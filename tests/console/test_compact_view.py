@@ -17,7 +17,13 @@ import pytest
 
 from ducta.console.cli import UnifiedCLI, _wants_compact
 from ducta.console.core import ExitCode
-from ducta.console.parser import COMMAND_GROUPS, GROUP_EXAMPLES, UnifiedArgumentParser
+from ducta.console.parser import (
+    COMMAND_GROUPS,
+    GROUP_EXAMPLES,
+    UnifiedArgumentParser,
+    example_line,
+    group_examples,
+)
 from ducta.console.ux import view
 from ducta.console.ux.rich_logger import _compact_filter
 
@@ -273,11 +279,12 @@ class TestEntryPoints:
 
         assert set(GROUP_EXAMPLES) == {group for group, _ in COMMAND_GROUPS}
         parser = UnifiedArgumentParser.create()
-        for group, example in GROUP_EXAMPLES.items():
-            argv = shlex.split(example)
-            assert argv[0] == "ducta", group
-            parser.parse_args(argv[1:])  # SystemExit here: the example went stale
-            assert f"e.g.         {example}" in parser.format_help()
+        for group in GROUP_EXAMPLES:
+            for example in group_examples(group):
+                argv = shlex.split(example)
+                assert argv[0] == "ducta", group
+                parser.parse_args(argv[1:])  # SystemExit here: the example went stale
+            assert f"e.g.         {example_line(group)}" in parser.format_help()
 
     def test_env_and_pipeline_have_short_forms_everywhere(self):
         args = UnifiedArgumentParser.create().parse_args(

@@ -62,6 +62,9 @@ export const routes = {
     withQuery(`/p/${enc(projectId)}/runs`, query),
   run: (projectId: string, runId: string, query?: { node?: string | null }) =>
     withQuery(`/p/${enc(projectId)}/runs/${enc(runId)}`, query),
+  /** A run's certificate; `projectId` "." when the run belongs to no known project. */
+  certificate: (projectId: string, certificateRunId: string) =>
+    `/workspace/certificates/${enc(projectId)}/${enc(certificateRunId)}`,
   /** Ducta Sentinel's page; `incident` opens one. */
   reliability: (projectId: string, incident?: string) =>
     withQuery(`/p/${enc(projectId)}/reliability`, { incident: incident ?? null }),

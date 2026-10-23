@@ -254,6 +254,7 @@ class MLNodeCommand(NodeCommand):
         self.model_version = model_version or "unknown"
         self.hyperparams = hyperparams or {}
         self.hyperparams_config = hyperparams_config
+        self.cli_hyperparams = dict(cli_hyperparams or {})
         self.node_config = node_config or {}
         self.pipeline_config = pipeline_config or {}
         self.mlops_context = mlops_context
@@ -369,6 +370,7 @@ class MLNodeCommand(NodeCommand):
         ml_context = MLNodeContext(
             model_version=self.model_version,
             hyperparams=self.merged_hyperparams,
+            cli_hyperparams=self.cli_hyperparams,
             hyperparams_config=self.hyperparams_config,
             node_config=self.node_config,
             pipeline_config=self.pipeline_config,

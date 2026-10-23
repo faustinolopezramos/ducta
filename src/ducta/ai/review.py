@@ -304,10 +304,55 @@ _PULLS = {"collect", "toPandas", "toLocalIterator"}
 _ROW_BY_ROW = {"iterrows", "itertuples"}
 #: ``save`` is not here: the name is too common (a model, a figure), and
 #: Spark's ``df.write…save()`` is caught by its ``.write``.
-_WRITES = {"to_csv", "to_parquet", "to_json", "to_excel", "saveAsTable", "insertInto"}
-_READS = {"read_csv", "read_parquet", "read_json", "read_excel", "read_sql", "read_table"}
+_WRITES = {
+    "to_csv",
+    "to_parquet",
+    "to_json",
+    "to_excel",
+    "saveAsTable",
+    "insertInto",
+    "to_sql",
+    "to_pickle",
+    "to_feather",
+    "to_hdf",
+    "to_orc",
+    "to_stata",
+    "to_xml",
+    "to_gbq",
+}
+_READS = {
+    "read_csv",
+    "read_parquet",
+    "read_json",
+    "read_excel",
+    "read_sql",
+    "read_table",
+    "read_sql_query",
+    "read_sql_table",
+    "read_pickle",
+    "read_feather",
+    "read_orc",
+    "read_hdf",
+    "read_xml",
+    "read_html",
+    "read_gbq",
+    "read_fwf",
+    "read_stata",
+}
+#: What the session of a Spark function is usually called (``spark.read``, ``self.spark.read``).
+_SPARK_NAMES = {"spark", "sparkSession", "session"}
 #: pandas' ``to_*`` writers return the text when given no path: serialising in memory.
-_PATH_KEYWORDS = {"path", "path_or_buf", "buf", "excel_writer", "fname", "file"}
+_PATH_KEYWORDS = {
+    "path",
+    "path_or_buf",
+    "path_or_buffer",
+    "buf",
+    "excel_writer",
+    "fname",
+    "file",
+    "con",  # to_sql
+    "destination_table",  # to_gbq
+}
 #: What a node's function has no business doing: running commands, reaching the
 #: network, deleting files, evaluating text as code. Not a sandbox — a net that
 #: catches the obvious, so the person reading the diff is told where to look.
@@ -334,6 +379,26 @@ _RISKY_CALLS = {
     "exec": "runs text as code",
     "compile": "runs text as code",
     "__import__": "imports by name",
+    "importlib.import_module": "imports by name",
+    "os.rename": "moves files",
+    "os.replace": "moves files",
+    "os.removedirs": "deletes files",
+    "os.makedirs": "creates folders",
+    "shutil.move": "moves files",
+    "shutil.copy": "copies files",
+    "shutil.copy2": "copies files",
+    "shutil.copyfile": "copies files",
+    "shutil.copytree": "copies files",
+    "os.execv": "runs commands",
+    "os.execve": "runs commands",
+    "os.execvp": "runs commands",
+    "os.execl": "runs commands",
+    "os.spawnl": "runs commands",
+    "os.spawnv": "runs commands",
+    "pickle.load": "loads objects that run code",
+    "pickle.loads": "loads objects that run code",
+    "marshal.loads": "loads objects that run code",
+    "cloudpickle.loads": "loads objects that run code",
 }
 #: ``Path(...).write_text()`` and friends, whatever the object is called.
 _RISKY_METHODS = {"write_text", "write_bytes", "unlink", "rmdir"}
@@ -352,14 +417,39 @@ def _dotted(node: ast.AST) -> str:
     return ""
 
 
-def _risk(item: ast.AST) -> Optional[Tuple[str, str]]:
+def _aliases(tree: ast.AST) -> Dict[str, str]:
+    """Name → what it imports: ``import os as o`` gives ``o → os``; ``from os import system``
+    gives ``system → os.system``."""
+    out: Dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                if a.asname:
+                    out[a.asname] = a.name
+        elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+            for a in node.names:
+                out[a.asname or a.name] = f"{node.module}.{a.name}"
+    return out
+
+
+def _resolved(node: ast.AST, aliases: Dict[str, str]) -> str:
+    """:func:`_dotted` with its first name replaced by what it was imported as."""
+    dotted = _dotted(node)
+    head, _, rest = dotted.partition(".")
+    if head in aliases:
+        return aliases[head] + ("." + rest if rest else "")
+    return dotted
+
+
+def _risk(item: ast.AST, aliases: Optional[Dict[str, str]] = None) -> Optional[Tuple[str, str]]:
     """``(what, why)`` when *item* (an import or a call) is something a node should not do."""
+    aliases = aliases or {}
     if isinstance(item, ast.Import):
         names = [a.name for a in item.names]
     elif isinstance(item, ast.ImportFrom):
         names = [item.module or ""]
     elif isinstance(item, ast.Call):
-        dotted = _dotted(item.func)
+        dotted = _resolved(item.func, aliases)
         if dotted in _RISKY_CALLS:
             return dotted, _RISKY_CALLS[dotted]
         if isinstance(item.func, ast.Attribute) and item.func.attr in _RISKY_METHODS:
@@ -398,6 +488,7 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
         return []
     out: List[Finding] = []
     seen: Set[Tuple[str, int]] = set()
+    aliases = _aliases(tree)
 
     def add(kind: str, node: ast.AST, finding: Finding) -> None:
         line = start + getattr(node, "lineno", 1) - 1
@@ -409,7 +500,7 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
         out.append(finding)
 
     for item in ast.walk(tree):
-        risky = _risk(item)
+        risky = _risk(item, aliases)
         if risky:
             what, why = risky
             add(
@@ -434,6 +525,26 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
             if isinstance(item.func, ast.Name)
             else ""
         )
+        if isinstance(item.func, ast.Name) and name != "open":
+            # ``from pandas import read_sql_query as q``: judged by what it is, not what it is called.
+            name = aliases.get(name, name).rsplit(".", 1)[-1]
+        if (
+            isinstance(item.func, ast.Attribute)
+            and item.func.attr == "table"
+            and _resolved(item.func.value, aliases).split(".")[-1] in _SPARK_NAMES
+        ):
+            add(
+                "io",
+                item,
+                Finding(
+                    "medium",
+                    "code",
+                    "The function reads a table itself (`spark.table`)",
+                    "Inputs read inside the function are invisible to Ducta: no lineage, no "
+                    "fingerprint in the certificate, the same table in every environment.",
+                    "Declare it in the catalog and take it as an input.",
+                ),
+            )
         if name in _PULLS:
             add(
                 "pull",
@@ -500,9 +611,8 @@ def _code_findings(facts: ReviewFacts) -> List[Finding]:
             )
         if (
             isinstance(item, ast.Attribute)
-            and item.attr == "read"
-            and isinstance(item.value, ast.Name)
-            and item.value.id == "spark"
+            and item.attr in ("read", "readStream")
+            and _resolved(item.value, aliases).split(".")[-1] in _SPARK_NAMES
         ):
             add(
                 "io",

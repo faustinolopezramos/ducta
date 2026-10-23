@@ -113,7 +113,6 @@ class FormatPolicy:
         "file_stream",
         "socket",
         "rate",
-        "memory",
     ]
 
     DEFAULT_SUPPORTED_OUTPUTS = [

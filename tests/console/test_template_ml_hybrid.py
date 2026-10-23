@@ -53,6 +53,39 @@ class TestMLBasic:
             is True
         )
 
+    def test_a_second_pipeline_builds_the_table_of_runs(self, tmp_path):
+        docs = _docs(_generate(tmp_path, TemplateType.ML_BASIC))
+        pipeline = docs["pipelines_config"]["churn_runs"]
+        assert pipeline["type"] == "ml"
+        node = docs["nodes_config"]["runs"]
+        assert node["output"] == ["gold.churn.runs"]
+        assert (node["module"], node["function"]) == ("pipelines.churn", "runs")
+        assert node["input"] == []  # it reads the tracking store, not a dataset
+
+    def test_the_runs_table_is_a_catalog_dataset_whose_format_is_the_users_to_choose(
+        self, tmp_path
+    ):
+        root = _generate(tmp_path, TemplateType.ML_BASIC)
+        catalog = "".join(
+            f.read_text()
+            for f in [root / "catalog.yaml", *root.glob("catalog/*.yaml")]
+            if f.exists()
+        )
+        entry = catalog[catalog.index("gold.churn.runs:") :]
+        assert "format: parquet" in entry
+        assert "delta" in entry and "csv" in entry  # the comment names the alternatives
+
+    def test_runs_function_returns_the_summary_and_takes_only_the_ml_context(self):
+        import inspect
+
+        namespace: dict = {}
+        exec(compile(MLBasicTemplate("p").generate_sample_code(), "churn.py", "exec"), namespace)
+        assert list(inspect.signature(namespace["runs"]).parameters) == ["ml_context"]
+
+    def test_the_readme_explains_the_runs_table(self):
+        readme = MLBasicTemplate("p").readme()
+        assert "churn_runs" in readme and "gold.churn.runs" in readme
+
     def test_the_training_node_is_marked_as_training(self, tmp_path):
         nodes = _docs(_generate(tmp_path, TemplateType.ML_BASIC))["nodes_config"]
         assert nodes["train"]["ml_stage"] == "training"

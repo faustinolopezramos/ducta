@@ -35,6 +35,16 @@ export interface CanvasQuality {
   isSanity: boolean;
 }
 
+/** A running stream node, as the canvas shows it: a dot's state and its throughput. */
+export interface StreamNodeBadge {
+  /** active · failed · skipped · stopped */
+  state: string;
+  health?: "idle" | "stalled" | null;
+  /** Rows per second processed by its latest batch. */
+  rate?: number | null;
+  error?: string | null;
+}
+
 export interface DagCanvasItem {
   id: string;
   name?: string;

@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import asyncio
+import inspect
 from datetime import datetime, timezone
 from functools import wraps
 from typing import Any, Dict, Optional
@@ -76,7 +76,7 @@ class StreamingValidationError(StreamingError):
         actual: Optional[str] = None,
         **kwargs,
     ):
-        context = kwargs.pop("context", {})
+        context = dict(kwargs.pop("context", None) or {})
         if field:
             context["field"] = field
         if expected:
@@ -92,7 +92,7 @@ class _ContextualStreamingError(StreamingError):
     ERROR_CODE: str = "STREAMING_ERROR"
 
     def __init__(self, message: str, context_kwargs: Dict[str, Optional[str]], **kwargs):
-        context = kwargs.pop("context", {})
+        context = dict(kwargs.pop("context", None) or {})
         for key, value in context_kwargs.items():
             if value is not None:
                 context[key] = value
@@ -221,7 +221,7 @@ def handle_streaming_error(func):
             cause=e,
         )
 
-    if asyncio.iscoroutinefunction(func):
+    if inspect.iscoroutinefunction(func):
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):

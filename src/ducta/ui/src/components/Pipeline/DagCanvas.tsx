@@ -24,7 +24,7 @@ import { DuctaNode, type DuctaNodeData } from "./DuctaNode";
 import { RoutedEdge, type RoutedEdgeData } from "./RoutedEdge";
 import { useCanvasViewport, type CanvasViewport } from "./useCanvasViewport";
 import { FIT_BAND_LABEL_PX, FIT_MAX_ZOOM, FIT_PADDING, FIT_TOP_PX } from "./canvasFit";
-import type { CanvasDataset, CanvasSelection, DagCanvasItem } from "./types";
+import type { CanvasDataset, CanvasSelection, DagCanvasItem, StreamNodeBadge } from "./types";
 
 export type { DagCanvasItem } from "./types";
 // Re-exported from its new home in utils/ so existing imports keep resolving.
@@ -40,6 +40,8 @@ interface DagCanvasProps {
   /** Applies only to the cycle fallback; the laid-out canvas sizes itself. */
   padding?: string;
   executionStates?: Record<string, string>;
+  /** Live state of streaming nodes (keyed by node name) while their stream runs. */
+  streamStates?: Record<string, StreamNodeBadge>;
   selection?: CanvasSelection;
   lineage?: Lineage | null;
   onSelect?: (selection: CanvasSelection) => void;
@@ -190,6 +192,7 @@ function DagCanvasInner({
   edgeClassName,
   padding = "80px 40px 120px",
   executionStates,
+  streamStates,
   selection,
   lineage,
   onSelect,
@@ -313,6 +316,7 @@ function DagCanvasInner({
             ? (lensDir === "up" ? lineage?.upstream : lineage?.downstream)?.get(item.id)
             : undefined,
           execState: executionStates?.[item.id],
+          stream: streamStates?.[item.name || item.id],
           orientation,
           // A band already says which layer a pipeline is; the swatch would repeat it.
           showLayer: !strata,
@@ -345,6 +349,7 @@ function DagCanvasInner({
       lineage,
       selectedNodeId,
       executionStates,
+      streamStates,
       orientation,
       strata,
       contextIds,
@@ -382,6 +387,14 @@ function DagCanvasInner({
       // log pane. Dependency-lens classes still win where both apply: the lens
       // is something the user asked for, the run state is ambient.
       const running = executionStates?.[e.to] === "running";
+      const streamBadge = streamStates?.[e.to];
+      const isStreamActive = streamBadge?.state === "active";
+      const isStreamStalled = streamBadge?.health === "stalled";
+      const streamClass = isStreamActive
+        ? isStreamStalled
+          ? "dag-edge-streaming-stalled"
+          : "dag-edge-streaming"
+        : null;
       const lensClass = edgeClassName?.(e.from, e.to);
 
       const data: RoutedEdgeData = {
@@ -400,7 +413,7 @@ function DagCanvasInner({
         source: e.from,
         target: e.to,
         type: "routed",
-        className: [lensClass, running && !lensClass ? "dag-edge-running" : null]
+        className: [lensClass, !lensClass ? (running ? "dag-edge-running" : streamClass) : null]
           .filter(Boolean)
           .join(" "),
         data: data as unknown as Record<string, unknown>,
@@ -414,6 +427,7 @@ function DagCanvasInner({
     edgeLabel,
     edgeClassName,
     executionStates,
+    streamStates,
     selectedDataset,
     lineage,
     tier,

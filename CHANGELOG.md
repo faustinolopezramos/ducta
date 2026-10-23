@@ -7,6 +7,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A run records the hyperparameters its model really has.** `train_with_search` put the
+  winning hyperparameters on the registered model but not on the tracked run, so a run
+  table, `ducta experiment compare` and the app showed only the search settings and the
+  split for a plain `ducta start`. They are logged on the run now.
+- **No false `ERROR` for an ML pipeline that has no search.** A pipeline of `type: ml` that
+  names no `hyperparams_config`, in a project whose `hyperparams_config_path` file has
+  several keys, logged `pipeline_key is required when the hyperparams file has N top-level
+  keys` although nothing was wrong (a pipeline that only reads runs, for example). It has
+  no search, and says nothing.
+- **Models › Experiments showed no metrics.** The API listed each run's metric *names* but
+  the page read their values, so the Metrics column, the run panel and the compare dialog
+  were always empty. A run now carries its final metrics. Its `parameters` are the
+  hyperparameters only; what Ducta records for itself (`_environment_snapshot`,
+  fingerprints, `_code_hash`) is in `internal_parameters`, so it no longer shows up as a
+  "differing parameter" in the compare dialog.
+- **`--search` trains what each trial asks for.** `train_with_search` ran its own search
+  over the whole space inside every trial and ignored the trial's values, so a grid or
+  random `--search` produced N identical models whose runs recorded hyperparameters the
+  model never had, and a Bayesian `--search` failed every trial ("use `ducta start
+  --search`"). A hyperparameter the run fixes (`--hyperparams`, `--sweep`, a trial) is now
+  used as given and only the free ones are searched; a trial that fixes the whole space is
+  cross-validated as one point, so it still reports the objective metric. A plain
+  `ducta start` searches as before. The node's `ml_context` carries them as
+  `cli_hyperparams`.
+- **`ducta config validate` rejects a malformed `hyperparams_config`.** A mapping holding the
+  search itself (`algorithm`, `search_space`) passed validation and was then ignored by
+  `--search`, which said no search was declared. It now says a mapping is only `{path, key}`
+  and where the search goes, and it reports a key with no file, a missing file, or a key the
+  file does not have.
+- **A streaming run no longer reports success when a node never started.** A pipeline
+  whose other queries finished was rewritten from `partial_failure` to `completed`
+  while `failed_nodes` still named the node, so `ducta stream run` exited 0 in a
+  backfill or CI. It stays `partial_failure` (the command exits non-zero, also for
+  `skipped_nodes`); a pipeline in which no node started is `failed` and no longer
+  counts as active.
+- **A query that ended frees its checkpoint.** A failed query, or one that finished on a
+  terminating trigger, stayed registered, so `restart_node` on the node that failed
+  returned `False` and the next run of the same pipeline in that process died with
+  "checkpoint already in use". Only a query that is still running owns a checkpoint.
+- **A terminating upstream that fails stops its dependants.** Nodes ordered `after` a
+  `once`/`available_now` node that died started anyway, on its partial output; they are
+  skipped now.
+- **`shutdown()` stops pipelines in `partial_failure`**, which can still have queries
+  running, and `list_running_pipelines` lists them. The stall check no longer flags a
+  healthy idle source: it read the constant `batchId` of a query with no new data as a
+  hang; it follows the progress report's timestamp, and its timeout is never under three
+  trigger intervals (an hourly trigger was "stalled" for most of the hour).
+- **`delta_stream` no longer alters the table it reads.** With `auto_enable_cdf` on (the
+  default) a plain read ran `ALTER TABLE … enableChangeDataFeed` on the source and forced
+  `startingVersion=latest`, which skipped every row the table already held on the first
+  run. That now happens only with `options.readChangeFeed: true`, the only case that
+  needs the feed (the reader never requested it before).
+- **`trigger: adaptive` works.** The project schema and the stream validator rejected it,
+  and the query name it was looked up under changes on every run, so it could never find
+  history. History is kept per `pipeline::node` for the life of the process.
+- **Server-side streams are not stopped after `execution_timeout_seconds`.** A streaming
+  run waited at most that long (1 hour by default), then stopped the pipeline and shut
+  its manager down, so the stream "started from the server to keep running" ended
+  silently; the executor also could not run again after a synchronous run. A hybrid run
+  in asynchronous mode stopped the streams it had just started when `execute()` returned,
+  and the hybrid executor was never shut down with the engine.
+- **`clear_pipeline_checkpoints` clears what the pipeline uses**: every node's own
+  `checkpoint_location`, not only the project default (it reported "no checkpoint found"
+  and deleted nothing), and it says which cloud paths to delete by hand instead of
+  resolving them as local folders. It only deletes a directory that holds checkpoint data.
+- **The pipeline status no longer carries the pipeline definition** (connector options,
+  broker credentials included), which `ducta stream status --format json` printed.
+- Streaming validation matches what the engine runs: more than one input/output, or a
+  bare string for one, is refused up front (a string failed later with an
+  `AttributeError`); formats and trigger types are case-insensitive like the factories;
+  an empty `kafka.bootstrap.servers` is refused; the 60-minute watermark cap is a warning,
+  not an error. A failed `function.module` import shows in the "not registered" error,
+  `register_transforms` runs once per module, and the hint no longer points at a missing
+  file. A `spark.sql.shuffle.partitions` / scheduler-pool change made to start a query is
+  undone right after, so it no longer leaks into the batch nodes sharing the session.
+- A manager built from a dict context honours its settings; `get_pipeline_status` hands out
+  a copy; finished executions are pruned (50 kept); error contexts accept `context=None`.
+
+- **`ducta ai extend` can no longer replace what a module already has.** A `def`, an
+  assignment or an `import … as` of a name the module defines — or `CONFIG[k] = …` on
+  one of its objects — was accepted as an "addition" and won on import. It is refused,
+  also at `apply`.
+- **Credentials inside a text are found** before a file is sent to a remote model:
+  connection strings (`jdbc:…;password=…`, ODBC `PWD=`, libpq), SAS `sig=`, private keys,
+  JWTs and short passwords. `redact` and the scanners were quadratic on long text without
+  spaces (400 KB took minutes); they are linear now.
+- **A broken connection to a model is an `AIError`** (a server that closes the connection
+  while it loads a model, a proxy, a reset), not a traceback.
+- **`ducta ai new` and `ducta ai fix` drafts get the code review** that `extend` and
+  Architect already had, which now also sees `to_sql`, `read_sql_query`, pickles,
+  `shutil.move`, `importlib.import_module`, `spark.table`, `self.spark.read` and
+  imports under another name.
+- **The skill's `check_env.py` no longer imports from the project** it inspects (a
+  `json.py` there ran); AI settings have upper bounds; `explain` reads only Python files;
+  Architect refuses a required keyword-only parameter; Sentinel never records a failed
+  re-run start without the engine lock.
+
 ### Security
 
 - **The file browser no longer lists or serves `.env`.** `GET /api/workspace/files/content`
@@ -17,6 +116,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A table of all your runs, in the format you choose.** `ducta.mlrun.run_summary`
+  joins the tracked runs of a pipeline with the model each registered and its run
+  certificate: one row per run, with `param_*`, `metric_*`, `model_name`/`model_version`,
+  `code_hash`, `data_hash`, `split_applied` and `certificate_id`, ready to sort by a
+  metric. `ducta init project --type ml` scaffolds it as the `churn_runs` pipeline and
+  the `gold.churn.runs` dataset; its `format` (`parquet`, `delta`, `csv`, `json`) is set in
+  the catalog like any other dataset's. A column no run has a value for is left out.
+- **The same table in the app.** Models › Experiments has an **All runs** view: one row per
+  run with its final metrics, the hyperparameters that differ between runs (**Show all**
+  adds the rest), the model it registered and whether its certificate is intact, sortable by
+  any column, with **CSV** to download every column and the checkboxes to compare runs. A
+  run's panel has an **Evidence** block (certificate, model, code and data hash, split) and
+  folds what Ducta records for itself under **Recorded by Ducta**. The API serves the table
+  as `GET /api/mlops/run-table` (`sort_by`, `ascending`, `verify_certificates`).
+- **A tracked run and its certificate point at each other.** The run is tagged
+  `ducta_run_id` (the certificate's `run_id`) and, for an ML pipeline, the certificate
+  carries `mlops_run_id` (certificate schema 1.7; certificates without a tracked run keep
+  the exact content and hash they had). The run also logs `_code_hash` and `_split_applied`.
+- **Running a stream is visible, in the terminal and in the app.**
+  - `ducta stream run` prints one header (`events · dev · 2 nodes running · execution
+    1911b3a0 · Ctrl+C to stop`), a line per node (source → sink, trigger) and then a small
+    table — node, state, rows per second, batch — once the first node has reported, every
+    30 seconds (`DUCTA_STREAM_REPORT_SECONDS`) and the moment a node changes state. A quiet
+    source shows as `idle`, a query that reports nothing as `stalled`, and the input rate
+    appears only when a node falls behind it. A failing run says `1 of 4 nodes failed`. It
+    is appended to the log, not drawn over it; the checkpoint is in `ducta stream plan`.
+  - **`ducta stream plan --pipeline P`** says what a stream would do without starting
+    Spark: per node what it reads, writes, how often it fires and its checkpoint, and what
+    would stop it (a transform that is not registered, a source path that does not exist,
+    an invalid node, two nodes sharing a checkpoint). Exits non-zero on errors;
+    `--output-format json` for scripts.
+  - **Web app, streaming pipelines:** *Start stream* / *Stop stream* replace Run / Stop (no
+    partial-run menu, which does not apply); the top bar shows a dot and one sentence,
+    `3 of 4 nodes running · 280 rows/s`; each stream node on the canvas shows its query (a
+    dot and its throughput, `idle`, `stalled`, `failed` with the error on hover); and the
+    logs panel has one row per node — a dot, the name, what it is doing in words (`file_stream
+    → parquet`, `idle for 3 min — no new input`, `stalled — …`, `failed — <error>`), a trend
+    and its rate. A row opens to what it reads and writes, trigger, batch, model and
+    checkpoint. **Restart** sits on a failed or hung node's row; for a healthy one it is
+    inside the detail.
+  - **`POST /api/executions/{id}/streaming/{stream_execution_id}/nodes/{node}/restart`**
+    (`execution.write`) restarts one node's query from its checkpoint. The streaming status
+    gains `source`, `sink`, `trigger`, `checkpoint`, `health` (`idle`/`stalled`) and
+    `idle_seconds` per node.
+- **`rate` and `socket` stream sources and a `memory` sink**, so a streaming pipeline can
+  be tried, tested and run in CI without an external system. `delta` is accepted as an
+  alias of `delta_stream`, the formats the default `FormatPolicy` lists are now exactly
+  the ones the engine can build (`memory` as an input was not one and is gone).
+- **`ducta list` and `ducta check`**: the two things you do first in a project, one
+  word each. They are `ducta config list-pipelines` and `ducta config validate` with
+  the same options (`--env`, `--filter`, `--pipeline`, `--output-format`, `--base-path`);
+  the long forms keep working. `ducta --help` opens with an *Essentials* group — `list`,
+  `check`, `start`, `stream` — before the rest, and `ducta` on its own suggests `check`.
 - **Ducta Architect: several pipelines designed first, built after** (`ducta ai
   architect`). The model writes a blueprint — new datasets with keys, write mode,
   columns and contract, new pipelines and nodes with their logic in words — and
@@ -146,6 +298,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`persist_model(metrics=...)` also logs them on the tracked run.** They went to the
+  model version only, so `ducta experiment show` printed `Metrics: (none)` and a sweep
+  could not be ranked. Pass `log_to_run=False` to keep the old behaviour; `train_with_search`
+  already logs its metrics once and does so.
+
+- **`ducta stream run` no longer prints four harmless Spark warnings** — "Your hostname … resolves
+  to a loopback address", "Unable to load native-hadoop library", the GC-metrics notice (which
+  landed in the middle of the live table) and "spark.sql.adaptive.enabled is not supported in
+  streaming" — nor Spark's "Setting default log level" lines. Only those loggers are lowered
+  (everything else Spark warns, and every error, still shows); only on local sessions, so the
+  hostname warning stays on a cluster, where it can point at a real misconfiguration. `-v`
+  shows them again; `DUCTA_SPARK_QUIET=1` still silences the JVM completely, `known` selects this
+  targeted mode.
+- **`ducta stream run` ends with a summary instead of nine log lines.** Stopping two nodes
+  printed nine INFO lines carrying 32-character ids; the per-query "Stopping…/stopped
+  successfully" lines are DEBUG now (`-v` shows them), and after the stop (Ctrl+C) or when the
+  stream ends on its own it prints how long it ran and, per node, the batches and rows it
+  processed in total (`Stopped · ran 00:43`, `NODE BATCHES ROWS IN ENDED`).
+- **The streaming start-up log is quieter.** The four "Configuring streaming query…" lines
+  per node are one, and Spark's WARN "scheduler pool … has not been configured" — caused by
+  the per-node pools Ducta creates on purpose — is no longer printed.
+- **A stalled query is a warning, not an error**: the node stays `active` with a `stalled`
+  note instead of showing the stall text as its error.
+- **`delta_stream` reads appended data unless asked for the change feed.** Set
+  `input.options.readChangeFeed: true` for the feed; `auto_enable_cdf` only applies then.
+  A node that relied on the old implicit CDF enabling must add that option.
+- **A streaming run is not bounded by `execution_timeout_seconds`**; it waits as long as
+  its queries run (cancel it to stop it).
+- **`ducta start --help` groups its options** by how often they are needed — *Common*,
+  *Dates and re-runs*, *Streaming and hybrid pipelines*, *ML tuning*, *Logging* — with a
+  one-line description each. No option was renamed or removed; what the search options
+  do, which used to fill the help, is in the CLI usage page (*ML tuning options*).
 - **An optional compact view of a run** (`DUCTA_CONSOLE=compact`): a header, one
   line per node (rows written, time, checks passed), a summary with the run's
   certificate, and for a failure one block with the line of your code that raised
