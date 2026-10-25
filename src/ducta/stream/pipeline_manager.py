@@ -26,7 +26,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
 from threading import Event, Lock, Thread
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -44,13 +44,20 @@ from ducta.stream.exceptions import (
     create_error_context,
     handle_streaming_error,
 )
+from ducta.stream.journal import StreamRunJournal, journal_base, recent_trigger_ms, summarize
+from ducta.stream.node_state import derive_node_state, node_names
 from ducta.stream.plan import describe_node
 from ducta.stream.progress_listener import (
     DuctaProgressListener,
     StreamingProgressSink,
     listener_available,
 )
-from ducta.stream.query_manager import StreamingQueryManager, get_query_exception, is_query_active
+from ducta.stream.query_manager import (
+    StreamingQueryManager,
+    get_query_exception,
+    is_query_active,
+    single_spec,
+)
 from ducta.stream.validators import StreamingValidator
 
 _TRANSIENT_DELTA_ERROR_TOKENS = frozenset(
@@ -185,7 +192,6 @@ class StreamingPipelineManager:
             context, validator=self.validator, progress_sink=self.progress_sink
         )
         self._register_progress_listener()
-        self.monitor_interval_seconds = 5.0
         self.active_environment = get_active_env(context)
         settings = get_context_value(context, "global_config", {}) or {}
         self.node_start_retry_attempts = int(settings.get("streaming_node_start_retries", 45))
@@ -211,6 +217,25 @@ class StreamingPipelineManager:
             max_workers=max_concurrent_pipelines,
             thread_name_prefix="streaming_pipeline",
         )
+        # The on-disk record of each execution (ducta.stream.journal), which query
+        # belongs to which node, and who is told about an execution's events.
+        self._journals: Dict[str, StreamRunJournal] = {}
+        self._query_owner: Dict[str, Tuple[str, str]] = {}
+        self._finished: Set[str] = set()
+        self._listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self.progress_sink.listener = self._on_progress
+        self.query_manager.batch_listener = self._on_micro_batch
+        # Live alerts: (execution, node) -> the kind last reported for it, and the
+        # quarantine counts not yet reported. Checked by a daemon every interval.
+        self._alerted: Dict[Tuple[str, str], str] = {}
+        self._quarantine_pending: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self.health_interval_seconds = float(
+            settings.get("streaming_health_interval_seconds", 30.0) or 30.0
+        )
+        self.quarantine_alert_interval_seconds = float(
+            settings.get("streaming_quarantine_alert_interval_seconds", 900.0) or 900.0
+        )
+        self._health_thread: Optional[Thread] = None
 
     #: Finished executions kept for status queries; older ones are dropped when a
     #: new pipeline starts, so a long-lived manager does not grow without bound.
@@ -268,9 +293,12 @@ class StreamingPipelineManager:
 
     def _is_transient_start_error(self, node_config: Dict[str, Any], exc: Exception) -> bool:
         """Identify startup errors that can resolve after upstream warm-up."""
-        input_config = node_config.get("input", {}) or {}
-        input_format = str(input_config.get("format", "")).lower()
-        if input_format != "delta_stream":
+        # Either spelling (input / a one-element inputs) and the "delta" alias.
+        input_config = single_spec(node_config, "input")
+        if not isinstance(input_config, dict):
+            return False
+        input_format = str(input_config.get("format", "")).strip().lower()
+        if input_format not in ("delta_stream", "delta"):
             return False
 
         root = (
@@ -368,8 +396,14 @@ class StreamingPipelineManager:
             execution_id=execution_id,
         )
 
-    def start_pipeline(self, pipeline_name: str, pipeline_config: Dict[str, Any]) -> str:
-        """Validate and start a pipeline asynchronously."""
+    def start_pipeline(
+        self, pipeline_name: str, pipeline_config: Dict[str, Any], run_id: Optional[str] = None
+    ) -> str:
+        """Validate and start a pipeline asynchronously.
+
+        *run_id* is the run this execution belongs to (its certificate, its journal);
+        the execution id stands in for it when none is given.
+        """
         try:
             self.validator.validate_streaming_pipeline_config(pipeline_config)
 
@@ -396,12 +430,15 @@ class StreamingPipelineManager:
                     "failed_nodes": {},
                     "skipped_nodes": {},
                     "error": None,
+                    "run_id": run_id or execution_id,
                 }
                 self._pipeline_events[execution_id] = Event()
                 self._pipeline_started_events[execution_id] = Event()
                 self._pipeline_stop_events[execution_id] = Event()
                 pruned = self._prune_finished_locked(keep=execution_id)
             self._forget_executions(pruned)
+            self._open_journal(execution_id, pipeline_name, pipeline_config, run_id or execution_id)
+            self._ensure_health_monitor()
 
             future = self._executor.submit(
                 self._execute_pipeline, execution_id, pipeline_name, pipeline_config
@@ -449,6 +486,8 @@ class StreamingPipelineManager:
         dropped = [eid for _, eid in sorted(finished)[:excess]]
         for eid in dropped:
             self._running_pipelines.pop(eid, None)
+            self._journals.pop(eid, None)
+            self._finished.discard(eid)
             self._pipeline_events.pop(eid, None)
             self._pipeline_started_events.pop(eid, None)
             self._pipeline_stop_events.pop(eid, None)
@@ -536,6 +575,9 @@ class StreamingPipelineManager:
                 info = self._running_pipelines.get(execution_id)
                 if info is not None:
                     info.setdefault("totals", {}).update(final_totals)
+        # Before the event: whoever waits on it (a synchronous run sealing its
+        # certificate) must find the listeners already told.
+        self._finish_execution(execution_id)
         if event is not None:
             event.set()
 
@@ -605,6 +647,7 @@ class StreamingPipelineManager:
                     self._running_pipelines[execution_id]["node_order"] = [
                         n.get("name") for n in ordered_nodes
                     ]
+            self._seed_adaptive_history(execution_id, pipeline_name, ordered_nodes)
             processed_nodes = self._process_pipeline_nodes(
                 execution_id, pipeline_name, ordered_nodes, satisfied_dependencies=satisfied
             )
@@ -618,6 +661,7 @@ class StreamingPipelineManager:
                         pipeline_info["end_time"] = time.time()
                     elif pipeline_info.get("status") != "partial_failure":
                         pipeline_info["status"] = "running"
+            self._journal_status(execution_id)
             self._signal_pipeline_started(execution_id)
             if not processed_nodes:
                 self._signal_pipeline_done(execution_id)
@@ -652,19 +696,30 @@ class StreamingPipelineManager:
 
             summary = self._node_summary(resolved_config, pipeline_name)
             with self._lock:
+                # Checked under the lock stop_pipeline snapshots the queries with: a
+                # query that finished starting after a stop is not registered, or it
+                # would run on unseen (and its checkpoint could be cleared under it).
+                stop_requested = self._stop_requested_locked(execution_id)
                 pipeline_info = self._running_pipelines.get(execution_id)
-                if pipeline_info is not None:
+                if pipeline_info is not None and not stop_requested:
                     pipeline_info["queries"][node_name] = query
+                    self._own_query_locked(execution_id, node_name, query)
                     pipeline_info["completed_nodes"] += 1
                     if summary:
                         pipeline_info.setdefault("node_summaries", {})[node_name] = summary
-                self._query_monitors[self._monitor_key(execution_id, node_name)] = (
-                    QueryHealthMonitor(
-                        query=query,
-                        query_name=node_name,
-                        timeout_seconds=self._stall_timeout_seconds(resolved_config),
+                if not stop_requested:
+                    self._query_monitors[self._monitor_key(execution_id, node_name)] = (
+                        QueryHealthMonitor(
+                            query=query,
+                            query_name=node_name,
+                            timeout_seconds=self._stall_timeout_seconds(resolved_config),
+                        )
                     )
-                )
+
+            if stop_requested:
+                logger.info(f"Pipeline '{execution_id}' was stopped while '{node_name}' started")
+                self._stop_unregistered_query(query, node_name)
+                return "stopped"
 
             logger.info(f"Successfully started query '{node_name}'")
             return "started"
@@ -897,6 +952,314 @@ class StreamingPipelineManager:
             pipeline_name=None,
             execution_id=None,
         )
+
+    # ── journal and events ───────────────────────────────────────────────────
+
+    def add_listener(self, listener: Callable[[Dict[str, Any]], None]) -> None:
+        """Tell *listener* about every execution event, as a dict with a ``kind``:
+
+        ``finished`` (status, error, per-node outcome, journal dir), and the live ones
+        ``stream_failed`` / ``stream_stalled`` / ``stream_quarantine`` /
+        ``stream_recovered``. Called from manager threads; errors are logged.
+        """
+        self._listeners.append(listener)
+
+    def _emit(self, event: Dict[str, Any]) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(dict(event))
+            except Exception as e:  # a listener must never break the stream
+                logger.warning(f"Stream event listener failed on '{event.get('kind')}': {e}")
+
+    def _open_journal(
+        self, execution_id: str, pipeline_name: str, pipeline_config: Dict[str, Any], run_id: str
+    ) -> None:
+        base = journal_base(self.context)
+        if base is None:
+            return
+        names = [
+            node if isinstance(node, str) else (node or {}).get("name", f"node_{i}")
+            for i, node in enumerate(pipeline_config.get("nodes", []) or [])
+        ]
+        gs = get_context_value(self.context, "global_config", {}) or {}
+        try:
+            journal = StreamRunJournal(
+                base,
+                pipeline_name,
+                run_id,
+                execution_id,
+                [str(n) for n in names],
+                api_execution_id=gs.get("api_execution_id") if isinstance(gs, dict) else None,
+            )
+        except OSError as e:
+            logger.warning(f"Stream journal unavailable for '{pipeline_name}': {e}")
+            return
+        with self._lock:
+            self._journals[execution_id] = journal
+            if execution_id in self._running_pipelines:
+                self._running_pipelines[execution_id]["journal_dir"] = str(journal.dir)
+
+    def _journal_status(self, execution_id: str) -> None:
+        with self._lock:
+            journal = self._journals.get(execution_id)
+            info = self._running_pipelines.get(execution_id) or {}
+            status, error = info.get("status"), info.get("error")
+        if journal is not None and status:
+            journal.set_status(str(status), error)
+
+    def _own_query_locked(self, execution_id: str, node_name: str, query: Any) -> None:
+        """Remember which node *query* runs, for its progress reports. Caller holds the lock."""
+        qname = getattr(query, "name", None) or getattr(query, "queryName", None)
+        if qname:
+            self._query_owner[str(qname)] = (execution_id, node_name)
+
+    def _on_progress(self, query_name: str, summary: Dict[str, Any]) -> None:
+        with self._lock:
+            owner = self._query_owner.get(query_name)
+            journal = self._journals.get(owner[0]) if owner else None
+        if owner is None or journal is None:
+            return
+        journal.record(
+            "progress",
+            {
+                "node": owner[1],
+                "batch_id": summary.get("batchId"),
+                "rows": summary.get("numInputRows"),
+                "trigger_ms": summary.get("triggerExecutionMs"),
+                "input_rows_per_second": summary.get("inputRowsPerSecond"),
+                "processed_rows_per_second": summary.get("processedRowsPerSecond"),
+            },
+        )
+
+    def _on_micro_batch(self, pipeline_name: str, execution_id: str, stats: Dict[str, Any]) -> None:
+        node = str(stats.get("node"))
+        with self._lock:
+            journal = self._journals.get(execution_id)
+            info = self._running_pipelines.get(execution_id)
+            if info is not None:
+                seen = info.setdefault("micro_batches", {}).setdefault(
+                    node, {"rows_quarantined": 0, "gate": None, "batch_id": None}
+                )
+                seen["rows_quarantined"] += int(stats.get("rows_quarantined") or 0)
+                seen["gate"] = stats.get("gate") or seen["gate"]
+                seen["batch_id"] = stats.get("batch_id")
+        if journal is not None:
+            journal.record("batch", stats)
+        self._note_quarantine(execution_id, pipeline_name, stats)
+
+    def _seed_adaptive_history(
+        self, execution_id: str, pipeline_name: str, nodes: List[Dict[str, Any]]
+    ) -> None:
+        """Give each adaptive node the batch durations its previous run journaled."""
+        base = journal_base(self.context)
+        if base is None:
+            return
+        with self._lock:
+            run_id = (self._running_pipelines.get(execution_id) or {}).get("run_id")
+        for cfg in nodes:
+            trigger = ((cfg.get("streaming") or {}).get("trigger")) or {}
+            if str(trigger.get("type", "")).lower() != "adaptive":
+                continue
+            name = str(cfg.get("name"))
+            try:
+                values = recent_trigger_ms(base, pipeline_name, name, exclude_run=run_id)
+            except OSError as e:
+                logger.debug(f"Could not read the journal history of '{name}': {e}")
+                continue
+            if values:
+                self.progress_sink.seed(f"{pipeline_name}::{name}", values)
+                logger.info(
+                    f"Adaptive trigger of '{name}' starts from {len(values)} batch "
+                    "duration(s) its previous run journaled"
+                )
+
+    def _finish_execution(self, execution_id: str) -> None:
+        """Journal the final status and tell the listeners, once per execution."""
+        with self._lock:
+            if execution_id in self._finished:
+                return
+            self._finished.add(execution_id)
+            journal = self._journals.get(execution_id)
+            for qname in [q for q, owner in self._query_owner.items() if owner[0] == execution_id]:
+                self._query_owner.pop(qname, None)
+        status = self._compute_pipeline_status(execution_id) or {}
+        nodes: Dict[str, Dict[str, Any]] = {}
+        summaries = status.get("node_summaries") or {}
+        journaled = summarize(journal.dir) if journal is not None else {}
+        for name in node_names(status):
+            state = derive_node_state(name, status)
+            nodes[name] = {
+                "state": state.state,
+                "error": state.error,
+                "sink": (summaries.get(name) or {}).get("sink"),
+                "totals": (status.get("totals") or {}).get(name),
+                **({"journal": journaled[name]} if name in journaled else {}),
+            }
+        # A failure that ended the run between two monitor passes is still reported.
+        self._report_transitions(execution_id, status)
+        self._flush_quarantine(execution_id, force=True)
+        final = str(status.get("status") or "error")
+        if journal is not None:
+            journal.set_status(final, status.get("error"), nodes=nodes)
+        self._emit(
+            {
+                "kind": "finished",
+                "execution_id": execution_id,
+                "run_id": status.get("run_id"),
+                "pipeline": status.get("pipeline_name"),
+                "status": final,
+                "error": status.get("error"),
+                "start_time": status.get("start_time"),
+                "end_time": status.get("end_time") or time.time(),
+                "nodes": nodes,
+                "journal_dir": str(journal.dir) if journal is not None else None,
+            }
+        )
+
+    # ── live alerts ──────────────────────────────────────────────────────────
+
+    def _ensure_health_monitor(self) -> None:
+        """Start the daemon that checks every live execution (once per manager)."""
+        if self.health_interval_seconds <= 0:
+            return
+        with self._lock:
+            if self._health_thread is not None and self._health_thread.is_alive():
+                return
+            self._health_thread = Thread(
+                target=self._health_loop, name="Ducta-stream-health", daemon=True
+            )
+            self._health_thread.start()
+
+    def _health_loop(self) -> None:
+        while not self._shutdown_event.wait(self.health_interval_seconds):
+            self.check_health_now()
+
+    def check_health_now(self) -> None:
+        """One monitor pass: refresh every live execution's health and report changes."""
+        with self._lock:
+            live = [
+                eid
+                for eid, info in self._running_pipelines.items()
+                if eid not in self._finished
+                and info.get("status") in ("starting", "running", "partial_failure")
+            ]
+        for eid in live:
+            try:
+                status = self._compute_pipeline_status(eid)
+                if status:
+                    self._report_transitions(eid, status)
+                self._flush_quarantine(eid)
+            except Exception as e:  # noqa: BLE001 - the monitor must keep going
+                logger.debug(f"Health pass failed for '{eid}': {e}")
+
+    def _report_transitions(self, execution_id: str, status: Dict[str, Any]) -> None:
+        """Emit stream_failed / stream_stalled once per episode, and stream_recovered."""
+        for name in node_names(status):
+            state = derive_node_state(name, status)
+            if state.state == "failed":
+                kind: Optional[str] = "stream_failed"
+            elif state.health == "stalled":
+                kind = "stream_stalled"
+            else:
+                kind = None
+            key = (execution_id, name)
+            with self._lock:
+                previous = self._alerted.get(key)
+                if kind == previous:
+                    continue
+                if kind is None:
+                    self._alerted.pop(key, None)
+                else:
+                    self._alerted[key] = kind
+            if kind is None and previous is None:
+                continue
+            self._emit(
+                {
+                    "kind": kind or "stream_recovered",
+                    "execution_id": execution_id,
+                    "run_id": status.get("run_id"),
+                    "pipeline": status.get("pipeline_name"),
+                    "node": name,
+                    "error": state.error,
+                    "previous": previous,
+                }
+            )
+
+    def _note_quarantine(
+        self, execution_id: str, pipeline_name: str, stats: Dict[str, Any]
+    ) -> None:
+        """Count quarantined rows; the first batch of an episode is reported at once."""
+        rows = int(stats.get("rows_quarantined") or 0)
+        if rows <= 0:
+            return
+        key = (execution_id, str(stats.get("node")))
+        with self._lock:
+            pending = self._quarantine_pending.setdefault(
+                key, {"rows": 0, "batches": 0, "last_sent": None, "pipeline": pipeline_name}
+            )
+            pending["rows"] += rows
+            pending["batches"] += 1
+            first = pending["last_sent"] is None
+        if first:
+            self._flush_quarantine(execution_id, force=True, only=key)
+
+    def _flush_quarantine(
+        self, execution_id: str, force: bool = False, only: Optional[Tuple[str, str]] = None
+    ) -> None:
+        """Report the quarantine counted since the last report, at most once an interval."""
+        now = time.time()
+        due: List[Tuple[Tuple[str, str], Dict[str, Any]]] = []
+        with self._lock:
+            run_id = (self._running_pipelines.get(execution_id) or {}).get("run_id")
+            for key, pending in self._quarantine_pending.items():
+                if key[0] != execution_id or (only is not None and key != only):
+                    continue
+                if not pending["rows"]:
+                    continue
+                last = pending["last_sent"]
+                if force or last is None or now - last >= self.quarantine_alert_interval_seconds:
+                    due.append((key, dict(pending)))
+                    pending.update(rows=0, batches=0, last_sent=now)
+        for (eid, node), pending in due:
+            self._emit(
+                {
+                    "kind": "stream_quarantine",
+                    "execution_id": eid,
+                    "run_id": run_id,
+                    "pipeline": pending["pipeline"],
+                    "node": node,
+                    "rows": pending["rows"],
+                    "batches": pending["batches"],
+                }
+            )
+
+    def _stop_requested_locked(self, execution_id: str) -> bool:
+        """Whether *execution_id* is being stopped (or the manager shut down). Caller holds ``self._lock``."""
+        if self._shutdown_event.is_set():
+            return True
+        stop_event = self._pipeline_stop_events.get(execution_id)
+        if stop_event is not None and stop_event.is_set():
+            return True
+        info = self._running_pipelines.get(execution_id)
+        return info is not None and info.get("status") == "stopped"
+
+    def _stop_unregistered_query(self, query: Any, node_name: str) -> None:
+        """Stop a query that started after its pipeline was stopped (best effort)."""
+        try:
+            self.query_manager.stop_query(query, graceful=True, timeout_seconds=10)
+        except Exception as e:
+            logger.error(f"Could not stop query '{node_name}' started after a stop: {e}")
+
+    def _has_live_queries(self, execution_id: str) -> bool:
+        """Whether any query of *execution_id* still runs, whatever its status says.
+
+        A stop that failed for one query leaves the pipeline ``stopped`` with that
+        query up; what is alive, not the status, decides what may be cleared.
+        """
+        with self._lock:
+            info = self._running_pipelines.get(execution_id) or {}
+            queries = list((info.get("queries") or {}).values())
+        return any(self.query_manager._is_query_active(q) for q in queries if q is not None)
 
     def _handle_node_execution_error(self, execution_id: str, node_name: str, error: str) -> None:
         logger.error(f"Error starting node '{node_name}' in pipeline '{execution_id}': {error}")
@@ -1201,6 +1564,17 @@ class StreamingPipelineManager:
                 if not pipeline_info:
                     logger.error(f"Execution '{execution_id}' not found")
                     return False
+                done_event = self._pipeline_events.get(execution_id)
+                if self._stop_requested_locked(execution_id) or (
+                    done_event is not None and done_event.is_set()
+                ):
+                    # Nothing watches a finished execution any more: a query
+                    # started now would run unseen.
+                    logger.error(
+                        f"Execution '{execution_id}' has finished or is stopping; "
+                        f"cannot restart '{node_name}'"
+                    )
+                    return False
                 existing_query = pipeline_info["queries"].get(node_name)
                 pipeline_config = pipeline_info["pipeline_config"]
                 pipeline_name = pipeline_info["pipeline_name"]
@@ -1232,27 +1606,38 @@ class StreamingPipelineManager:
                 node_config=node_config,
             )
 
-            # Re-acquire the lock to publish the new query/monitor.
+            # Re-acquire the lock to publish the new query/monitor, unless a stop
+            # landed meanwhile: then the new query is stopped instead.
+            summary = self._node_summary(node_config, pipeline_name)
             with self._lock:
                 pipeline_info = self._running_pipelines.get(execution_id)
-                if pipeline_info is None:
-                    logger.error(
-                        f"Pipeline '{execution_id}' disappeared during restart of '{node_name}'"
-                    )
-                    return False
-                pipeline_info["queries"][node_name] = query
-                if "failed_nodes" in pipeline_info:
-                    pipeline_info["failed_nodes"].pop(node_name, None)
-                summary = self._node_summary(node_config, pipeline_name)
-                if summary:
-                    pipeline_info.setdefault("node_summaries", {})[node_name] = summary
-                self._query_monitors[self._monitor_key(execution_id, node_name)] = (
-                    QueryHealthMonitor(
-                        query=query,
-                        query_name=node_name,
-                        timeout_seconds=self._stall_timeout_seconds(node_config),
-                    )
+                published = pipeline_info is not None and not self._stop_requested_locked(
+                    execution_id
                 )
+                if published:
+                    pipeline_info["queries"][node_name] = query
+                    self._own_query_locked(execution_id, node_name, query)
+                    failed_nodes = pipeline_info.get("failed_nodes") or {}
+                    failed_nodes.pop(node_name, None)
+                    if not failed_nodes:
+                        # The error shown was this node's; it no longer applies.
+                        pipeline_info["error"] = None
+                    if summary:
+                        pipeline_info.setdefault("node_summaries", {})[node_name] = summary
+                    self._query_monitors[self._monitor_key(execution_id, node_name)] = (
+                        QueryHealthMonitor(
+                            query=query,
+                            query_name=node_name,
+                            timeout_seconds=self._stall_timeout_seconds(node_config),
+                        )
+                    )
+            if not published:
+                logger.error(
+                    f"Pipeline '{execution_id}' was stopped or dropped during the "
+                    f"restart of '{node_name}'"
+                )
+                self._stop_unregistered_query(query, node_name)
+                return False
 
             logger.info(f"Successfully restarted node '{node_name}' in pipeline '{execution_id}'")
             return True
@@ -1326,13 +1711,18 @@ class StreamingPipelineManager:
         """
         try:
             with self._lock:
-                active = [
+                candidates = [
                     eid
                     for eid, info in self._running_pipelines.items()
                     if info.get("pipeline_name") == pipeline_name
-                    and info.get("status") in ("starting", "running", "partial_failure")
                 ]
-            active = [eid for eid in active if self.is_query_active(eid)]
+            # Any execution with a query still up, whatever its status says (a
+            # "stopped" one whose stop failed for a query still writes there).
+            active = [
+                eid
+                for eid in candidates
+                if self.is_query_active(eid) or self._has_live_queries(eid)
+            ]
             if active:
                 return {
                     "status": "error",
@@ -1531,11 +1921,15 @@ class StreamingPipelineManager:
 
         results: Dict[str, bool] = {}
         with self._lock:
-            execution_ids = [
+            by_status = [
                 eid
                 for eid, info in self._running_pipelines.items()
                 if info.get("status") in ("running", "starting", "partial_failure")
             ]
+            others = [eid for eid in self._running_pipelines if eid not in by_status]
+        # A stopped/error/completed execution may still hold a live query (a stop
+        # that failed for it): shutdown stops those too.
+        execution_ids = by_status + [eid for eid in others if self._has_live_queries(eid)]
 
         for execution_id in execution_ids:
             try:

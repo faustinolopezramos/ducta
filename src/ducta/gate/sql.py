@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import re
-from typing import Any, ClassVar, List, Optional, Set
+from typing import Any, ClassVar, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -146,18 +146,37 @@ class SQLSanitizer:
         cls._check_ast_for_dangerous_operations(parsed)
         logger.debug("Query validated successfully using sqlglot AST parser")
 
-    # scan behind a warning.
-    DANGEROUS_EXPRESSIONS: ClassVar[List[str]] = [
-        "Drop",
-        "Delete",
-        "Insert",
-        "Update",
-        "Create",
-        "Alter",
-        "Truncate",
-        "Merge",
-        "Command",  # covers EXECUTE / CALL
-    ]
+    # Each operation the AST scan refuses, and the names sqlglot has given its node
+    # class across versions (`TRUNCATE` is `TruncateTable`; `ALTER` was `AlterTable`).
+    # An operation none of whose names resolves is left to the lexical check, behind
+    # a warning.
+    DANGEROUS_EXPRESSIONS: ClassVar[Dict[str, Tuple[str, ...]]] = {
+        "Drop": ("Drop",),
+        "Delete": ("Delete",),
+        "Insert": ("Insert",),
+        "Update": ("Update",),
+        "Create": ("Create",),
+        "Alter": ("Alter", "AlterTable"),
+        "Truncate": ("TruncateTable", "Truncate"),
+        "Merge": ("Merge",),
+        "Command": ("Command",),  # covers EXECUTE / CALL
+    }
+
+    @classmethod
+    def _dangerous_expression_classes(cls) -> Tuple[List[Tuple[str, Any]], List[str]]:
+        """The operations the installed sqlglot can scan for, with their node class,
+        and the ones it cannot."""
+        from sqlglot import expressions  # type: ignore
+
+        resolved: List[Tuple[str, Any]] = []
+        missing: List[str] = []
+        for operation, names in cls.DANGEROUS_EXPRESSIONS.items():
+            found = next((getattr(expressions, n) for n in names if hasattr(expressions, n)), None)
+            if found is None:
+                missing.append(operation)
+            else:
+                resolved.append((operation, found))
+        return resolved, missing
 
     @classmethod
     def _check_ast_for_dangerous_operations(cls, parsed: Any) -> None:
@@ -170,15 +189,7 @@ class SQLSanitizer:
                     "Query contains forbidden operation: SELECT ... INTO (creates a table)"
                 )
 
-        resolved = []
-        missing = []
-        for name in cls.DANGEROUS_EXPRESSIONS:
-            operation_class = getattr(expressions, name, None)
-            if operation_class is None:
-                missing.append(name)
-            else:
-                resolved.append((name, operation_class))
-
+        resolved, missing = cls._dangerous_expression_classes()
         if not resolved:
             # The whole scan is meaningless — fail closed rather than wave it through.
             raise ConfigurationError(

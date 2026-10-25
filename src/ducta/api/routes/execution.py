@@ -161,20 +161,36 @@ async def get_execution(
     description=(
         "For a streaming or hybrid execution that is still running: per pipeline, its "
         "queries' state, each node's latest batch throughput and the model it scores "
-        "with. `active` is false once the execution holds no running engine."
+        "with. `active` is false once the execution holds no running engine; the "
+        "stream is then read from its journal (`from_journal`, with `source`), "
+        "`interrupted` when a server restart cut it off."
     ),
 )
 async def get_execution_streaming_status(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
+    source_path: OptionalSourcePathDep = None,
     current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> StreamingStatusResponse:
-    from ducta.api.services.streaming_status import streaming_status
+    from ducta.api.services.streaming_status import journal_lookup, streaming_status
 
     user_id = current_user.id if current_user else None
-    await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
+    record = await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
     engine = exec_manager.get_active_engine(execution_id)
-    return await run_in_threadpool(streaming_status, execution_id, engine)
+
+    def from_journal() -> List[Any]:
+        # Without a source the project (so its journals) cannot be located.
+        if not source_path:
+            return []
+        return journal_lookup(
+            source_path,
+            getattr(record, "project_id", None),
+            str(getattr(record, "env", "")),
+            str(getattr(record, "pipeline_name", "")),
+            execution_id,
+        )
+
+    return await run_in_threadpool(streaming_status, execution_id, engine, from_journal)
 
 
 @router.post(

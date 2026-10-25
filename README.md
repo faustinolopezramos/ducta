@@ -137,6 +137,8 @@ validate configuration or check certificates without paying for a JVM.
 ```bash
 pip install "ducta[mlops]"        # + experiment tracking & model registry
 pip install "ducta[api]"          # + web app / REST API
+pip install "ducta[ai]"           # + drafting, fixing and reviewing pipelines with a model
+pip install "ducta[delta]"        # + Delta Lake (time travel, MERGE, streaming upserts)
 pip install "ducta[all]"          # everything above
 ```
 
@@ -213,7 +215,7 @@ ducta template --template medallion_basic --project-name orders --format toml
 ducta config convert --to json --out ../orders-json     # rewrite a project in another format
 ```
 
-The same pipeline, `pipelines/etl`:
+The template's pipeline, `pipelines/etl`, trimmed to two checks:
 
 <details open>
 <summary><b>YAML</b> — <code>pipelines/etl.yaml</code> (comments, the most compact)</summary>
@@ -398,7 +400,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.6",
+  "schema_version": "1.8",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -406,7 +408,7 @@ flowchart LR
   "started_at": "2026-01-01T09:00:00+00:00",
   "ended_at": "2026-01-01T09:01:12+00:00",
   "duration_seconds": 72.418,
-  "ducta_version": "0.2.0",
+  "ducta_version": "0.3.0",
   "config_fingerprint": "sha256:6c1f…",     // the config this ran with
   "environment": {                           // where it ran
     "python_version": "3.12.4", "os_info": "Linux 6.8.0",
@@ -415,8 +417,8 @@ flowchart LR
   },
   "nodes": [
     { "name": "clean_sales", "type": "batch", "status": "success",
-      "duration_seconds": 41.09, "outputs": ["core.analytics.sales_clean"],
-      "error": null }
+      "duration_seconds": 41.09, "ended_at": "2026-01-01T09:01:10+00:00",
+      "outputs": ["core.analytics.sales_clean"], "error": null }
   ],
   "inputs": {                                // which data went in
     "raw_sales": { "filepath": "data/sales.csv", "file_size_bytes": 48213904,
@@ -439,14 +441,19 @@ flowchart LR
   ],
   "code": { "nodes": { "pipelines.sales.clean_sales": {   // the logic each node ran
     "scope": "function", "source_hash": "sha256:52aa…" } } },
+  "error": null,                             // the run's error, when it failed
   "evidence_complete": true,                 // did the run record everything it was asked to?
   "evidence_gaps": [],                       // and if not, what it could not record
   "signed": true,                            // inside the hash, so it cannot be stripped
   "evidence_level": "signed",                // the project's evidence policy, also hashed
   "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
-  "signature": "hmac-sha256:44c9…"           // optional, when a key is configured
+  "signature": "hmac-sha256:44c9…",          // optional, when a key is configured
+  "key_id": "3f9a1c…"                        // which key signed it
 }
 ```
+
+An ML run also records `mlops_run_id`, its tracked run; a stream node's entry
+carries its batches and its rows read, written and quarantined.
 
 **Verify it later** — anyone, on any machine, without rerunning the pipeline:
 
@@ -506,12 +513,12 @@ it ran correctly.** An honest comparison:
 
 | Instead of Ducta, use… | …when | Ducta's difference |
 |---|---|---|
-| **Airflow / Dagster / Prefect** | You need scheduling, backfills, retries, a multi-team DAG estate, alerting, SLAs. | Ducta has **no scheduler** and does not want one. It is the thing your Airflow task *calls* — see the [Airflow tutorial](https://github.com/faustinolopezramos/ducta/blob/main/docs/tutorials/airflow_integration.rst). Dagster overlaps most (assets, checks); it is far more mature and far larger. |
+| **Airflow / Dagster / Prefect** | You need scheduling, backfills across many pipelines, a multi-team DAG estate. | Ducta has **no scheduler** and does not want one. It is the thing your Airflow task *calls* — see the [Airflow tutorial](https://github.com/faustinolopezramos/ducta/blob/main/docs/tutorials/airflow_integration.rst). It does retry nodes and send alerts (failures, quality gates, slow runs, missed SLAs, stream incidents) for the runs it executes. Dagster overlaps most (assets, checks); it is far more mature and far larger. |
 | **dbt** | Your transformations are SQL inside a warehouse. | dbt is excellent and Ducta does not compete with it in-warehouse. Ducta is for Spark/Python work — non-SQL transforms, ML steps, streaming — where dbt does not reach. |
 | **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
 | **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
 | **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
-| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.2.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.3.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
 
 **Where Ducta is genuinely different:** the run certificate. Most tools can
 tell you a job succeeded. Ducta gives you a portable, self-hashed and
@@ -563,14 +570,18 @@ flowchart TD
         CHECK["<b>check</b><br/>quality checks & gates"]
         STREAM["<b>stream</b><br/>Structured Streaming"]
         MLRUN["<b>mlrun</b><br/>tracking · registry · fingerprints"]
-        GATE["<b>gate</b><br/>I/O: Spark · Pandas · Polars · JDBC"]
+        GATE["<b>gate</b><br/>I/O: Spark · JDBC"]
     end
+
+    AI["<b>ai</b><br/>draft · fix · review · Architect · Sentinel"]
 
     SET["<b>setting</b><br/>YAML/TOML/JSON → typed Context"]
 
     UI --> API
     CLI --> CORE
     API --> CORE
+    CLI & API --> AI
+    AI --> SET
     CORE --> CHECK & STREAM & MLRUN & GATE
     CHECK & STREAM & MLRUN & GATE --> SET
     CORE --> SET
@@ -579,13 +590,14 @@ flowchart TD
 | Module | Responsibility | Deeper tour |
 |---|---|---|
 | [`setting`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/setting/README.md) | Loads, interpolates and validates every config source into one typed, environment-aware `Context`. | Foundation |
-| [`gate`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/gate/README.md) | Unified, secure read/write across Spark, Pandas and Polars, plus a sanitized JDBC gateway. | Physical I/O |
+| [`gate`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/gate/README.md) | Secure read/write: Spark for every file format and table (pandas for pickle datasets), plus a sanitized JDBC gateway. | Physical I/O |
 | [`check`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/check/README.md) | Engine-agnostic checks before and after each node; quality gates that block, warn or skip. | Data quality |
 | [`mlrun`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/mlrun/README.md) | Experiment tracking, versioned model registry, data fingerprinting, hyperparameter search, reproducible splits. | MLOps |
-| [`stream`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/stream/README.md) | Declarative Spark Structured Streaming: readers, sinks, query supervision, checkpoints. | Streaming |
+| [`stream`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/stream/README.md) | Declarative Spark Structured Streaming: readers, sinks, checkpoints, query supervision; per-batch merge, quarantine and quality checks, a run journal and live alerts. | Streaming |
 | [`core`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md) | Turns a `Context` into running work — dependency graph, parallel nodes, gates, run certificate. | Execution engine |
 | [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
 | [`api`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/api/README.md) | REST + WebSocket over the engine; serves the bundled web app. | Service |
+| [`ai`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/ai/README.md) | A local or remote model drafts, fixes, reviews and explains pipelines (`ducta ai`); every draft is validated, and nothing is written until a person accepts it. Also ships the agent skill (`ducta skill`). | Authoring assistance |
 
 ### The public API
 
@@ -623,14 +635,13 @@ and stays usable on a bare `pip install ducta` with no Spark present.
 Direction, not commitments — Ducta is alpha and priorities move. The
 [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) is the record of what actually shipped.
 
-**Now (in flight toward `0.4.0`)**
+**Now (in flight toward `0.4.0`, see `[Unreleased]` in the CHANGELOG)**
 
-- Hyperparameter search driven by the engine — random and Bayesian strategies,
-  `n_trials`, per-trial process isolation so every trial is tracked as its own run.
-- Security hardening across the API surface: CORS and WebSocket origin
-  validation, SQL sanitization on every path, Git clone host allow-lists.
-- Consolidating the web app on a shared component layer (sortable tables,
-  consistent loading and error states).
+- Streams with the guarantees of a batch run: per-batch MERGE into Delta,
+  quarantine of the rows a rule rejects (or of a batch the quality gate blocks),
+  the node's quality checks on every batch, a run journal that outlives the
+  process, a certificate for every streaming run, and alerts while it runs.
+- Showing a stream node's quarantine and gate verdicts in the web app.
 
 **Next**
 
@@ -646,8 +657,10 @@ Direction, not commitments — Ducta is alpha and priorities move. The
 - Declaring the configuration schema and the public Python API stable — the
   gate to leaving alpha.
 - Broader Databricks coverage: Unity Catalog paths exercised end to end.
-- Certificate ergonomics: diffing two runs, and verifying a whole directory of
-  certificates in CI.
+- Certificate ergonomics: verifying a whole directory of certificates in CI
+  (comparing two runs is `ducta certify diff`).
+- Stream joins: several inputs per stream node (stream-stream with watermarks, or
+  stream-table).
 
 **Exploring**
 

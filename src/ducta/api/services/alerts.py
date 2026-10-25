@@ -41,7 +41,7 @@ from loguru import logger
 
 @dataclass
 class AlertEvent:
-    kind: str  # failure | quality_gate | slow | sla_miss | stale
+    kind: str  # failure | quality_gate | slow | sla_miss | sentinel | stream_*
     project: str
     pipeline: str
     env: str
@@ -84,6 +84,9 @@ def _text(event: AlertEvent) -> str:
         "slow": "ran unusually slowly",
         "sla_miss": "missed its SLA",
         "sentinel": "— a Ducta Sentinel incident",
+        "stream_failed": "has a stream node that failed",
+        "stream_stalled": "has a stream node that stalled",
+        "stream_quarantine": "quarantined data",
     }.get(event.kind, event.kind)
     lines = [f"[ducta] {event.project} / {event.pipeline} {title} in {event.env}.", event.summary]
     if event.link:
@@ -200,6 +203,56 @@ def notify_run_finished(
             )
     except Exception as e:  # noqa: BLE001 — alerting must never break a run's bookkeeping
         logger.warning("Alerts for run {} not evaluated: {}", record.get("id"), e)
+
+
+#: Live stream events an ``alerts:`` rule can name in ``when``.
+STREAM_EVENT_KINDS = ("stream_failed", "stream_stalled", "stream_quarantine")
+
+
+def _stream_summary(event: Dict[str, Any]) -> str:
+    node = event.get("node") or "?"
+    if event.get("kind") == "stream_quarantine":
+        rows, batches = event.get("rows") or 0, event.get("batches") or 0
+        return f"Node '{node}': {rows} row(s) quarantined in {batches} batch(es)."
+    return f"Node '{node}': {str(event.get('error') or 'no error detail')[:500]}"
+
+
+def notify_stream_event(
+    source_path: Any,
+    project_id: Optional[str],
+    env: str,
+    event: Dict[str, Any],
+    post: Poster = _post_json,
+) -> List[Dict[str, Any]]:
+    """A stream's live event, through the project's rules that name its kind. Never raises."""
+    if event.get("kind") not in STREAM_EVENT_KINDS:
+        return []  # finished / recovered: the run's own end-of-run alerts cover those
+    try:
+        from pathlib import Path
+
+        from ducta.api.repositories.v2_store import V2ProjectStore
+
+        store = V2ProjectStore.detect(Path(source_path))
+        if store is None:
+            return []
+        rules = store.project().project.alerts
+        if not rules:
+            return []
+        return deliver(
+            AlertEvent(
+                kind=str(event["kind"]),
+                project=str(project_id or store.root.name),
+                pipeline=str(event.get("pipeline") or ""),
+                env=env,
+                summary=_stream_summary(event),
+                run_id=event.get("run_id"),
+            ),
+            rules,
+            post=post,
+        )
+    except Exception as e:  # noqa: BLE001 - alerting must never break a stream
+        logger.warning("Stream alert '{}' not evaluated: {}", event.get("kind"), e)
+        return []
 
 
 def check_sla(

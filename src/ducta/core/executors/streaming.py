@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from contextlib import ExitStack
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -42,14 +42,60 @@ class StreamingExecutor(BaseExecutor):
         super().__init__(context, settings=settings)
         max_streaming_pipelines = self.settings.max_streaming_pipelines
         self._max_streaming_pipelines = max_streaming_pipelines
-        self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
         self._exit_stack = ExitStack()
         self._active_execution_id = None
+        #: Called with a stream's ``finished`` event once its outcome is in the ledger;
+        #: the facade seals an asynchronous run's certificate from it.
+        self.on_finished: Optional[Callable[[Dict[str, Any]], None]] = None
+        #: Callables also told about every live stream event (the API's alerts).
+        self.event_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self.streaming_manager = self._new_manager()
+
+    def _new_manager(self) -> StreamingPipelineManager:
+        manager = StreamingPipelineManager(self.context, self._max_streaming_pipelines)
+        manager.add_listener(self._on_stream_event)
+        return manager
+
+    def _on_stream_event(self, event: Dict[str, Any]) -> None:
+        if event.get("kind") == "finished":
+            self._record_stream_outcome(event)
+            if self.on_finished is not None:
+                self.on_finished(event)
+        for listener in list(self.event_listeners):
+            try:
+                listener(event)
+            except Exception as e:  # noqa: BLE001 - a listener never breaks a stream
+                logger.warning("Stream event listener failed: {}", e)
+
+    def _record_stream_outcome(self, event: Dict[str, Any]) -> None:
+        """Each stream node's outcome, in the run's ledger: its certificate shows it."""
+        from ducta.core.ledger import ledger_for
+
+        ledger = ledger_for(self.context)
+        start, end = event.get("start_time"), event.get("end_time")
+        duration = float(end - start) if isinstance(start, (int, float)) and end else 0.0
+        statuses = {"failed": "failed", "skipped": "skipped"}
+        for name, node in (event.get("nodes") or {}).items():
+            sink = node.get("sink")
+            ledger.record_node(
+                name,
+                statuses.get(str(node.get("state")), "success"),
+                duration_seconds=duration,
+                outputs=[sink] if sink else [],
+                error=node.get("error"),
+                node_type="stream",
+                stream={
+                    "state": node.get("state"),
+                    "totals": node.get("totals"),
+                    **(node.get("journal") or {}),
+                },
+            )
 
     def execute(
         self,
         pipeline_name: str,
         execution_mode: Optional[str] = "async",
+        run_id: Optional[str] = None,
     ) -> str:
         self._mlops_pipeline_name = pipeline_name
         self.node_executor.pipeline_name = pipeline_name
@@ -78,7 +124,7 @@ class StreamingExecutor(BaseExecutor):
             except Exception as e:
                 logger.warning("Failed to start MLflow run for streaming: {}", e)
 
-        execution_id = self.streaming_manager.start_pipeline(pipeline_name, pipeline)
+        execution_id = self.streaming_manager.start_pipeline(pipeline_name, pipeline, run_id=run_id)
         self._active_execution_id = execution_id
 
         logger.info(
@@ -97,9 +143,7 @@ class StreamingExecutor(BaseExecutor):
         """Replace a manager that a previous run shut down (a synchronous run
         ends with :meth:`shutdown`), so the executor can run again."""
         if getattr(self.streaming_manager, "is_shut_down", False):
-            self.streaming_manager = StreamingPipelineManager(
-                self.context, self._max_streaming_pipelines
-            )
+            self.streaming_manager = self._new_manager()
 
     @property
     def active_execution_id(self) -> Optional[str]:

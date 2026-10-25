@@ -204,9 +204,22 @@ class TestSQLSanitizerAgainstRealSqlglot:
                 "WITH x AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM x"
             )
 
+    def test_every_operation_resolves_on_the_installed_sqlglot(self):
+        # `Truncate` is `TruncateTable` in sqlglot: looked up by the wrong name it
+        # warned on every query and TRUNCATE was left to the lexical check alone.
+        _, missing = SQLSanitizer._dangerous_expression_classes()
+        assert missing == []
+
+    def test_truncate_is_caught_by_the_ast_scan(self):
+        import sqlglot
+
+        with pytest.raises(ConfigurationError, match="forbidden operation: Truncate"):
+            SQLSanitizer._check_ast_for_dangerous_operations(sqlglot.parse_one("TRUNCATE TABLE t"))
+
     def test_fails_closed_when_no_expression_class_resolves(self, monkeypatch):
-        for name in SQLSanitizer.DANGEROUS_EXPRESSIONS:
-            monkeypatch.delattr(f"sqlglot.expressions.{name}", raising=False)
+        for names in SQLSanitizer.DANGEROUS_EXPRESSIONS.values():
+            for name in names:
+                monkeypatch.delattr(f"sqlglot.expressions.{name}", raising=False)
 
         with pytest.raises(ConfigurationError, match="AST validation unavailable"):
             SQLSanitizer.sanitize_query("SELECT 1 AS col")

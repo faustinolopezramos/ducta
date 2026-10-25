@@ -32,7 +32,7 @@ except ImportError:  # PySpark not installed (e.g. pure-Python test environments
     StreamingQuery = Any  # type: ignore
 
 from ducta.stream.exceptions import StreamingError
-from ducta.stream.factories import StreamingHandlerFactory
+from ducta.stream.factories import StreamingHandlerFactory, spark_option_value
 
 
 class BaseStreamingWriter(ABC):
@@ -67,10 +67,11 @@ class BaseStreamingWriter(ABC):
                 if value is None:
                     continue
                 # Spark expects string values for writer.option
-                writer = writer.option(str(key), str(value))
+                writer = writer.option(str(key), spark_option_value(value))
             return writer
         except Exception as e:
-            logger.error(f"Error applying options {options}: {str(e)}")
+            # Keys only: values carry credentials (kafka.sasl.jaas.config, ...).
+            logger.error(f"Error applying options {list(options.keys())}: {str(e)}")
             raise StreamingError(f"Failed to apply writer options: {str(e)}")
 
     def _apply_common(self, writer: DataStreamWriter, config: Dict[str, Any]) -> DataStreamWriter:

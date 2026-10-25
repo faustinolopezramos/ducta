@@ -155,12 +155,16 @@ class RunLedger:
         error: Optional[str] = None,
         node_type: str = "batch",
         ml: Optional[Dict[str, Any]] = None,
+        stream: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Append one node's outcome. Safe to call from worker threads.
 
         ``ml`` is what an ML node was given and did: its split (and where it was
         declared), whether it was bound to apply it, whether it did, its model version
         and hyperparameters. Only ML nodes carry it.
+
+        ``stream`` is what a stream node did over the run: batches, rows read, written
+        and quarantined, gate verdicts (from its journal). Only stream nodes carry it.
         """
         from datetime import datetime, timezone
 
@@ -176,6 +180,8 @@ class RunLedger:
         }
         if ml is not None:
             record["ml"] = ml
+        if stream is not None:
+            record["stream"] = stream
         self._append(NODE_DETAILS_ATTR, record, what=f"node trace for '{name}'")
 
     @property

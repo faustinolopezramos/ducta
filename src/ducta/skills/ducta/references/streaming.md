@@ -42,13 +42,45 @@ A `file_stream` input needs `file_format` and a `schema`
 `${paths.output}` and `${env}`; two environments sharing a checkpoint share state.
 
 Triggers: `processing_time` (with `interval`), `once`, `available_now`, `continuous`,
-`adaptive` (starts from the batch durations earlier runs measured in the same process).
+`adaptive` (starts from the batch durations the previous run journaled).
 Default: `processing_time` every 10 seconds, `append`. Sinks: `delta`, `parquet`, `json`,
 `csv`, `kafka`, `console`, `memory`.
 
 `checkpoint_location` is a **base**: the checkpoint is `<base>/<pipeline>/<node>`. A
 `delta_stream` input streams appended data; `options: {readChangeFeed: true}` streams the
 change feed (and only then does `auto_enable_cdf` turn it on for the table).
+
+## Merge, quarantine and quality per batch
+
+Any of `output.mode: merge`, `stream.quarantine` or the node's `quality:` makes each
+micro-batch run like a small batch (through `foreachBatch`):
+
+```yaml
+    stream:
+      output:
+        format: delta                 # merge needs delta; the path also takes parquet/json/csv
+        path: ${paths.output}/${env}/silver/orders
+        mode: merge
+        merge: {keys: [order_id], dedupe_order_by: updated_at}
+      quarantine:
+        reject_when: "order_id IS NULL OR amount < 0"   # SQL over one row
+    quality:
+      checks: {row_count: {min: 1}}
+      gate: {max_errors: 0}
+```
+
+Order: rows matching `reject_when` go to quarantine → checks run on the rest → a
+blocking gate sends the **whole batch** to quarantine (the stream continues) → the rest
+is appended or merged. Quarantine defaults to
+`<output_path>/<env>/quarantine/<pipeline>/<node>`, in the sink's format, with
+`_ducta_reason` / `_ducta_batch_id` / `_ducta_run_id` / `_ducta_quarantined_at`.
+Delta writes are idempotent per batch; without `dedupe_order_by` a batch with a repeated
+key fails. `console`, `memory` and `kafka` sinks cannot use this path.
+
+Every run journals itself under `<output_path>/<env>/.ducta/streams/<pipeline>/<run_id>/`
+(`run.json`, `batches.jsonl`; a dead process reads as `interrupted`) and gets a Run
+Certificate when it ends. `alerts:` rules may name `stream_failed`, `stream_stalled`
+and `stream_quarantine`, sent while it runs.
 
 ## Transforms
 
@@ -103,3 +135,5 @@ environments:
 | `trigger` / `checkpoint_location` "not allowed here" | move it under `stream.streaming` |
 | `ducta stream status` lists nothing | it only sees its own process: check the terminal running `ducta stream run`, or the server's `GET /api/executions/{id}/streaming` |
 | scoring a stream fails on Java 21 | streaming model scoring needs Arrow: use JDK 17 |
+| a batch fails with "appear more than once in the incoming batch" | merge keys repeat within a batch: add `merge.dedupe_order_by` |
+| rows missing from the sink | look in the quarantine table: `_ducta_reason` says which rule or gate set them aside |

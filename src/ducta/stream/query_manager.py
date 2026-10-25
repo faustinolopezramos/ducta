@@ -325,6 +325,14 @@ class StreamingQueryManager:
 
         self._active_queries: Dict[str, Dict[str, Any]] = {}  # Track active queries
         self._active_queries_lock = threading.Lock()
+        #: Called as ``(pipeline_name, execution_id, stats)`` after each micro-batch
+        #: of a node written through ``foreachBatch`` (see ducta.stream.micro_batch).
+        self.batch_listener: Optional[Callable[[str, str, Dict[str, Any]], None]] = None
+
+    def _on_micro_batch(self, pipeline_name: str, execution_id: str, stats: Dict[str, Any]) -> None:
+        listener = self.batch_listener
+        if listener is not None:
+            listener(pipeline_name, execution_id, stats)
 
     def _is_query_active(self, query: StreamingQuery) -> bool:
         """Check if a streaming query is currently active."""
@@ -558,6 +566,9 @@ class StreamingQueryManager:
         """
         try:
             function_config = node_config.get("function")
+            if isinstance(function_config, str):
+                # `stream.transform: <name>` - the short form the schema accepts.
+                function_config = {"key": function_config}
             if not function_config:
                 if serving is not None:
                     from ducta.mlrun.serving import score
@@ -910,7 +921,31 @@ class StreamingQueryManager:
                         config_section="output.format",
                     )
 
-                writer = self.writer_factory.get_writer(output_format)
+                from ducta.stream.micro_batch import MicroBatchSink, needs_micro_batch
+
+                if needs_micro_batch(node_config):
+                    # Merge, quarantine or quality: each micro-batch is handled
+                    # like a small batch run (see ducta.stream.micro_batch).
+                    sink = MicroBatchSink(
+                        self.context,
+                        node_config,
+                        pipeline_name,
+                        checkpoint_location,
+                        run_id=execution_id,
+                        on_batch=lambda stats: self._on_micro_batch(
+                            pipeline_name, execution_id, stats
+                        ),
+                    )
+
+                    def start_query() -> StreamingQuery:
+                        return write_stream.foreachBatch(sink).start()
+
+                else:
+                    writer = self.writer_factory.get_writer(output_format)
+
+                    def start_query() -> StreamingQuery:
+                        return writer.write_stream(write_stream, output_config)
+
                 # Serialize the scheduling-conf + .start() window so each query
                 # captures its own FAIR pool and shuffle.partitions value.
                 with self._query_start_lock:
@@ -918,7 +953,7 @@ class StreamingQueryManager:
                         df, node_name, streaming_config
                     )
                     try:
-                        query = writer.write_stream(write_stream, output_config)
+                        query = start_query()
                     finally:
                         # The started query keeps its own copy of these settings.
                         restore_scheduling()

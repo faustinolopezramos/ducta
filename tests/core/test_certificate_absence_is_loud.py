@@ -33,6 +33,7 @@ def _executor(global_config: dict) -> PipelineExecutor:
     }
     executor._batch_executor = fake_batch
     executor._streaming_executor = MagicMock()
+    executor._async_stream_runs = {}
     executor._record_chain_state = MagicMock()
     executor._collect_batch_outcome = MagicMock()
     return executor
@@ -124,20 +125,38 @@ class TestEscalation:
             executor.run_pipeline("p")
 
 
-class TestStreamingSaysWhyItHasNoCertificate:
-    def test_async_streaming_explains_the_absence(self):
+class TestAsyncStreamingIsSealedWhenItEnds:
+    def _start(self):
         executor = _executor({})
         executor._batch_executor._get_pipeline_config.return_value = {
             "type": PipelineType.STREAMING.value,
             "requires_dates": False,
         }
         executor._streaming_executor.execute.return_value = "exec-1"
+        return executor, executor.run_pipeline("p", execution_mode="async")
 
-        result = executor.run_pipeline("p", execution_mode="async")
+    def test_the_run_has_an_id_and_says_when_it_is_sealed(self):
+        executor, result = self._start()
 
         assert result.status is RunStatus.RUNNING
+        assert result.run_id
         assert result.certificate_path is None
-        assert "streaming" in result.certificate_error
+        assert result.certificate_error == "sealed when the stream ends"
+        executor._streaming_executor.execute.assert_called_once_with(
+            "p", "async", run_id=result.run_id
+        )
+
+    def test_the_finished_event_seals_it(self):
+        executor, result = self._start()
+        executor._emit_run_certificate = MagicMock(return_value=("/runs/x", None))
+
+        executor._seal_async_stream({"run_id": result.run_id, "status": "stopped"})
+        executor._seal_async_stream({"run_id": result.run_id, "status": "stopped"})
+
+        executor._emit_run_certificate.assert_called_once()
+        kwargs = executor._emit_run_certificate.call_args.kwargs
+        assert kwargs["run_id"] == result.run_id
+        assert kwargs["status"] == RunStatus.SUCCESS.value
 
 
 class TestResultCarriesTheReason:

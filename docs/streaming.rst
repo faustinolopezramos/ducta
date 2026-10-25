@@ -224,6 +224,64 @@ Ducta calls ``register_transforms(registry)`` of every module named in the
 transform's ``module``, in ``settings.streaming_transform_modules``, or passed
 with ``ducta stream run --transforms-module``.
 
+Merge, quarantine and quality
+-----------------------------
+
+A stream node can treat each micro-batch like a small batch run. Any of
+``output.mode: merge``, ``quarantine`` or ``quality`` makes Ducta write the
+node through ``foreachBatch``; a node with none of them keeps Spark's own sink.
+
+.. code-block:: yaml
+
+   orders_silver:
+     kind: stream
+     stream:
+       input: {format: kafka, options: {kafka.bootstrap.servers: localhost:9092, subscribe: orders}}
+       output:
+         format: delta
+         path: ${paths.output}/${env}/silver/orders
+         mode: merge                         # append (default) | merge
+         merge: {keys: [order_id], dedupe_order_by: updated_at}
+       quarantine:
+         reject_when: "order_id IS NULL OR amount < 0"
+       streaming:
+         checkpoint_location: ${paths.output}/${env}/_ckpt/orders_silver
+         trigger: 30 seconds
+     quality:
+       checks: {row_count: {min: 1}}
+       gate: {max_errors: 0}
+
+Each batch goes through these steps, in order:
+
+1. **Rows matching** ``quarantine.reject_when`` (a SQL predicate over one row)
+   are set aside with ``_ducta_reason``, ``_ducta_batch_id``, ``_ducta_run_id``
+   and ``_ducta_quarantined_at``.
+2. **The node's quality checks** run on the remaining rows. When the gate
+   blocks, the **whole batch** goes to quarantine instead of the sink, and the
+   stream carries on. That holds for any blocking ``gate.on_fail``
+   (``skip_downstream``, ``stop_all``); with ``warn_only`` the batch is written
+   and the failure logged. Input contracts (``sanity_checks``) do not run on
+   stream nodes.
+3. **What passed** is appended or merged into the sink.
+
+``merge`` takes the catalog's merge block (``keys``, ``when_matched``,
+``when_not_matched``, ``delete_when``, ``schema_evolution``) and needs a Delta sink.
+``dedupe_order_by`` keeps one row per key, the latest by that column; without it,
+a batch that repeats a key fails the query.
+
+Quarantined rows go to ``quarantine.path``, by default
+``<output_path>/<environment>/quarantine/<pipeline>/<node>``, in the sink's format.
+The micro-batch path writes ``delta``, ``parquet``, ``json`` and ``csv`` sinks.
+
+**Delta writes are idempotent per batch.** Spark runs a batch again after a
+failure with the same id; a Delta append tagged with the query's id and the batch
+id is skipped the second time, and a merge is an upsert. Parquet, JSON and CSV
+appends have no such guarantee.
+
+A passing batch's quality report is kept one time in
+``settings.streaming_quality_report_every`` (default 100). Every failing batch's
+report is kept.
+
 Running
 -------
 
@@ -343,6 +401,22 @@ Fault tolerance
 - **A failed terminating upstream stops its dependants**: nodes ordered ``after`` a
   ``once``/``available_now`` node that died are skipped, not started on its
   partial output.
+- **Stopping during start-up leaves nothing running**: a query that finishes
+  starting after its pipeline was stopped is stopped, not left running unseen.
+- **A journal outlives the process**: every run writes
+  ``<output_path>/<environment>/.ducta/streams/<pipeline>/<run_id>/``. That holds
+  ``run.json`` (status, and each node's outcome at the end) and ``batches.jsonl``
+  (one line per batch with data). A run whose process died reads as
+  ``interrupted``. The ``adaptive`` trigger starts from the batch durations the
+  previous run journaled.
+- **Every run is certified**: an asynchronous run gets its run id when it starts
+  and its Run Certificate when it ends. A stream node's entry carries its batches
+  and its rows read, written and quarantined.
+- **Live alerts**: ``alerts:`` rules can name ``stream_failed``,
+  ``stream_stalled`` and ``stream_quarantine``. They are sent while the stream
+  runs: a failure or stall once until it recovers, and quarantine at once, then at
+  most every ``streaming_quarantine_alert_interval_seconds``. Health is checked
+  every ``streaming_health_interval_seconds``, not only when someone asks for it.
 
 From Python
 -----------

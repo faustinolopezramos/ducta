@@ -31,6 +31,21 @@ from ducta.setting.interpolator import VariableInterpolator
 from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import StreamingConfigurationError, StreamingError
 
+#: URI schemes a checkpoint is handed to Spark as-is for (s3a/s3n/wasb(s) are the
+#: Hadoop connectors open-source Spark uses for S3 and Azure Blob).
+_CLOUD_PREFIXES = (
+    "s3://",
+    "s3a://",
+    "s3n://",
+    "gs://",
+    "abfs://",
+    "abfss://",
+    "wasb://",
+    "wasbs://",
+    "hdfs://",
+    "dbfs:/",
+)
+
 
 class CheckpointManager:
     """Resolves, sanitizes, and reserves streaming checkpoint locations.
@@ -49,8 +64,12 @@ class CheckpointManager:
 
     @staticmethod
     def is_cloud_path(path: str) -> bool:
-        """Check if path is on a cloud filesystem."""
-        return str(path).startswith(("s3://", "gs://", "abfs://", "abfss://", "hdfs://", "dbfs:/"))
+        """Check if path is on a cloud filesystem.
+
+        Anything else goes through pathlib, which folds ``s3a://bucket`` into
+        ``s3a:/bucket`` - a path no Hadoop filesystem resolves.
+        """
+        return str(path).startswith(_CLOUD_PREFIXES)
 
     @staticmethod
     def sanitize_path_component(component: str) -> str:

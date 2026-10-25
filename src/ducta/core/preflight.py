@@ -371,6 +371,7 @@ _EXTRA_NODE_KEYS = frozenset(
         "name",  # stamped on by the config loader
         "type",  # dispatch: batch | streaming | ingestion
         "streaming",  # stream.query_manager (inline connector config)
+        "quarantine",  # stream.micro_batch (reject_when / path)
         "depends_on",  # stream.pipeline_manager._process_pipeline_nodes
         "table",  # core.execution.ingestion
         "query",  # core.execution.ingestion
@@ -476,16 +477,16 @@ def _check_use_pandas(
 def _check_stream_quality(
     report: PreflightReport, node_name: str, node_config: Dict[str, Any]
 ) -> None:
-    """The streaming engine runs no quality checks. A ``quality`` block (or an input
-    contract) on a stream node was accepted and never evaluated: a stream with an
-    impossible check and ``on_fail: stop_all`` wrote its output and exited 0."""
+    """A stream node's ``quality`` block runs on every micro-batch (ducta.stream.
+    micro_batch), but input contracts (``sanity_checks``) do not: a stream reads an
+    inline source, not catalog datasets. Said, instead of accepted and ignored."""
     if not _is_streaming_node(node_config):
         return
-    if node_config.get("data_quality") or node_config.get("sanity_checks"):
+    if node_config.get("sanity_checks"):
         report.warn(
-            f"Node '{node_name}': quality checks do not run on stream nodes — this "
-            "block is not evaluated. Check the stream's output with a batch node that "
-            "reads it."
+            f"Node '{node_name}': input contracts do not run on stream nodes — this "
+            "block is not evaluated. Put the checks in the node's own 'quality:' block, "
+            "which runs on every batch."
         )
 
 

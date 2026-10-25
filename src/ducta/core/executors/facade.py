@@ -49,6 +49,9 @@ from ducta.setting.contexts import Context
 from ducta.setting.environments import sanitize_env_for_path
 from ducta.stream.constants import PipelineType
 
+#: The code fingerprint of a pipeline whose nodes are all declarative.
+NO_NODE_CODE = "none"
+
 
 class PipelineExecutor:
     """Orchestrator that delegates to specialized executors."""
@@ -72,6 +75,9 @@ class PipelineExecutor:
         self._force_reuse = False
         self._force_rerun_all = False
         self.reused_pipelines: List[str] = []
+        #: Asynchronous streaming runs still running: run_id -> (pipeline, started_at).
+        #: Their certificate is sealed when the stream's ``finished`` event arrives.
+        self._async_stream_runs: Dict[str, Tuple[str, Any]] = {}
 
     @property
     def batch_executor(self) -> BatchExecutor:
@@ -85,6 +91,7 @@ class PipelineExecutor:
         """Lazy initialization of StreamingExecutor."""
         if self._streaming_executor is None:
             self._streaming_executor = StreamingExecutor(self.context, settings=self.settings)
+            self._streaming_executor.on_finished = self._seal_async_stream
         return self._streaming_executor
 
     @property
@@ -138,15 +145,27 @@ class PipelineExecutor:
             )
 
         if pipeline_type == PipelineType.STREAMING.value and execution_mode != "sync":
-            execution_id = self.streaming_executor.execute(pipeline_name, execution_mode)
+            import uuid
+            from datetime import datetime, timezone
+
+            # The run gets its id and ledger now; its certificate is sealed when the
+            # stream ends (stopped, completed or failed) - see _seal_async_stream.
+            run_id = uuid.uuid4().hex
+            RunLedger.start(self.context, run_id)
+            self._async_stream_runs[run_id] = (pipeline_name, datetime.now(timezone.utc))
+            try:
+                execution_id = self.streaming_executor.execute(
+                    pipeline_name, execution_mode, run_id=run_id
+                )
+            except Exception:
+                self._async_stream_runs.pop(run_id, None)
+                raise
             return PipelineRunResult(
                 pipeline=pipeline_name,
+                run_id=run_id,
                 status=RunStatus.RUNNING,
                 streaming_execution_ids=[execution_id] if execution_id else [],
-                # A continuous query has no end, so nothing here can seal a
-                # certificate over it. Said out loud rather than left as an
-                # unexplained `certificate_path is None`.
-                certificate_error=("asynchronous streaming runs do not emit a run certificate"),
+                certificate_error="sealed when the stream ends",
             )
 
         import uuid
@@ -176,7 +195,9 @@ class PipelineExecutor:
                 )
                 self._collect_hybrid_outcome(result, hybrid_result)
             elif pipeline_type == PipelineType.STREAMING.value:
-                execution_id = self.streaming_executor.execute(pipeline_name, execution_mode)
+                execution_id = self.streaming_executor.execute(
+                    pipeline_name, execution_mode, run_id=run_id
+                )
                 if execution_id:
                     result.streaming_execution_ids.append(execution_id)
             else:
@@ -303,6 +324,33 @@ class PipelineExecutor:
             result.status = RunStatus.FAILED
             if not result.errors:
                 result.errors.append("hybrid pipeline failed")
+
+    def _seal_async_stream(self, event: Dict[str, Any]) -> None:
+        """Seal the certificate of an asynchronous streaming run that just ended.
+
+        The stream's nodes are already in the ledger (StreamingExecutor records them
+        before calling this). A synchronous run is sealed by run_pipeline itself.
+        """
+        from datetime import datetime, timezone
+
+        run = self._async_stream_runs.pop(str(event.get("run_id")), None)
+        if run is None:
+            return
+        pipeline_name, started_at = run
+        final = str(event.get("status") or "error")
+        status = RunStatus.SUCCESS.value if final in ("completed", "stopped") else "failed"
+        path, error = self._emit_run_certificate(
+            pipeline_name=pipeline_name,
+            run_id=str(event.get("run_id")),
+            started_at=started_at,
+            ended_at=datetime.now(timezone.utc),
+            status=status,
+            error=event.get("error"),
+        )
+        if path:
+            logger.info(
+                "Streaming run {} ended ({}); certificate: {}", event.get("run_id"), final, path
+            )
 
     def _emit_run_certificate(
         self,
@@ -906,7 +954,10 @@ class PipelineExecutor:
             }
             modules.discard(None)
             if not modules:
-                return None
+                # Declarative nodes only (an ingestion): no code of the project's to
+                # change. A fixed value, so the marker can vouch for it — None here
+                # made every later run refuse it as "written by an older Ducta".
+                return NO_NODE_CODE
 
             loader = self.batch_executor.node_executor._function_loader
             importer = loader.secure_importer

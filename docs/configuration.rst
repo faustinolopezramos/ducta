@@ -222,6 +222,11 @@ environment variable, never written in the file:
   ``SLA_CHECK_MINUTES`` or by ``POST .../alerts/check``;
 - ``sentinel`` — Ducta Sentinel escalated an incident to a person, or saw it
   recover (see :doc:`ai`).
+- ``stream_failed`` / ``stream_stalled`` — a stream node's query failed or
+  stalled. Sent while the stream runs, once until the node recovers;
+- ``stream_quarantine`` — a stream node set rows aside (``quarantine`` or its
+  quality gate): the first batch at once, then one summary at most every
+  ``streaming_quarantine_alert_interval_seconds`` (see :doc:`streaming`).
 
 Channels: ``slack`` and ``teams`` (``webhook_env``), ``webhook`` (``url_env``),
 ``email`` (``to``; the server's ``DUCTA_SMTP_HOST``, ``DUCTA_SMTP_PORT``,

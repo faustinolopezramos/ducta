@@ -182,7 +182,10 @@ class ChainReuseConfig(BaseModel):
 #: Keys the framework itself writes into `global_config` at runtime (after the
 #: user's file has been validated). They are not typos and must never be warned
 #: about, even if a future refactor makes validation see them.
-_RUNTIME_GLOBAL_CONFIG_KEYS = frozenset({"environment", "pipeline_name", "layer", "mlops"})
+# ``api_execution_id``: the API stamps its execution id for the stream journal.
+_RUNTIME_GLOBAL_CONFIG_KEYS = frozenset(
+    {"environment", "pipeline_name", "layer", "mlops", "api_execution_id"}
+)
 
 
 def _warn_unknown_keys(model: BaseModel, block: str) -> None:
@@ -384,6 +387,28 @@ class GlobalConfigSchema(BaseModel):
     )
     streaming_shuffle_partitions: Optional[int] = Field(
         default=None, description="spark.sql.shuffle.partitions applied to streaming queries."
+    )
+    stream_journal_dir: Optional[str] = Field(
+        default=None,
+        description="Where streaming runs are journaled (default "
+        "<output_path>/<environment>/.ducta/streams; env-scoped like run_certificate_dir).",
+    )
+    streaming_health_interval_seconds: Optional[float] = Field(
+        default=None,
+        description="How often running streams are checked for failed or stalled nodes, "
+        "which the 'stream_failed'/'stream_stalled' alerts report (default 30; 0 turns "
+        "the check off).",
+    )
+    streaming_quarantine_alert_interval_seconds: Optional[float] = Field(
+        default=None,
+        description="A node's first quarantined batch is reported at once; later ones "
+        "are summed into one 'stream_quarantine' alert at most this often (default 900).",
+    )
+    streaming_quality_report_every: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="A stream node with quality checks keeps the report of every batch that "
+        "fails them, and of one passing batch in this many (default 100).",
     )
     mlops_path: Optional[str] = Field(
         default=None, description="Where MLOps experiments and models are stored."

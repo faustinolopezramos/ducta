@@ -32,6 +32,7 @@ def _executor(pipeline_type: str, execution_id: str = "exec-1") -> PipelineExecu
     fake_streaming = MagicMock()
     fake_streaming.execute.return_value = execution_id
     executor._streaming_executor = fake_streaming
+    executor._async_stream_runs = {}
 
     # `_emit_run_certificate` returns (path, reason_not_written); the caller
     # unpacks it, so a bare MagicMock would fail to iterate.

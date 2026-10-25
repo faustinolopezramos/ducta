@@ -38,7 +38,10 @@ from ducta.setting.environments import sanitize_env_for_path
 # 1.6: an ML node that scored with a registered model records it under ``ml.model``
 # (source, name, the version the run pinned, artifact hash).
 # 1.7: ``mlops_run_id``, the tracked run of an ML pipeline (absent when there is none).
-SCHEMA_VERSION = "1.7"
+# 1.8: a stream node's entry carries ``stream`` (state, totals, batches, rows read,
+# written and quarantined, gate verdicts), and an asynchronous streaming run is
+# certified when it ends.
+SCHEMA_VERSION = "1.8"
 DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
 LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"

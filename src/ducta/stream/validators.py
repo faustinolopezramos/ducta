@@ -47,19 +47,12 @@ RESERVED_OUTPUT_KEYS = {"trigger", "outputMode", "checkpointLocation", "queryNam
 class StreamingValidator:
     """Validates streaming pipeline configurations with enhanced error handling."""
 
-    def __init__(
-        self,
-        format_policy: Optional[Any] = None,
-        max_batch_nodes: int = 10,
-        max_streaming_nodes: int = 5,
-    ) -> None:
+    def __init__(self, format_policy: Optional[Any] = None) -> None:
         """
         format_policy is optional. If provided, it will be used to validate input/output formats
         (e.g., Context.format_policy). Otherwise, default enums/constants are used.
         """
         self.policy = format_policy
-        self.max_batch_nodes = max_batch_nodes
-        self.max_streaming_nodes = max_streaming_nodes
 
     @handle_streaming_error
     def validate_streaming_pipeline_config(self, pipeline_config: Dict[str, Any]) -> None:
@@ -151,6 +144,7 @@ class StreamingValidator:
         self._validate_node_io_config(node_config, node_name)
         self._validate_node_streaming_config(node_config, node_name)
         self._validate_node_function_config(node_config, node_name)
+        self._validate_node_micro_batch_config(node_config, node_name)
 
     def _validate_node_structure(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate basic node structure (Phase 1)."""
@@ -421,12 +415,114 @@ class StreamingValidator:
                     actual=str(sorted(reserved_present)),
                 )
 
+            self._validate_output_mode(output_config, format_type, node_name)
+
+            # Spark options are case-insensitive, and one set here lands after the
+            # checkpoint Ducta reserved for the node: it would replace it unseen.
+            options = output_config.get("options") or {}
+            if isinstance(options, dict) and any(
+                str(key).lower() == "checkpointlocation" for key in options
+            ):
+                raise StreamingValidationError(
+                    f"Node '{node_name}' output options must not set checkpointLocation; "
+                    "use 'streaming.checkpoint_location' instead.",
+                    field="output.options.checkpointLocation",
+                )
+
         except StreamingValidationError:
             raise
         except Exception as e:
             raise StreamingValidationError(
                 f"Error validating output config for node '{node_name}': {str(e)}",
                 cause=e,
+            )
+
+    def _validate_output_mode(
+        self, output_config: Dict[str, Any], format_type: str, node_name: str
+    ) -> None:
+        """``output.mode`` (append | merge) and the ``merge`` block it needs."""
+        mode = str(output_config.get("mode") or "append").strip().lower()
+        merge = output_config.get("merge")
+        if mode not in ("append", "merge"):
+            raise StreamingValidationError(
+                f"Node '{node_name}' output mode '{mode}' is not 'append' or 'merge'",
+                field="output.mode",
+                expected="append | merge",
+                actual=mode,
+            )
+        if mode != "merge":
+            if merge is not None:
+                raise StreamingValidationError(
+                    f"Node '{node_name}' output.merge is only valid with output.mode 'merge'",
+                    field="output.merge",
+                )
+            return
+        if format_type != "delta":
+            raise StreamingValidationError(
+                f"Node '{node_name}' merges into '{format_type}'; only a delta sink can be merged into",
+                field="output.format",
+                expected="delta",
+                actual=format_type,
+            )
+        from ducta.gate.exceptions import ConfigurationError
+        from ducta.gate.writers import validate_merge_spec
+
+        try:
+            validate_merge_spec(merge)
+        except ConfigurationError as e:
+            raise StreamingValidationError(f"Node '{node_name}' {e}", field="output.merge") from e
+        order_by = merge.get("dedupe_order_by")
+        if order_by is not None and (not isinstance(order_by, str) or not order_by.strip()):
+            raise StreamingValidationError(
+                f"Node '{node_name}' merge.dedupe_order_by must be a column name",
+                field="output.merge.dedupe_order_by",
+                expected=NON_EMPTY_STRING,
+                actual=str(order_by),
+            )
+
+    def _validate_node_micro_batch_config(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """A node written per micro-batch (merge, quarantine, quality): sink and quarantine."""
+        from ducta.stream.micro_batch import MICRO_BATCH_SINKS, needs_micro_batch
+        from ducta.stream.query_manager import single_spec
+
+        quarantine = node_config.get("quarantine")
+        if quarantine is not None:
+            if not isinstance(quarantine, dict) or not isinstance(
+                quarantine.get("reject_when"), str
+            ):
+                raise StreamingValidationError(
+                    f"Node '{node_name}' quarantine needs reject_when: '<SQL predicate>'",
+                    field="quarantine.reject_when",
+                )
+            from ducta.check.checks.business import BusinessRulesCheck
+
+            try:
+                BusinessRulesCheck._validate_sql_rule(quarantine["reject_when"])
+            except ValueError as e:
+                raise StreamingValidationError(
+                    f"Node '{node_name}' quarantine.reject_when: {e}",
+                    field="quarantine.reject_when",
+                ) from e
+            path = quarantine.get("path")
+            if path is not None and (not isinstance(path, str) or not path.strip()):
+                raise StreamingValidationError(
+                    f"Node '{node_name}' quarantine.path must be a non-empty string",
+                    field="quarantine.path",
+                )
+
+        if not needs_micro_batch(node_config):
+            return
+        output = single_spec(node_config, "output")
+        fmt = str((output or {}).get("format") or "").strip().lower()
+        if fmt not in MICRO_BATCH_SINKS:
+            raise StreamingValidationError(
+                f"Node '{node_name}' writes '{fmt}': merge, quarantine and quality checks "
+                f"need one of {sorted(MICRO_BATCH_SINKS)}",
+                field="output.format",
+                expected=str(sorted(MICRO_BATCH_SINKS)),
+                actual=fmt,
             )
 
     def _validate_file_output_path(
@@ -750,19 +846,18 @@ class StreamingValidator:
         names_set = set(node_names)
 
         for node_name, node in node_by_name.items():
-            depends_on = node.get("depends_on", node.get("dependencies", []))
-            if depends_on is None:
-                continue
+            for key in ("depends_on", "dependencies"):
+                declared = node.get(key)
+                if declared is not None and not isinstance(declared, list):
+                    raise StreamingValidationError(
+                        f"Node '{node_name}' {key} must be a list",
+                        field=key,
+                        expected="list",
+                        actual=str(type(declared)),
+                    )
 
-            if not isinstance(depends_on, list):
-                raise StreamingValidationError(
-                    f"Node '{node_name}' depends_on must be a list",
-                    field="depends_on",
-                    expected="list",
-                    actual=str(type(depends_on)),
-                )
-
-            for dependency in depends_on:
+            # Both spellings, as the start order (topological_sort) reads them.
+            for dependency in get_node_dependencies(node):
                 if dependency == node_name:
                     raise StreamingValidationError(
                         f"Node '{node_name}' cannot depend on itself",
@@ -1049,95 +1144,3 @@ class StreamingValidator:
         """Parse time interval to minutes."""
         seconds = self.parse_time_to_seconds(interval)
         return seconds / 60.0
-
-    def _build_compatibility_warnings(
-        self,
-        batch_outputs: set,
-        streaming_outputs: set,
-        streaming_nodes: List[Any],
-        batch_nodes: List[Any],
-    ) -> List[str]:
-        """Build all compatibility warnings in one method."""
-        warnings: List[str] = []
-        self._append_shared_output_warning(warnings, batch_outputs, streaming_outputs)
-        self._append_duplicate_checkpoint_warnings(warnings, streaming_nodes)
-        self._append_resource_usage_warning(warnings, batch_nodes, streaming_nodes)
-        return warnings
-
-    def validate_pipeline_compatibility(
-        self, batch_config: Dict[str, Any], streaming_config: Dict[str, Any]
-    ) -> List[str]:
-        """Validate compatibility between batch and streaming configurations."""
-        try:
-            batch_nodes = batch_config.get("nodes", [])
-            streaming_nodes = streaming_config.get("nodes", [])
-
-            batch_outputs = self._extract_output_paths(batch_nodes)
-            streaming_outputs = self._extract_output_paths(streaming_nodes)
-
-            return self._build_compatibility_warnings(
-                batch_outputs, streaming_outputs, streaming_nodes, batch_nodes
-            )
-
-        except Exception as e:
-            logger.error(f"Error validating pipeline compatibility: {str(e)}")
-            return [f"Error during compatibility validation: {str(e)}"]
-
-    def _extract_output_paths(self, nodes: List[Any]) -> set:
-        """Extract output path strings from a list of nodes."""
-        outputs = set()
-        for node in nodes:
-            if not isinstance(node, dict):
-                continue
-            output_cfg = node.get("outputs", node.get("output"))
-            if output_cfg is None:
-                continue
-            specs = output_cfg if isinstance(output_cfg, list) else [output_cfg]
-            for spec in specs:
-                if isinstance(spec, dict):
-                    output_path = spec.get("path")
-                    if output_path:
-                        outputs.add(output_path)
-        return outputs
-
-    def _append_shared_output_warning(
-        self, warnings: List[str], batch_outputs: set, streaming_outputs: set
-    ) -> None:
-        """Append a warning if there are shared output resources."""
-        shared = batch_outputs.intersection(streaming_outputs)
-        if shared:
-            warnings.append(
-                f"Shared output resources detected: {shared}. "
-                f"Ensure proper coordination to avoid conflicts."
-            )
-
-    def _append_duplicate_checkpoint_warnings(
-        self, warnings: List[str], streaming_nodes: List[Any]
-    ) -> None:
-        """Detect duplicate checkpoint locations across streaming nodes and append warnings."""
-        checkpoint_locations = set()
-        for node in streaming_nodes:
-            if not isinstance(node, dict):
-                continue
-            checkpoint = node.get("streaming", {}).get("checkpoint_location")
-            if not checkpoint:
-                continue
-            if checkpoint in checkpoint_locations:
-                warnings.append(
-                    f"Duplicate checkpoint location: {checkpoint}. "
-                    f"Each streaming query should have a unique checkpoint."
-                )
-            checkpoint_locations.add(checkpoint)
-
-    def _append_resource_usage_warning(
-        self, warnings: List[str], batch_nodes: List[Any], streaming_nodes: List[Any]
-    ) -> None:
-        """Append a resource usage warning when node counts indicate potential issues."""
-        if (
-            len(batch_nodes) > self.max_batch_nodes
-            and len(streaming_nodes) > self.max_streaming_nodes
-        ):
-            warnings.append(
-                f"High resource usage detected: {len(batch_nodes)} batch nodes and "
-                f"{len(streaming_nodes)} streaming nodes. Consider resource allocation."
-            )

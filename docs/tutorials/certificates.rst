@@ -27,7 +27,7 @@ A trimmed real certificate, from a batch ingestion run:
 .. code-block:: json
 
    {
-     "schema_version": "1.7",
+     "schema_version": "1.8",
      "run_id": "f9fb815596a74bf2a66d6cf3570b5493",
      "pipeline": "bronze.ingestion",
      "environment_name": "base",

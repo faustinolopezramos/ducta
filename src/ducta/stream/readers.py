@@ -40,7 +40,7 @@ from ducta.stream.constants import (
 )
 from ducta.stream.context_utils import get_context_value
 from ducta.stream.exceptions import StreamingError
-from ducta.stream.factories import StreamingHandlerFactory
+from ducta.stream.factories import StreamingHandlerFactory, spark_option_value
 
 
 class _StreamingSparkMixin:
@@ -138,12 +138,12 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
         return merged
 
     def _apply_options(self, reader, options: Dict[str, Any]):
-        """Safely apply reader.options, skipping None values and casting to str."""
+        """Safely apply reader.options, skipping None values; see ``spark_option_value``."""
         try:
             for key, value in (options or {}).items():
                 if value is None:
                     continue
-                reader = reader.option(str(key), str(value))
+                reader = reader.option(str(key), spark_option_value(value))
             return reader
         except Exception as e:
             logger.error(f"Error applying options {list((options or {}).keys())}: {str(e)}")

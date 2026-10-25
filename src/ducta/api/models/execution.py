@@ -370,6 +370,10 @@ class StreamingNodeStatus(BaseModel):
     trigger_execution_ms: Optional[float] = None
     #: The model the query was pinned to when it started (`model:` on the node).
     model: Optional[Dict[str, Any]] = None
+    #: Rows this node sent to quarantine so far (a node with merge/quarantine/quality).
+    rows_quarantined: Optional[int] = None
+    #: Its quality gate's verdict on the last checked batch: pass · warn · block · error.
+    gate: Optional[str] = None
     #: What the node reads / writes / how often it fires / where it checkpoints, in
     #: one line each ("kafka topic events", "every 5 seconds"). Never connection options.
     source: Optional[str] = None
@@ -395,6 +399,11 @@ class StreamingPipelineStatus(BaseModel):
     failed_queries: int = 0
     error: Optional[str] = None
     nodes: List[StreamingNodeStatus] = Field(default_factory=list)
+    #: The run this stream belongs to (its certificate and journal).
+    run_id: Optional[str] = None
+    #: True when read from the run's journal: no engine holds it any more (the run
+    #: ended, or the server restarted - then the status is ``interrupted``).
+    from_journal: bool = False
 
 
 class StreamingRestartResponse(BaseModel):

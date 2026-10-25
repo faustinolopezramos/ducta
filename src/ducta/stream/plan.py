@@ -65,6 +65,10 @@ class NodePlan:
     checkpoint: Optional[str]
     after: List[str] = field(default_factory=list)
     transform: Optional[str] = None
+    #: Where rejected rows and gate-blocked batches go (None: no quarantine).
+    quarantine: Optional[str] = None
+    #: The node's quality checks, e.g. "3 checks, gate" (None: none).
+    quality: Optional[str] = None
     issues: List[Issue] = field(default_factory=list)
 
     def summary(self) -> Dict[str, Any]:
@@ -156,7 +160,27 @@ def describe_sink(spec: Any) -> str:
         return f"kafka topic {topic}" if topic else "kafka"
     if fmt in ("console", "memory"):
         return fmt
+    if str(spec.get("mode") or "").lower() == "merge":
+        keys = (spec.get("merge") or {}).get("keys") or []
+        keys = [keys] if isinstance(keys, str) else list(keys)
+        return f"{fmt} merge on [{', '.join(map(str, keys))}] {spec.get('path') or '?'}"
     return f"{fmt} {spec.get('path') or '?'}"
+
+
+def describe_quality(node_config: Dict[str, Any]) -> Optional[str]:
+    """``3 checks, gate`` for a node whose batches are checked; None otherwise."""
+    dq = node_config.get("data_quality")
+    if not isinstance(dq, dict) or not dq.get("enabled", True):
+        return None
+    checks = dq.get("checks") or {}
+    if not checks and not dq.get("profile"):
+        return None
+    parts = [f"{len(checks)} check{'s' if len(checks) != 1 else ''}"]
+    if dq.get("profile"):
+        parts.append(f"profile {dq['profile']}")
+    if dq.get("quality_gate"):
+        parts.append("gate")
+    return ", ".join(parts)
 
 
 def describe_trigger(streaming: Dict[str, Any]) -> str:
@@ -217,6 +241,16 @@ def describe_node(node_config: Dict[str, Any], context: Any, pipeline_name: str)
         plan.issues.append(Issue(ERROR, e.message))
     except Exception as e:  # noqa: BLE001 - a plan reports, it does not raise
         plan.issues.append(Issue(ERROR, f"could not resolve the checkpoint: {e}"))
+    plan.quality = describe_quality(node_config)
+    quarantine = node_config.get("quarantine")
+    if isinstance(quarantine, dict) or plan.quality:
+        from ducta.stream.micro_batch import default_quarantine_path
+
+        explicit = quarantine.get("path") if isinstance(quarantine, dict) else None
+        try:
+            plan.quarantine = explicit or default_quarantine_path(context, pipeline_name, name)
+        except StreamingError as e:
+            plan.issues.append(Issue(ERROR, e.message))
     return plan
 
 

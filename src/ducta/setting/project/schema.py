@@ -115,11 +115,23 @@ class AlertRule(_Strict):
     # Not `on:` — YAML 1.1 reads that key as the boolean true.
     # No `stale`: it was accepted and never sent. A pipeline late for its
     # `metadata.sla` is `sla_miss`.
-    when: List[Literal["failure", "quality_gate", "sla_miss", "slow", "sentinel"]] = Field(
+    when: List[
+        Literal[
+            "failure",
+            "quality_gate",
+            "sla_miss",
+            "slow",
+            "sentinel",
+            "stream_failed",
+            "stream_stalled",
+            "stream_quarantine",
+        ]
+    ] = Field(
         ...,
         min_length=1,
         description="failure | quality_gate | sla_miss | slow | sentinel (incidents it "
-        "escalates or resolves)",
+        "escalates or resolves) | stream_failed | stream_stalled | stream_quarantine "
+        "(sent while a stream runs)",
     )
     pipelines: List[str] = Field(
         default_factory=lambda: ["*"], description="Pipeline name globs this rule covers"
@@ -901,6 +913,17 @@ def _misplaced_streaming_keys(value: Any, where: str) -> None:
                 )
 
 
+class StreamMergeSpec(MergeSpec):
+    """``merge:`` of a stream sink: the catalog's block, plus in-batch dedupe."""
+
+    dedupe_order_by: Optional[str] = Field(
+        default=None,
+        min_length=1,
+        description="Keep the row with the highest value of this column per key "
+        "(default: a batch with a repeated key fails)",
+    )
+
+
 class StreamOutput(_Strict):
     """A stream's sink: ``delta``, ``parquet``, ``kafka``, ..."""
 
@@ -908,11 +931,56 @@ class StreamOutput(_Strict):
     path: Optional[str] = None
     options: Dict[str, Any] = Field(default_factory=dict)
     partitionBy: Optional[Union[str, List[str]]] = None
+    mode: Optional[Literal["append", "merge"]] = Field(
+        default=None, description="append (default) | merge: upsert each batch by merge.keys"
+    )
+    merge: Optional[StreamMergeSpec] = None
+
+    @model_validator(mode="after")
+    def _merge_needs_spec(self) -> "StreamOutput":
+        if self.mode == "merge":
+            if self.merge is None:
+                raise ValueError("output.mode 'merge' needs output.merge: {keys: [...]}")
+            if (self.format or "").lower() != "delta":
+                raise ValueError("output.mode 'merge' needs format: delta")
+        elif self.merge is not None:
+            raise ValueError("output.merge is only valid with output.mode 'merge'")
+        return self
 
     @model_validator(mode="before")
     @classmethod
     def _no_run_settings(cls, value: Any) -> Any:
         _misplaced_streaming_keys(value, "output")
+        options = value.get("options") if isinstance(value, dict) else None
+        # Spark options are case-insensitive; this one would replace the node's checkpoint.
+        if isinstance(options, dict) and any(
+            str(key).lower() == "checkpointlocation" for key in options
+        ):
+            raise ValueError(
+                "'checkpointLocation' belongs in the node's 'streaming:' block, not in "
+                "output.options (streaming: {checkpoint_location: ...})"
+            )
+        return value
+
+
+class StreamQuarantine(_Strict):
+    """Rows of each batch that must not reach the sink, set aside with the reason."""
+
+    reject_when: str = Field(
+        ..., min_length=1, description="SQL predicate over one row, e.g. 'amount < 0'"
+    )
+    path: Optional[str] = Field(
+        default=None,
+        description="Where the rows go, in the sink's format "
+        "(default: <output_path>/<environment>/quarantine/<pipeline>/<node>)",
+    )
+
+    @field_validator("reject_when")
+    @classmethod
+    def _plain_predicate(cls, value: str) -> str:
+        from ducta.check.checks.business import BusinessRulesCheck
+
+        BusinessRulesCheck._validate_sql_rule(value)
         return value
 
 
@@ -930,6 +998,11 @@ class StreamSpec(_Strict):
     )
     input: StreamInput = Field(default_factory=StreamInput)
     output: StreamOutput = Field(default_factory=StreamOutput)
+    quarantine: Optional[StreamQuarantine] = Field(
+        default=None,
+        description="Rows matching reject_when, and whole batches the node's quality gate "
+        "blocks, go to a quarantine table instead of the sink",
+    )
     streaming: StreamingSpec = Field(default_factory=StreamingSpec)
 
     @model_validator(mode="before")

@@ -23,7 +23,8 @@ SPDX-License-Identifier: Apache-2.0
 # The snapshot itself carries Spark progress objects and the pipeline's config;
 # none of that leaves the server.
 
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 from ducta.api.models.execution import (
     StreamingNodeStatus,
@@ -40,6 +41,7 @@ def _text(value: Any) -> Optional[str]:
 def _node_status(node: str, snapshot: Dict[str, Any]) -> StreamingNodeStatus:
     state = derive_node_state(node, snapshot)
     summary = (snapshot.get("node_summaries") or {}).get(node) or {}
+    micro = (snapshot.get("micro_batches") or {}).get(node) or {}
     return StreamingNodeStatus(
         node=node,
         state=state.state,
@@ -56,6 +58,8 @@ def _node_status(node: str, snapshot: Dict[str, Any]) -> StreamingNodeStatus:
         processed_rows_per_second=state.processed_rows_per_second,
         trigger_execution_ms=state.trigger_execution_ms,
         model=(snapshot.get("served_models") or {}).get(node),
+        rows_quarantined=micro.get("rows_quarantined"),
+        gate=_text(micro.get("gate")),
     )
 
 
@@ -72,13 +76,75 @@ def pipeline_status(snapshot: Dict[str, Any]) -> StreamingPipelineStatus:
         failed_queries=int(snapshot.get("failed_queries") or 0),
         error=_text(snapshot.get("error")),
         nodes=[_node_status(node, snapshot) for node in nodes],
+        run_id=_text(snapshot.get("run_id")),
     )
 
 
-def streaming_status(execution_id: str, engine: Any) -> StreamingStatusResponse:
-    """The streams ``engine`` is running for ``execution_id`` (none without an engine)."""
+def journal_pipeline_status(run: Dict[str, Any]) -> StreamingPipelineStatus:
+    """A stream no engine holds any more, as its journal left it (ducta.stream.journal)."""
+    from ducta.stream.journal import summarize
+
+    outcome = run.get("outcome") or {}
+    journaled = summarize(Path(run["journal_dir"])) if run.get("journal_dir") else {}
+    nodes = []
+    for name in run.get("nodes") or sorted(outcome):
+        final = outcome.get(name) or {}
+        counts = journaled.get(name) or final.get("journal") or {}
+        gates = counts.get("gate") or {}
+        nodes.append(
+            StreamingNodeStatus(
+                node=name,
+                # An interrupted run never wrote its nodes' outcome.
+                state=str(final.get("state") or "unknown"),
+                error=_text(final.get("error")),
+                sink=_text(final.get("sink")),
+                last_batch_id=counts.get("last_batch"),
+                rows_quarantined=counts.get("rows_quarantined"),
+                gate="block" if gates.get("block") else (next(iter(gates), None)),
+            )
+        )
+    return StreamingPipelineStatus(
+        stream_execution_id=str(run.get("execution_id") or ""),
+        pipeline_name=_text(run.get("pipeline")),
+        status=str(run.get("status") or "unknown"),
+        error=_text(run.get("error")),
+        nodes=nodes,
+        run_id=_text(run.get("run_id")),
+        from_journal=True,
+    )
+
+
+def journal_lookup(
+    source_path: Any, project_id: Optional[str], env: str, pipeline: str, execution_id: str
+) -> List[StreamingPipelineStatus]:
+    """The journaled stream of API execution *execution_id*, if it left one."""
+    from ducta.api.services.run_certificates import env_stream_journal_dir
+    from ducta.api.workspace.manager import WorkspaceManager
+    from ducta.stream.journal import find_run
+
+    try:
+        root = (
+            WorkspaceManager(source_path).for_project(project_id).root
+            if project_id
+            else Path(source_path)
+        )
+        base = env_stream_journal_dir(Path(root), env)
+        run = find_run(str(base), pipeline, api_execution_id=execution_id) if base else None
+    except Exception:  # noqa: BLE001 - no journal is an answer, not an error
+        return []
+    return [journal_pipeline_status(run)] if run else []
+
+
+def streaming_status(
+    execution_id: str,
+    engine: Any,
+    from_journal: Optional[Callable[[], List[StreamingPipelineStatus]]] = None,
+) -> StreamingStatusResponse:
+    """The streams ``engine`` is running for ``execution_id``; without an engine, what
+    *from_journal* finds on disk (a finished run, or one a server restart cut off)."""
     if engine is None:
-        return StreamingStatusResponse(execution_id=execution_id, active=False)
+        pipelines = from_journal() if from_journal is not None else []
+        return StreamingStatusResponse(execution_id=execution_id, active=False, pipelines=pipelines)
     snapshot = engine.streaming_snapshot() if hasattr(engine, "streaming_snapshot") else []
     return StreamingStatusResponse(
         execution_id=execution_id,

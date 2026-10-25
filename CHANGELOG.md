@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Stream nodes can merge, quarantine and check every micro-batch.**
+  `stream.output.mode: merge` upserts each batch into a Delta sink by `merge.keys`;
+  `merge.dedupe_order_by` keeps the latest row per key.
+  `stream.quarantine.reject_when` sets rows aside, and the node's `quality:` block now
+  runs on every batch; a blocking gate quarantines the whole batch and the stream goes
+  on. Until now a stream node's `quality:` was accepted and silently ignored.
+  Delta writes are idempotent per batch.
+- **Streaming runs leave a journal and a certificate.** Each run writes
+  `<output_path>/<env>/.ducta/streams/<pipeline>/<run_id>/` (`run.json`,
+  `batches.jsonl`). An asynchronous run now has a run id and a Run Certificate, sealed
+  when it ends; a stream node's certificate entry carries its batches and its rows
+  read, written and quarantined (certificate schema `1.8`).
+  `GET /executions/{id}/streaming?source=...` falls back to the journal once no engine
+  holds the stream (`from_journal`, status `interrupted` after a server restart). The
+  `adaptive` trigger starts from the previous run's journaled durations.
+- **Live stream alerts**: `alerts:` rules can name `stream_failed`, `stream_stalled`
+  and `stream_quarantine`, sent while the stream runs, from a health check every
+  `streaming_health_interval_seconds`.
+- New settings: `streaming_quality_report_every`, `streaming_health_interval_seconds`,
+  `streaming_quarantine_alert_interval_seconds`, `stream_journal_dir`.
+
+### Changed (breaking)
+
+- **`checkpointLocation` is rejected in a stream's `output.options`.** It silently
+  replaced the checkpoint Ducta reserved for the node; set
+  `streaming.checkpoint_location` instead.
+- **`StreamingValidator.validate_pipeline_compatibility` was removed** (nothing called
+  it, and its duplicate-checkpoint warning was wrong: `checkpoint_location` is a base),
+  together with the validator's `max_batch_nodes`/`max_streaming_nodes` arguments.
+
+### Fixed
+
+- **Stopping a stream while it starts no longer leaves a query running.** A node whose
+  query finished starting after the stop is stopped instead of registered; a restart is
+  refused once the execution has stopped or finished. Shutdown and
+  `clear_pipeline_checkpoints` go by the queries still alive, not by the status, so a
+  live query's checkpoint is never deleted.
+- **`stream.transform: <name>`**, the short form the schema accepts, failed at start.
+- **Checkpoints on `s3a://`, `s3n://`, `wasb://` and `wasbs://`** were treated as local
+  paths (`s3a:/bucket/...`, plus a stray local folder).
+- **The `adaptive` trigger ignores idle progress reports**, which pulled the interval
+  far below a real batch's duration.
+- **Stream options that are mappings or lists are sent as JSON** (Kafka `assign`,
+  `startingOffsets`), not as a Python repr; booleans as `true`/`false`.
+- The start retry for a Delta source that does not exist yet also covers the `delta`
+  alias and a one-element `inputs` list; a restarted node clears its old error; a
+  failing stream writer logs option names, not values (credentials).
+
+## [0.3.0] - 2026-10-24
+
 ### Changed (breaking)
 
 - **`delta_stream` reads appended data unless asked for the change feed.** It enabled
@@ -35,6 +87,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--reuse-upstream` reuses a chain that starts with a declarative ingestion.** A
+  pipeline whose nodes have no code of the project's (a JDBC `ingest:`) recorded no code
+  fingerprint, so every later run refused it as "written by an older Ducta" and re-ran
+  it — and with it everything downstream, however often the chain had run.
+- **The SQL check scans `TRUNCATE` structurally again**, and no longer warns
+  "sqlglot does not expose Truncate" on every query: sqlglot names the node
+  `TruncateTable`. Operations are looked up under each name sqlglot has used.
 - **A project written in TOML or JSON no longer breaks the web app's environment list**
   (`GET /api/environments` answered 500: it read `ducta.yaml` only). The workspace's
   active environment and the source's environments and configuration files are read from
@@ -2228,7 +2287,8 @@ with data quality, MLOps, and run governance built in.
   `linux/arm64`, including Apple Silicon).
 - Unit test suites and coverage configuration.
 
-[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/faustinolopezramos/ducta/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/faustinolopezramos/ducta/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/faustinolopezramos/ducta/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/faustinolopezramos/ducta/releases/tag/v0.1.0

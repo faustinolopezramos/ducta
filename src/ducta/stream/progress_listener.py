@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import time
 from collections import deque
 from threading import Lock
-from typing import Any, Deque, Dict, Optional
+from typing import Any, Callable, Deque, Dict, Iterable, Optional
 
 from loguru import logger  # type: ignore
 
@@ -66,6 +66,9 @@ class StreamingProgressSink:
         # query_name -> running totals: input rows seen, batches that had any, and the
         # last batch id counted (idle reports repeat a batch id and must not recount it)
         self._totals: Dict[str, Dict[str, Any]] = {}
+        #: Called as ``(query_name, summary)`` for each report of a new batch with
+        #: input rows (the stream journal); outside the lock, errors ignored.
+        self.listener: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
     @staticmethod
     def _duration(progress: Any, key: str) -> Optional[float]:
@@ -122,6 +125,7 @@ class StreamingProgressSink:
 
             now = time.time()
             rows = summary["numInputRows"]
+            new_batch = False
             with self._lock:
                 if (
                     isinstance(rows, (int, float)) and rows > 0
@@ -138,17 +142,38 @@ class StreamingProgressSink:
                     totals["rows"] += rows
                     totals["batches"] += 1
                     totals["last_batch"] = summary["batchId"]
+                    new_batch = True
                 self._latest[query_name] = summary
                 if query_id is not None:
                     self._id_to_name[str(query_id)] = query_name
-                if trigger_ms is not None:
+                # An idle report (no input rows) times a trigger that did no work: a
+                # few ms that, averaged in, would pull the adaptive interval far
+                # below what a real batch takes. Only batches with data count.
+                idle_report = isinstance(rows, (int, float)) and rows <= 0
+                if trigger_ms is not None and not idle_report:
                     window = self._trigger_ms.setdefault(
                         self._history_key.get(query_name, query_name),
                         deque(maxlen=self._max_history),
                     )
                     window.append(trigger_ms)
+            listener = self.listener
+            if new_batch and listener is not None:
+                listener(query_name, dict(summary))
         except Exception as e:  # never let a metrics callback break the stream
             logger.debug(f"StreamingProgressSink.record ignored an event: {e}")
+
+    def seed(self, history_key: str, trigger_ms: Iterable[float]) -> None:
+        """Start *history_key*'s window with durations an earlier run measured (the
+        stream journal), unless this process already has its own."""
+        values = [float(v) for v in trigger_ms if isinstance(v, (int, float)) and v > 0]
+        if not values:
+            return
+        with self._lock:
+            if self._trigger_ms.get(history_key):
+                return
+            self._trigger_ms[history_key] = deque(
+                values[-self._max_history :], maxlen=self._max_history
+            )
 
     def get_latest(self, query_name: str) -> Optional[Dict[str, Any]]:
         with self._lock:

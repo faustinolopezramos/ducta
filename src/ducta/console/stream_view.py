@@ -337,6 +337,10 @@ def render_plan(plan: PipelinePlan) -> str:
         lines.append(f"    writes      {node.sink}")
         if node.transform:
             lines.append(f"    transform   {node.transform}")
+        if node.quality:
+            lines.append(f"    checks      {node.quality} {dot} a blocked batch is quarantined")
+        if node.quarantine:
+            lines.append(f"    quarantine  {node.quarantine}")
         lines.append(f"    fires       {node.trigger} {dot} {node.output_mode}")
         lines.append(f"    checkpoint  {node.checkpoint or '-'}")
         for issue in node.issues:

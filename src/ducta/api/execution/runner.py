@@ -400,6 +400,19 @@ def _dispatch_pipeline_type(
     return outcome
 
 
+def _attach_stream_alerts(engine: Any, source_path: Any, project_id: Any, env: str) -> None:
+    """Send the project's ``alerts:`` for a stream's live events (failure, stall,
+    quarantine) while it runs, not only when the run ends."""
+    from ducta.api.services.alerts import notify_stream_event
+
+    try:
+        engine.streaming_executor.event_listeners.append(
+            lambda event: notify_stream_event(source_path, project_id, env, event)
+        )
+    except Exception as e:  # noqa: BLE001 - alerts are best effort
+        logger.debug("Stream alerts not attached: {}", e)
+
+
 def _link_certificate(ctx: Any, manager: Any, execution_id: str) -> None:
     """Attach the Run Certificate this run emitted, if any (best-effort).
 
@@ -661,6 +674,9 @@ def run_pipeline_sync(
                         # storage is workspace-scoped).
                         if spec.project_id:
                             _gs["project_id"] = spec.project_id
+                        # The stream journal records it, so this execution's
+                        # stream stays findable after the server restarts.
+                        _gs["api_execution_id"] = execution_id
 
                     execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
                     os.chdir(execution_cwd)
@@ -696,6 +712,8 @@ def run_pipeline_sync(
                     pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
                     manager.register_active_engine(execution_id, engine)
+                    if pipeline_type == PipelineType.STREAMING.value:
+                        _attach_stream_alerts(engine, source_path, spec.project_id, env)
                     # Terminal outcomes that do not raise. ``None`` means a clean run;
                     # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
                     outcome: Optional[Dict[str, Any]] = None

@@ -18,11 +18,25 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import json
 from typing import Any, Dict, List, Tuple, Type
 
 from loguru import logger  # type: ignore
 
 from ducta.stream.exceptions import StreamingError, StreamingFormatNotSupportedError
+
+
+def spark_option_value(value: Any) -> str:
+    """The string Spark gets for a reader/writer option.
+
+    A mapping or list is JSON (Kafka's ``assign`` / ``startingOffsets`` take a JSON
+    object; ``str()`` would hand them a Python repr), a bool is ``true``/``false``.
+    """
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(value)
+    return str(value)
 
 
 class StreamingHandlerFactory:

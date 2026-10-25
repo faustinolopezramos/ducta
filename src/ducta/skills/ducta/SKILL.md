@@ -4,7 +4,7 @@ description: Install, configure, run and troubleshoot Ducta, the configuration-a
 license: Apache-2.0
 compatibility: Requires the ducta CLI (pip install ducta; Python 3.10-3.13). Works with any agent that can read files and run shell commands.
 metadata:
-  ducta-version: "0.2"
+  ducta-version: "0.3"
   skill-version: "1.1.3"
   homepage: https://github.com/faustinolopezramos/ducta
 ---

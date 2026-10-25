@@ -42,25 +42,48 @@ from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 _LEGACY_RUNS_DIR = Path(".ducta") / "runs"
 
 
-def env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
-    """The run-certificates directory a run in *env* writes to, or None.
-
-    Resolved the way the runner resolves it before executing
-    (execution/runner.py): same context loader, same execution cwd, same path
-    normalisation — so the ``${output_path}/${environment}/.ducta/runs``
-    template lands on the directory the executor actually wrote. Nothing here
-    calls ``os.chdir``: it runs inside the server process.
-    """
+def _env_context(project_dir: Path, env: str) -> Optional[Tuple[Any, Path]]:
+    """``(context, execution_cwd)`` of *env*, resolved the way the runner resolves
+    them before executing (execution/runner.py): same context loader, same execution
+    cwd, same path normalisation. Nothing here calls ``os.chdir``: it runs inside
+    the server process."""
     try:
         ctx = WorkspaceManager(project_dir).load_context(env)
     except Exception as exc:  # noqa: BLE001 — an environment the project can't load is skipped
-        logger.debug("Could not resolve run-certificates dir for env '{}': {}", env, exc)
+        logger.debug("Could not load the context of env '{}': {}", env, exc)
         return None
     env_dir = project_dir / env if (project_dir / env).is_dir() else project_dir
     execution_cwd = select_execution_cwd(project_dir, env_dir, ctx)
     normalize_execution_context_paths(ctx, execution_cwd)
+    return ctx, execution_cwd
+
+
+def env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
+    """The run-certificates directory a run in *env* writes to, or None.
+
+    So the ``${output_path}/${environment}/.ducta/runs`` template lands on the
+    directory the executor actually wrote (see ``_env_context``).
+    """
+    loaded = _env_context(project_dir, env)
+    if loaded is None:
+        return None
+    ctx, execution_cwd = loaded
     runs_dir = Path(CoreSettings.from_context(ctx).run_certificate_dir)
     return runs_dir if runs_dir.is_absolute() else execution_cwd / runs_dir
+
+
+def env_stream_journal_dir(project_dir: Path, env: str) -> Optional[Path]:
+    """Where a streaming run in *env* journals itself (ducta.stream.journal), or None."""
+    from ducta.stream.journal import journal_base
+
+    loaded = _env_context(project_dir, env)
+    if loaded is None:
+        return None
+    ctx, execution_cwd = loaded
+    base = journal_base(ctx)
+    if base is None:
+        return None
+    return Path(base) if Path(base).is_absolute() else execution_cwd / base
 
 
 def candidate_runs_dirs(project_dir: Path, env: Optional[str]) -> List[Tuple[Optional[str], Path]]:
