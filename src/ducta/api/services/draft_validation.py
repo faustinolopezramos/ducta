@@ -41,7 +41,7 @@ from typing import Dict, List
 from ducta.api.repositories.v2_store import V2ProjectStore
 from ducta.api.services.code_index import module_file, top_level_functions
 from ducta.setting.problems import Problem, parse_problems
-from ducta.setting.project_loader import ProjectConfigError, validate_project
+from ducta.setting.project.loader import ProjectConfigError, validate_project
 
 #: Directories that hold data, state, environments or caches — never
 #: configuration or code, and too large to copy for every draft.

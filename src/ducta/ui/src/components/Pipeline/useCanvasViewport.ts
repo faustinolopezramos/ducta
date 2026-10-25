@@ -15,6 +15,8 @@ export interface CanvasViewport {
   fitCanvas: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
+  /** Back to 100%, around the middle of the view. */
+  resetZoom: () => void;
 }
 
 /**
@@ -54,6 +56,7 @@ export function useCanvasViewport(): CanvasViewport {
 
   const zoomIn = useCallback(() => flow.zoomIn({ duration: PAN_DURATION }), [flow]);
   const zoomOut = useCallback(() => flow.zoomOut({ duration: PAN_DURATION }), [flow]);
+  const resetZoom = useCallback(() => flow.zoomTo(1, { duration: PAN_DURATION }), [flow]);
 
-  return { centerOnNode, fitCanvas, zoomIn, zoomOut };
+  return { centerOnNode, fitCanvas, zoomIn, zoomOut, resetZoom };
 }

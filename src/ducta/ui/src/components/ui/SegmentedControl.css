@@ -1,0 +1,56 @@
+/* One choice out of a few: a light track, the current option raised in ink —
+   petrol stays free for primary actions and selection, as on the canvas. */
+.tui-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-md);
+  background: var(--overlay-subtle);
+}
+
+.tui-segmented__option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+
+.tui-segmented__option:hover {
+  color: var(--text);
+}
+
+.tui-segmented__option.is-active {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(15, 27, 32, 0.08), inset 0 0 0 1px var(--border);
+}
+
+.tui-segmented__option:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.tui-segmented__count {
+  color: var(--text-muted);
+  font-weight: var(--weight-regular, 400);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tui-segmented__option { transition: none; }
+}

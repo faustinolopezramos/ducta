@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Tuple, Union
 
 from ducta.setting.exceptions import ConfigurationError
-from ducta.setting.project_loader import PROJECT_FILE, find_project_root, load_project_v2
+from ducta.setting.project.loader import PROJECT_FILE, find_project_root, load_project_v2
 
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context

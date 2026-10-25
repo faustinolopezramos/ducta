@@ -105,11 +105,16 @@ describe("NodeReview", () => {
     fireEvent.click(button);
     await waitFor(() => expect(posts[0]?.body).toEqual({ kind: "review", pipeline: "etl", node: "load", env: "dev" }));
     expect(await screen.findByText(/Reviewing/)).toBeInTheDocument();
-    job = { ...job, status: "done", review: review([DUCTA_FINDING, AI_FINDING], "qwen2.5-coder:7b", 1) };
+    job = {
+      ...job,
+      status: "done",
+      review: { ...review([DUCTA_FINDING, AI_FINDING], "qwen2.5-coder:7b", 1), usage: { input_tokens: 4630, output_tokens: 720 } },
+    };
     const link = await screen.findByRole("link", { name: "pipelines/etl.py:127" }, { timeout: 4000 });
     expect(link).toHaveAttribute("href", "/p/shop/code/pipelines/etl.py?line=127");
     expect(screen.getByText(AI_FINDING.code)).toBeInTheDocument();
     expect(screen.getByText(/1 from Ducta, 1 from AI \(1 dropped/)).toBeInTheDocument();
+    expect(screen.getByText(/· qwen2.5-coder:7b · 4,630 tokens in · 720 out/)).toBeInTheDocument();
   });
 
   it("turns a finding into a fix draft with the finding as its note", async () => {

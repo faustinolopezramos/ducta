@@ -7,7 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`delta_stream` reads appended data unless asked for the change feed.** It enabled
+  the change data feed (CDF) on its own. A node that relied on that must add
+  `input.options.readChangeFeed: true`; `auto_enable_cdf` only applies then.
+- **CLI exit codes are consistent.** A failed `--sweep`/`--search` trial exits `4`, as
+  a failed run does (was `1`); a failing `quality run` check exits `3`, as sanity
+  checks and `config validate` do (was `1`); `quality validate-config` outside a
+  project exits `2`; `ducta ai apply` without a terminal and without `--yes` exits `3`
+  (it wrote nothing; was `0`); `ducta init ingestion test` exits `5` when it could not
+  try the connection and `4` when it failed (testing needs a Spark session, which the
+  CLI does not start). A script that checks for `1` must check for the new code.
+- **One experiment per pipeline.** Every execution created a new experiment with the
+  pipeline's name, so *Models* listed `bronze.ingestion` eight times, each with one run.
+  An execution is now a run in its pipeline's experiment. Experiments created before
+  stay as they are; code that looked a run up by a per-execution experiment must look
+  in the pipeline's experiment.
+- **`ducta.setting.project_*` modules moved to the `ducta.setting.project` package**:
+  `project_loader` is `ducta.setting.project.loader`, and likewise `context`,
+  `decompile`, `defaults`, `files`, `inspect` and `schema`. `ducta.setting` and
+  `ducta.setting.project` export the same public names as before (`load_project`,
+  `validate_project`, `Project`…); only imports of the old module paths fail.
+- **`ducta.console` exports what `__all__` names**: the argument validators stay in
+  `ducta.console.validation` (`from ducta.console import *` raised). The unused
+  `validate_mode`, `validate_format` and `validate_timeout` were removed.
+
 ### Fixed
+
+- **A project written in TOML or JSON no longer breaks the web app's environment list**
+  (`GET /api/environments` answered 500: it read `ducta.yaml` only). The workspace's
+  active environment and the source's environments and configuration files are read from
+  the project's own `ducta.*` file too.
+- **The web app no longer writes a second `ducta.yaml` beside a `ducta.toml`.** Saving a
+  TOML or JSON project's settings wrote one — two project files, so the project stopped
+  validating — and a canvas edit failed with a YAML parse error. The web app edits YAML
+  projects only and now says so (HTTP 400, with `ducta config convert --to yaml`).
+- **Comments after a node survive adding and removing nodes on the canvas.** A node added
+  after one whose last lines were comments took them over, and undoing the addition
+  deleted them; removing a node deleted the comments written above it, and the ones
+  written above the next node. They now stay where they were written; only the
+  comments inside the removed node go with it. Undoing a removal puts the node back
+  where it was, between the same comments (it went to the end of the pipeline).
+- **Connections in a workspace of several projects.** The Connections page asked for the
+  workspace's `sources.yaml` and listed none of the projects' connections; each request
+  now names the project of the page, and a project that does not exist is a 404 instead
+  of the workspace's own file (where a new connection would have been written).
+- **A large Delta table's preview no longer reads every data file** to say when it was last
+  written: the newest commit in `_delta_log` says it.
+- **Reviews and explanations no longer lose a cut or unreadable answer in silence.** They
+  made one request and, if its answer had no readable block (common with small models) or
+  was cut by the output limit, said only "could not be read". They now ask once more,
+  say when the answer was cut off, and an explanation or node review too large for an
+  Ollama window is refused before the request, as a pipeline review already was.
 
 - **A run records the hyperparameters its model really has.** `train_with_search` put the
   winning hyperparameters on the registered model but not on the tracked run, so a run
@@ -105,6 +157,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `json.py` there ran); AI settings have upper bounds; `explain` reads only Python files;
   Architect refuses a required keyword-only parameter; Sentinel never records a failed
   re-run start without the engine lock.
+- **The CLI kept logging after a parallel sweep's first trial.** Trial 1 ran in the
+  CLI's own process, and a trial removes every log sink: the rest of the sweep, and
+  its summary, printed nothing and wrote nothing to the log file. Every trial now
+  runs in a worker.
+- **`ducta init ingestion test` and `setup` reported "✓ Connection successful!" for a
+  connection nobody had contacted** — with no Spark session the test was skipped and
+  counted as a pass — and a refused connection as "inconclusive". The same swap was
+  in the web app's messages: an untested connection read "Connection verified".
+  `setup` now asks before saving a connection that failed, finds the project from a
+  subfolder, and its next steps show a `kind: ingest` node instead of the format-1
+  `config/node/nodes.yml`. TOML and JSON projects keep their connections where
+  `settings.ingestion.sources_path` says (only `ducta.yaml` was read).
+- **`ducta model promote … production` without `--env` skipped the promotion
+  policy**, and so did any failure to read it. The base project's policy now
+  applies without `--env`; a policy that cannot be read refuses the promotion
+  (exit `2`, `--force` to bypass).
+- **`ducta model gc` ignored `settings.mlops.gc`** (the web app applied it), so a
+  project keeping models longer than the 90-day default lost them. It now applies
+  them, and deletes nothing when the project cannot be read.
+- **`ducta config convert --out DIR` wrote relative to the project root** instead of
+  the current directory; `start --sweep FILE` is read from the current directory too.
+- **`ducta config pipeline-info` exited `0` for a pipeline that does not exist**; it
+  exits `3` with the closest name. `ducta start --node` with a name the project does
+  not define fails before running, with the closest node, instead of failing inside
+  the run with "Unknown Error".
+- **`ducta ai …` found the project only in the current directory**, not above it.
+- **`ducta ui` did not detect TOML or JSON projects.**
+- **`ducta certify` printed the configuration banner once per environment** and
+  never searched an environment the project declares beyond the canonical ones
+  (`qa`, `sandbox_alice`).
+- **`ducta stream stop --timeout` never reached the engine**, which always waited 30
+  seconds.
+- **A missing optional package named the right extra**: `databricks`, `httpx`,
+  `ruamel` and others pointed at the wrong one or at none; `ducta ui` without the
+  `api` extra says `pip install "ducta[api]"` instead of "Ducta-app".
+
+- **No error toast for an answer that is simply "none yet".** Opening a failed run
+  showed "No explanation for run …" and a node's *Review* tab "No review of … yet" as
+  errors; both mean nothing was asked for yet.
+- **"Needs attention" drops a failure once a later run fixed it.** A node run failing
+  stayed listed after the pipeline ran that node again and succeeded.
+- **A run's graph is framed in its box.** The canvas kept a 420px minimum inside a
+  shorter box, so the nodes sat at the bottom or out of sight.
+- **"Where the time went" shows sub-second durations** (0.7s; it showed 0s).
+- **Health says when the selected environment has no runs** and links to the one that
+  has them, instead of listing every pipeline as "never".
+- The node inspector's tabs fit (*Comments* was cut off), ML pipelines are tagged *ML*
+  (was *Ml*), an error toast shows an alert icon instead of a second ✕, and the
+  *Projects* page lost a doubled gap above *Needs attention*.
+- **A failed run's diagnosis finds your code again when the project lives under a folder
+  named `ducta`** (frames were taken for Ducta's own).
+- **A hidden folder inside `pipelines/` or `catalog/` (an assistant's `.claude/`, …) is
+  no longer read as part of the project**; it broke validation. `ducta skill install`
+  now installs next to `ducta.yaml` from any folder of the project, warns outside one,
+  points `AGENTS.md` to the shared `.agents/` copy, and says to restart the assistant.
+- **A quality gate that blocks a node run with `run_in_process: true` stops the node.**
+  The worker's block reached the parent as a `TypeError`, which lost the gate's
+  no-retry flag: the node was retried, and the error named the wrong cause.
+- **`ducta quality run` prints the report when a check fails.** It logged "Quality run
+  failed" and printed nothing, so `--output-format json` gave a script no results;
+  `POST /api/quality/run` answered 422 instead of the report. The exit code is unchanged.
+- **The CLI is readable on light terminals.** The status dashboard's header was dark text
+  on a forced black background, and tables, schemas and errors printed fixed white text.
+- **Warnings instead of silence** when a Spark config key is not applied, a quality score
+  cannot be computed (the report kept a perfect 1.0), or pickled pandas data cannot be
+  converted to Spark (the node got pandas instead).
+- **Web app:** switching workspace from the header reloads again, so no logs, problems or
+  run states of the previous workspace stay on screen; the bottom panel always marks the
+  tab it shows; the run page's cancel button says *Cancelling…*; an old
+  `/workspace/nodes/<name>/code` link opens the project's Code view.
+- **`ducta stream run` and `ducta start` keep a stream running.** They returned once
+  the queries started, which ended the process and the queries with it: nothing was
+  written. The command now runs while the queries do, stops them gracefully on
+  Ctrl+C, and ends on its own with a terminating trigger. `ducta stream status` and
+  `stop` say where to look for a stream they cannot see (another terminal, the server).
+- **A node without `outputs` runs.** The schema and `ducta config validate` accept a
+  node that only has an effect (notify, audit, train and register); its return value
+  was still checked as a DataFrame, so every run failed ("Result DataFrame is None").
+- **Generated projects keep `.env` out of git.** The template's `.gitignore` ignored
+  `env/` but not `.env` (or `.env.*`), where the docs say credentials go.
+- **List settings read from one variable take commas.** `CORS_ORIGINS=https://a.com`
+  or `GIT_CLONE_ALLOWED_HOSTS=a,b` stopped the server at startup: only JSON lists
+  parsed. Both forms work now.
+- **`ExecutionManager.execute` accepts a relative project path.** It looked for data
+  relative to another directory and reported the pipeline "skipped".
+- **Preflight warns when `use_pandas` has no effect.** It applies only to pickle
+  datasets; on CSV, Parquet and the rest the node got Spark anyway. For pandas, set
+  `execution_mode: vectorized` on the node (now documented).
+- **Preflight warns about `quality` on stream nodes.** The streaming engine runs no
+  checks: the block was accepted and ignored (an impossible check with `on_fail:
+  stop_all` still wrote the output and exited 0).
+- **`alerts[].when: [stale]` is refused.** It was accepted and never sent.
+- **The AI builder rejects a pipeline name that is a path** (`../../x`), which read a YAML
+  file outside the project and sent it to the model.
 
 ### Security
 
@@ -115,6 +261,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env.dist`) are still shown.
 
 ### Added
+
+- **`ducta ai eval` measures a model.** Ten fixed cases — three new pipelines (one asked
+  in Spanish), two fixes of a broken pipeline, an extension, a revised draft, an Architect
+  blueprint, a pipeline review and an explanation — run on fresh copies of the
+  `medallion_basic` template in a temporary folder and are scored by Ducta's own checks.
+  The report gives the pass rate, attempts per draft, time, tokens and each result's
+  `prompt_version`. `--repeat N` runs every case N times: it passes only when every run
+  does, and one that passes some is reported as *flaky*. Every report is kept in
+  `~/.ducta/ai/evals/` (the last 50) and compared with the same model's previous one;
+  `--list` and `--compare A [B]` read them without a model, and `--out` writes a copy.
+  With a remote model it asks before sending the template.
+- **The server's model can be measured over HTTP** (admins, `ai.configure`):
+  `POST /api/ai/evals` starts an evaluation as a job (`confirm_remote: true` is required
+  with a remote model, 409 otherwise), `GET`/`DELETE /api/ai/evals/jobs/{id}` follow and
+  stop it, and `GET /api/ai/evals`, `/api/ai/evals/{id}` and
+  `/api/ai/evals/compare?a=&b=` read the kept reports — the CLI's too. In the web app it
+  is **Settings › AI › Measure this model** (admins only): pick the cases and the runs per
+  case (1, 3 or 5), confirm before a remote model receives the template, follow each case
+  as it ends (and stop it), then read the report — pass rate, flaky cases, attempts, time,
+  tokens, what was gained or lost since the model's previous report — and download it as
+  JSON. Every kept report, CLI or server, is listed below it.
+- **A project decides whether AI may touch it.** `ai: {enabled: false}` in its `ducta.*`
+  file (`ducta.yaml`, `.toml` or `.json`) stops every AI feature for the project;
+  `ai: {remote: false}` allows only a local model.
+  It is checked before the first model request of drafts, fixes, extensions, proposals,
+  Architect, reviews, explanations and Sentinel's proposals (`AIPolicyError`, HTTP 403).
+- **Token usage is visible.** `ducta ai new`, `fix`, `review`, `explain` and `eval` end with
+  `Model usage: … tokens in (… cached) · … out`; drafts (`Draft.usage`), reviews and
+  explanations keep it, and the API returns it on drafts and explanations, with the
+  `prompt_version` (a fingerprint of the system prompt) that made them. The web app shows
+  the same line on a draft's summary, a node's and a pipeline's review and a run's
+  explanation (left out when only Ducta's checks ran).
 
 - **A table of all your runs, in the format you choose.** `ducta.mlrun.run_summary`
   joins the tracked runs of a pipeline with the model each registered and its run
@@ -298,6 +476,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`pip install "ducta[ai]"` is enough for `ducta ai`.** The validator never needed the
+  `api` extra (FastAPI, SQLAlchemy, Redis, Git…); messages and docs asked for
+  `ducta[api,ai]`. Verified in a clean environment with only `ducta[ai]`.
+- **Hosted OpenAI-compatible endpoints are retried when they say "not now".** A `429` or
+  `500`/`502`/`503`/`504`/`529` is asked again up to twice, after `Retry-After` (up to 60 s)
+  or 2 s then 4 s; one rate limit no longer ends a draft or an Architect build half-way.
+- **Claude's options follow the model's version.** `effort` and the server-side fallback
+  were sent only to models on fixed lists, so a newer model would silently lose them.
+  They now go to every model of that version or later, and a `400` that rejects one is
+  asked again without it (remembered by the provider).
+- **`ducta.ai.loop` and `ducta.ai.drafts`.** The loop every feature shares and the drafts
+  left `builder.py` (1,367 lines) for their own modules, with public names (`run_loop`,
+  `validate_files`, `judge_problems`, `text_sha`…) instead of the private ones six modules
+  imported. `ducta.ai.builder` still exports the documented API.
+
 - **`persist_model(metrics=...)` also logs them on the tracked run.** They went to the
   model version only, so `ducta experiment show` printed `Metrics: (none)` and a sweep
   could not be ranked. Pass `log_to_run=False` to keep the old behaviour; `train_with_search`
@@ -321,9 +514,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the per-node pools Ducta creates on purpose — is no longer printed.
 - **A stalled query is a warning, not an error**: the node stays `active` with a `stalled`
   note instead of showing the stall text as its error.
-- **`delta_stream` reads appended data unless asked for the change feed.** Set
-  `input.options.readChangeFeed: true` for the feed; `auto_enable_cdf` only applies then.
-  A node that relied on the old implicit CDF enabling must add that option.
 - **A streaming run is not bounded by `execution_timeout_seconds`**; it waits as long as
   its queries run (cancel it to stop it).
 - **`ducta start --help` groups its options** by how often they are needed — *Common*,
@@ -351,13 +541,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands as one block.
 - **`-e` and `-p` work in every command** that takes `--env` or `--pipeline`
   (`ducta config validate -e dev` was "unrecognized arguments").
-- **CLI exit codes are consistent.** A failed `--sweep`/`--search` trial exits `4`, as
-  a failed run does (was `1`); a failing `quality run` check exits `3`, as sanity
-  checks and `config validate` do (was `1`); `quality validate-config` outside a
-  project exits `2`; `ducta ai apply` without a terminal and without `--yes` exits `3`
-  (it wrote nothing; was `0`).
-- **`ducta init ingestion test` exits `5` when it could not try the connection** and
-  `4` when it failed. Testing needs a Spark session, which the CLI does not start.
 - **CLI logs go to the project's `logs/ducta.log`**, wherever in the project the
   command runs or whatever `--base-path` names; outside a project (and for
   `skill`) there is no log file. Output is coloured only on a terminal
@@ -367,16 +550,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validate`) and on `certify list/show/verify/diff`.
 - **`ducta[ai]` no longer needs `ducta[api]`**: it adds `ruamel.yaml`, and the
   shared services import FastAPI only where a response is built.
-- **`ducta.console` exports what `__all__` names**: the argument validators stay in
-  `ducta.console.validation` (`from ducta.console import *` raised). The unused
-  `validate_mode`, `validate_format` and `validate_timeout` were removed.
 - **`ducta.MLNodeContext` is public** — the type of the `ml_context` an ML node
   receives, as `docs/mlops.rst` already imported it.
 
-- **One experiment per pipeline.** Every execution created a new experiment with the
-  pipeline's name, so *Models* listed `bronze.ingestion` eight times, each with one run.
-  An execution is now a run in its pipeline's experiment. Experiments created before
-  stay as they are.
 - **`GET /api/mlops/experiments?pipeline=…` returns only that pipeline's experiments.**
   The tracking store is shared by every pipeline, so *Models* listed bronze, silver and
   gold experiments under an ML pipeline.
@@ -398,103 +574,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *Code*; a dataset without a path shows *default location*.
 - The "Applied 'dev' environment overrides" line is now debug output (it printed once
   per environment every time a project was validated).
-
-### Fixed
-
-- **The CLI kept logging after a parallel sweep's first trial.** Trial 1 ran in the
-  CLI's own process, and a trial removes every log sink: the rest of the sweep, and
-  its summary, printed nothing and wrote nothing to the log file. Every trial now
-  runs in a worker.
-- **`ducta init ingestion test` and `setup` reported "✓ Connection successful!" for a
-  connection nobody had contacted** — with no Spark session the test was skipped and
-  counted as a pass — and a refused connection as "inconclusive". The same swap was
-  in the web app's messages: an untested connection read "Connection verified".
-  `setup` now asks before saving a connection that failed, finds the project from a
-  subfolder, and its next steps show a `kind: ingest` node instead of the format-1
-  `config/node/nodes.yml`. TOML and JSON projects keep their connections where
-  `settings.ingestion.sources_path` says (only `ducta.yaml` was read).
-- **`ducta model promote … production` without `--env` skipped the promotion
-  policy**, and so did any failure to read it. The base project's policy now
-  applies without `--env`; a policy that cannot be read refuses the promotion
-  (exit `2`, `--force` to bypass).
-- **`ducta model gc` ignored `settings.mlops.gc`** (the web app applied it), so a
-  project keeping models longer than the 90-day default lost them. It now applies
-  them, and deletes nothing when the project cannot be read.
-- **`ducta config convert --out DIR` wrote relative to the project root** instead of
-  the current directory; `start --sweep FILE` is read from the current directory too.
-- **`ducta config pipeline-info` exited `0` for a pipeline that does not exist**; it
-  exits `3` with the closest name. `ducta start --node` with a name the project does
-  not define fails before running, with the closest node, instead of failing inside
-  the run with "Unknown Error".
-- **`ducta ai …` found the project only in the current directory**, not above it.
-- **`ducta ui` did not detect TOML or JSON projects.**
-- **`ducta certify` printed the configuration banner once per environment** and
-  never searched an environment the project declares beyond the canonical ones
-  (`qa`, `sandbox_alice`).
-- **`ducta stream stop --timeout` never reached the engine**, which always waited 30
-  seconds.
-- **A missing optional package named the right extra**: `databricks`, `httpx`,
-  `ruamel` and others pointed at the wrong one or at none; `ducta ui` without the
-  `api` extra says `pip install "ducta[api]"` instead of "Ducta-app".
-
-- **No error toast for an answer that is simply "none yet".** Opening a failed run
-  showed "No explanation for run …" and a node's *Review* tab "No review of … yet" as
-  errors; both mean nothing was asked for yet.
-- **"Needs attention" drops a failure once a later run fixed it.** A node run failing
-  stayed listed after the pipeline ran that node again and succeeded.
-- **A run's graph is framed in its box.** The canvas kept a 420px minimum inside a
-  shorter box, so the nodes sat at the bottom or out of sight.
-- **"Where the time went" shows sub-second durations** (0.7s; it showed 0s).
-- **Health says when the selected environment has no runs** and links to the one that
-  has them, instead of listing every pipeline as "never".
-- The node inspector's tabs fit (*Comments* was cut off), ML pipelines are tagged *ML*
-  (was *Ml*), an error toast shows an alert icon instead of a second ✕, and the
-  *Projects* page lost a doubled gap above *Needs attention*.
-- **A failed run's diagnosis finds your code again when the project lives under a folder
-  named `ducta`** (frames were taken for Ducta's own).
-- **A hidden folder inside `pipelines/` or `catalog/` (an assistant's `.claude/`, …) is
-  no longer read as part of the project**; it broke validation. `ducta skill install`
-  now installs next to `ducta.yaml` from any folder of the project, warns outside one,
-  points `AGENTS.md` to the shared `.agents/` copy, and says to restart the assistant.
-- **A quality gate that blocks a node run with `run_in_process: true` stops the node.**
-  The worker's block reached the parent as a `TypeError`, which lost the gate's
-  no-retry flag: the node was retried, and the error named the wrong cause.
-- **`ducta quality run` prints the report when a check fails.** It logged "Quality run
-  failed" and printed nothing, so `--output-format json` gave a script no results;
-  `POST /api/quality/run` answered 422 instead of the report. The exit code is unchanged.
-- **The CLI is readable on light terminals.** The status dashboard's header was dark text
-  on a forced black background, and tables, schemas and errors printed fixed white text.
-- **Warnings instead of silence** when a Spark config key is not applied, a quality score
-  cannot be computed (the report kept a perfect 1.0), or pickled pandas data cannot be
-  converted to Spark (the node got pandas instead).
-- **Web app:** switching workspace from the header reloads again, so no logs, problems or
-  run states of the previous workspace stay on screen; the bottom panel always marks the
-  tab it shows; the run page's cancel button says *Cancelling…*; an old
-  `/workspace/nodes/<name>/code` link opens the project's Code view.
-- **`ducta stream run` and `ducta start` keep a stream running.** They returned once
-  the queries started, which ended the process and the queries with it: nothing was
-  written. The command now runs while the queries do, stops them gracefully on
-  Ctrl+C, and ends on its own with a terminating trigger. `ducta stream status` and
-  `stop` say where to look for a stream they cannot see (another terminal, the server).
-- **A node without `outputs` runs.** The schema and `ducta config validate` accept a
-  node that only has an effect (notify, audit, train and register); its return value
-  was still checked as a DataFrame, so every run failed ("Result DataFrame is None").
-- **Generated projects keep `.env` out of git.** The template's `.gitignore` ignored
-  `env/` but not `.env` (or `.env.*`), where the docs say credentials go.
-- **List settings read from one variable take commas.** `CORS_ORIGINS=https://a.com`
-  or `GIT_CLONE_ALLOWED_HOSTS=a,b` stopped the server at startup: only JSON lists
-  parsed. Both forms work now.
-- **`ExecutionManager.execute` accepts a relative project path.** It looked for data
-  relative to another directory and reported the pipeline "skipped".
-- **Preflight warns when `use_pandas` has no effect.** It applies only to pickle
-  datasets; on CSV, Parquet and the rest the node got Spark anyway. For pandas, set
-  `execution_mode: vectorized` on the node (now documented).
-- **Preflight warns about `quality` on stream nodes.** The streaming engine runs no
-  checks: the block was accepted and ignored (an impossible check with `on_fail:
-  stop_all` still wrote the output and exited 0).
-- **`alerts[].when: [stale]` is refused.** It was accepted and never sent.
-- **The AI builder rejects a pipeline name that is a path** (`../../x`), which read a YAML
-  file outside the project and sent it to the model.
 
 ### Dependencies
 

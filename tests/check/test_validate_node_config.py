@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from ducta.check.service import QualityService
-from ducta.setting.project_loader import ProjectConfigError
+from ducta.setting.project.loader import ProjectConfigError
 
 PROJECT = """\
 version: 2

@@ -30,9 +30,11 @@ check, and neither ever logs or returns the key.
 
 from __future__ import annotations
 
+import re
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Protocol
+from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple
 
 from ducta.ai.config import ANTHROPIC, AIConfig
 from ducta.ai.errors import AIEnvironmentError, AIError
@@ -65,8 +67,24 @@ class LLMProvider(Protocol):
 def _install_hint(package: str) -> AIError:
     return AIEnvironmentError(
         f"The '{package}' package is not installed. Install the AI extra: "
-        "pip install 'ducta[api,ai]'"
+        "pip install 'ducta[ai]'"
     )
+
+
+#: Answers that mean "not now": rate limited, or the server is overloaded or restarting.
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
+#: The longest ``Retry-After`` honoured; a longer one fails at once with its message.
+_MAX_RETRY_AFTER = 60.0
+
+
+def _retry_after(response: Any, default: float) -> Optional[float]:
+    """How long to wait before retrying *response* (its ``Retry-After`` seconds, or
+    *default*), or ``None`` when it asks for longer than is worth waiting."""
+    try:
+        seconds = float(response.headers.get("retry-after", ""))
+    except (TypeError, ValueError):
+        return default
+    return max(seconds, 0.0) if seconds <= _MAX_RETRY_AFTER else None
 
 
 class _TemperatureRejected(Exception):
@@ -89,6 +107,13 @@ class OpenAICompatibleProvider:
 
     #: Low but not zero: valid YAML matters more than variety.
     temperature = 0.1
+    #: Retries of a request the server turned away for now (rate limit, overload),
+    #: as the Anthropic SDK does: hosted endpoints (Groq, OpenAI, gateways) rate-limit
+    #: by the minute, and a draft makes several requests in a row.
+    max_retries = 2
+    #: Waits before each retry when the answer gives no ``Retry-After``.
+    backoff_seconds = (2.0, 4.0)
+    _sleep = staticmethod(time.sleep)
 
     def __init__(self, config: AIConfig, api_key: Optional[str] = None, client: Any = None):
         self.config = config
@@ -119,6 +144,11 @@ class OpenAICompatibleProvider:
         ) as client:
             yield client
 
+    def _waits(self) -> List[float]:
+        """The default wait before each retry (the last one repeats)."""
+        steps = list(self.backoff_seconds) or [0.0]
+        return [steps[min(i, len(steps) - 1)] for i in range(self.max_retries)]
+
     def _request(self, method: str, path: str, **kwargs: Any) -> Dict[str, Any]:
         try:
             import httpx
@@ -129,6 +159,16 @@ class OpenAICompatibleProvider:
         try:
             with self._http() as client:
                 response = client.request(method, path, **kwargs)
+                for wait in self._waits():
+                    delay = (
+                        _retry_after(response, wait)
+                        if response.status_code in _RETRY_STATUSES
+                        else None
+                    )
+                    if delay is None:
+                        break
+                    self._sleep(delay)
+                    response = client.request(method, path, **kwargs)
         except httpx.ConnectError as e:
             hint = (
                 " Is the local server running (e.g. `ollama serve`)?"
@@ -155,6 +195,12 @@ class OpenAICompatibleProvider:
             ) from e
         if response.status_code in (401, 403):
             raise AIError(f"{where} rejected the API key (HTTP {response.status_code})")
+        if response.status_code == 429:
+            raise AIError(
+                f"{where} is limiting requests (HTTP 429): {_detail(response)}. Ducta "
+                f"retried up to {self.max_retries} times; wait a minute, or use a plan or "
+                "model with higher limits"
+            )
         if response.status_code == 404 and path.endswith(("completions", "/api/chat")):
             raise AIError(
                 f"{where} does not serve model '{self.config.model}' (HTTP 404). "
@@ -254,25 +300,57 @@ class OllamaProvider(OpenAICompatibleProvider):
         )
 
 
-#: Models that take ``fallbacks: "default"`` (re-run a declined request on a
-#: model the API picks) on the first-party API.
-_FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5"}
 _FALLBACK_BETA = "server-side-fallback-2026-07-01"
+_CLAUDE_NEW = re.compile(r"^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-|$)")  # claude-opus-4-7
+_CLAUDE_OLD = re.compile(r"^claude-(\d+)(?:-(\d+))?-([a-z]+)")  # claude-3-5-sonnet
 
 
-#: Models that take ``output_config.effort`` (older ones reject it).
-_EFFORT_MODELS = (
-    "claude-fable-5",
-    "claude-mythos-5",
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-haiku-5-5",
-    "claude-opus-4-8",
-    "claude-opus-4-7",
-)
+def claude_version(model: str) -> Optional[Tuple[str, int, int]]:
+    """``(family, major, minor)`` of a Claude model name, or ``None`` for another name.
+
+    ``claude-opus-4-7`` → ``("opus", 4, 7)``; ``claude-sonnet-4-20250514`` →
+    ``("sonnet", 4, 0)``; ``claude-3-5-haiku-latest`` → ``("haiku", 3, 5)``.
+    """
+    m = _CLAUDE_NEW.match(model)
+    if m:
+        return m.group(1), int(m.group(2)), int(m.group(3) or 0)
+    m = _CLAUDE_OLD.match(model)
+    if m:
+        return m.group(3), int(m.group(1)), int(m.group(2) or 0)
+    return None
+
+
+def takes_effort(model: str) -> bool:
+    """Whether *model* takes ``output_config.effort``.
+
+    Decided by version rather than by a list, so a model released after this
+    Ducta takes it too; a model that rejects it is asked again without it.
+    """
+    version = claude_version(model)
+    if version is None:
+        return True
+    family, major, minor = version
+    return major >= 5 or (family == "opus" and (major, minor) >= (4, 7))
+
+
+def takes_fallbacks(model: str) -> bool:
+    """Whether *model* takes ``fallbacks: "default"`` (a declined request re-run on a
+    model the API picks) on the first-party API: current Fable, Opus and Sonnet."""
+    version = claude_version(model)
+    return version is not None and version[0] in ("fable", "opus", "sonnet") and version[1] >= 5
+
+
 #: Writing project files is coding work: below ``high``, drafts fail validation
 #: more often (and Opus 5.5 defaults to ``medium``).
 _DEFAULT_EFFORT = "high"
+
+
+class _Rejected(Exception):
+    """HTTP 400 from Anthropic: maybe an option this model does not take."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.message = message
 
 
 class AnthropicProvider:
@@ -294,6 +372,9 @@ class AnthropicProvider:
         self.config = config
         self._key = api_key
         self._client = client
+        #: Options sent until a 400 says the model or endpoint does not take them.
+        self._effort = True
+        self._fallbacks = True
 
     def _sdk(self):
         try:
@@ -323,6 +404,8 @@ class AnthropicProvider:
         anthropic = self._sdk()
         try:
             return fn(**kwargs)
+        except _Rejected:
+            raise
         except anthropic.AuthenticationError as e:
             raise AIError("Anthropic rejected the API key (`ducta ai login` to replace it)") from e
         except anthropic.NotFoundError as e:
@@ -332,6 +415,8 @@ class AnthropicProvider:
         except anthropic.RateLimitError as e:
             raise AIError("Anthropic rate limit reached; try again in a minute", cause=e) from e
         except anthropic.APIStatusError as e:
+            if getattr(e, "status_code", None) == 400:
+                raise _Rejected(str(getattr(e, "message", e))) from e
             raise AIError(f"Anthropic answered HTTP {e.status_code}: {e.message}") from e
         except anthropic.APITimeoutError as e:  # a kind of APIConnectionError: before it
             raise AIError(
@@ -368,22 +453,32 @@ class AnthropicProvider:
             "system": [{"type": "text", "text": system, "cache_control": cache}],
             "messages": wire,
         }
-        effort = self.config.effort or (
-            _DEFAULT_EFFORT if model.startswith(_EFFORT_MODELS) else None
-        )
-        if effort:
-            kwargs["output_config"] = {"effort": effort}
-        with self._anthropic() as client:
-            if model in _FALLBACK_MODELS and not self.config.base_url:
-                response = self._call(
-                    self._streamed,
-                    stream=client.beta.messages.stream,
-                    betas=[_FALLBACK_BETA],
-                    fallbacks="default",
-                    **kwargs,
-                )
+        if self._effort and (self.config.effort or takes_effort(model)):
+            kwargs["output_config"] = {"effort": self.config.effort or _DEFAULT_EFFORT}
+        fallbacks = self._fallbacks and not self.config.base_url and takes_fallbacks(model)
+        try:
+            with self._anthropic() as client:
+                if fallbacks:
+                    response = self._call(
+                        self._streamed,
+                        stream=client.beta.messages.stream,
+                        betas=[_FALLBACK_BETA],
+                        fallbacks="default",
+                        **kwargs,
+                    )
+                else:
+                    response = self._call(self._streamed, stream=client.messages.stream, **kwargs)
+        except _Rejected as e:
+            # A model or endpoint that does not take an option says so in a 400:
+            # ask again without it, and never send it again from this provider.
+            why = e.message.lower()
+            if "output_config" in kwargs and ("effort" in why or "output_config" in why):
+                self._effort = False
+            elif fallbacks and ("fallback" in why or "beta" in why):
+                self._fallbacks = False
             else:
-                response = self._call(self._streamed, stream=client.messages.stream, **kwargs)
+                raise AIError(f"Anthropic answered HTTP 400: {e.message}") from e
+            return self.complete(system, messages)
 
         if response.stop_reason == "refusal":
             details = getattr(response, "stop_details", None)

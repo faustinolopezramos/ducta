@@ -8,8 +8,8 @@ import pytest
 
 from ducta.console.cli import UnifiedCLI
 from ducta.console.core import ExitCode
-from ducta.setting.project_inspect import diff_trees, resolved_tree
-from ducta.setting.project_loader import compile_project, validate_project
+from ducta.setting.project.inspect import diff_trees, resolved_tree
+from ducta.setting.project.loader import compile_project, validate_project
 
 
 def _run(cwd, *argv):

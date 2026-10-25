@@ -275,7 +275,7 @@ class Sentinel:
             return
         try:
             from ducta.api.services.alerts import AlertEvent, deliver
-            from ducta.setting.project_loader import validate_project
+            from ducta.setting.project.loader import validate_project
 
             rules = validate_project(self.root).project.alerts
             if not any("sentinel" in r.when for r in rules):
@@ -593,7 +593,7 @@ class Sentinel:
 
     def _check_sla(self, env: str, certs: List[Dict[str, Any]], settings: gate.Settings) -> None:
         from ducta.api.services.metrics import project_metrics
-        from ducta.setting.project_loader import validate_project
+        from ducta.setting.project.loader import validate_project
 
         project = validate_project(self.root)
         slas = {n: (p.metadata or {}).get("sla") for n, p in project.pipelines.items()}
@@ -724,7 +724,7 @@ class Sentinel:
 
 def project_envs(root: Path) -> List[str]:
     """The environments a project declares (``base`` when none)."""
-    from ducta.setting.project_loader import ProjectConfigError, validate_project
+    from ducta.setting.project.loader import ProjectConfigError, validate_project
 
     try:
         declared = list(validate_project(root).project.environments)

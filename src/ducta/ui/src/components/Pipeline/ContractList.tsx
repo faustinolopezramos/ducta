@@ -5,15 +5,17 @@ import { DataTable, type DataTableColumn } from "../ui/DataTable";
 import { Button } from "../ui/Button";
 import { compactDuration } from "../../utils/nodePresentation";
 import { formatDate } from "../../utils/formatDate";
+import { formatRelative } from "../../utils/timeLabels";
+import { MiddleTruncate } from "./MiddleTruncate";
 import { ChecksList, DatasetRef, KeyValues, lastRunLine, qualityLine } from "./Focus/parts";
 import { FAILURE_STATUSES } from "../ui/statusMeta";
 
 /**
- * A dataset name that wraps at its own seams (`bronze.education.student_cost`
- * breaks after a dot or underscore) instead of mid-word.
+ * A name that wraps at its own seams (`golden.transformation_education` breaks
+ * after a dot or underscore) instead of mid-word.
  */
 function breakable(name: string) {
-  return name.split(/(?<=[._])/).map((part, i) => (
+  return name.split(/(?<=[._:])/).map((part, i) => (
     <Fragment key={i}>
       {i > 0 && <wbr />}
       {part}
@@ -97,65 +99,62 @@ export function ContractList({
               onSelectDataset(name);
             }}
           >
-            {breakable(name)}
+            <MiddleTruncate text={name} />
           </button>
         ))}
       </span>
     );
   };
 
+  // The state is a dot beside the name, as on the canvas: a column of its own
+  // stood empty for every node that had not run.
   const columns: DataTableColumn<ContractRow>[] = [
-    {
-      key: "status",
-      header: "",
-      headerLabel: "Status",
-      width: "36px",
-      cell: (row) => {
-        const state = stateOf(row);
-        return (
-          <span
-            className={`node-card-status${state ? ` status-dot-${state}` : ""}`}
-            title={state ?? "not run"}
-            aria-label={state ?? "not run"}
-          />
-        );
-      },
-    },
     {
       key: "node",
       header: "Node",
-      width: "24%",
+      width: "26%",
       cell: (row) => {
         const entry = [row.schema?.module ?? row.module, row.schema?.fn ?? row.fn].filter(Boolean).join(":");
+        const state = stateOf(row);
         return (
-          <span className="contract-node">
-            <span className="contract-node-name">{row.name}</span>
-            {entry && <span className="contract-node-fn">{entry}</span>}
+          <span className="contract-node-cell" data-row-id={row.id}>
+            <span
+              className={`node-card-status${state ? ` status-dot-${state}` : ""}`}
+              title={state ?? "not run"}
+              aria-label={state ?? "not run"}
+            />
+            <span className="contract-node">
+              <span className="contract-node-name">{breakable(row.name)}</span>
+              {entry && <span className="contract-node-fn">{breakable(entry)}</span>}
+            </span>
           </span>
         );
       },
     },
-    { key: "reads", header: "Reads", width: "22%", cell: (row) => datasetButtons(row.inputs, row.schema?.inputs) },
-    { key: "writes", header: "Writes", width: "22%", cell: (row) => datasetButtons(row.outputs, row.schema?.outputs) },
+    { key: "reads", header: "Reads", width: "20%", cell: (row) => datasetButtons(row.inputs, row.schema?.inputs) },
+    { key: "writes", header: "Writes", width: "20%", cell: (row) => datasetButtons(row.outputs, row.schema?.outputs) },
     {
       key: "quality",
       header: "Quality",
-      width: "14%",
+      width: "16%",
       cell: (row) => qualityLine(row.schema?.quality) ?? <span className="contract-none">—</span>,
     },
     {
       key: "last",
       header: "Last run",
-      width: "10%",
+      width: "20%",
       align: "right",
       cell: (row) => {
         const state = stateOf(row);
         if (state && FAILURE_STATUSES.has(state)) return <span className="contract-failed">failed</span>;
         if (state === "running") return <span className="contract-running">running</span>;
+        // How it went, how long it took, and when: the time alone did not say it ran.
         const took = compactDuration(row.schema?.last_execution_duration);
+        const when = formatRelative(row.schema?.last_execution_time);
+        const line = [state, took, when].filter(Boolean).join(" · ");
         return (
-          <span title={row.schema?.last_execution_time ? formatDate(row.schema.last_execution_time) : undefined}>
-            {took ?? <span className="contract-none">—</span>}
+          <span className="contract-last" title={row.schema?.last_execution_time ? formatDate(row.schema.last_execution_time) : undefined}>
+            {line || <span className="contract-none">—</span>}
           </span>
         );
       },
@@ -200,7 +199,7 @@ export function ContractList({
                   schema?.last_execution_time,
                   schema?.last_execution_duration
                 ),
-                absent: "never run on its own",
+                absent: "never run",
                 plain: true,
               },
               ...(schema?.last_execution_error_message

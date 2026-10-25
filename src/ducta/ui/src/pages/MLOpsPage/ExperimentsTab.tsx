@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { colors, styles } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ActionButton } from "../../components/ui/ActionButton";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -394,24 +395,15 @@ export function ExperimentsTab({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <div className="mlops-view-switch" role="group" aria-label="Experiments view">
-            <Button
-              size="sm"
-              variant={view === "experiments" ? "primary" : "ghost"}
-              aria-pressed={view === "experiments"}
-              onClick={() => setView("experiments")}
-            >
-              By experiment
-            </Button>
-            <Button
-              size="sm"
-              variant={view === "runs" ? "primary" : "ghost"}
-              aria-pressed={view === "runs"}
-              onClick={() => setView("runs")}
-            >
-              All runs
-            </Button>
-          </div>
+          <SegmentedControl
+            aria-label="Experiments view"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "experiments", label: "By experiment" },
+              { value: "runs", label: "All runs" },
+            ]}
+          />
           <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
             {view === "runs"
               ? `${runTable?.rows.length ?? 0} run${runTable?.rows.length === 1 ? "" : "s"}`

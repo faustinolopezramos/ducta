@@ -12,7 +12,7 @@ import textwrap
 import pytest
 
 from ducta.core import preflight
-from ducta.setting.project_loader import load_project_v2
+from ducta.setting.project.loader import load_project_v2
 
 _ids = itertools.count()
 
@@ -113,7 +113,7 @@ def test_with_split_enforcement_warn_they_are_warnings(tmp_path, monkeypatch):
 
 
 def test_an_unknown_enforcement_value_is_rejected_when_the_project_loads(tmp_path, monkeypatch):
-    from ducta.setting.project_loader import ProjectConfigError
+    from ducta.setting.project.loader import ProjectConfigError
 
     with pytest.raises(ProjectConfigError, match="split_enforcement"):
         _report(tmp_path, monkeypatch, NODE, settings="settings: {split_enforcement: never}\n")

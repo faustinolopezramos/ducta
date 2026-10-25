@@ -26,3 +26,23 @@ def test_failed_says_failed():
 def test_untested_is_not_ok():
     r = _test_response(None)
     assert r.ok is False and r.message.startswith("Not verified")
+
+
+def test_connections_are_read_from_the_named_project(tmp_path):
+    """Connections live in each project's sources.yaml. Without ``project`` the
+    routes read the workspace root, so a multi-project workspace listed none."""
+    from ducta.api.repositories.project_repository import ProjectRepository
+    from ducta.api.routes.ingestion import _project_manager, _service
+    from ducta.api.workspace.manager import WorkspaceManager
+
+    (tmp_path / "projects").mkdir()
+    ProjectRepository(tmp_path).create("batch", {})
+    (tmp_path / "projects" / "batch" / "config").mkdir()
+    (tmp_path / "projects" / "batch" / "config" / "sources.yaml").write_text(
+        "sources:\n  warehouse:\n    type: postgres\n    host: db\n    port: 5432\n    database: dw\n"
+    )
+    workspace = WorkspaceManager(tmp_path)
+
+    names = [c["name"] for c in _service(_project_manager(workspace, "batch")).list_connections()]
+    assert names == ["warehouse"]
+    assert _service(_project_manager(workspace, None)).list_connections() == []

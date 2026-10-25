@@ -14,6 +14,8 @@ export interface PipelineDialogsProps {
   onCloseRunOptions: () => void;
   onRunWithOptions: (options: RunOptions) => void;
   confirmRun: (() => void) | null;
+  /** The node the confirmed run is limited to; null when the whole pipeline runs. */
+  confirmNode?: string | null;
   onCancelConfirmRun: () => void;
   onConfirmRun: () => void;
   blocker: Blocker;
@@ -31,6 +33,7 @@ export function PipelineDialogs({
   onCloseRunOptions,
   onRunWithOptions,
   confirmRun,
+  confirmNode = null,
   onCancelConfirmRun,
   onConfirmRun,
   blocker,
@@ -53,9 +56,13 @@ export function PipelineDialogs({
       <ConfirmDialog
         open={confirmRun !== null}
         tone="danger"
-        title={`Run ${pipelineId} in ${activeEnv}?`}
-        description={`${activeEnv} is production: this run writes real data. Type the pipeline's name to run it.`}
-        requireTyping={pipelineId ?? ""}
+        title={confirmNode ? `Run node ${confirmNode} in ${activeEnv}?` : `Run ${pipelineId} in ${activeEnv}?`}
+        description={
+          confirmNode
+            ? `${activeEnv} is production: this node writes real data. Type the node's name to run it.`
+            : `${activeEnv} is production: this run writes real data. Type the pipeline's name to run it.`
+        }
+        requireTyping={confirmNode ?? pipelineId ?? ""}
         confirmLabel="Run in production"
         onCancel={onCancelConfirmRun}
         onConfirm={onConfirmRun}

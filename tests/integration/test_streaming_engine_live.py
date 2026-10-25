@@ -113,7 +113,7 @@ def test_an_adaptive_trigger_written_in_yaml_runs(spark, tmp_path, monkeypatch):
     from ducta.api.execution.runner import normalize_execution_context_paths
     from ducta.console.template import TemplateGenerator, TemplateType
     from ducta.core.executors import PipelineExecutor
-    from ducta.setting.project_loader import load_project_v2
+    from ducta.setting.project.loader import load_project_v2
 
     root = tmp_path / "sb"
     TemplateGenerator(root).generate_project(TemplateType.STREAMING_BASIC, "sb")

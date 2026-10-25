@@ -25,7 +25,6 @@
 .mlops-cert--bad { color: var(--danger); }
 .mlops-cert--none { color: var(--text-muted); font-weight: 400; }
 
-.mlops-view-switch { display: inline-flex; gap: 4px; }
 
 .mlops-runtable-note {
   margin: 0 0 var(--space-3);

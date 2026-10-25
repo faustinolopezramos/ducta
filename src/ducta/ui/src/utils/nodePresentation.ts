@@ -23,7 +23,8 @@ export type Medallion = (typeof MEDALLION)[number];
  */
 export function medallionOf(name: string | null | undefined): Medallion | null {
   if (!name) return null;
-  const head = name.split(".")[0]?.trim().toLowerCase();
+  // `bronze.events`, and a stream endpoint's `bronze/fraud_events` alike.
+  const head = name.split(/[./]/)[0]?.trim().toLowerCase();
   return MEDALLION.find((layer) => layer === head) ?? null;
 }
 

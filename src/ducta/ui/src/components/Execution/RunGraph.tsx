@@ -5,6 +5,7 @@ import { useGitFileAt, useServerProject, useWorkspaceFileContent } from "../../a
 import { DagCanvas } from "../Pipeline/DagCanvas";
 import { Skeleton } from "../ui/Skeleton";
 import { joinPath } from "../../pages/CodePage/paths";
+import { NOT_RUN } from "../Pipeline/NodeCard";
 import { itemsFromPipelineYaml } from "./pipelineGraph";
 
 /** Rows in the longest chain of *items* — how tall the graph is drawn. */
@@ -47,6 +48,7 @@ export function RunGraph({
   nodeStates,
   onSelectNode,
   successfulNodes,
+  nodeDurations,
 }: {
   projectId: string;
   pipeline: string;
@@ -58,6 +60,8 @@ export function RunGraph({
    */
   successfulNodes?: string[] | "all";
   onSelectNode?: (node: string) => void;
+  /** Each node's own time in this run (its certificate), shown on its card. */
+  nodeDurations?: Record<string, number>;
 }) {
   // Until someone picks, the version the run used — once the certificate says which.
   const [picked, setAsOf] = useState<"run" | "now" | null>(null);
@@ -74,16 +78,38 @@ export function RunGraph({
   const then = useGitFileAt(path, asOf === "run" ? commit : null);
   const now = useWorkspaceFileContent(asOf === "now" ? path : "");
   const text = asOf === "run" ? (then.data?.exists ? then.data.content : null) : now.data?.content ?? null;
-  const items = useMemo(() => (text ? itemsFromPipelineYaml(text, pipeline) : null), [text, pipeline]);
+  // Keyed by content: the caller builds the map afresh on every render, and a
+  // new items array each time would re-lay the graph out each time.
+  const durationsKey = JSON.stringify(nodeDurations ?? {});
+  const items = useMemo(() => {
+    if (!text) return null;
+    const durations: Record<string, number> = JSON.parse(durationsKey);
+    return (
+      itemsFromPipelineYaml(text, pipeline)?.map((it) =>
+        durations[it.id] != null ? { ...it, lastDuration: durations[it.id] } : it,
+      ) ?? null
+    );
+  }, [text, pipeline, durationsKey]);
   const missingThen = asOf === "run" && then.data && !then.data.exists;
   const height = graphHeight(items);
-  const states = useMemo(() => {
+  const ranStates = useMemo(() => {
     if (!items || !successfulNodes || Object.keys(nodeStates).length > 0) return nodeStates;
     const ran = successfulNodes === "all" ? null : new Set(successfulNodes);
     return Object.fromEntries(
       items.filter((it) => !ran || ran.has(it.id)).map((it) => [it.id, "success"]),
     );
   }, [items, nodeStates, successfulNodes]);
+  // Once we know what the run did, the nodes it left out are dimmed and say so:
+  // they used to look exactly like the ones that ran.
+  const { states, ranIds } = useMemo(() => {
+    const known = Object.keys(ranStates);
+    if (!items || known.length === 0) return { states: ranStates, ranIds: null };
+    const ran = new Set(known);
+    if (items.every((it) => ran.has(it.id))) return { states: ranStates, ranIds: null };
+    const out: Record<string, string> = { ...ranStates };
+    for (const it of items) if (!ran.has(it.id)) out[it.id] = NOT_RUN;
+    return { states: out, ranIds: ran };
+  }, [items, ranStates]);
 
   return (
     <div className="run-graph">
@@ -107,6 +133,7 @@ export function RunGraph({
             fitPadding={RUN_GRAPH_PADDING}
             items={items}
             executionStates={states}
+            highlight={ranIds}
             onSelect={(sel) => sel?.kind === "node" && onSelectNode?.(sel.id)}
           />
         )}

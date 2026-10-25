@@ -48,7 +48,7 @@ class Settings:
     @classmethod
     def of(cls, root: Path) -> Optional["Settings"]:
         """The project's settings, or ``None`` when it does not load."""
-        from ducta.setting.project_loader import ProjectConfigError, validate_project
+        from ducta.setting.project.loader import ProjectConfigError, validate_project
 
         try:
             project = validate_project(root).project

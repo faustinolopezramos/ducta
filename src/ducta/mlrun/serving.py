@@ -44,7 +44,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from loguru import logger
 
-from ducta.setting.project_schema import ModelRef
+from ducta.setting.project.schema import ModelRef
 
 #: Frameworks whose artifact is a pickle: loading one executes it.
 PICKLE_FRAMEWORKS = frozenset({"sklearn", "scikit-learn", "pickle", "joblib", "custom"})

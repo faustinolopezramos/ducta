@@ -1,11 +1,15 @@
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { IconFileCertificate } from "@tabler/icons-react";
+import { IconFileCertificate, IconSearch, IconX } from "@tabler/icons-react";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { DataTable } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { useExecutionList } from "../../api/queries";
-import { useProjectName } from "../../hooks/useProjects";
+import { useProjectList, useProjectName } from "../../hooks/useProjects";
+import { FilterMenu } from "../ExecutionHistoryPage/FilterMenu";
+import "../ExecutionHistoryPage/FilterBar.css";
+import "./CertificateDetail.css";
 import { certificateColumns, type CertificateListItem } from "./certificateColumns";
 
 const FETCH_LIMIT = 200;
@@ -21,9 +25,27 @@ export function CertificatesPage() {
   const navigate = useNavigate();
   const projectName = useProjectName();
   const { data, isLoading, error } = useExecutionList({ limit: FETCH_LIMIT });
-  const rows: CertificateListItem[] = (data?.executions ?? []).filter(
-    (ex: CertificateListItem) => !!ex.certificate_run_id
+  const all: CertificateListItem[] = useMemo(
+    () => (data?.executions ?? []).filter((ex: CertificateListItem) => !!ex.certificate_run_id),
+    [data],
   );
+  // Workspace-wide, so it can get long: narrow it by text, project and
+  // environment, in the same controls the Runs page uses.
+  const { projects } = useProjectList();
+  const [q, setQ] = useState("");
+  const [project, setProject] = useState<string | undefined>();
+  const [env, setEnv] = useState<string | undefined>();
+  const envs = useMemo(() => [...new Set(all.map((ex) => ex.env).filter(Boolean) as string[])].sort(), [all]);
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return all.filter(
+      (ex) =>
+        (!project || ex.project_id === project) &&
+        (!env || ex.env === env) &&
+        (!needle || `${ex.pipeline_name} ${ex.certificate_run_id} ${ex.id}`.toLowerCase().includes(needle)),
+    );
+  }, [all, q, project, env]);
+  const filtering = Boolean(q || project || env);
 
   return (
     <PageContainer>
@@ -31,6 +53,48 @@ export function CertificatesPage() {
         title="Certificates"
         description="The proof artifact every terminating run emits — what ran, against which data, with what result."
       />
+
+      <div className="run-filters" role="search" aria-label="Filter certificates">
+        <label className="run-filters__search">
+          <IconSearch size={13} aria-hidden="true" />
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search pipeline or certificate…"
+            aria-label="Search certificates"
+          />
+        </label>
+        {projects.length > 1 && (
+          <FilterMenu
+            label="Project"
+            options={projects.map((p) => ({ value: p.id, label: p.name }))}
+            selected={project ? [project] : []}
+            onChange={([p]) => setProject(p)}
+          />
+        )}
+        {envs.length > 0 && (
+          <FilterMenu
+            label="Environment"
+            options={envs.map((e) => ({ value: e, label: e }))}
+            selected={env ? [env] : []}
+            onChange={([e]) => setEnv(e)}
+          />
+        )}
+        {filtering && (
+          <button
+            type="button"
+            className="run-filters__clear"
+            onClick={() => {
+              setQ("");
+              setProject(undefined);
+              setEnv(undefined);
+            }}
+          >
+            <IconX size={12} aria-hidden="true" /> Clear filters
+          </button>
+        )}
+      </div>
 
       <DataTable<CertificateListItem>
         columns={certificateColumns(projectName)}
@@ -49,11 +113,15 @@ export function CertificatesPage() {
             : undefined
         }
         empty={
-          <EmptyState
-            icon={IconFileCertificate}
-            title="No certificates yet"
-            description="Run a pipeline to completion to see its Run Certificate here."
-          />
+          filtering ? (
+            <EmptyState icon={IconSearch} title="No certificates match" description="Change or clear the filters." />
+          ) : (
+            <EmptyState
+              icon={IconFileCertificate}
+              title="No certificates yet"
+              description="Run a pipeline to completion to see its Run Certificate here."
+            />
+          )
         }
       />
     </PageContainer>

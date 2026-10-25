@@ -281,8 +281,8 @@ def _handle_pipeline_info(parsed_args, config_manager: ConfigManager) -> int:
 def _handle_schema(parsed_args) -> int:
     import json
 
-    from ducta.setting.project_decompile import write_schemas
-    from ducta.setting.project_schema import json_schema
+    from ducta.setting.project.decompile import write_schemas
+    from ducta.setting.project.schema import json_schema
 
     out = getattr(parsed_args, "out", None)
     if out:
@@ -298,7 +298,7 @@ _INSPECT_COMMANDS = ("show", "explain", "diff", "convert")
 
 def _handle_inspect(cmd: str, parsed_args, config_manager: ConfigManager) -> int:
     """``show`` / ``explain`` / ``diff`` / ``convert``: what the project resolves to."""
-    from ducta.setting.project_loader import ProjectConfigError
+    from ducta.setting.project.loader import ProjectConfigError
 
     assert config_manager.project_root is not None  # ConfigManager requires a project
     root = Path(config_manager.project_root)
@@ -321,12 +321,12 @@ def _env(value: Optional[str]) -> Optional[str]:
 
 
 def _show(root: Path, parsed_args) -> int:
-    from ducta.setting import project_inspect as inspect
+    from ducta.setting.project import inspect
 
     env = _env(getattr(parsed_args, "env", None))
     fmt = getattr(parsed_args, "output_format", "yaml")
     if getattr(parsed_args, "engine", False):
-        from ducta.setting.project_loader import compile_project, validate_project
+        from ducta.setting.project.loader import compile_project, validate_project
 
         data: Any = compile_project(validate_project(root, env))
     elif getattr(parsed_args, "ml", False):
@@ -340,8 +340,8 @@ def _show(root: Path, parsed_args) -> int:
 def _explain(root: Path, parsed_args) -> int:
     import difflib
 
-    from ducta.setting import project_inspect as inspect
-    from ducta.setting.project_loader import apply_environment, read_project
+    from ducta.setting.project import inspect
+    from ducta.setting.project.loader import apply_environment, read_project
 
     env = _env(getattr(parsed_args, "env", None))
     result = inspect.explain(root, parsed_args.path, env)
@@ -371,7 +371,7 @@ def _short(value: Any) -> str:
 
 
 def _diff(root: Path, parsed_args) -> int:
-    from ducta.setting import project_inspect as inspect
+    from ducta.setting.project import inspect
 
     a, b = _env(parsed_args.env_a), _env(parsed_args.env_b)
     changes = inspect.diff_trees(inspect.resolved_tree(root, a), inspect.resolved_tree(root, b))
@@ -386,7 +386,7 @@ def _diff(root: Path, parsed_args) -> int:
 
 
 def _convert(root: Path, parsed_args) -> int:
-    from ducta.setting import project_inspect as inspect
+    from ducta.setting.project import inspect
 
     written = inspect.convert_project(root, Path(parsed_args.out), parsed_args.to_format)
     logger.success(

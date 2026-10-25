@@ -649,11 +649,13 @@
   /* Icon-only at this width — except text-only buttons, which have no icon to fall back to. */
   .pipeline-env-label,
   .canvas-segment span:not(.canvas-segment__keep),
-  .canvas-text-btn span {
+  .canvas-text-btn > span:not(.canvas-view__name):not(.canvas-popover__caret),
+  .canvas-view__summary,
+  .canvas-view__colon {
     display: none;
   }
 
-  .canvas-text-btn {
+  .canvas-controls--top-right > .canvas-text-btn {
     width: 28px;
     padding: 0;
   }
@@ -667,6 +669,12 @@
   /* "Projects" is one rail click away; the trail keeps the project and pipeline. */
   .pipeline-trail-link--root,
   .pipeline-trail-sep--root { display: none; }
+}
+
+@media (max-width: 1024px) {
+  /* The secondary actions go icon-only (each keeps its name as a tooltip and
+     aria-label) so Run, the page's main action, is never pushed off screen. */
+  .pipeline-action-label { display: none; }
 }
 
 @media (max-width: 640px) {
@@ -690,116 +698,13 @@
 .key-hint.cmdk-item-hint { flex: 0 0 auto; max-width: none; font-family: var(--font-sans); }
 
 /* A canvas squeezed by the code pane or the inspector gets the narrow-window
-   chrome: icon-only buttons, and the filter keeps its search, not its chips. */
+   chrome: icon-only lenses and Add node, a shorter search, and View without
+   its summary — every control stays, only its words go. */
 @container canvas (max-width: 760px) {
   .canvas-segment span:not(.canvas-segment__keep),
-  .canvas-text-btn span { display: none; }
-  .canvas-text-btn { width: 28px; padding: 0; }
-  .canvas-filter__chip { display: none; }
-}
-
-/* ── Pipeline Flow Bar (Sources ➔ Transformations ➔ Sinks) ────────────── */
-.pipeline-flow-bar {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 15;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill, 999px);
-  box-shadow: var(--shadow-sm, 0 1px 3px rgba(0, 0, 0, 0.05));
-  font-size: var(--text-2xs, 11px);
-  max-width: calc(100% - 240px);
-  overflow-x: auto;
-  pointer-events: auto;
-}
-
-.pipeline-flow-sep {
-  color: var(--text-dim);
-  flex-shrink: 0;
-}
-
-.pipeline-flow-stage {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 2px 8px;
-  border-radius: var(--radius-pill, 999px);
-  background: transparent;
-  border: 1px solid transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: all var(--dur-fast, 120ms) var(--ease-out);
-  font-size: inherit;
-}
-
-.pipeline-flow-stage:hover {
-  background: var(--overlay-subtle, rgba(0, 0, 0, 0.04));
-  color: var(--text);
-}
-
-.pipeline-flow-stage.is-active {
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  border-color: var(--primary);
-  color: var(--text);
-}
-
-.pipeline-flow-stage-title {
-  font-weight: 500;
-}
-
-.pipeline-flow-stage-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--surface-secondary, rgba(0, 0, 0, 0.06));
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-dim);
-}
-
-.pipeline-flow-stage-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-.bronze-dot { background: #cd7f32; }
-.silver-dot { background: #94a3b8; }
-.gold-dot { background: #eab308; }
-
-.stage-health-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  font-size: 10px;
-  padding: 1px 4px;
-  border-radius: 4px;
-}
-
-.stage-health--failed {
-  background: color-mix(in srgb, var(--error, #ef4444) 15%, transparent);
-  color: var(--error, #ef4444);
-  font-weight: 600;
-}
-
-.stage-health--stale {
-  background: color-mix(in srgb, var(--warning, #f59e0b) 15%, transparent);
-  color: var(--warning, #f59e0b);
-  font-weight: 600;
-}
-
-.stage-health--ok {
-  color: var(--success, #10b981);
+  .canvas-text-btn > span:not(.canvas-view__name):not(.canvas-popover__caret),
+  .canvas-view__summary,
+  .canvas-view__colon { display: none; }
+  .canvas-controls--top-right > .canvas-text-btn { width: 28px; padding: 0; }
+  .canvas-search__field input { width: 90px; }
 }

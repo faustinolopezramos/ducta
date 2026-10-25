@@ -197,3 +197,41 @@ class TestFormat2Inputs:
 
     def test_outputs_are_unchanged(self):
         assert node_io({"output": ["silver.x"]}, "output") == ["silver.x"]
+
+
+class TestStreamEndpoints:
+    """A stream node reads and writes `{format, path, options}` endpoints with no
+    dataset name: its format and path came out as two "datasets" (`delta_stream`,
+    `kafka`) and its outputs not at all, so nothing connected stream nodes."""
+
+    BRONZE = {
+        "inputs": [{"format": "kafka", "options": {"subscribe": "ecommerce-events"}}],
+        "outputs": [
+            {"format": "delta", "path": "${output_path}/${environment}/bronze/fraud_events"}
+        ],
+    }
+    SILVER = {
+        "inputs": [
+            {"format": "delta_stream", "path": "${output_path}/${environment}/bronze/fraud_events"}
+        ],
+        "outputs": [
+            {"format": "delta", "path": "${output_path}/${environment}/silver/fraud_events_clean"}
+        ],
+    }
+
+    def test_the_writers_output_and_the_readers_input_share_a_name(self):
+        assert node_io(self.BRONZE, "output") == ["bronze/fraud_events"]
+        assert node_io(self.SILVER, "input") == ["bronze/fraud_events"]
+
+    def test_a_kafka_source_is_named_by_its_topic(self):
+        assert node_io(self.BRONZE, "input") == ["kafka:ecommerce-events"]
+
+    def test_a_format_2_input_mapping_is_unchanged(self):
+        assert node_io({"inputs": [{"df": "silver.a"}]}, "input") == ["silver.a"]
+
+    def test_a_stream_endpoints_path_carries_its_medallion_layer(self):
+        from ducta.api.models.dataset import medallion_layer
+
+        assert medallion_layer("bronze/fraud_events") == "bronze"
+        assert medallion_layer("silver.education.student") == "silver"
+        assert medallion_layer("kafka:ecommerce-events") is None

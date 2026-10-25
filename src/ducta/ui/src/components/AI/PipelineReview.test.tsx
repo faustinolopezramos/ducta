@@ -14,6 +14,7 @@ const review: AIPipelineReview = {
   created_at: "2026-10-15T17:00:00+00:00",
   nodes: ["clean_orders", "daily_revenue"],
   model: "qwen2.5-coder:14b",
+  usage: { input_tokens: 9840, output_tokens: 1210 },
   dropped: 1,
   notes: "",
   ideas: ["Orders per store and day, from silver.sales.orders"],
@@ -87,6 +88,7 @@ describe("PipelineReview", () => {
   it("shows the kept review by node, with a way to act on each finding", async () => {
     const { onOpenNode } = renderIt();
     expect(await screen.findByText("silver.sales: 1 high, 1 medium, 1 low")).toBeInTheDocument();
+    expect(screen.getByText(/Review · dev · qwen2.5-coder:14b · .* · 9,840 tokens in · 1,210 out/)).toBeInTheDocument();
     const node = screen.getByRole("region", { name: "clean_orders" });
     expect(within(node).getByText("Compares amount before casting it")).toBeInTheDocument();
     expect(within(node).getByRole("link", { name: "sales.py:9" })).toBeInTheDocument();

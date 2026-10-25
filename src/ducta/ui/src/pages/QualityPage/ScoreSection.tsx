@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { colors } from "../../theme/tokens";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -31,18 +32,34 @@ function metricCard(title: string, value: string) {
   );
 }
 
+/** A 0–1 score as a percentage: "100%", "97.3%". */
+export function scorePercent(value: number | null | undefined): string {
+  if (typeof value !== "number") return "—";
+  const pct = value * 100;
+  return `${Number.isInteger(pct) ? pct : pct.toFixed(1)}%`;
+}
+
 export function ScoreSection({
   runId,
   env,
   pipelineName,
   project,
   onClear,
+  title = "Pipeline quality score",
+  runLabel,
+  picker,
 }: {
   runId: string;
   env?: string;
   pipelineName?: string;
   project?: string;
-  onClear: () => void;
+  /** Only for a run someone picked: the latest run's score has nothing to clear. */
+  onClear?: () => void;
+  title?: string;
+  /** The run in words (pipeline · when); the raw id otherwise. */
+  runLabel?: string;
+  /** Choose another run. */
+  picker?: ReactNode;
 }) {
   const score = useQualityScore(runId, env, pipelineName, project);
 
@@ -51,14 +68,17 @@ export function ScoreSection({
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
         <IconGauge size={16} color={colors.accent} />
         <h2 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 600, color: colors.text, flex: 1 }}>
-          Pipeline quality score
-          <span style={{ fontFamily: "var(--font-mono)", fontWeight: 400, fontSize: "var(--text-xs)", color: colors.textMuted, marginLeft: 8 }}>
-            {runId}
+          {title}
+          <span style={{ fontFamily: runLabel ? "var(--font-sans)" : "var(--font-mono)", fontWeight: 400, fontSize: "var(--text-xs)", color: colors.textMuted, marginLeft: 8 }}>
+            {runLabel ?? runId}
           </span>
         </h2>
-        <Button variant="ghost" size="sm" onClick={onClear} leftIcon={<IconX size={14} />}>
-          Clear
-        </Button>
+        {picker}
+        {onClear && (
+          <Button variant="ghost" size="sm" onClick={onClear} leftIcon={<IconX size={14} />}>
+            Clear
+          </Button>
+        )}
       </div>
 
       {score.isLoading && <Skeleton variant="text" width="50%" />}
@@ -75,9 +95,9 @@ export function ScoreSection({
       {score.data && (
         <div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
-            {metricCard("Health index", score.data.health_index?.toFixed(3) ?? "—")}
-            {metricCard("Sanity score", score.data.sanity_score?.toFixed(3) ?? "—")}
-            {metricCard("DQ score", score.data.dq_score?.toFixed(3) ?? "—")}
+            {metricCard("Health index", scorePercent(score.data.health_index))}
+            {metricCard("Sanity score", scorePercent(score.data.sanity_score))}
+            {metricCard("DQ score", scorePercent(score.data.dq_score))}
           </div>
           {score.data.nodes_blocked?.length > 0 && (
             <div style={{ marginBottom: 10 }}>

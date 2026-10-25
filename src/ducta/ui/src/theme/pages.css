@@ -88,13 +88,9 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* The view choice is a SegmentedControl; this only spaces it from the actions. */
 .view-switch {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding-right: 8px;
-  margin-right: 4px;
-  border-right: 1px solid var(--border);
+  margin-right: 8px;
 }
 
 .stat-badge {

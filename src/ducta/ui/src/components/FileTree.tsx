@@ -30,8 +30,11 @@ interface FileTreeProps {
   generated?: string[];
 }
 
-/** Operating-system and tooling litter nobody opens on purpose. */
-const NOISE = new Set([".DS_Store", "Thumbs.db", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".ipynb_checkpoints"]);
+/** Operating-system, tooling and editor/agent litter nobody opens on purpose in Ducta. */
+const NOISE = new Set([
+  ".DS_Store", "Thumbs.db", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".ipynb_checkpoints",
+  ".claude", ".idea", ".vscode",
+]);
 const visible = <T extends { name: string }>(entries: T[] | undefined): T[] => (entries ?? []).filter((e) => !NOISE.has(e.name));
 
 function FileIcon({ name }: { name: string }) {

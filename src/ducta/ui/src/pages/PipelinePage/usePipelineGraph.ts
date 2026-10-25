@@ -8,6 +8,7 @@ import {
 } from "../../api/queries";
 import { useProjectList, useProjectPipelines } from "../../hooks/useProjects";
 import { useBuilderStore } from "../../store/builderStore";
+import { useSourceStore } from "../../store/workspace";
 import { resolveDepId, computeLevels } from "../../utils/dagValidation";
 import { computeLineage } from "../../utils/lineage";
 import { dependsOnFromSpecs, descendantsOf, orderPipelines, runChainOf } from "../../utils/pipelineChain";
@@ -60,7 +61,7 @@ export function usePipelineGraph({
   // focus panel needs the full record. Both come from the same request.
   const { data: datasetsData, isLoading: datasetsLoading } = useProjectDatasets(projectId ?? "");
   const datasetList = useMemo(() => datasetsData?.datasets ?? [], [datasetsData]);
-  const datasetMap = useMemo(() => {
+  const registryDatasets = useMemo(() => {
     const map = new Map<string, CanvasDataset>();
     for (const d of datasetList) {
       map.set(d.name, {
@@ -100,9 +101,11 @@ export function usePipelineGraph({
   );
 
   // ── Nodes: schema, items, wiring ─────────────────────────────────────────
+  const activeEnv = useSourceStore((s) => s.activeEnv) || "base";
   const { data: schemasData, isLoading: schemasLoading } = usePipelineNodeSchemas(
     projectId ?? "",
-    pipelineId ?? ""
+    pipelineId ?? "",
+    activeEnv
   );
   const schemaById = useMemo(() => {
     const map = new Map<string, NodeSchema>();
@@ -140,6 +143,22 @@ export function usePipelineGraph({
   }, [drawnPipelines, pipelineById, pipelineId, schemaById]);
 
   const itemById = useMemo(() => new Map(dagItems.map((it) => [it.id, it])), [dagItems]);
+
+  // What the chips show: the catalog, plus the format a stream node declares
+  // inline on its endpoint — without it a Kafka or Delta endpoint read
+  // "format not declared" although its node says exactly what it is.
+  const datasetMap = useMemo(() => {
+    const map = new Map(registryDatasets);
+    for (const item of dagItems) {
+      for (const port of [...(item.inputs ?? []), ...(item.outputs ?? [])]) {
+        if (!port.format) continue;
+        const known = map.get(port.name);
+        if (known?.declared && known.format) continue;
+        map.set(port.name, { ...(known ?? { name: port.name }), declared: true, format: port.format });
+      }
+    }
+    return map;
+  }, [registryDatasets, dagItems]);
   const isOnCanvas = useCallback((nodeId: string) => itemById.has(nodeId), [itemById]);
 
   /**
@@ -248,7 +267,7 @@ export function usePipelineGraph({
 
   /**
    * What each card shows as its state. A live run's states win outright; with
-   * no run in view, a node shows how its last run on its own ended.
+   * no run in view, a node shows how the last run that included it ended.
    */
   const nodeStates = useMemo(() => {
     if (Object.keys(executionStates).length > 0) return executionStates;

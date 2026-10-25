@@ -46,21 +46,19 @@ from ducta.ai.agents.architect.blueprint import (
     module_path,
     render,
 )
-from ducta.ai.builder import (
+from ducta.ai.builder import build_context
+from ducta.ai.drafts import Attempt, Draft, utc_now
+from ducta.ai.errors import AIConfigError, AIConflictError
+from ducta.ai.loop import (
     NEW,
     Assembled,
-    Attempt,
-    Draft,
     ParsedAnswer,
     Scope,
-    _judge,
-    _key,
-    _now,
-    _run,
-    _validate,
-    build_context,
+    judge_problems,
+    problem_key,
+    run_loop,
+    validate_files,
 )
-from ducta.ai.errors import AIConfigError, AIConflictError
 from ducta.ai.providers import LLMProvider
 
 BUILD_PROMPT = """\
@@ -138,7 +136,7 @@ def module_request(root: Path, bp: Blueprint, pipe: PipelineSpec, rel: str, ctx:
 
 def module_problems(source: str, rel: str, pipe: PipelineSpec) -> List[str]:
     """Why a module the model wrote for *pipe* is not accepted (empty: accepted)."""
-    from ducta.ai.review import ReviewFacts, _code_findings
+    from ducta.ai.review import ReviewFacts, code_findings
 
     try:
         tree = ast.parse(source)
@@ -178,7 +176,7 @@ def module_problems(source: str, rel: str, pipe: PipelineSpec) -> List[str]:
     facts = ReviewFacts(pipe.name, "", "", "dev", {}, {}, {})
     facts.function = {"file": rel, "line": 1, "function": ""}
     facts.code_lines = lines
-    problems += [f"{rel}:{f.line or 1}: {f.title} — {f.suggestion}" for f in _code_findings(facts)]
+    problems += [f"{rel}:{f.line or 1}: {f.title} — {f.suggestion}" for f in code_findings(facts)]
     return problems
 
 
@@ -233,7 +231,7 @@ def scaffold(root: Path, text: str) -> Draft:
         request=(bp.goal or bp.name) if bp else "blueprint",
         provider="",
         model="",
-        created_at=_now(),
+        created_at=utc_now(),
         ok=report.ok,
         files=files,
         base=base,
@@ -272,8 +270,8 @@ def build(
             + "; ".join(errors[:5])
             + ". Revise it (`ducta ai revise`) and build again."
         )
-    current = _validate(root, {})
-    baseline = {_key(p) for p in current if p.get("severity") == "error"}
+    current = validate_files(root, {})
+    baseline = {problem_key(p) for p in current if p.get("severity") == "error"}
     built: Dict[str, str] = {}
     attempts: List[Attempt] = []
     notes: List[str] = []
@@ -291,14 +289,13 @@ def build(
             if on_attempt:
                 on_attempt(attempt)
 
-        part = _run(
+        part = run_loop(
             root,
             provider,
             system=BUILD_PROMPT,
             first_message=module_request(root, bp, pipe, rel, ctx),
             scope=Scope(kind="new", purpose="architect"),
             request=f"{bp.name}: module of {name}",
-            ctx=ctx,
             max_attempts=max_attempts,
             on_attempt=tagged,
             current=current,
@@ -317,8 +314,8 @@ def build(
             notes.append(f"{rel}: {part.notes}")
 
     files, base = render(root, bp, existing, built)
-    problems = _validate(root, files)
-    blocking = _judge(problems, baseline, NEW)
+    problems = validate_files(root, files)
+    blocking = judge_problems(problems, baseline, NEW)
     rejected: List[Dict[str, Any]] = []
     if failed is not None:
         rejected = [p for p in failed.blocking if p not in blocking]
@@ -340,7 +337,7 @@ def build(
         request=bp.goal or bp.name,
         provider=provider.config.provider,
         model=(failed.model if failed else provider.config.model) or "",
-        created_at=_now(),
+        created_at=utc_now(),
         ok=failed is None and not blocking,
         files=files,
         base=base,

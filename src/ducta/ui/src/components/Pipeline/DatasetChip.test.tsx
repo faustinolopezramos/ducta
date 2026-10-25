@@ -23,7 +23,7 @@ const declared: CanvasDataset = {
 describe("DatasetChip", () => {
   it("names the dataset and its real format", () => {
     render(<DatasetChip dataset={declared} />);
-    expect(screen.getByText("silver.clean_results")).toBeInTheDocument();
+    expect(screen.getByTitle("silver.clean_results")).toBeInTheDocument();
     expect(screen.getByText("delta, merge, 2 M rows")).toBeInTheDocument();
   });
 
@@ -84,13 +84,13 @@ describe("DatasetChip", () => {
   describe("semantic zoom", () => {
     it("at `detail` shows the name and the metadata line", () => {
       const { container } = render(<DatasetChip dataset={declared} tier="detail" />);
-      expect(screen.getByText("silver.clean_results")).toBeInTheDocument();
+      expect(screen.getByTitle("silver.clean_results")).toBeInTheDocument();
       expect(container.querySelector(".ds-chip-meta")).not.toBeNull();
     });
 
     it("at `flow` keeps the name and drops the metadata", () => {
       const { container } = render(<DatasetChip dataset={declared} tier="flow" />);
-      expect(screen.getByText("silver.clean_results")).toBeInTheDocument();
+      expect(screen.getByTitle("silver.clean_results")).toBeInTheDocument();
       expect(container.querySelector(".ds-chip-meta")).toBeNull();
     });
 

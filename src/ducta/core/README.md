@@ -53,7 +53,7 @@ Ducta Core is the orchestration layer, implementing:
 
 ## 2. Configuration & Schemas
 
-Core does not read project files — it consumes the `Context` that `ducta.setting.project_loader` compiles from `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml`. Its behavior is driven by the engine settings (`settings:` in `ducta.yaml`, compiled into `global_config`) and per-node/per-pipeline blocks:
+Core does not read project files — it consumes the `Context` that `ducta.setting.project.loader` compiles from `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml`. Its behavior is driven by the engine settings (`settings:` in `ducta.yaml`, compiled into `global_config`) and per-node/per-pipeline blocks:
 
 *   **`max_parallel_nodes`**: Thread-pool width for parallel node execution.
 *   **`execution_timeout_seconds` / `node_timeout_seconds`**: Whole-pipeline and per-node time limits (capped at 24h).

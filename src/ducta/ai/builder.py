@@ -20,23 +20,16 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-import difflib
 import functools
-import hashlib
-import json
 import os
 import re
 import shutil
 import sys
-import uuid
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Set, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.ai.config import AIConfig
 from ducta.ai.context import (
     MAX_CHARS,
     SKIP_DIRS,
@@ -47,23 +40,45 @@ from ducta.ai.context import (
     normalize_location,
     redact,
 )
-from ducta.ai.errors import (
-    AICancelledError,
-    AIConfigError,
-    AIConflictError,
-    AIEnvironmentError,
-    AIError,
-    AINotFoundError,
+from ducta.ai.drafts import (
+    Attempt,
+    Draft,
+    delete_draft,
+    drafts_dir,
+    list_drafts,
+    load_draft,
+    read_text,
+    save_draft,
+    text_sha,
+    utc_now,
 )
-from ducta.ai.providers import ChatMessage, Completion, LLMProvider
-from ducta.setting.project_loader import (
+from ducta.ai.errors import AIConfigError, AIConflictError, AIEnvironmentError, AINotFoundError
+from ducta.ai.loop import (
+    AGAIN,
+    MIN_CONTEXT_CHARS,
+    NEW,
+    Assembled,
+    ParsedAnswer,
+    Scope,
+    concerns,
+    describe_problem,
+    judge_problems,
+    message_budget,
+    parse_answer,
+    problem_key,
+    run_loop,
+    too_large,
+    validate_files,
+)
+from ducta.ai.providers import ChatMessage, LLMProvider
+from ducta.setting.project.loader import (
     CATALOG_DIR,
     PIPELINES_DIR,
     catalog_location,
     visible_in,
 )
 
-_BASE_PROMPT = """\
+BASE_PROMPT = """\
 You are the pipeline builder of Ducta, a data-pipeline framework. You write \
 format-2 project files that pass Ducta's validator on the first try.
 
@@ -144,14 +159,9 @@ name itself is the problem.
 - Explain the cause in one or two lines, in the language of the request.
 """
 
-SYSTEM_PROMPT = _BASE_PROMPT + NEW_RULES
-FIX_PROMPT = _BASE_PROMPT + FIX_RULES
+SYSTEM_PROMPT = BASE_PROMPT + NEW_RULES
+FIX_PROMPT = BASE_PROMPT + FIX_RULES
 
-_BLOCK = re.compile(
-    r"^[ \t]*```(?P<lang>[\w+-]*)[ \t]*(?P<meta>[^\n`]*)\n" r"(?:(?P<body>.*?)\n)?[ \t]*```[ \t]*$",
-    re.DOTALL | re.MULTILINE,
-)
-_FILE_META = re.compile(r"(?:file|path)\s*[=:]\s*[\"']?(?P<path>[^\s\"']+)")
 _RUN = re.compile(r"run:\s*[\"']?([\w.]+):")
 #: Python runs these on its own (pytest, site, packaging): a draft never adds one.
 _AUTO_RUN = {"conftest.py", "sitecustomize.py", "usercustomize.py", "setup.py", "noxfile.py"}
@@ -171,7 +181,7 @@ _CATALOG_KEYS = {
     "table",
 }
 #: The most a fix may show the model of its editable files, in characters.
-_MAX_EDITABLE_CHARS = 60_000
+MAX_EDITABLE_CHARS = 60_000
 
 
 _STDLIB: FrozenSet[str] = frozenset(getattr(sys, "stdlib_module_names", ()))
@@ -203,59 +213,7 @@ def _shadows(root: Path, p: PurePosixPath) -> Optional[str]:
     return None
 
 
-def _clean_path(path: str) -> str:
-    """A path as the model wrote it, without the ``./`` some models put in front."""
-    while path.startswith("./"):
-        path = path[2:]
-    return path
-
-
-# ── the model's answer ──────────────────────────────────────────────────────
-
-
-@dataclass
-class ParsedAnswer:
-    files: Dict[str, str] = field(default_factory=dict)
-    catalog: Optional[str] = None
-    notes: str = ""
-    #: Blocks with no file name: (language, body). Small models often drop the
-    #: info string; :func:`assemble` places them when the content says where.
-    unnamed: List[Tuple[str, str]] = field(default_factory=list)
-
-
-def parse_answer(text: str) -> ParsedAnswer:
-    """The files and catalog additions in a model's answer."""
-    out = ParsedAnswer()
-    rest = text
-    for m in _BLOCK.finditer(text):
-        meta, body = m.group("meta").strip(), m.group("body") or ""
-        rest = rest.replace(m.group(0), "")
-        found = _FILE_META.search(meta)
-        if found:
-            out.files[_clean_path(found.group("path"))] = body.rstrip() + "\n"
-        elif meta.lower().startswith("catalog"):
-            out.catalog = ((out.catalog or "") + "\n" + body).strip() + "\n"
-        else:
-            # A header comment on the first line is the other common shape.
-            first, _, remainder = body.partition("\n")
-            header = re.match(r"#\s*(?:file|path)\s*[:=]\s*(\S+)", first.strip())
-            if header:
-                out.files[_clean_path(header.group(1))] = remainder.rstrip() + "\n"
-            elif body.strip():
-                out.unnamed.append((m.group("lang").lower(), body.rstrip() + "\n"))
-    out.notes = rest.strip()
-    return out
-
-
-def _sha(text: Optional[str]) -> Optional[str]:
-    return None if text is None else hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _read(path: Path) -> Optional[str]:
-    return path.read_text(encoding="utf-8") if path.is_file() else None
-
-
-def _is_pipeline(rel: str) -> bool:
+def is_pipeline_file(rel: str) -> bool:
     p = PurePosixPath(rel)
     # A module may live in pipelines/ too, when the project keeps its code there.
     return bool(p.parts) and p.parts[0] == PIPELINES_DIR and p.suffix != ".py"
@@ -272,39 +230,6 @@ def _outside(root: Path, rel: str) -> Optional[str]:
     if not (Path(root) / rel).resolve().is_relative_to(Path(root).resolve()):
         return f"{rel}: paths must be inside the project"
     return None
-
-
-# ── what a draft may touch ──────────────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class Scope:
-    """What a draft may touch."""
-
-    #: ``new``: one new pipeline, new modules, new datasets. ``fix``: also a
-    #: rewrite of the files in ``editable``.
-    kind: str = "new"
-    editable: FrozenSet[str] = frozenset()
-    #: The pipeline being fixed.
-    pipeline: Optional[str] = None
-    #: What the draft is for, when not ``kind`` (``quality``, ``docs``: see
-    #: :mod:`ducta.ai.proposals`), and the node it is about, if one.
-    purpose: str = ""
-    target: Optional[str] = None
-
-
-NEW = Scope()
-
-
-@dataclass
-class Assembled:
-    #: Project-relative path → full new text.
-    files: Dict[str, str] = field(default_factory=dict)
-    #: Why parts of the answer were not used; sent back to the model.
-    rejected: List[str] = field(default_factory=list)
-    new_datasets: List[str] = field(default_factory=list)
-    #: SHA-256 of each file in ``files`` as it was read to build it (``None``: absent).
-    base: Dict[str, Optional[str]] = field(default_factory=dict)
 
 
 def _check_path(root: Path, rel: str, scope: Scope = NEW) -> Optional[str]:
@@ -398,7 +323,7 @@ def _new_modules(root: Path, answer: ParsedAnswer) -> Set[str]:
     """Modules the answer's pipeline runs that do not exist yet."""
     out: Set[str] = set()
     for rel, text in answer.files.items():
-        if _is_pipeline(rel):
+        if is_pipeline_file(rel):
             out |= {m for m in _modules_run_by(root, text) if not (root / m).exists()}
     return out
 
@@ -416,8 +341,8 @@ def _place_unnamed(root: Path, answer: ParsedAnswer, scope: Scope = NEW) -> List
         except yaml.YAMLError:
             data = None
         if isinstance(data, dict) and isinstance(data.get("nodes"), dict) and data["nodes"]:
-            if not any(_is_pipeline(r) for r in answer.files):
-                own = sorted(r for r in scope.editable if _is_pipeline(r))
+            if not any(is_pipeline_file(r) for r in answer.files):
+                own = sorted(r for r in scope.editable if is_pipeline_file(r))
                 first = next(iter(data["nodes"]))
                 answer.files[own[0] if own else f"{PIPELINES_DIR}/{first}.yaml"] = body
             continue
@@ -458,14 +383,14 @@ def assemble(
         if why:
             out.rejected.append(why)
         else:
-            current = _read(root / rel)
+            current = read_text(root / rel)
             if rel in scope.editable and text == current:
                 continue  # returned unchanged: not part of the draft
             out.files[rel] = text
-            out.base[rel] = _sha(current)
+            out.base[rel] = text_sha(current)
 
     if scope.kind == "new":
-        pipelines = [r for r in out.files if _is_pipeline(r)]
+        pipelines = [r for r in out.files if is_pipeline_file(r)]
         if not pipelines:
             out.rejected.append("The answer has no ```yaml file=pipelines/<name>.yaml block")
         for extra in pipelines[1:]:
@@ -492,7 +417,7 @@ def assemble(
         new = {k: v for k, v in new.items() if k not in bad}
         if new:
             out.new_datasets = list(new)
-            rel, text, base = _catalog_with(root, new, pipeline)
+            rel, text, base = catalog_with(root, new, pipeline)
             out.files[rel] = text
             out.base[rel] = base
 
@@ -501,11 +426,29 @@ def assemble(
     return out
 
 
+def default_assembler(
+    root: Path, ctx: ProjectContext, scope: Scope
+) -> Callable[[ParsedAnswer], Assembled]:
+    """How ``new`` and ``fix`` answers become a draft: :func:`assemble`, plus the code review.
+
+    The code the draft adds is held to the same review as an extension's or
+    Architect's (what was already in a file is not the draft's).
+    """
+    from ducta.ai.extend import new_code_problems
+
+    def assembler(answer: ParsedAnswer) -> Assembled:
+        assembled = assemble(root, ctx, answer, scope)
+        assembled.rejected += new_code_problems(root, assembled.files)
+        return assembled
+
+    return assembler
+
+
 def _outputs_of(files: Dict[str, str]) -> Set[str]:
     """Datasets the draft's pipeline files write."""
     out: Set[str] = set()
     for rel, text in files.items():
-        if not _is_pipeline(rel):
+        if not is_pipeline_file(rel):
             continue
         try:
             data = yaml.safe_load(text)
@@ -565,7 +508,7 @@ def _catalog_problems(
     return out
 
 
-def _catalog_with(
+def catalog_with(
     root: Path, entries: Dict[str, Any], pipeline: str
 ) -> Tuple[str, str, Optional[str]]:
     """Where new catalog entries go, that file's full text with them, and the hash it had."""
@@ -581,152 +524,10 @@ def _catalog_with(
         )
     rel = target.relative_to(root).as_posix()
     header = f"# Added by `ducta ai` for pipeline {pipeline}\n"
-    current = _read(target)
+    current = read_text(target)
     if current is None:
         return rel, header + addition, None
-    return rel, current.rstrip("\n") + "\n\n" + header + addition, _sha(current)
-
-
-# ── drafts ──────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class Attempt:
-    number: int
-    files: List[str]
-    #: Errors the draft is responsible for (see :func:`_judge`).
-    errors: int
-    warnings: int
-    rejected: List[str]
-    usage: Dict[str, int]
-    #: The first few problems, as sent back to the model: what the attempt got wrong.
-    messages: List[str] = field(default_factory=list)
-
-
-@dataclass
-class Draft:
-    id: str
-    request: str
-    provider: str
-    model: str
-    created_at: str
-    ok: bool
-    files: Dict[str, str]
-    #: SHA-256 of each file as it was when the draft was made (``None``: did not exist).
-    base: Dict[str, Optional[str]]
-    #: Every problem of the project with the draft applied, plus rejections.
-    problems: List[Dict[str, Any]]
-    notes: str = ""
-    new_datasets: List[str] = field(default_factory=list)
-    attempts: List[Attempt] = field(default_factory=list)
-    #: The model's last answer as it came, for when the draft is not what was expected.
-    raw_answer: str = ""
-    #: ``new``, ``fix``, ``quality`` (a node's checks) or ``docs`` (descriptions).
-    kind: str = "new"
-    #: The pipeline fixed, for a fix; the node's pipeline, for ``quality``.
-    pipeline: Optional[str] = None
-    #: The node a ``quality`` draft is about.
-    target: Optional[str] = None
-    #: The environment a proposal measured its data in.
-    env: Optional[str] = None
-    #: What Ducta checked the draft against, in words ("Proven on 2,431 rows of dev").
-    evidence: str = ""
-    #: Problems the draft introduces (or, for a fix, leaves on its pipeline).
-    blocking: List[Dict[str, Any]] = field(default_factory=list)
-    applied_at: Optional[str] = None
-    #: The draft this one revises ("Ask for changes"), if any.
-    revision_of: Optional[str] = None
-    #: The first message the model was sent, so a revision continues the same conversation.
-    prompt: str = ""
-    #: SHA-256 of each file the prompt showed in full (a fix's editable files):
-    #: a revision re-sends that prompt, so it refuses if one changed since.
-    seen: Dict[str, Optional[str]] = field(default_factory=dict)
-
-    @property
-    def errors(self) -> List[Dict[str, Any]]:
-        return [p for p in self.problems if p.get("severity") == "error"]
-
-    def diff(self, root: Path) -> str:
-        chunks: List[str] = []
-        for rel, text in self.files.items():
-            before = _read(root / rel) or ""
-            chunks.extend(
-                difflib.unified_diff(
-                    before.splitlines(keepends=True),
-                    text.splitlines(keepends=True),
-                    fromfile=f"a/{rel}" if before else "/dev/null",
-                    tofile=f"b/{rel}",
-                )
-            )
-        return "".join(chunks)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Draft":
-        data = dict(data)
-        # A draft written by another Ducta version may carry fields this one lacks.
-        fields = set(Attempt.__dataclass_fields__)
-        data["attempts"] = [
-            Attempt(**{k: v for k, v in a.items() if k in fields})
-            for a in data.get("attempts") or []
-        ]
-        known = set(cls.__dataclass_fields__)
-        draft = cls(**{k: v for k, v in data.items() if k in known})
-        # The id names files (the draft's own, an apply's temporary ones): a draft
-        # file anyone could edit does not get to pick a path with it.
-        if not _DRAFT_ID.match(str(draft.id)):
-            raise ValueError(f"'{draft.id}' is not a draft id")
-        return draft
-
-
-_DRAFT_ID = re.compile(r"^[0-9A-Za-z-]{1,64}$")
-
-
-def drafts_dir(root: Path) -> Path:
-    return Path(root) / ".ducta" / "ai" / "drafts"
-
-
-def save_draft(root: Path, draft: Draft) -> Path:
-    from ducta.ai.fsutil import atomic_write_text
-
-    path = drafts_dir(root) / f"{draft.id}.json"
-    return atomic_write_text(path, json.dumps(draft.to_dict(), indent=2, ensure_ascii=False))
-
-
-def list_drafts(root: Path, limit: int = 50) -> List[Draft]:
-    """The project's drafts, newest first."""
-    folder = drafts_dir(root)
-    if not folder.is_dir():
-        return []
-    out = []
-    for path in sorted(folder.glob("*.json"), reverse=True)[:limit]:
-        try:
-            out.append(Draft.from_dict(json.loads(path.read_text(encoding="utf-8"))))
-        except (OSError, ValueError, TypeError):
-            continue
-    return out
-
-
-def load_draft(root: Path, draft_id: str) -> Draft:
-    if not _DRAFT_ID.match(draft_id):
-        raise AIConfigError(f"'{draft_id}' is not a draft id")
-    folder = drafts_dir(root)
-    matches = sorted(folder.glob(f"{draft_id}*.json")) if folder.is_dir() else []
-    if not matches:
-        raise AINotFoundError(f"No draft '{draft_id}' in {folder}")
-    if len(matches) > 1:
-        raise AIConfigError(f"'{draft_id}' matches {len(matches)} drafts; give more of the id")
-    try:
-        return Draft.from_dict(json.loads(matches[0].read_text(encoding="utf-8")))
-    except (ValueError, TypeError, AttributeError) as e:
-        raise AIConflictError(f"{matches[0].name} is not a readable draft ({e})") from e
-
-
-def delete_draft(root: Path, draft_id: str) -> None:
-    draft = load_draft(root, draft_id)
-    (drafts_dir(root) / f"{draft.id}.json").unlink()
+    return rel, current.rstrip("\n") + "\n\n" + header + addition, text_sha(current)
 
 
 def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
@@ -754,7 +555,7 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
         unsafe = existing_changes(root, draft.pipeline or "", draft.files)
     if unsafe:
         raise AIConflictError(f"Draft {draft.id} cannot be applied: {'; '.join(unsafe[:5])}")
-    changed = [rel for rel, sha in draft.base.items() if _sha(_read(root / rel)) != sha]
+    changed = [rel for rel, sha in draft.base.items() if text_sha(read_text(root / rel)) != sha]
     if changed:
         raise AIConflictError(
             f"These files changed after the draft was made: {', '.join(changed)}. "
@@ -767,7 +568,7 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
         if blocking:
             raise AIConfigError(
                 "The draft no longer validates against the project as it is now: "
-                + "; ".join(_describe(p) for p in blocking[:5])
+                + "; ".join(describe_problem(p) for p in blocking[:5])
                 + ". Revise it or generate it again (or force it)."
             )
     # Every file is written in full before any is replaced, so a failure (a full
@@ -793,14 +594,14 @@ def apply_draft(root: Path, draft: Draft, *, force: bool = False) -> List[str]:
         for tmp, _ in staged:
             tmp.unlink(missing_ok=True)
         raise AIEnvironmentError(f"Could not write draft {draft.id}: {e}", cause=e) from e
-    draft.applied_at = _now()
+    draft.applied_at = utc_now()
     if (drafts_dir(root) / f"{draft.id}.json").exists():
         save_draft(root, draft)
     return list(draft.files)
 
 
 def _is_catalog_target(root: Path, rel: str) -> bool:
-    """Whether *rel* is where :func:`_catalog_with` puts new catalog entries."""
+    """Whether *rel* is where :func:`catalog_with` puts new catalog entries."""
     location = catalog_location(root)
     if location.is_dir() or location.name == CATALOG_DIR:
         p = PurePosixPath(rel)
@@ -820,10 +621,10 @@ def _apply_scope(root: Path, draft: Draft) -> Scope:
 
         return extend_scope(root, draft.pipeline or "")
     if draft.kind == "quality":
-        rel = _pipeline_file(root, draft.pipeline or "").relative_to(root).as_posix()
+        rel = find_pipeline_file(root, draft.pipeline or "").relative_to(root).as_posix()
         return Scope(kind="proposal", editable=frozenset({rel}), purpose="quality")
     if draft.kind == "docs":
-        from ducta.setting.project_loader import read_project
+        from ducta.setting.project.loader import read_project
 
         located = read_project(root, expand=False)
         files = {*located.catalog_files.values(), *located.pipeline_files.values()}
@@ -872,238 +673,15 @@ def _recheck(root: Path, draft: Draft) -> List[Dict[str, Any]]:
         scope = Scope(kind="fix", editable=editable, pipeline=draft.pipeline)
     else:
         scope = NEW
-    baseline = {_key(p) for p in _validate(root, {}) if p.get("severity") == "error"}
-    return _judge(_validate(root, draft.files), baseline, scope)
+    baseline = {problem_key(p) for p in validate_files(root, {}) if p.get("severity") == "error"}
+    return judge_problems(validate_files(root, draft.files), baseline, scope)
 
 
 def _pipeline_name(files: Dict[str, str]) -> Optional[str]:
     for rel in files:
-        if _is_pipeline(rel):
+        if is_pipeline_file(rel):
             return PurePosixPath(rel).stem
     return None
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-# ── validation ──────────────────────────────────────────────────────────────
-
-
-def _validate(root: Path, files: Dict[str, str]) -> List[Dict[str, Any]]:
-    try:
-        from ducta.api.repositories.v2_store import V2ProjectStore
-        from ducta.api.services.draft_validation import validate_draft
-    except ImportError as e:
-        raise AIEnvironmentError(
-            "Validating drafts needs Ducta's API extra: pip install 'ducta[api,ai]'"
-        ) from e
-    store = V2ProjectStore.detect(root)
-    if store is None:
-        raise AIConfigError(f"{root} is not a format-2 Ducta project (no ducta.yaml)")
-    return [p.to_dict() for p in validate_draft(store, files)]
-
-
-def _key(p: Dict[str, Any]) -> Tuple[Any, ...]:
-    return (p.get("code"), p.get("file"), p.get("node"), p.get("message"))
-
-
-def _concerns(p: Dict[str, Any], scope: Scope) -> bool:
-    """Whether problem *p* is on the pipeline a fix is about.
-
-    Not for an extension: it adds to the pipeline as it is, problems included —
-    only the errors it adds are its own.
-    """
-    if scope.kind != "fix" or scope.purpose == "extend":
-        return False
-    return p.get("pipeline") == scope.pipeline or p.get("file") in scope.editable
-
-
-def _judge(
-    problems: List[Dict[str, Any]], baseline: Set[Tuple[Any, ...]], scope: Scope
-) -> List[Dict[str, Any]]:
-    """The errors a draft is responsible for: new ones, and (a fix) those left on its pipeline."""
-    return [
-        p
-        for p in problems
-        if p.get("severity") == "error" and (_key(p) not in baseline or _concerns(p, scope))
-    ]
-
-
-#: Characters per token, to size a request to a local model's window
-#: (YAML and code run about three to four).
-_CHARS_PER_TOKEN = 3
-#: Tokens left free in that window: the model's answer, and on a retry the
-#: previous answer plus Ducta's feedback on it.
-_ANSWER_TOKENS = 3000
-_FEEDBACK_TOKENS = 500
-#: The least project context worth sending with a request.
-_MIN_CONTEXT_CHARS = MAX_CHARS // 4
-
-
-def message_budget(config: AIConfig, system: str) -> Optional[int]:
-    """The characters a request (first message and earlier turns) may take, if limited.
-
-    Only Ollama's window is Ducta's to set (``context_tokens``, sent as
-    ``num_ctx``); other providers take far more than a request holds.
-    """
-    if config.provider != "ollama":
-        return None
-    free: int = (
-        config.context_tokens
-        - len(system) // _CHARS_PER_TOKEN
-        - 2 * _ANSWER_TOKENS
-        - _FEEDBACK_TOKENS
-    )
-    return max(0, free) * _CHARS_PER_TOKEN
-
-
-def _too_large(config: AIConfig, chars: int) -> AIConfigError:
-    return AIConfigError(
-        f"The request (about {chars // _CHARS_PER_TOKEN:,} tokens, plus room for the answer) "
-        f"does not fit the model's context window ({config.context_tokens:,} tokens). Raise "
-        "context_tokens in ~/.ducta/ai.toml (if the model supports it) or narrow the request."
-    )
-
-
-#: How the model is asked to answer again, after problems or a change request.
-AGAIN = "answer again with ALL the blocks (complete files, not just the changes)."
-
-
-def _feedback(
-    assembled: Assembled, blocking: List[Dict[str, Any]], truncated: bool, again: str = AGAIN
-) -> str:
-    lines = [f"Ducta's validator rejected the draft. Fix every point and {again}"]
-    if truncated:
-        lines.append("- Your answer was cut off by the output limit: be more concise.")
-    lines += [f"- {r}" for r in assembled.rejected]
-    lines += [f"- {_describe(p)}" for p in blocking]
-    return "\n".join(lines)
-
-
-def _describe(p: Dict[str, Any]) -> str:
-    where = ":".join(str(x) for x in (p.get("file"), p.get("line")) if x)
-    fix = p.get("fix")
-    hint = None
-    if isinstance(fix, dict):
-        # A Problem's fix is {label, replace: [old, new]}.
-        swap = fix.get("replace")
-        hint = fix.get("label") or fix.get("description")
-        if isinstance(swap, list) and len(swap) == 2:
-            hint = f"{hint + ': ' if hint else ''}replace '{swap[0]}' with '{swap[1]}'"
-    return f"{where + ': ' if where else ''}{p.get('message')}" + (
-        f" (suggested fix: {hint})" if hint else ""
-    )
-
-
-# ── the loop ────────────────────────────────────────────────────────────────
-
-
-def _run(
-    root: Path,
-    provider: LLMProvider,
-    *,
-    system: str,
-    first_message: str,
-    scope: Scope,
-    request: str,
-    ctx: ProjectContext,
-    max_attempts: Optional[int],
-    on_attempt: Optional[Callable[[Attempt], None]],
-    prior: Sequence[ChatMessage] = (),
-    seen: Optional[Dict[str, Optional[str]]] = None,
-    current: Optional[List[Dict[str, Any]]] = None,
-    should_stop: Optional[Callable[[], bool]] = None,
-    assembler: Optional[Callable[[ParsedAnswer], Assembled]] = None,
-    again: str = AGAIN,
-) -> Draft:
-    """Ask, validate, send the problems back; *seen* hashes the files the prompt showed."""
-    seen = dict(seen or {})
-    budget = message_budget(provider.config, system)
-    fixed = len(first_message) + sum(len(m.content) for m in prior)
-    if budget is not None and fixed > budget:
-        raise _too_large(provider.config, fixed)
-    if current is None:
-        current = _validate(root, {})
-    baseline = {_key(p) for p in current if p.get("severity") == "error"}
-    attempts = max_attempts or provider.config.max_attempts
-    # A retry sends the request, the last answer and what was wrong with it:
-    # earlier answers are superseded (each one is complete), so the
-    # conversation does not outgrow the model's window attempt after attempt.
-    base = [ChatMessage("user", first_message), *prior]
-    messages = list(base)
-    history: List[Attempt] = []
-    assembled = Assembled()
-    problems: List[Dict[str, Any]] = []
-    blocking: List[Dict[str, Any]] = []
-    answer = ParsedAnswer()
-    completion: Optional[Completion] = None
-    interrupted = ""
-    for number in range(1, attempts + 1):
-        if should_stop and should_stop():
-            raise AICancelledError("Stopped")
-        try:
-            completion = provider.complete(system, messages)
-        except AIError as e:
-            if completion is None:
-                raise
-            # Keep what the earlier attempts produced rather than lose it.
-            interrupted = f"Attempt {number} did not complete: {e.message}"
-            break
-        answer = parse_answer(completion.text)
-        if assembler:
-            assembled = assembler(answer)
-        else:
-            # ``new`` and ``fix``: the code the draft adds is held to the same review as an
-            # extension's or Architect's (what was already in a file is not the draft's).
-            from ducta.ai.extend import new_code_problems
-
-            assembled = assemble(root, ctx, answer, scope)
-            assembled.rejected += new_code_problems(root, assembled.files)
-        assembled.base.update({rel: sha for rel, sha in seen.items() if rel in assembled.files})
-        problems = _validate(root, assembled.files) if assembled.files else []
-        blocking = _judge(problems, baseline, scope)
-        attempt = Attempt(
-            number=number,
-            files=list(assembled.files),
-            errors=len(blocking),
-            warnings=sum(1 for p in problems if p.get("severity") == "warning"),
-            rejected=list(assembled.rejected),
-            usage=completion.usage,
-            messages=(list(assembled.rejected) + [_describe(p) for p in blocking])[:5],
-        )
-        history.append(attempt)
-        if on_attempt:
-            on_attempt(attempt)
-        if assembled.files and not blocking and not assembled.rejected:
-            break
-        messages = base + [
-            ChatMessage("assistant", completion.text),
-            ChatMessage("user", _feedback(assembled, blocking, completion.truncated, again)),
-        ]
-
-    rejected = [{"severity": "error", "message": r, "source": "ai"} for r in assembled.rejected]
-    return Draft(
-        id=datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6],
-        request=request,
-        provider=provider.config.provider,
-        model=(completion.model if completion else provider.config.model) or "",
-        created_at=_now(),
-        ok=bool(assembled.files) and not assembled.rejected and not blocking,
-        files=assembled.files,
-        base={rel: assembled.base.get(rel) for rel in assembled.files},
-        problems=problems + rejected,
-        notes="\n\n".join(x for x in (answer.notes, interrupted) if x),
-        new_datasets=assembled.new_datasets,
-        attempts=history,
-        raw_answer=completion.text if completion else "",
-        kind=scope.purpose or scope.kind,
-        pipeline=scope.pipeline,
-        target=scope.target,
-        blocking=blocking + rejected,
-        prompt=first_message,
-        seen=seen,
-    )
 
 
 def generate(
@@ -1132,23 +710,23 @@ def generate(
     if budget is not None:
         # The project's context is what gives way to a small window.
         room = min(room, budget - len(tail))
-        if room < _MIN_CONTEXT_CHARS:
-            raise _too_large(provider.config, _MIN_CONTEXT_CHARS + len(tail))
-    return _run(
+        if room < MIN_CONTEXT_CHARS:
+            raise too_large(provider.config, MIN_CONTEXT_CHARS + len(tail))
+    return run_loop(
         root,
         provider,
         system=SYSTEM_PROMPT,
         first_message=ctx.render(room) + tail,
         scope=NEW,
         request=request.strip(),
-        ctx=ctx,
+        assembler=default_assembler(root, ctx, NEW),
         max_attempts=max_attempts,
         on_attempt=on_attempt,
         should_stop=should_stop,
     )
 
 
-def _pipeline_file(root: Path, pipeline: str) -> Path:
+def find_pipeline_file(root: Path, pipeline: str) -> Path:
     if not pipeline or "/" in pipeline or "\\" in pipeline:
         raise AINotFoundError(f"No pipeline '{pipeline}' in {root / PIPELINES_DIR}")
     for suffix in (".yaml", ".yml"):
@@ -1157,7 +735,7 @@ def _pipeline_file(root: Path, pipeline: str) -> Path:
             return candidate
     path: Optional[Path]
     try:
-        from ducta.setting.project_loader import read_project
+        from ducta.setting.project.loader import read_project
 
         path = read_project(root).pipeline_files.get(pipeline)
     except Exception:  # noqa: BLE001 — a project that does not parse has no index
@@ -1174,7 +752,7 @@ def _pipeline_file(root: Path, pipeline: str) -> Path:
 def fix_scope(root: Path, pipeline: str) -> Scope:
     """The pipeline's file and the existing modules its nodes run."""
     root = Path(root).resolve()
-    path = _pipeline_file(root, pipeline)
+    path = find_pipeline_file(root, pipeline)
     modules = {
         m for m in _modules_run_by(root, path.read_text(encoding="utf-8")) if (root / m).is_file()
     }
@@ -1185,7 +763,7 @@ def fix_scope(root: Path, pipeline: str) -> Scope:
     )
 
 
-def _refuse_credentials(rel: str, text: Optional[str], provider: LLMProvider) -> None:
+def refuse_credentials(rel: str, text: Optional[str], provider: LLMProvider) -> None:
     """Raise when *rel*, sent whole, would hand a remote model a credential.
 
     The model answers with whole files: what it is not shown, it would write
@@ -1216,8 +794,8 @@ def fix(
     """A draft that fixes *pipeline*: its validation problems, a run's *error*, or a *note*."""
     root = Path(root).resolve()
     scope = fix_scope(root, pipeline)
-    problems = _validate(root, {})
-    current = [p for p in problems if p.get("severity") == "error" and _concerns(p, scope)]
+    problems = validate_files(root, {})
+    current = [p for p in problems if p.get("severity") == "error" and concerns(p, scope)]
     if not current and not error.strip() and not note.strip():
         raise AIConfigError(
             f"Pipeline '{pipeline}' validates and no error or note was given: nothing to fix"
@@ -1227,13 +805,14 @@ def fix(
     seen: Dict[str, Optional[str]] = {}
     for rel in sorted(scope.editable):
         lang = "python" if rel.endswith(".py") else "yaml"
-        text = _read(root / rel)
-        seen[rel] = _sha(text)
-        _refuse_credentials(rel, text, provider)
+        text = read_text(root / rel)
+        seen[rel] = text_sha(text)
+        refuse_credentials(rel, text, provider)
         parts.append(f"```{lang} file={rel}\n{(text or '').rstrip()}\n```")
     if current:
         parts.append(
-            "# What the validator reports\n" + "\n".join(f"- {_describe(p)}" for p in current)
+            "# What the validator reports\n"
+            + "\n".join(f"- {describe_problem(p)}" for p in current)
         )
     if error.strip():
         parts.append(
@@ -1245,29 +824,29 @@ def fix(
         parts.append("# What the user says\n" + note.strip())
     # The files must go whole; the project context is what gives way to them.
     own = sum(len(x) + 2 for x in parts)
-    if own > _MAX_EDITABLE_CHARS:
+    if own > MAX_EDITABLE_CHARS:
         raise AIConfigError(
             f"Pipeline '{pipeline}' and its modules are too large to send whole "
-            f"({own:,} characters; the limit is {_MAX_EDITABLE_CHARS:,}). Split its modules "
+            f"({own:,} characters; the limit is {MAX_EDITABLE_CHARS:,}). Split its modules "
             "or fix it by hand."
         )
     where = "\n\n" + where_code_goes(root)
-    room = max(_MIN_CONTEXT_CHARS, MAX_CHARS - own)
+    room = max(MIN_CONTEXT_CHARS, MAX_CHARS - own)
     budget = message_budget(provider.config, FIX_PROMPT)
     if budget is not None:
         room = min(room, budget - own - len(where) - 2)
-        if room < _MIN_CONTEXT_CHARS:
-            raise _too_large(provider.config, own + _MIN_CONTEXT_CHARS)
+        if room < MIN_CONTEXT_CHARS:
+            raise too_large(provider.config, own + MIN_CONTEXT_CHARS)
     parts.insert(0, ctx.render(room) + where)
     request = note.strip() or (f"Fix pipeline {pipeline}")
-    return _run(
+    return run_loop(
         root,
         provider,
         system=FIX_PROMPT,
         first_message="\n\n".join(parts),
         scope=scope,
         request=request,
-        ctx=ctx,
+        assembler=default_assembler(root, ctx, scope),
         max_attempts=max_attempts,
         on_attempt=on_attempt,
         seen=seen,
@@ -1321,7 +900,7 @@ def revise(
         scope, system = NEW, SYSTEM_PROMPT
 
     seen = draft.seen or {r: sha for r, sha in draft.base.items() if r in scope.editable}
-    changed = sorted(rel for rel, sha in seen.items() if _sha(_read(root / rel)) != sha)
+    changed = sorted(rel for rel, sha in seen.items() if text_sha(read_text(root / rel)) != sha)
     if changed:
         raise AIConflictError(
             f"These files changed after draft {draft.id} was made: {', '.join(changed)}. "
@@ -1332,7 +911,7 @@ def revise(
     # provider must not get.
     if draft.kind in ("fix", "extend"):
         for rel in sorted(seen):
-            _refuse_credentials(rel, _read(root / rel), provider)
+            refuse_credentials(rel, read_text(root / rel), provider)
     prior = [
         ChatMessage("assistant", draft.raw_answer),
         ChatMessage(
@@ -1342,20 +921,19 @@ def revise(
             + f"\n\nKeep everything else as it is, and {again}",
         ),
     ]
-    revised = _run(
+    revised = run_loop(
         root,
         provider,
         system=system,
         first_message=draft.prompt,
         scope=scope,
         request=f"{draft.request} — {note.strip()}",
-        ctx=build_context(root),
+        assembler=assembler or default_assembler(root, build_context(root), scope),
         max_attempts=max_attempts,
         on_attempt=on_attempt,
         prior=prior,
         seen=seen,
         should_stop=should_stop,
-        assembler=assembler,
         again=again,
     )
     revised.revision_of = draft.id
@@ -1365,3 +943,28 @@ def revise(
 
         revised.evidence = quality_evidence(root, revised)
     return revised
+
+
+#: The drafting API. Drafts and the loop live in :mod:`ducta.ai.drafts` and
+#: :mod:`ducta.ai.loop`; their public names are re-exported here, where the
+#: documentation has always pointed.
+__all__ = [
+    "NEW",
+    "Attempt",
+    "Draft",
+    "Scope",
+    "apply_draft",
+    "assemble",
+    "code_folder",
+    "default_assembler",
+    "delete_draft",
+    "fix",
+    "fix_scope",
+    "generate",
+    "list_drafts",
+    "load_draft",
+    "parse_answer",
+    "revise",
+    "save_draft",
+    "where_code_goes",
+]

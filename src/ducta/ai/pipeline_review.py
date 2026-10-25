@@ -45,15 +45,18 @@ from typing import Any, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.ai.builder import _pipeline_file, _validate, message_budget, parse_answer
+from ducta.ai.builder import find_pipeline_file
 from ducta.ai.context import redact_config
 from ducta.ai.errors import AIConfigError
-from ducta.ai.providers import ChatMessage, LLMProvider
+from ducta.ai.loop import ask, message_budget, prompt_version, validate_files
+from ducta.ai.policy import require_allowed
+from ducta.ai.providers import LLMProvider
 from ducta.ai.review import (
     AREAS,
     SEVERITIES,
     Finding,
     ReviewFacts,
+    answer_mapping,
     check_finding,
     ducta_checks,
     review_facts,
@@ -113,6 +116,8 @@ class PipelineReview:
     dropped: int = 0
     notes: str = ""
     usage: Dict[str, int] = field(default_factory=dict)
+    #: Which version of the prompt made it (:func:`ducta.ai.loop.prompt_version`).
+    prompt_version: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         out = asdict(self)
@@ -142,16 +147,16 @@ def _order(findings: List[Finding]) -> List[Finding]:
 
 def pipeline_facts(root: Path, pipeline: str, env: str = "dev") -> Dict[str, ReviewFacts]:
     """Each node's facts (:func:`review_facts`), in the pipeline's order."""
-    path = _pipeline_file(root, pipeline)
+    path = find_pipeline_file(root, pipeline)
     doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     nodes = doc.get("nodes") if isinstance(doc, dict) else None
     if not isinstance(nodes, dict) or not nodes:
         raise AIConfigError(f"Pipeline '{pipeline}' has no nodes to review")
-    from ducta.setting.project_loader import apply_environment, read_project
+    from ducta.setting.project.loader import apply_environment, read_project
 
     # The project and its problems are read once, for every node.
     resolved = apply_environment(read_project(root), env)
-    problems = _validate(root, {})
+    problems = validate_files(root, {})
     return {
         str(name): review_facts(
             root, pipeline, str(name), env, resolved=resolved, problems=problems
@@ -327,6 +332,7 @@ def review_pipeline(
     )
     if provider is None:
         return review
+    require_allowed(root, provider.config)
     message = _render(root, pipeline, facts, found, remote=not provider.config.is_local, note=note)
     system = PIPELINE_REVIEW_PROMPT.format(
         areas=" | ".join(AREAS), max=MAX_AI_FINDINGS, ideas=MAX_IDEAS
@@ -341,19 +347,22 @@ def review_pipeline(
             f"({len(message):,} characters; {limit:,} fit). Review its nodes one by one "
             f"(`ducta ai review {pipeline} <node>`), or raise context_tokens."
         )
-    completion = provider.complete(system, [ChatMessage("user", message)])
-    review.model = completion.model or provider.config.model
-    review.usage = dict(completion.usage)
-    answer = parse_answer(completion.text)
-    bodies = [b for lang, b in answer.unnamed if lang in ("yaml", "yml", "")] + list(
-        answer.files.values()
+    completion, review.usage = ask(
+        provider,
+        system,
+        message,
+        readable=lambda text: bool(answer_mapping(text)),
+        again="Answer again with ONLY the ```yaml block holding `findings:` and `ideas:`.",
     )
-    try:
-        data = yaml.safe_load(bodies[0]) if bodies else None
-    except yaml.YAMLError:
-        data = None
-    if not isinstance(data, dict):
-        review.notes = "The model's answer could not be read; only Ducta's findings are shown."
+    review.model = completion.model or provider.config.model
+    review.prompt_version = prompt_version(system)
+    data = answer_mapping(completion.text)
+    if not data:
+        review.notes = (
+            "The model's answer was cut off by its output limit; only Ducta's findings are shown."
+            if completion.truncated
+            else "The model's answer could not be read; only Ducta's findings are shown."
+        )
         return review
     found_raw = data.get("findings")
     raw: List[Any] = found_raw if isinstance(found_raw, list) else []

@@ -35,9 +35,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.setting import project_files as pf
-from ducta.setting.project_defaults import resolve_extends
-from ducta.setting.project_loader import (
+from ducta.setting.project import files as pf
+from ducta.setting.project.defaults import resolve_extends
+from ducta.setting.project.loader import (
     CATALOG_DIR,
     PIPELINES_DIR,
     PROFILES_STEM,
@@ -107,7 +107,7 @@ def ml_plan(root: Path, env: Optional[str], pipeline: Optional[str] = None) -> D
     ``--hyperparams`` / ``--model-version`` go on top of these.
     """
     from ducta.core.ml_contract import effective_split, must_apply_split, node_stage
-    from ducta.setting.project_loader import validate_project
+    from ducta.setting.project.loader import validate_project
 
     project = validate_project(root, env)
     settings = project.project.settings
@@ -183,7 +183,7 @@ def _without_none(value: Any, key: str = "") -> Any:
     The exception is a template's required parameter, which is declared as null
     and is written as ``"<required>"`` instead.
     """
-    from ducta.setting.project_defaults import REQUIRED
+    from ducta.setting.project.defaults import REQUIRED
 
     if isinstance(value, dict):
         return {
@@ -330,7 +330,7 @@ def convert_project(root: Path, target: Path, fmt: str) -> List[Path]:
     converted (their comments cannot be carried over); the Python and the data
     stay where they are. The editor schemas are written next to them.
     """
-    from ducta.setting.project_decompile import write_schemas
+    from ducta.setting.project.decompile import write_schemas
 
     root, target = Path(root), Path(target)
     if target.exists() and any(target.iterdir()):

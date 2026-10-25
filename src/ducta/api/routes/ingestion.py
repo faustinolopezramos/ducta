@@ -21,9 +21,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Annotated, Any, Dict, List, Optional, Set
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from loguru import logger
 
 from ducta.api.dependencies import ExecutionManagerDep, WorkspaceManagerDep, require_permission
@@ -36,12 +36,35 @@ from ducta.api.models.ingestion import (
     ConnectionUsageItem,
     ConnectionUsageResponse,
 )
+from ducta.api.workspace.manager import WorkspaceManager
 from ducta.gate.gateway import ConnectionSpec, IngestionService, IngestionServiceError
 
 router = APIRouter(prefix="/ingestion", tags=["Ingestion"])
 
 
-def _service(manager: WorkspaceManagerDep) -> IngestionService:
+def _project_manager(
+    manager: WorkspaceManagerDep,
+    project: Annotated[
+        Optional[str], Query(description="Project whose sources.yaml to use")
+    ] = None,
+) -> WorkspaceManager:
+    """The workspace, or one of its projects when ``project`` is given.
+
+    Connections live in each project's ``sources.yaml``: without the project, a
+    workspace holding several projects listed none of them. A project that does
+    not exist is a 404 — not the workspace's own ``sources.yaml``, where a new
+    connection would have been written.
+    """
+    scoped = manager.for_project(project)
+    if project and scoped is manager and project != manager.root.name:
+        raise HTTPException(status_code=404, detail=f"No project '{project}'")
+    return scoped
+
+
+ProjectManagerDep = Annotated[WorkspaceManager, Depends(_project_manager)]
+
+
+def _service(manager: WorkspaceManager) -> IngestionService:
     return IngestionService(manager.root)
 
 
@@ -101,7 +124,7 @@ def _find_pipelines_using_connection(root: Path, connection_name: str) -> List[s
     dependencies=[Depends(require_permission("ingestion.read"))],
     summary="List configured database connections",
 )
-async def list_connections(manager: WorkspaceManagerDep) -> ConnectionListResponse:
+async def list_connections(manager: ProjectManagerDep) -> ConnectionListResponse:
     conns = _service(manager).list_connections()
     return ConnectionListResponse(connections=[ConnectionInfo(**c) for c in conns])
 
@@ -112,7 +135,7 @@ async def list_connections(manager: WorkspaceManagerDep) -> ConnectionListRespon
     dependencies=[Depends(require_permission("ingestion.read"))],
     summary="Show connection details (no credentials)",
 )
-async def get_connection(name: str, manager: WorkspaceManagerDep) -> ConnectionInfo:
+async def get_connection(name: str, manager: ProjectManagerDep) -> ConnectionInfo:
     try:
         return ConnectionInfo(**_service(manager).get_connection(name))
     except IngestionServiceError as exc:
@@ -124,7 +147,7 @@ async def get_connection(name: str, manager: WorkspaceManagerDep) -> ConnectionI
     dependencies=[Depends(require_permission("ingestion.read"))],
     summary="Whether a connection's credentials are set — never their values",
 )
-async def get_connection_credentials(name: str, manager: WorkspaceManagerDep) -> Dict[str, Any]:
+async def get_connection_credentials(name: str, manager: ProjectManagerDep) -> Dict[str, Any]:
     """`<NAME>_USER` / `<NAME>_PASSWORD`, each set or not — in the server's
     environment or the project's `.env` — the way the engine looks them up."""
     import os
@@ -154,7 +177,7 @@ async def get_connection_credentials(name: str, manager: WorkspaceManagerDep) ->
     summary="Show pipelines/executions that (heuristically) use this connection",
 )
 async def get_connection_usage(
-    name: str, manager: WorkspaceManagerDep, exec_manager: ExecutionManagerDep
+    name: str, manager: ProjectManagerDep, exec_manager: ExecutionManagerDep
 ) -> ConnectionUsageResponse:
     try:
         _service(manager).get_connection(name)
@@ -207,7 +230,7 @@ def _test_response(result: Optional[bool]) -> ConnectionTestResponse:
     dependencies=[Depends(require_permission("ingestion.read"))],
     summary="Re-test a saved connection using its stored credentials",
 )
-async def retest_connection(name: str, manager: WorkspaceManagerDep) -> ConnectionTestResponse:
+async def retest_connection(name: str, manager: ProjectManagerDep) -> ConnectionTestResponse:
     try:
         ok = _service(manager).test_connection(name)
     except IngestionServiceError as exc:
@@ -224,7 +247,7 @@ async def retest_connection(name: str, manager: WorkspaceManagerDep) -> Connecti
     summary="Test a connection without saving it",
 )
 async def test_connection(
-    body: ConnectionTestRequest, manager: WorkspaceManagerDep
+    body: ConnectionTestRequest, manager: ProjectManagerDep
 ) -> ConnectionTestResponse:
     spec = ConnectionSpec(
         name="__test__",
@@ -250,7 +273,7 @@ async def test_connection(
     summary="Create or overwrite a database connection",
 )
 async def create_connection(
-    body: ConnectionCreateRequest, manager: WorkspaceManagerDep
+    body: ConnectionCreateRequest, manager: ProjectManagerDep
 ) -> ConnectionInfo:
     spec = ConnectionSpec(
         name=body.name,
@@ -275,7 +298,7 @@ async def create_connection(
     dependencies=[Depends(require_permission("ingestion.write"))],
     summary="Remove a database connection",
 )
-async def delete_connection(name: str, manager: WorkspaceManagerDep) -> None:
+async def delete_connection(name: str, manager: ProjectManagerDep) -> None:
     try:
         _service(manager).delete_connection(name)
     except IngestionServiceError as exc:

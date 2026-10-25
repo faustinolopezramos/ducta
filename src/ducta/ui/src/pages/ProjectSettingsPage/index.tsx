@@ -32,7 +32,7 @@ export function ProjectSettingsPage() {
       {current === "alerts" ? (
         <AlertRules projectId={projectId} />
       ) : current === "ai" ? (
-        <AISettings />
+        <AISettings projectId={projectId} />
       ) : (
         <EnvironmentsDiff projectId={projectId} />
       )}

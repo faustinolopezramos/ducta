@@ -155,7 +155,7 @@ class TestCertify:
 
         declared = SimpleNamespace(project=SimpleNamespace(environments=["qa", "dev"]))
         monkeypatch.setattr(
-            "ducta.setting.project_loader.validate_project", lambda root, *a, **k: declared
+            "ducta.setting.project.loader.validate_project", lambda root, *a, **k: declared
         )
         envs = certify_cmds._search_envs(SimpleNamespace(base_path=str(project)))
         assert envs == [*DEFAULT_ENVIRONMENTS, "qa"]

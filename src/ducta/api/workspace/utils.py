@@ -56,7 +56,7 @@ def normalize_workspace_path(path: Path) -> Path:
     workspace's ``projects/`` that is not a project itself resolves to that
     workspace.
     """
-    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project.loader import find_project_root
 
     path = path.resolve()
     if find_project_root(path) is not None or (path / "projects").is_dir():

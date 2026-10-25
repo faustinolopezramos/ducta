@@ -162,7 +162,10 @@ class _ReadsMixin:
         if node_name:
             all_executions = [e for e in all_executions if e.node_name == node_name]
         if status:
-            all_executions = [e for e in all_executions if e.status.value == status]
+            # One status or several, comma-separated ("failed,cancelled"): the
+            # run list filters on any of them.
+            wanted = {s.strip() for s in status.split(",") if s.strip()}
+            all_executions = [e for e in all_executions if e.status.value in wanted]
         if env:
             all_executions = [e for e in all_executions if e.env == env]
         if sweep_id:

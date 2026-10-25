@@ -14,8 +14,18 @@ export interface RoutedEdgeData extends Record<string, unknown> {
   datasetDimmed?: boolean;
   tier?: "shape" | "flow" | "detail";
   onSelectDataset?: (name: string) => void;
+  /** How many nodes read the dataset this chip stands for. */
+  datasetReaders?: number;
+  /**
+   * Where the chip sits — past its writer's port — and which of its points
+   * that is: its centre, or (left to right) the middle of its leading edge.
+   * Without it the chip sits at the polyline's midpoint.
+   */
+  chipAt?: LayoutPoint & { anchor: "center" | "start" };
   /** Plain text label, used by the project map for its shared-dataset summary. */
   label?: string | null;
+  /** The label's tooltip (the datasets a merged edge stands for). */
+  labelTitle?: string;
   /** Which way the layers run, so the spline leaves and enters along the flow. */
   direction?: "TB" | "LR";
 }
@@ -67,7 +77,8 @@ export const RoutedEdge = memo(function RoutedEdge({
   const path = edgePath(points, d?.direction);
   const dataset = d?.dataset ?? null;
   const label = d?.label ?? null;
-  const at = dataset || label ? midpoint(points) : null;
+  const at = dataset || label ? (dataset && d?.chipAt) || midpoint(points) : null;
+  const anchorStart = Boolean(dataset && d?.chipAt?.anchor === "start");
 
   return (
     <>
@@ -78,7 +89,7 @@ export const RoutedEdge = memo(function RoutedEdge({
             className="dag-edge-slot"
             style={{
               position: "absolute",
-              transform: `translate(-50%, -50%) translate(${at.x}px, ${at.y}px)`,
+              transform: `translate(${anchorStart ? "0" : "-50%"}, -50%) translate(${at.x}px, ${at.y}px)`,
               // The wrapper must not swallow pointer events over the pane, but
               // the chip inside it has to stay clickable.
               pointerEvents: dataset ? "all" : "none",
@@ -90,10 +101,11 @@ export const RoutedEdge = memo(function RoutedEdge({
                 selected={d?.datasetSelected}
                 dimmed={d?.datasetDimmed}
                 tier={d?.tier}
+                readers={d?.datasetReaders}
                 onSelect={d?.onSelectDataset}
               />
             ) : (
-              <span className="dag-edge-label">{label}</span>
+              <span className="dag-edge-label" title={d?.labelTitle}>{label}</span>
             )}
           </div>
         </EdgeLabelRenderer>

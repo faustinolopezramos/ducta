@@ -5,6 +5,10 @@ import { ProblemsPanel } from "../../components/Problems/ProblemsPanel";
 import { SamplePreview } from "../../components/Pipeline/SamplePreview";
 import { StreamingStatusPanel } from "../../components/Execution/StreamingStatusPanel";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
+import { useExecutionLogs } from "../../api/queries";
+import { useLogsStore } from "../../store/logsStore";
+import { toLogEntry } from "../../utils/logEntries";
+import { formatDate } from "../../utils/formatDate";
 import type { Problem } from "../../api/queries/problems";
 import type { DagCanvasItem } from "../../components/Pipeline/types";
 import type { BottomPanelTab } from "../../store/uiStore";
@@ -34,6 +38,10 @@ export interface PipelineDockProps {
   executionStates: Record<string, string>;
   isStreamPipeline?: boolean;
   streamSummary?: StreamSummary | null;
+  /** The pipeline's last recorded run: its logs show until this session runs something. */
+  lastRun?: { id?: string; status: string } | null;
+  /** The latest run this server started (the latest with stored logs), when lastRun is not it. */
+  lastServedRun?: { id: string; status: string; started_at?: string | null } | null;
 }
 
 export function PipelineDock({
@@ -58,7 +66,22 @@ export function PipelineDock({
   executionStates,
   isStreamPipeline = false,
   streamSummary = null,
+  lastRun = null,
+  lastServedRun = null,
 }: PipelineDockProps) {
+  // Nothing run in this session yet: show the last run's logs. The bar above
+  // said "Last run success · 2d ago" while the panel said "No logs". A run
+  // started from the CLI keeps no logs on the server (only its certificate):
+  // then the latest run that does is shown, and the panel says which.
+  const liveCount = useLogsStore((s) => s.currentLogs.length);
+  const idle = !isExecuting && liveCount === 0;
+  const fromCli = Boolean(lastRun && !lastRun.id);
+  const pastRun = idle ? (lastRun?.id ? lastRun : fromCli ? lastServedRun : null) : null;
+  const pastRunId = pastRun?.id ?? "";
+  const { data: pastData } = useExecutionLogs(pastRunId);
+  const pastLogs = pastRunId
+    ? (Array.isArray(pastData) ? pastData : (pastData as { logs?: unknown[] } | undefined)?.logs ?? []).map(toLogEntry)
+    : undefined;
   // The tab the body really shows. A saved "preview" tab outlives its sample
   // (the tab is persisted, the sample is not): the body then falls back to the
   // logs, and the Logs tab must read as selected so one tab always is.
@@ -173,9 +196,22 @@ export function PipelineDock({
               {activeExecutionId && (
                 <StreamingStatusPanel executionId={activeExecutionId} isActive={isExecuting} />
               )}
+              {fromCli && pastRunId && (
+                <p className="pipeline-dock__note" role="note">
+                  Logs of the run of {formatDate(lastServedRun?.started_at)}. The later
+                  run was started from the CLI; its logs stayed in that terminal.
+                </p>
+              )}
               <InlineLogs
                 isRunning={isExecuting}
                 onClose={onClose}
+                logs={pastLogs}
+                finalStatus={pastRunId ? pastRun?.status : undefined}
+                emptyDescription={
+                  idle && fromCli && !pastRunId
+                    ? "The last run was started from the CLI: its logs stayed in that terminal."
+                    : undefined
+                }
                 mode="fill"
                 nodes={pipelineNodes}
                 executionStates={executionStates}

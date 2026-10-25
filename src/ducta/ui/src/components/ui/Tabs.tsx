@@ -10,6 +10,8 @@ export interface TabItem<T extends string = string> {
   count?: number;
   /** Tooltip explaining what this view is for. */
   hint?: string;
+  /** A small word after the label that qualifies the whole tab ("server"). */
+  tag?: string;
 }
 
 interface TabsProps<T extends string> {
@@ -89,6 +91,7 @@ export function Tabs<T extends string>({ items, value, onChange, label }: TabsPr
             {Icon && <Icon size={14} stroke={1.6} />}
             <span>{tab.label}</span>
             {tab.count != null && <span className="tabs-count">{tab.count}</span>}
+            {tab.tag && <span className="tabs-tag">{tab.tag}</span>}
           </button>
         );
       })}

@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -110,6 +111,9 @@ class DatasetListResponse(BaseModel):
 
 
 def medallion_layer(name: str) -> Optional[str]:
-    """Return the medallion layer encoded in *name*'s namespace, if any."""
-    head = name.split(".")[0].strip().lower()
+    """Return the medallion layer encoded in *name*'s namespace, if any.
+
+    ``bronze.events`` and a stream endpoint's ``bronze/fraud_events`` alike.
+    """
+    head = re.split(r"[./]", name, maxsplit=1)[0].strip().lower()
     return head if head in MEDALLION_LAYERS else None

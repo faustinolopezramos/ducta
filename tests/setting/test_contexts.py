@@ -242,7 +242,8 @@ class TestMLConfigMixin:
 
         mixin._resolve_hyperparams_config("ml.student_performance")
 
-        mock_load.assert_called_once_with("config/ml/hyperparams.yml")
+        # required=False: a file with several keys and none named means no search.
+        mock_load.assert_called_once_with("config/ml/hyperparams.yml", required=False)
 
 
 class TestContextInit:

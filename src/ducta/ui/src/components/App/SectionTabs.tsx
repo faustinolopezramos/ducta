@@ -32,11 +32,12 @@ export function RunsTabs({ projectId, current }: { projectId: string; current: R
 
 export type SettingsTab = "environments" | "alerts" | "connections" | "ai";
 
-export const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+export const SETTINGS_TABS: { id: SettingsTab; label: string; tag?: string; hint?: string }[] = [
   { id: "environments", label: "Environments" },
   { id: "connections", label: "Connections" },
   { id: "alerts", label: "Alerts" },
-  { id: "ai", label: "AI" },
+  // Every project on the server shares the AI settings: the tab says so.
+  { id: "ai", label: "AI", tag: "server", hint: "Server-wide: every project uses this model" },
 ];
 
 export function SettingsTabs({ projectId, current }: { projectId: string; current: SettingsTab }) {

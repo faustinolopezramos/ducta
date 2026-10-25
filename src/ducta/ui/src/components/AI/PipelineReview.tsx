@@ -18,7 +18,7 @@ import { formatRelative } from "../../utils/timeLabels";
 import { Button } from "../ui/Button";
 import { PermittedButton } from "../ui/PermittedButton";
 import { AIDraftDialog } from "./AIDraftDialog";
-import { useElapsed } from "./aiText";
+import { usageLine, useElapsed } from "./aiText";
 import { findingNote } from "./NodeReview";
 import "./AIDraftDialog.css";
 
@@ -133,7 +133,7 @@ export function PipelineReview({
           <div className="ai-drawer__titles">
             <span className="ai-dim ai-fine">
               {review
-                ? `Review · ${review.env} · ${review.model ?? "Ducta's checks"} · ${formatRelative(review.created_at) ?? review.created_at}`
+                ? `Review · ${review.env} · ${review.model ?? "Ducta's checks"} · ${formatRelative(review.created_at) ?? review.created_at}${usageLine(review.usage) ? ` · ${usageLine(review.usage)}` : ""}`
                 : "Review"}
             </span>
             <h2 id="ai-review-title">

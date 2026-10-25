@@ -45,14 +45,14 @@ from ducta.setting.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context
-from ducta.setting import project_files as pf
-from ducta.setting.project_defaults import (
+from ducta.setting.project import files as pf
+from ducta.setting.project.defaults import (
     apply_defaults,
     resolve_extends,
     resolve_node_templates,
     resolve_pipeline_uses,
 )
-from ducta.setting.project_schema import (
+from ducta.setting.project.schema import (
     BUILTIN_SCORER,
     PROJECT_FORMAT_VERSION,
     CatalogEntry,
@@ -672,7 +672,7 @@ def _schema_keys() -> List[str]:
     """Every key the format-2 files accept, for suggesting a replacement for a typo."""
     from pydantic import BaseModel
 
-    from ducta.setting import project_schema
+    from ducta.setting.project import schema as project_schema
 
     keys = set()
     for obj in vars(project_schema).values():

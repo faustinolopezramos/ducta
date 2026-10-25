@@ -53,9 +53,16 @@ describe("AIExplanation", () => {
   });
 
   it("shows a kept explanation without asking the model again", async () => {
-    kept = { execution_id: "run-1", text: TEXT, model: "qwen", created_at: new Date().toISOString() };
+    kept = {
+      execution_id: "run-1",
+      text: TEXT,
+      model: "qwen",
+      created_at: new Date().toISOString(),
+      usage: { input_tokens: 1072, cache_read_input_tokens: 2048, output_tokens: 410 },
+    };
     const { rerender } = renderIt();
     expect(await screen.findByText(/load failed/)).toBeInTheDocument();
+    expect(screen.getByText(/3,120 tokens in \(2,048 cached\) · 410 out/)).toBeInTheDocument();
     expect(screen.getByText(/Nothing was changed/)).toBeInTheDocument();
     rerender(1); // pressing "Explain with AI" with one kept: nothing is sent
     await new Promise((r) => setTimeout(r, 30));

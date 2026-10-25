@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from "react";
-import { IconUpload, IconShieldCheck } from "@tabler/icons-react";
+import { useLocation } from "react-router-dom";
+import { IconChevronRight, IconUpload, IconShieldCheck } from "@tabler/icons-react";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { PageHeader } from "../../components/ui/PageHeader";
 import { Button } from "../../components/ui/Button";
@@ -24,9 +25,12 @@ import "./VerifyCertificatePage.css";
  * certificate reads the same way everywhere it's viewed.
  */
 export function VerifyCertificatePage() {
-  const [jsonText, setJsonText] = useState("");
+  // "Check with key" on a certificate's page opens this one with it loaded and
+  // the key field showing: that check is the only one that takes a key.
+  const handed = (useLocation().state ?? {}) as { certificateJson?: string; withKey?: boolean };
+  const [jsonText, setJsonText] = useState(handed.certificateJson ?? "");
   const [signingKey, setSigningKey] = useState("");
-  const [showKeyField, setShowKeyField] = useState(false);
+  const [showKeyField, setShowKeyField] = useState(Boolean(handed.withKey));
   const [parseError, setParseError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -107,12 +111,23 @@ export function VerifyCertificatePage() {
         />
         {parseError && <p style={{ color: "var(--danger)", fontSize: "var(--text-xs)" }}>Not valid JSON: {parseError}</p>}
 
-        <button type="button" className="verify-cert-advanced-toggle" onClick={() => setShowKeyField((v) => !v)}>
-          {showKeyField ? "Hide" : "Advanced:"} signing key
+        {/* A disclosure that looks like one: a chevron that turns, and it says
+            the key is optional. It read as plain text before. */}
+        <button
+          type="button"
+          className="verify-cert-advanced-toggle"
+          aria-expanded={showKeyField}
+          aria-controls="verify-cert-key"
+          onClick={() => setShowKeyField((v) => !v)}
+        >
+          <IconChevronRight size={14} aria-hidden="true" className="verify-cert-advanced-chevron" />
+          Signing key (optional)
         </button>
         {showKeyField && (
           <input
+            id="verify-cert-key"
             type="password"
+            aria-label="Signing key"
             className="verify-cert-key-input"
             value={signingKey}
             onChange={(e) => setSigningKey(e.target.value)}

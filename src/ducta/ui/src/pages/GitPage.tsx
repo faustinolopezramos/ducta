@@ -6,10 +6,9 @@ import { PageContainer } from "../components/ui/PageContainer";
 import { Panel } from "../components/ui/Panel";
 import { SkeletonText } from "../components/ui/Skeleton";
 import { EmptyState } from "../components/ui/EmptyState";
-import { IconCircleCheck, IconGitCommit } from "@tabler/icons-react";
-import { ICONS } from "../components/icons";
+import { IconCircleCheck, IconGitBranch, IconGitCommit } from "@tabler/icons-react";
 import { FileTree } from "../components/FileTree";
-import { useGitStatus, useGitLog } from "../api/queries";
+import { useGitStatus, useGitLog, useGitAvailable } from "../api/queries";
 import { useGitStage, useGitCommitChanges, useGitPull, useGitPush } from "../api/mutations";
 import { useSourceStore } from "../store/workspace";
 import type { SectionTitleProps } from "../types/pages";
@@ -21,12 +20,10 @@ import type { SectionTitleProps } from "../types/pages";
 // Right: Remote repository status + connector
 // ─────────────────────────────────────────────
 
+// The same small section label as the rest of the app ("NEEDS ATTENTION"):
+// it used to be larger and carry an icon, here only.
 function SectionTitle({ children }: SectionTitleProps) {
-  return (
-    <h2 style={{ ...styles.fontSans, margin: "0 0 14px", fontSize: "var(--text-sm)", fontWeight: 600, color: colors.textMuted, textTransform: "uppercase", letterSpacing: "0.07em" }}>
-      {children}
-    </h2>
-  );
+  return <h2 className="dash-section-title">{children}</h2>;
 }
 
 function FileList({ label, files, color }: { label: string; files: string[]; color: string }) {
@@ -64,6 +61,9 @@ export function GitPage() {
   const [browsePath, setBrowsePath] = useState<string>("");
 
   const { data: gitStatus, isLoading: statusLoading } = useGitStatus();
+  // A folder that is not a repository has nothing to stage or show: saying
+  // "working tree clean" there read as if every change were committed.
+  const gitAvailable = useGitAvailable();
   const { data: gitLog, isLoading: logLoading } = useGitLog({ path: browsePath || undefined, limit: 20 });
   const { mutate: stageAll, isPending: isStaging } = useGitStage();
   const { mutate: commitChanges, isPending: isCommitting } = useGitCommitChanges();
@@ -91,6 +91,15 @@ export function GitPage() {
         description="Stage, commit, and push your workspace changes."
       />
 
+      {gitAvailable === false ? (
+        <Panel>
+          <EmptyState
+            icon={IconGitBranch}
+            title="This workspace is not a Git repository"
+            description="Run git init in the workspace folder to stage, commit and see history here."
+          />
+        </Panel>
+      ) : (
       <div className="git-page-grid">
 
         {/* ── Left: working tree + commit + history ── */}
@@ -98,7 +107,7 @@ export function GitPage() {
 
           {/* Working tree status */}
           <div>
-            <SectionTitle>{ICONS.GIT} Working tree</SectionTitle>
+            <SectionTitle>Working tree</SectionTitle>
             <Panel>
               {statusLoading ? (
                 <SkeletonText lines={3} />
@@ -128,9 +137,7 @@ export function GitPage() {
 
           {/* Commit */}
           <div>
-            <SectionTitle>
-              <IconGitCommit size={18} stroke={1.5} style={{ verticalAlign: "middle", marginRight: 4 }} /> Commit
-            </SectionTitle>
+            <SectionTitle>Commit</SectionTitle>
             <Panel className={staged.length > 0 ? "git-commit-panel--armed" : undefined}>
               <div style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, marginBottom: 8 }}>
                 {staged.length > 0
@@ -176,7 +183,7 @@ export function GitPage() {
           {/* Commit history */}
           <div>
             <SectionTitle>
-              {ICONS.HISTORY ?? ICONS.SCHEDULE} Commit history
+              Commit history
               {browsePath && (
                 <span style={{ ...styles.fontMono, fontSize: "var(--text-2xs)", fontWeight: 400, color: colors.accent, textTransform: "none", letterSpacing: 0, marginLeft: 8 }}>
                   {browsePath}{" "}
@@ -242,7 +249,7 @@ export function GitPage() {
         {/* ── Right sidebar: remote controls ── */}
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div>
-            <SectionTitle>{ICONS.CONNECTIONS} Remote</SectionTitle>
+            <SectionTitle>Remote</SectionTitle>
             {sourceType !== "git" && (
               <p style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, margin: "8px 2px 0", lineHeight: 1.5 }}>
                 This workspace is a local folder, so pull and push from a terminal. Open it from a Git URL to do both here.
@@ -260,9 +267,10 @@ export function GitPage() {
             )}
           </div>
           <div>
-            <SectionTitle>{ICONS.BROWSE} Repository files</SectionTitle>
+            <SectionTitle>Repository files</SectionTitle>
             <Panel flush className="git-filetree-panel">
-              <FileTree activePath={browsePath} onSelectFile={setBrowsePath} />
+              {/* Folders a run writes fold away, as in Code. */}
+              <FileTree activePath={browsePath} onSelectFile={setBrowsePath} generated={["logs", "data", "models", ".ducta"]} />
             </Panel>
             <p style={{ ...styles.fontSans, fontSize: "var(--text-2xs)", color: colors.textMuted, margin: "6px 2px 0" }}>
               Select a file to filter the commit history.
@@ -270,6 +278,7 @@ export function GitPage() {
           </div>
         </div>
       </div>
+      )}
     </PageContainer>
   );
 }

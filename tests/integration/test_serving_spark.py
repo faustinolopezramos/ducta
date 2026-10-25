@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from ducta.mlrun.serving import ResolvedModel, ServingModel, predict
-from ducta.setting.project_schema import ModelRef
+from ducta.setting.project.schema import ModelRef
 
 sklearn = pytest.importorskip("sklearn")
 

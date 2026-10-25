@@ -77,9 +77,9 @@ def verify(
     end_date: Optional[str] = None,
 ) -> VerifyReport:
     """Check *pipelines* as the project now has them; run and snapshot them in *env* if asked."""
-    from ducta.ai.builder import _describe, _validate
+    from ducta.ai.loop import describe_problem, validate_files
     from ducta.api.services.governance import protected_environments
-    from ducta.setting.project_loader import ProjectConfigError, validate_project
+    from ducta.setting.project.loader import ProjectConfigError, validate_project
 
     root = Path(root).resolve()
     try:
@@ -92,10 +92,10 @@ def verify(
         raise AIConfigError(f"No pipeline {', '.join(unknown)} in the project")
     report = VerifyReport(_in_dependency_order(project, names))
 
-    for p in _validate(root, {}):
+    for p in validate_files(root, {}):
         if p.get("pipeline") not in (None, *names) and p.get("node") is None:
             continue
-        line = _describe(p)
+        line = describe_problem(p)
         if p.get("severity") == "error":
             report.errors.append(line)
         elif p.get("pipeline") in names:

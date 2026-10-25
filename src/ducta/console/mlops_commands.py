@@ -119,7 +119,7 @@ def _project_mlops_settings(env: Optional[str]) -> Optional[Dict[str, Any]]:
     """
     from pathlib import Path
 
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     if find_nearest_project(Path.cwd()) is None:
         return None

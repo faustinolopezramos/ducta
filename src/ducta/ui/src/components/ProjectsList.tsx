@@ -15,6 +15,11 @@ import { NewProjectModal } from "./Dashboard/NewProjectModal";
 
 interface ProjectsListProps {
   projects: ProjectSummary[];
+  /** The project listing is still loading: the board shows nothing yet, not "no projects". */
+  loading?: boolean;
+  /** The project listing failed: the board says so instead of offering to create one. */
+  error?: unknown;
+  onRetry?: () => void;
   /** Unused: the header names the workspace. Kept so callers need not change. */
   workspacePath?: string;
 }
@@ -27,7 +32,7 @@ interface ProjectsListProps {
  * and when it was created — nothing about whether anything was running, broken
  * or about to run, though every one of those answers was one request away.
  */
-export function ProjectsList({ projects }: ProjectsListProps) {
+export function ProjectsList({ projects, loading, error, onRetry }: ProjectsListProps) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [newProjectOpen, setNewProjectOpen] = useState(false);
   const deleteProject = useDeleteServerProject();
@@ -76,8 +81,9 @@ export function ProjectsList({ projects }: ProjectsListProps) {
       <PageHeader
         title="Projects"
         description="What is running, what needs attention, and every project in this workspace."
+        // With no projects the board's empty state carries the one "New project".
         actions={
-          canWrite && (
+          canWrite && projects.length > 0 && (
             <Button
               variant="primary"
               onClick={() => setNewProjectOpen(true)}
@@ -109,6 +115,9 @@ export function ProjectsList({ projects }: ProjectsListProps) {
 
         <ProjectsBoard
           projects={projects}
+          loading={loading}
+          error={error}
+          onRetry={onRetry}
           activity={stats.byProject}
           onDelete={canWrite ? setConfirmDelete : undefined}
           onCreate={canWrite ? () => setNewProjectOpen(true) : undefined}

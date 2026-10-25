@@ -150,3 +150,38 @@ describe("AISettings", () => {
     expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
   });
 });
+
+describe("AI settings scope and saving", () => {
+  it("says the setting is the server's, and offers Save/Discard only once something changed", async () => {
+    renderIt();
+    expect(await screen.findByText("Server-wide setting.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Attempts"), { target: { value: "5" } });
+    expect(screen.getByRole("region", { name: "Unsaved changes" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument());
+    expect(screen.getByLabelText("Attempts")).toHaveValue(3);
+  });
+});
+
+describe("Measure this model", () => {
+  it("is there for an admin, below the settings", async () => {
+    renderIt();
+    expect(await screen.findByRole("heading", { name: "Measure this model" })).toBeInTheDocument();
+  });
+
+  it("is not there without ai.configure: it spends the server's key", async () => {
+    canConfigure = false;
+    renderIt();
+    expect(await screen.findByText(/Requires the 'ai.configure' permission/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Measure this model" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.url.startsWith("/ai/evals"))).toBe(false);
+  });
+
+  it("is not there before a model is set up", async () => {
+    settings = { ...settings, configured: false, error: "No AI provider configured." };
+    renderIt();
+    await screen.findByText("Server-wide setting.");
+    expect(screen.queryByRole("heading", { name: "Measure this model" })).not.toBeInTheDocument();
+  });
+});

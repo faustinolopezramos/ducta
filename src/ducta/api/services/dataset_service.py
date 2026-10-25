@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from ducta.api.models.dataset import (
@@ -59,12 +60,55 @@ def io_names(value: Any) -> List[str]:
     return []
 
 
+_STREAM_KEYS = ("path", "format", "options", "table")
+_PLACEHOLDER_PREFIX = re.compile(r"^(?:\$\{[^}]*\}/)+")
+
+
+def stream_endpoint_name(entry: Dict[str, Any]) -> Optional[str]:
+    """The name a stream node's ``{format, path, options}`` endpoint goes by.
+
+    A stream node reads and writes by path or topic, not by dataset name, so
+    the bronze node's output and the silver node's input are the same path.
+    Named by that path without its placeholder root
+    (``${output_path}/${environment}/bronze/fraud_events`` → ``bronze/fraud_events``),
+    the two ends match and the canvas draws the dataset between them; a Kafka
+    source is ``kafka:<topic>``.
+    """
+    name = entry.get("name") or entry.get("id")
+    if name:
+        return str(name)
+    path = entry.get("path") or entry.get("table")
+    if isinstance(path, str) and path.strip():
+        return _PLACEHOLDER_PREFIX.sub("", path.strip()).rstrip("/") or path.strip()
+    raw_options = entry.get("options")
+    options: Dict[str, Any] = raw_options if isinstance(raw_options, dict) else {}
+    topic = options.get("subscribe") or options.get("topic") or entry.get("topic")
+    if topic:
+        return f"{entry.get('format') or 'kafka'}:{topic}"
+    return None
+
+
+def _is_stream_endpoints(value: Any) -> bool:
+    return (
+        isinstance(value, list)
+        and bool(value)
+        and all(
+            isinstance(e, dict)
+            and not (e.get("name") or e.get("id"))
+            and any(k in e for k in _STREAM_KEYS)
+            for e in value
+        )
+    )
+
+
 def node_io(spec: Dict[str, Any], side: str) -> List[str]:
     """Return a node spec's dataset names for *side* (``"input"``/``"output"``)."""
     plural = f"{side}s"
     value = spec.get(plural)
     if not value:
         value = spec.get(side)
+    if isinstance(value, list) and _is_stream_endpoints(value):
+        return [n for n in (stream_endpoint_name(e) for e in value) if n]
     if side == "input":
         # Inputs as {param: dataset} — alone, or as a list item, which is how
         # the node repository returns a format-2 node's: the datasets are the

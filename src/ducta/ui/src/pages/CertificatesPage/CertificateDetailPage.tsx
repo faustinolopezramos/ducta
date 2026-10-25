@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { IconDownload } from "@tabler/icons-react";
 import { PageContainer } from "../../components/ui/PageContainer";
 import { PageHeader } from "../../components/ui/PageHeader";
@@ -7,7 +7,8 @@ import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useToastStack } from "../../hooks/useModalStack";
-import { useExecutionStatus } from "../../api/queries";
+import { useExecutionList, useExecutionStatus } from "../../api/queries";
+import { formatDate } from "../../utils/formatDate";
 import {
   isMissingCertificate,
   useCertificate,
@@ -62,7 +63,26 @@ export function CertificateDetailPage() {
     : { status: "idle" };
 
   // Ad hoc "compare to another certificate" — independent of Reproduce,
-  // since `certify diff` supports comparing any two certificates.
+  // since `certify diff` supports comparing any two certificates. The choices
+  // are this pipeline's other certificates, newest first: a pasted run id was
+  // the only way in, and nobody has one at hand.
+  const navigate = useNavigate();
+  const { data: siblingRuns } = useExecutionList(
+    { project_id: projectId === "." ? undefined : projectId, pipeline_name: cert?.pipeline, limit: 50 },
+    { enabled: !!cert?.pipeline }
+  );
+  const compareChoices = useMemo(
+    () =>
+      ((siblingRuns?.executions ?? []) as Array<{ certificate_run_id?: string | null; env?: string; started_at?: string | null }>)
+        .filter((ex) => ex.certificate_run_id && ex.certificate_run_id !== runId)
+        .map((ex) => ({
+          id: ex.certificate_run_id!,
+          label: [cert?.pipeline, ex.env, ex.started_at ? formatDate(ex.started_at) : null, ex.certificate_run_id!.slice(0, 8)]
+            .filter(Boolean)
+            .join(" · "),
+        })),
+    [siblingRuns, runId, cert?.pipeline]
+  );
   const [compareRunId, setCompareRunId] = useState("");
   const [activeCompareId, setActiveCompareId] = useState<string | null>(null);
   const { data: compareDiff, isFetching: comparing, error: compareError } = useCertificateDiff(
@@ -150,6 +170,11 @@ export function CertificateDetailPage() {
             reproduce={reproduceState}
             reproducing={startingReproduce}
             onReproduce={() => setConfirmReproduceOpen(true)}
+            // The key is not on this server, so the check that takes one is
+            // the standalone verifier — opened with this certificate in it.
+            onCheckWithKey={() =>
+              navigate("/verify-certificate", { state: { certificateJson: JSON.stringify(cert, null, 2), withKey: true } })
+            }
           />
 
           {confirmReproduceOpen && (
@@ -181,14 +206,22 @@ export function CertificateDetailPage() {
               Compare to another certificate
             </label>
             <div className="cert-detail__compare-row">
-              <input
+              <select
                 id="compare-run-id"
-                type="text"
                 value={compareRunId}
                 onChange={(e) => setCompareRunId(e.target.value)}
-                placeholder="Run ID to compare against…"
                 className="cert-detail__compare-input"
-              />
+                disabled={compareChoices.length === 0}
+              >
+                <option value="">
+                  {compareChoices.length === 0 ? "No other certificates of this pipeline yet" : "Choose a certificate…"}
+                </option>
+                {compareChoices.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
               <Button
                 variant="secondary"
                 size="sm"
@@ -199,6 +232,7 @@ export function CertificateDetailPage() {
                 Compare
               </Button>
             </div>
+            <span className="cert-detail__compare-hint">This pipeline’s other certificates, newest first.</span>
             {compareError != null && <p style={{ color: "var(--danger)", fontSize: "var(--text-xs)" }}>Could not find that certificate.</p>}
             {compareDiff && <CertificateDiffView diff={compareDiff} labelB={activeCompareId?.slice(0, 12) ?? "compared run"} />}
           </div>

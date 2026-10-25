@@ -32,3 +32,4 @@ export * from "./Sparkline";
 export * from "./EntityChip";
 export * from "./KeyHint";
 export * from "./Menu";
+export * from "./SegmentedControl";

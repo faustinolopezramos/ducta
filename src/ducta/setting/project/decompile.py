@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Engine documents → project files (format 2).
 
-The inverse of :mod:`ducta.setting.project_loader`'s ``compile_project``:
+The inverse of :mod:`ducta.setting.project.loader`'s ``compile_project``:
 ``decompile`` turns the five engine documents back into the ``ducta.yaml`` /
 ``catalog.yaml`` / ``pipelines/*.yaml`` shape, ``canonical`` reduces documents
 to what the project format keeps, and ``write_schemas`` writes the JSON Schemas
@@ -33,7 +33,7 @@ import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     _conventional_path,
 )
 
@@ -241,7 +241,7 @@ def _decompile_node(
 def _decompile_dataset(
     name: str, inp: Optional[Dict[str, Any]], outp: Optional[Dict[str, Any]], problems: List[str]
 ) -> Dict[str, Any]:
-    from ducta.setting.project_schema import DATASET_ENGINE_KEYS
+    from ducta.setting.project.schema import DATASET_ENGINE_KEYS
 
     where = f"dataset '{name}'"
     inp, outp = inp or {}, outp or {}
@@ -639,7 +639,7 @@ def write_schemas(target: Path) -> None:
     """Per-file-kind JSON Schemas under .ducta/schema/, for editor autocompletion."""
     import json
 
-    from ducta.setting.project_schema import json_schema
+    from ducta.setting.project.schema import json_schema
 
     defs = json_schema()["$defs"]
     folder = target / _SCHEMA_DIR

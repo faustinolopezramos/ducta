@@ -47,7 +47,10 @@ export function InlineLogs({
   lineLink,
   highlightId,
   finalStatus,
+  emptyDescription,
 }: {
+  /** What to say when there are no logs at all, instead of "Run a pipeline…". */
+  emptyDescription?: string;
   /** How the run ended, once it has — the header says so instead of "Idle". */
   finalStatus?: string;
   /** A URL to one line (the run page's `?log=`), for each row's link button. */
@@ -213,7 +216,9 @@ export function InlineLogs({
         icon={IconTerminal2}
         size="sm"
         title={anyFilter ? "No matches found" : "No logs"}
-        description={anyFilter ? "Try adjusting your search or filters." : "Run a pipeline to see execution logs."}
+        description={
+          anyFilter ? "Try adjusting your search or filters." : emptyDescription ?? "Run a pipeline to see execution logs."
+        }
       />
     )
   ) : null;
@@ -360,7 +365,12 @@ export function InlineLogs({
               <div className="ilog__level-pills">
                 {LEVELS.map((lvl) => {
                   const active = levelFilter === lvl;
-                  const col = lvl === "ALL" ? "var(--text)" : (LEVEL_COLOR[lvl as LogLevel] ?? "var(--text-dim)");
+                  // A run that succeeded still logs a few warnings and errors
+                  // (retries, noisy libraries): in red they read as a failure.
+                  // Colour comes back while it runs and when it did not succeed.
+                  const calm = !isRunning && finalStatus === "success";
+                  const col =
+                    lvl === "ALL" ? "var(--text)" : calm ? "var(--text-muted)" : (LEVEL_COLOR[lvl as LogLevel] ?? "var(--text-dim)");
                   const count = levelCounts[lvl as LogLevel | "ALL"];
                   const hasEntries = count != null && count > 0;
 

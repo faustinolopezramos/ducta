@@ -42,19 +42,11 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.ai.builder import (
-    Assembled,
-    Draft,
-    ParsedAnswer,
-    Scope,
-    _pipeline_file,
-    _read,
-    _run,
-    _sha,
-    build_context,
-)
+from ducta.ai.builder import find_pipeline_file
 from ducta.ai.context import redact
+from ducta.ai.drafts import Draft, read_text, text_sha
 from ducta.ai.errors import AIConfigError, AINotFoundError
+from ducta.ai.loop import Assembled, ParsedAnswer, Scope, run_loop
 from ducta.ai.providers import LLMProvider
 from ducta.ai.yaml_edit import edit_yaml, mapping
 
@@ -228,7 +220,7 @@ def _column_facts(profile: Any) -> List[Dict[str, Any]]:
 def quality_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> QualityFacts:
     """The node, its current checks, and its output measured in *env* (when it can be)."""
     root = Path(root).resolve()
-    path = _pipeline_file(root, pipeline)
+    path = find_pipeline_file(root, pipeline)
     rel = path.relative_to(root).as_posix()
     _yaml_only(root, rel)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -357,7 +349,7 @@ def quality_assembler(root: Path, facts: QualityFacts) -> Callable[[ParsedAnswer
                 "The proposal is the node's current block: change something or say why not"
             )
             return out
-        text = _read(root / facts.pipeline_rel) or ""
+        text = read_text(root / facts.pipeline_rel) or ""
 
         def put(doc: Any) -> None:
             new = mapping(block)
@@ -371,7 +363,7 @@ def quality_assembler(root: Path, facts: QualityFacts) -> Callable[[ParsedAnswer
             )
             return out
         out.files[facts.pipeline_rel] = new
-        out.base[facts.pipeline_rel] = _sha(text)
+        out.base[facts.pipeline_rel] = text_sha(text)
         return out
 
     return assemble
@@ -406,17 +398,16 @@ def propose_quality(
     system = QUALITY_PROMPT.format(
         checks="\n".join(f"- {name}: {shape}" for name, shape in QUALITY_CHECKS.items())
     )
-    draft = _run(
+    draft = run_loop(
         root,
         provider,
         system=system,
         first_message=message,
         scope=_quality_scope(facts),
         request=note.strip() or f"Quality checks for {pipeline}.{node}",
-        ctx=build_context(root),
         max_attempts=max_attempts,
         on_attempt=on_attempt,
-        seen={facts.pipeline_rel: _sha(_read(root / facts.pipeline_rel))},
+        seen={facts.pipeline_rel: text_sha(read_text(root / facts.pipeline_rel))},
         should_stop=should_stop,
         assembler=quality_assembler(root, facts),
         again=AGAIN_PROPOSAL,
@@ -504,7 +495,7 @@ def docs_facts(root: Path, env: str = "dev", limit: int = 60, columns: bool = Tr
 
     ``columns=False`` skips reading column names (counting what is missing).
     """
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     root = Path(root).resolve()
     located = read_project(root, expand=False)
@@ -651,7 +642,7 @@ def docs_assembler(root: Path, facts: DocsFacts) -> Callable[[ParsedAnswer], Ass
         edits, problems = _docs_edits(block, facts)
         out.rejected += problems
         for rel, fns in edits.items():
-            text = _read(root / rel) or ""
+            text = read_text(root / rel) or ""
 
             def apply(doc: Any, fns: List[Callable[[Any], None]] = fns) -> None:
                 for fn in fns:
@@ -660,7 +651,7 @@ def docs_assembler(root: Path, facts: DocsFacts) -> Callable[[ParsedAnswer], Ass
             new = edit_yaml(text, apply)
             if new != text:
                 out.files[rel] = new
-                out.base[rel] = _sha(text)
+                out.base[rel] = text_sha(text)
         if not out.files and not out.rejected:
             out.rejected.append("The proposal adds nothing: describe what was asked for")
         return out
@@ -692,17 +683,16 @@ def propose_docs(
     if facts.empty:
         raise AIConfigError("Every dataset, pipeline and node already has a description")
     message = facts.render() + (f"\n\n# What the user says\n{note.strip()}" if note.strip() else "")
-    draft = _run(
+    draft = run_loop(
         root,
         provider,
         system=DOCS_PROMPT,
         first_message=message,
         scope=_docs_scope(facts),
         request=note.strip() or "Document the project",
-        ctx=build_context(root),
         max_attempts=max_attempts,
         on_attempt=on_attempt,
-        seen={rel: _sha(_read(root / rel)) for rel in _docs_scope(facts).editable},
+        seen={rel: text_sha(read_text(root / rel)) for rel in _docs_scope(facts).editable},
         should_stop=should_stop,
         assembler=docs_assembler(root, facts),
         again=AGAIN_PROPOSAL,

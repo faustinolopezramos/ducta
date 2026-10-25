@@ -48,3 +48,14 @@ class TestProjectDirAllowsLegitimateIds:
 
     def test_root_name_is_the_workspace_root_special_case(self, repo, tmp_path):
         assert repo.project_dir(tmp_path.name) == tmp_path
+
+
+class TestListIdsSkipsNonProjectFolders:
+    """A dot folder under projects/ (``.claude``, ``.vscode``) made ``list_ids``
+    raise on it, so ``GET /api/projects`` failed and the workspace looked empty."""
+
+    def test_dot_and_invalid_folders_are_ignored(self, repo, tmp_path):
+        repo.create("orders", {})
+        (tmp_path / "projects" / ".claude").mkdir()
+        (tmp_path / "projects" / "my project").mkdir()
+        assert repo.list_ids() == ["orders"]

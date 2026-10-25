@@ -26,6 +26,9 @@ AI pipeline builder over HTTP — what ``ducta ai`` does, for the UI.
   runs as a job the client polls; each validation attempt shows up as it ends.
 * ``/projects/{id}/ai/drafts`` — the saved drafts; applying one needs
   ``pipeline.write`` and writes files without committing them.
+* ``/ai/evals`` — ``ducta ai eval`` for the server's model: a job on Ducta's
+  template project, and the reports kept in ``~/.ducta/ai/evals`` (the CLI's
+  too). Admins only (``ai.configure``): it spends the server's key.
 
 An API key goes in and never comes out: responses carry its source and a mask.
 """
@@ -40,7 +43,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
@@ -204,6 +207,18 @@ class JobResponse(BaseModel):
     questions: Optional[List[str]] = None
     #: sentinel_propose: the incident the proposal is linked to.
     incident_id: Optional[str] = None
+    #: eval: ``cases`` and ``repeat`` asked for, ``results`` as each case ends, and
+    #: ``report_id`` with ``summary`` once done (GET /ai/evals/{report_id}).
+    evaluation: Optional[Dict[str, Any]] = None
+
+
+class EvalRequest(BaseModel):
+    cases: Optional[List[str]] = Field(default=None, description="Case ids (default: all)")
+    repeat: int = Field(default=1, ge=1, le=10, description="Runs per case")
+    confirm_remote: bool = Field(
+        default=False,
+        description="Required with a remote model: the template project is sent to it",
+    )
 
 
 class DocsGaps(BaseModel):
@@ -219,6 +234,9 @@ class ExplanationResponse(BaseModel):
     text: str
     model: str
     created_at: str
+    #: The tokens the model took (``input_tokens``, ``output_tokens``, cache reads…).
+    usage: Dict[str, int] = Field(default_factory=dict)
+    prompt_version: str = ""
 
 
 class DraftSummary(BaseModel):
@@ -236,6 +254,10 @@ class DraftSummary(BaseModel):
     files: List[str]
     applied_at: Optional[str] = None
     revision_of: Optional[str] = None
+    #: The tokens every attempt took, added up (empty when the provider did not say).
+    usage: Dict[str, int] = Field(default_factory=dict)
+    #: Which version of the system prompt made it.
+    prompt_version: str = ""
 
 
 class DraftFile(BaseModel):
@@ -626,7 +648,12 @@ async def get_explanation(
     if found is None:
         raise HTTPException(status_code=404, detail=f"No explanation for run '{execution_id}'")
     return ExplanationResponse(
-        execution_id=execution_id, text=found.text, model=found.model, created_at=found.created_at
+        execution_id=execution_id,
+        text=found.text,
+        model=found.model,
+        created_at=found.created_at,
+        usage=found.usage,
+        prompt_version=found.prompt_version,
     )
 
 
@@ -646,18 +673,20 @@ class _Jobs:
     process (another uvicorn worker) can read its progress and ask it to stop:
     the file is the job, and ``<id>.cancel`` next to it is the request to stop.
     A restart loses running jobs (they read as failed), never saved drafts.
+    *folder* says where a root's jobs go (evaluations keep theirs by the reports).
     """
 
-    def __init__(self) -> None:
+    def __init__(self, folder: Callable[[Path], Path] = _jobs_dir) -> None:
         self._live: Dict[str, Path] = {}  # running here: job id → project root
         self._lock = threading.RLock()
+        self._folder = folder
 
     def running(self) -> int:
         with self._lock:
             return len(self._live)
 
     def _path(self, root: Path, job_id: str) -> Path:
-        return _jobs_dir(root) / f"{job_id}.json"
+        return self._folder(root) / f"{job_id}.json"
 
     def _write(self, root: Path, job: JobResponse, owner: Optional[str]) -> None:
         path = self._path(root, job.id)
@@ -671,7 +700,7 @@ class _Jobs:
             self._live[job.id] = root
             self._write(root, job, owner)
             finished = sorted(
-                (p for p in _jobs_dir(root).glob("*.json") if p.stem not in self._live),
+                (p for p in self._folder(root).glob("*.json") if p.stem not in self._live),
                 key=lambda p: p.stat().st_mtime,
             )
             for old in finished[: max(0, len(finished) - _MAX_JOBS)]:
@@ -719,6 +748,17 @@ class _Jobs:
             job.attempts.append(attempt)
             self._write(root, job, owner)
 
+    def update(self, root: Path, job_id: str, **fields: Any) -> None:
+        """Progress of a running job (it stays running), unless it was stopped."""
+        with self._lock:
+            found = self.read(root, job_id)
+            if found is None or found[0].status != "running":
+                return
+            job, owner = found
+            for key, value in fields.items():
+                setattr(job, key, value)
+            self._write(root, job, owner)
+
     def cancel(self, root: Path, job_id: str) -> Optional[JobResponse]:
         """Ask the worker to stop, and show the job as stopped from now on."""
         with self._lock:
@@ -737,6 +777,8 @@ class _Jobs:
 
 
 _jobs = _Jobs()
+#: Evaluations of the server's model: their root is the reports folder.
+_eval_jobs = _Jobs(folder=lambda root: root / "jobs")
 #: Draft jobs get their own threads: they take minutes, and the event loop's
 #: default executor serves every ``asyncio.to_thread`` call of the API.
 _EXECUTOR = ThreadPoolExecutor(max_workers=_MAX_RUNNING, thread_name_prefix="ducta-ai")
@@ -783,8 +825,9 @@ async def start_job(
     request: Request,
     current_user: CurrentUserDep,
 ) -> JobResponse:
-    from ducta.ai.builder import fix, generate, load_draft, revise, save_draft
+    from ducta.ai.builder import fix, generate, revise
     from ducta.ai.config import load_config
+    from ducta.ai.drafts import load_draft, save_draft
     from ducta.ai.errors import AICancelledError, AIConfigError, AIError, AINotFoundError
     from ducta.ai.explain import explain_failure, save_explanation
     from ducta.ai.proposals import propose_docs, propose_quality
@@ -854,7 +897,7 @@ async def start_job(
     config = await asyncio.to_thread(load_config)
     config.require_model()
     provider = make_provider(config)
-    if _jobs.running() >= _MAX_RUNNING:
+    if _jobs.running() + _eval_jobs.running() >= _MAX_RUNNING:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Other drafts are being generated; try again when they finish",
@@ -1138,6 +1181,203 @@ async def cancel_job(
     return await asyncio.to_thread(_jobs.cancel, root, job_id) or job
 
 
+# ── evals ───────────────────────────────────────────────────────────────────
+# Static paths (``compare``, ``jobs``) come before ``/ai/evals/{report_id}``.
+
+
+def _eval_root() -> Path:
+    from ducta.ai.evals import reports_dir
+
+    return reports_dir()
+
+
+def _report(report_id: str) -> Any:
+    """A kept report by its id — never a path, which the CLI also accepts."""
+    from ducta.ai.evals import REPORT_ID, load_report
+
+    if not REPORT_ID.match(report_id):
+        raise HTTPException(status_code=404, detail=f"No eval report '{report_id}'")
+    return load_report(report_id)
+
+
+@router.get(
+    "/ai/evals/cases",
+    summary="The cases an evaluation can run",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def list_eval_cases() -> List[Dict[str, Any]]:
+    from ducta.ai.evals import CASES
+
+    return [{"id": c.id, "kind": c.kind, "prompt": c.prompt, "about": c.about} for c in CASES]
+
+
+@router.post(
+    "/ai/evals",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Measure the server's model on Ducta's template project",
+    description="Returns at once; poll GET /ai/evals/jobs/{job_id}. Each case runs on a fresh "
+    "copy of the medallion_basic template in a temporary folder: nothing of any project is "
+    "read or changed. With a remote model the template is sent to it, so `confirm_remote` "
+    "must be true (409 otherwise). The report is kept: GET /ai/evals.",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def start_eval(body: EvalRequest, current_user: CurrentUserDep) -> JobResponse:
+    from ducta.ai import evals
+    from ducta.ai.config import load_config
+    from ducta.ai.errors import AICancelledError, AIError
+    from ducta.ai.providers import make_provider
+
+    cases = evals.select(body.cases)
+    config = await asyncio.to_thread(load_config)
+    config.require_model()
+    if not config.is_local and not body.confirm_remote:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"The eval sends Ducta's {evals.TEMPLATE} template project (no project's "
+            f"files) to {config.endpoint}, {len(cases) * body.repeat} run(s), several requests "
+            "each. Send confirm_remote: true to run it.",
+        )
+    provider = make_provider(config)
+    if _jobs.running() + _eval_jobs.running() >= _MAX_RUNNING:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Other drafts are being generated; try again when they finish",
+        )
+    root = _eval_root()
+    job = JobResponse(
+        id=uuid.uuid4().hex[:12],
+        project_id="",
+        kind="eval",
+        status="running",
+        started_at=_now(),
+        model=config.model,
+        is_local=config.is_local,
+        evaluation={"cases": [c.id for c in cases], "repeat": body.repeat, "results": []},
+    )
+    await asyncio.to_thread(_eval_jobs.add, root, job, _owner(current_user))
+    done: List[Dict[str, Any]] = []
+
+    def report(result: Any) -> None:
+        from dataclasses import asdict
+
+        done.append({**asdict(result), "flaky": result.flaky})
+        _eval_jobs.update(root, job.id, evaluation={**(job.evaluation or {}), "results": done})
+
+    def stop() -> bool:
+        return _eval_jobs.cancelled(root, job.id)
+
+    def work() -> None:
+        try:
+            found = evals.run_eval(
+                provider, cases, repeat=body.repeat, on_result=report, should_stop=stop
+            )
+            if stop():
+                raise AICancelledError("Stopped")
+            found.source = "server"
+            evals.save_report(found)
+            _eval_jobs.finish(
+                root,
+                job.id,
+                status="done",
+                ok=found.passed == len(found.results),
+                evaluation={
+                    **(job.evaluation or {}),
+                    "results": done,
+                    "report_id": found.id,
+                    "summary": found.summary(),
+                },
+                finished_at=_now(),
+            )
+        except AICancelledError as e:
+            _eval_jobs.finish(root, job.id, status="cancelled", error=e.message, finished_at=_now())
+        except AIError as e:
+            _eval_jobs.finish(root, job.id, status="failed", error=e.message, finished_at=_now())
+        except Exception as e:  # noqa: BLE001 — a job never takes the server down
+            _eval_jobs.finish(
+                root, job.id, status="failed", error=f"Unexpected error: {e}", finished_at=_now()
+            )
+
+    _EXECUTOR.submit(work)
+    return job
+
+
+def _eval_job(job_id: str) -> JobResponse:
+    found = _eval_jobs.read(_eval_root(), job_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No eval job '{job_id}'")
+    return found[0]
+
+
+@router.get(
+    "/ai/evals/jobs/{job_id}",
+    response_model=JobResponse,
+    summary="An evaluation: its cases' results so far, and its report when done",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def get_eval_job(job_id: str) -> JobResponse:
+    return await asyncio.to_thread(_eval_job, job_id)
+
+
+@router.delete(
+    "/ai/evals/jobs/{job_id}",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Stop an evaluation",
+    description="It reads as cancelled at once and no report is kept; a request already sent "
+    "to the model is not interrupted, but no further one is made.",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def cancel_eval_job(job_id: str) -> JobResponse:
+    job = await asyncio.to_thread(_eval_job, job_id)
+    if job.status != "running":
+        return job
+    return await asyncio.to_thread(_eval_jobs.cancel, _eval_root(), job_id) or job
+
+
+@router.get(
+    "/ai/evals",
+    summary="The kept evaluation reports, newest first (CLI and server alike)",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def list_evals() -> List[Dict[str, Any]]:
+    from ducta.ai.evals import list_reports
+
+    return [r.head() for r in await asyncio.to_thread(list_reports)]
+
+
+@router.get(
+    "/ai/evals/compare",
+    summary="What changed from report a to report b, case by case",
+    description="Without `a`, b is compared with the same model's previous report.",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def compare_evals(b: str, a: Optional[str] = None) -> Dict[str, Any]:
+    from ducta.ai.evals import compare, previous_report
+
+    def run() -> Dict[str, Any]:
+        after = _report(b)
+        before = _report(a) if a else previous_report(after)
+        if before is None:
+            raise HTTPException(
+                status_code=404, detail=f"No earlier report of {after.model} to compare with"
+            )
+        return compare(before, after)
+
+    return await asyncio.to_thread(run)
+
+
+@router.get(
+    "/ai/evals/{report_id}",
+    summary="One kept evaluation report",
+    dependencies=[Depends(require_permission("ai.configure"))],
+)
+async def get_eval(report_id: str) -> Dict[str, Any]:
+    found = await asyncio.to_thread(_report, report_id)
+    data: Dict[str, Any] = found.to_dict()
+    return data
+
+
 # ── drafts ──────────────────────────────────────────────────────────────────
 
 
@@ -1156,6 +1396,8 @@ def _summary(draft: Any) -> DraftSummary:
         files=list(draft.files),
         applied_at=draft.applied_at,
         revision_of=draft.revision_of,
+        usage=draft.usage,
+        prompt_version=draft.prompt_version,
     )
 
 
@@ -1171,7 +1413,7 @@ def _summary(draft: Any) -> DraftSummary:
 async def list_ai_drafts(
     project_id: str, svc: ProjectServiceDep, limit: int = Query(default=50, ge=1, le=200)
 ) -> List[DraftSummary]:
-    from ducta.ai.builder import list_drafts
+    from ducta.ai.drafts import list_drafts
 
     root = _project_root(svc, project_id)
     return [_summary(d) for d in await asyncio.to_thread(list_drafts, root, limit)]
@@ -1187,7 +1429,7 @@ async def list_ai_drafts(
     ],
 )
 async def get_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -> DraftResponse:
-    from ducta.ai.builder import _read, _sha, load_draft
+    from ducta.ai.drafts import load_draft, read_text, text_sha
 
     root = _project_root(svc, project_id)
 
@@ -1196,7 +1438,7 @@ async def get_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -
         stale = (
             []
             if draft.applied_at
-            else [rel for rel, sha in draft.base.items() if _sha(_read(root / rel)) != sha]
+            else [rel for rel, sha in draft.base.items() if text_sha(read_text(root / rel)) != sha]
         )
         return DraftResponse(
             **_summary(draft).model_dump(),
@@ -1262,7 +1504,8 @@ def _blueprint_fields(draft: Any) -> Dict[str, Any]:
 async def apply_ai_draft(
     project_id: str, draft_id: str, body: ApplyRequest, svc: ProjectServiceDep
 ) -> ApplyResponse:
-    from ducta.ai.builder import apply_draft, load_draft
+    from ducta.ai.builder import apply_draft
+    from ducta.ai.drafts import load_draft
 
     root = _project_root(svc, project_id)
 
@@ -1283,7 +1526,7 @@ async def apply_ai_draft(
     ],
 )
 async def delete_ai_draft(project_id: str, draft_id: str, svc: ProjectServiceDep) -> None:
-    from ducta.ai.builder import delete_draft
+    from ducta.ai.drafts import delete_draft
 
     root = _project_root(svc, project_id)
     await asyncio.to_thread(delete_draft, root, draft_id)

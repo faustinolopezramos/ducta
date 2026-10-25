@@ -565,6 +565,20 @@ Remove the API key from the keychain
 
 Show the configuration and check the model answers
 
+### ducta ai eval
+
+Runs fixed cases (new pipelines, fixes, a review, an explanation) on fresh copies of the medallion_basic template in a temporary folder, and reports which pass Ducta's checks, attempts, tokens and time. Nothing of yours is read or changed; with a remote model the template is sent to it.
+
+| Option | What it does |
+|---|---|
+| `--case` | Run only this case (repeatable; default: all) — one of `new-gold-daily`, `new-silver-filter`, `new-spanish`, `fix-wrong-dataset`, `fix-missing-function`, `extend-add-node`, `revise-draft`, `architect-plan`, `review-pipeline`, `explain-keyerror` |
+| `--repeat` | Run every case N times (1-10): it passes only when every run does — default `1` |
+| `--out` | Also write the report to this JSON file |
+| `--list` | List the kept reports (~/.ducta/ai/evals); no model is asked |
+| `--compare` | Compare two reports (ids or files), or one with the model's previous one; no model is asked |
+| `--yes` | Do not ask before sending the template to a remote model |
+| `--output-format` | Output format (json prints the report) — one of `rich`, `json`; default `rich` |
+
 ### ducta ai new
 
 Draft a new pipeline from a description

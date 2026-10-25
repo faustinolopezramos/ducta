@@ -65,7 +65,7 @@ _PUBLIC_API: dict[str, str] = {
     "MLNodeContext": "ducta.core.ml_context",
     # Configuration
     "Context": "ducta.setting.contexts",
-    "load_project": "ducta.setting.project_loader",
+    "load_project": "ducta.setting.project.loader",
     # Run certificates
     "RunCertificate": "ducta.core.certificate",
     "build_certificate": "ducta.core.certificate",
@@ -125,7 +125,7 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
     from ducta.core.ml_context import MLNodeContext
     from ducta.gate import ReaderFactory, WriterFactory
     from ducta.setting.contexts import Context
-    from ducta.setting.project_loader import load_project
+    from ducta.setting.project.loader import load_project
 
 
 def __getattr__(name: str) -> Any:

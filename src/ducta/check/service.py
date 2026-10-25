@@ -313,7 +313,7 @@ class QualityService:
         workspace code), and an unregistered check is then only a warning.
         """
         from ducta.check import QUALITY_CHECKS_REGISTRY
-        from ducta.setting.project_loader import compile_project, validate_project
+        from ducta.setting.project.loader import compile_project, validate_project
 
         errors: List[str] = []
         warnings: List[str] = []

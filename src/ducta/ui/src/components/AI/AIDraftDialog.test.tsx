@@ -62,6 +62,7 @@ const draft = {
   attempts: [{ number: 1, files: [], errors: 0, warnings: 0, rejected: [], usage: {} }],
   raw_answer: "",
   stale_files: [],
+  usage: { input_tokens: 14210, output_tokens: 1920 },
 };
 
 let job: Record<string, unknown>;
@@ -163,6 +164,7 @@ describe("AIDraftDialog", () => {
     fireEvent.click(within(files).getByText("src/gold.py"));
     expect(screen.getByText("+def grades(df, **kwargs): return df")).toBeInTheDocument();
     expect(screen.getByText(/Nothing is committed or run/)).toBeInTheDocument();
+    expect(screen.getByText("14,210 tokens in · 1,920 out")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Apply 2 files" }));
     await waitFor(() => expect(onApplied).toHaveBeenCalledWith("gold.grades"));

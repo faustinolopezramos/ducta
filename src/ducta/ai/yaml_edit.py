@@ -41,7 +41,7 @@ def edit_yaml(text: str, edit: Callable[[Any], None]) -> str:
         from ducta.api.repositories.v2_store import restore_blank_lines, round_trip_yaml, style_of
     except ImportError as e:  # pragma: no cover — the api extra brings ruamel
         raise AIEnvironmentError(
-            "Applying a proposal needs Ducta's API extra: pip install 'ducta[api,ai]'"
+            "Applying a proposal needs Ducta's AI extra: pip install 'ducta[ai]'"
         ) from e
     doc = round_trip_yaml().load(text) if text.strip() else None
     if doc is None:

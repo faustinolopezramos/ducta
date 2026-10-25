@@ -116,7 +116,7 @@ class ArchitectCommands:
     def scaffold(parsed_args) -> int:
         """The blueprint's files with stub functions: a draft, no model involved."""
         from ducta.ai.agents.architect.build import scaffold
-        from ducta.ai.builder import save_draft
+        from ducta.ai.drafts import save_draft
 
         root = _project_root(parsed_args)
         draft = scaffold(root, _read(parsed_args.blueprint))
@@ -144,7 +144,7 @@ class ArchitectCommands:
         from ducta.ai.agents.architect.blueprint import load_blueprint
         from ducta.ai.agents.architect.build import build
         from ducta.ai.agents.architect.design import blueprint_of
-        from ducta.ai.builder import load_draft
+        from ducta.ai.drafts import load_draft
 
         source = parsed_args.blueprint
 

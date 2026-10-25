@@ -17,7 +17,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ducta.ai.builder import apply_draft, revise, save_draft
+from ducta.ai.builder import apply_draft, revise
+from ducta.ai.drafts import save_draft
 from ducta.ai.errors import AIConfigError, AIConflictError
 from ducta.ai.extend import existing_changes, extend
 from ducta.ai.pipeline_review import (

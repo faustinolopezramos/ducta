@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from ducta.api.services.alerts import AlertEvent, deliver, events_for_run, matching_rules
-from ducta.setting.project_schema import AlertRule
+from ducta.setting.project.schema import AlertRule
 
 
 def _rule(on, pipelines=("*",), var="ALERT_URL", type_="webhook"):

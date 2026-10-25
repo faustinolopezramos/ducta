@@ -9,8 +9,8 @@ import pytest
 import ducta.check.checks  # noqa: F401  registers the built-ins
 from ducta.check.core import QUALITY_CHECKS_REGISTRY, BaseQualityCheck
 from ducta.check.params import CHECK_PARAMS, COMMON_PARAMS, problems_in, schema_for
-from ducta.setting.project_loader import ProjectConfigError, validate_project
-from ducta.setting.project_schema import json_schema
+from ducta.setting.project.loader import ProjectConfigError, validate_project
+from ducta.setting.project.schema import json_schema
 
 
 class TestTheTableAgreesWithTheChecks:

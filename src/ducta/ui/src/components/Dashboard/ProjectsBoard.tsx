@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Link } from "react-router-dom";
-import { IconPackage, IconPlus, IconX } from "@tabler/icons-react";
+import { IconAlertTriangle, IconPackage, IconPlus, IconX } from "@tabler/icons-react";
 import { Button } from "../ui/Button";
 import { EmptyState } from "../ui/EmptyState";
 import { StatusBadge } from "../ui/StatusBadge";
@@ -9,9 +9,14 @@ import { ACTIVITY_DAYS, runTimestamp, type ProjectActivity } from "../../utils/d
 import { FAILURE_STATUSES } from "../ui/statusMeta";
 import { formatRelative } from "../../utils/timeLabels";
 import { routes } from "../../utils/routes";
+import { apiErrorMessage } from "../../api/mutations/errors";
 
 interface ProjectsBoardProps {
   projects: ProjectSummary[];
+  loading?: boolean;
+  /** The listing failed: shown as an error with a retry, never as an empty workspace. */
+  error?: unknown;
+  onRetry?: () => void;
   activity: Map<string, ProjectActivity>;
   /** Omitted when the user may not delete projects: the delete control is not shown. */
   onDelete?: (projectId: string) => void;
@@ -27,7 +32,7 @@ interface ProjectsBoardProps {
  * colouring anything that is not worth a second look. Sorted by whichever
  * project did something most recently, with no control exposed to change that.
  */
-export function ProjectsBoard({ projects, activity, onDelete, onCreate }: ProjectsBoardProps) {
+export function ProjectsBoard({ projects, loading, error, onRetry, activity, onDelete, onCreate }: ProjectsBoardProps) {
   const rows = useMemo(() => {
     const lastRunTime = (id: string) => {
       const lastRun = activity.get(id)?.lastRun;
@@ -37,6 +42,19 @@ export function ProjectsBoard({ projects, activity, onDelete, onCreate }: Projec
       (a, b) => lastRunTime(b.id) - lastRunTime(a.id) || a.name.localeCompare(b.name)
     );
   }, [projects, activity]);
+
+  if (error) {
+    return (
+      <EmptyState
+        icon={IconAlertTriangle}
+        title="Couldn't load the projects"
+        description={apiErrorMessage(error, "Check that the Ducta server is running and try again.")}
+        action={onRetry && <Button variant="ghost" onClick={onRetry}>Try again</Button>}
+      />
+    );
+  }
+
+  if (loading && projects.length === 0) return null;
 
   if (projects.length === 0) {
     return (

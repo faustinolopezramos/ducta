@@ -43,7 +43,7 @@ from ducta.api.exceptions import (
 )
 from ducta.api.repositories.v2_store import V2ProjectStore, _dump_rt, _load_rt, _sync
 from ducta.api.utils.validators import validate_identifier
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     CATALOG_FILE,
     PIPELINES_DIR,
     PROJECT_FILE,
@@ -51,6 +51,16 @@ from ducta.setting.project_loader import (
 )
 
 _PROJECTS_DIR = "projects"
+
+
+def _is_project_id(name: str) -> bool:
+    try:
+        validate_identifier(name, field="project_id")
+    except ValueError:
+        return False
+    return True
+
+
 #: API-owned keys kept under ``metadata`` in ducta.yaml.
 _API_META = ("variables", "created_at", "updated_at")
 
@@ -94,7 +104,12 @@ class ProjectRepository:
         return find_project_root(self.project_dir(project_id)) is not None
 
     def list_ids(self) -> List[str]:
-        """Sorted project IDs: the workspace itself when it is a project, else projects/*."""
+        """Sorted project IDs: the workspace itself when it is a project, else projects/*.
+
+        Folders whose name is not a valid project id (``.claude``, ``.vscode``,
+        ``my project``) are skipped: they cannot be projects, and validating
+        them would fail the whole listing.
+        """
         ids: List[str] = []
         projects_root = self.projects_root()
         if projects_root.is_dir():
@@ -102,7 +117,7 @@ class ProjectRepository:
                 sorted(
                     entry.name
                     for entry in projects_root.iterdir()
-                    if entry.is_dir() and self.exists(entry.name)
+                    if entry.is_dir() and _is_project_id(entry.name) and self.exists(entry.name)
                 )
             )
         if not ids and find_project_root(self._root) is not None:

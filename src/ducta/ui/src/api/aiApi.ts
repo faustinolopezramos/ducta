@@ -82,7 +82,8 @@ export interface AIJob {
     | "architect_build"
     | "sentinel_propose"
     | "extend"
-    | "review_pipeline";
+    | "review_pipeline"
+    | "eval";
   status: "running" | "done" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
@@ -102,6 +103,8 @@ export interface AIJob {
   questions?: string[] | null;
   /** sentinel_propose: the incident the explanation and fix draft are linked to. */
   incident_id?: string | null;
+  /** eval: the cases asked for, each one's result as it ends, and the kept report when done. */
+  evaluation?: AIEvalProgress | null;
 }
 
 export interface AIExplanation {
@@ -109,6 +112,8 @@ export interface AIExplanation {
   text: string;
   model: string;
   created_at: string;
+  /** The tokens the model took (absent when the provider did not say). */
+  usage?: Record<string, number>;
 }
 
 export interface AIReviewFinding {
@@ -140,6 +145,8 @@ export interface AIReview {
   /** The model's findings dropped: they pointed at nothing real. */
   dropped: number;
   notes: string;
+  /** The tokens the model took (absent when the provider did not say). */
+  usage?: Record<string, number>;
 }
 
 /** A whole pipeline's review: every node, and what is only visible across them. */
@@ -155,6 +162,8 @@ export interface AIPipelineReview {
   model: string | null;
   dropped: number;
   notes: string;
+  /** The tokens the model took (absent when the provider did not say). */
+  usage?: Record<string, number>;
 }
 
 /** What an extension adds, read by Ducta from its files. */
@@ -214,6 +223,8 @@ export interface AIDraftSummary {
   files: string[];
   applied_at: string | null;
   revision_of: string | null;
+  /** The tokens the model took (absent when the provider did not say). */
+  usage?: Record<string, number>;
 }
 
 export interface AIDraft extends AIDraftSummary {
@@ -333,6 +344,177 @@ export const useAIModels = () =>
     enabled: false,
     retry: false,
   });
+
+// ── evaluations of the server's model (admins: ai.configure) ─────────────────
+
+export interface AIEvalCase {
+  id: string;
+  kind: string;
+  /** What the model is asked (empty for review and explain). */
+  prompt: string;
+  /** What the case is about, in a few words. */
+  about: string;
+}
+
+export interface AIEvalResult {
+  case: string;
+  kind: string;
+  /** Every run passed. */
+  passed: boolean;
+  seconds: number;
+  /** Validation attempts, added up over the runs (drafts only). */
+  attempts: number;
+  usage: Record<string, number>;
+  prompt_version: string;
+  /** Why it did not pass, in Ducta's words. */
+  misses: string[];
+  runs: number;
+  passes: number;
+  flaky?: boolean;
+}
+
+export interface AIEvalSummary {
+  passed: number;
+  total: number;
+  pass_rate: number;
+  flaky: string[];
+  mean_attempts: number;
+  seconds: number;
+  usage: Record<string, number>;
+}
+
+export interface AIEvalReport {
+  id: string;
+  provider: string;
+  model: string;
+  created_at: string;
+  repeat: number;
+  /** "cli" or "server"; empty in a report from before it was recorded. */
+  source?: string;
+  results: AIEvalResult[];
+  summary: AIEvalSummary;
+}
+
+/** A kept report as the list shows it. */
+export interface AIEvalHead {
+  id: string;
+  provider: string;
+  model: string;
+  created_at: string;
+  repeat: number;
+  source?: string;
+  cases: string[];
+  passed: number;
+  total: number;
+  pass_rate: number;
+  flaky: string[];
+  usage: Record<string, number>;
+}
+
+export interface AIEvalComparison {
+  a: AIEvalHead;
+  b: AIEvalHead;
+  cases: {
+    case: string;
+    /** "2/3": passes of runs; null when the case did not run in that report. */
+    a: string | null;
+    b: string | null;
+    change: "gained" | "lost" | "same" | "added" | "removed";
+    prompt_changed: boolean;
+  }[];
+  pass_rate: number;
+  mean_attempts: number;
+  seconds: number;
+  tokens: number;
+}
+
+export interface AIEvalProgress {
+  cases: string[];
+  repeat: number;
+  results: AIEvalResult[];
+  report_id?: string;
+  summary?: AIEvalSummary;
+}
+
+export const useAIEvalCases = (enabled = true) =>
+  useQuery<AIEvalCase[]>({
+    queryKey: qk.ai.evalCases(),
+    queryFn: () => client.get("/ai/evals/cases").then((r) => r.data),
+    enabled,
+    staleTime: Infinity,
+  });
+
+/** The kept reports, newest first — the CLI's too. */
+export const useAIEvalReports = (enabled = true) =>
+  useQuery<AIEvalHead[]>({
+    queryKey: qk.ai.evals(),
+    queryFn: () => client.get("/ai/evals").then((r) => r.data),
+    enabled,
+  });
+
+export const useAIEvalReport = (reportId: string | null) =>
+  useQuery<AIEvalReport>({
+    queryKey: qk.ai.evalReport(reportId ?? ""),
+    queryFn: () => client.get(`/ai/evals/${encodeURIComponent(reportId!)}`).then((r) => r.data),
+    enabled: Boolean(reportId),
+    staleTime: Infinity,
+  });
+
+/** What changed from *a* to *b*; without *a*, from the same model's previous report. */
+export const useAIEvalComparison = (b: string | null, a?: string | null) =>
+  useQuery<AIEvalComparison | null>({
+    queryKey: qk.ai.evalComparison(b ?? "", a ?? ""),
+    queryFn: async () => {
+      try {
+        return (await client.get("/ai/evals/compare", { params: a ? { a, b } : { b } })).data;
+      } catch (e) {
+        // No earlier report of that model: nothing to compare, not an error.
+        if ((e as { response?: { status?: number } }).response?.status === 404) return null;
+        throw e;
+      }
+    },
+    enabled: Boolean(b),
+    staleTime: Infinity,
+    retry: false,
+  });
+
+export interface AIEvalStart {
+  cases?: string[];
+  repeat: number;
+  /** Required with a remote model: the template project is sent to it. */
+  confirm_remote: boolean;
+}
+
+export const useStartAIEval = () =>
+  useMutation<AIJob, unknown, AIEvalStart>({
+    mutationFn: (body) => client.post("/ai/evals", body).then((r) => r.data),
+    onError: defaultOnError,
+  });
+
+/** An evaluation, polled every 2 s while it runs; the report list refreshes when it ends. */
+export const useAIEvalJob = (jobId: string | null) => {
+  const qc = useQueryClient();
+  return useQuery<AIJob>({
+    queryKey: qk.ai.evalJob(jobId ?? ""),
+    queryFn: async () => {
+      const job: AIJob = (await client.get(`/ai/evals/jobs/${jobId}`)).data;
+      if (job.status !== "running") qc.invalidateQueries({ queryKey: qk.ai.evals() });
+      return job;
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => (query.state.data?.status === "running" || !query.state.data ? 2000 : false),
+  });
+};
+
+/** Stop an evaluation: it reads as cancelled at once, and no report is kept. */
+export const useCancelAIEval = () => {
+  const qc = useQueryClient();
+  return useMutation<AIJob, unknown, string>({
+    mutationFn: (jobId) => client.delete(`/ai/evals/jobs/${jobId}`).then((r) => r.data),
+    onSuccess: (job) => qc.setQueryData(qk.ai.evalJob(job.id), job),
+    onError: defaultOnError,
+  });
+};
 
 // ── jobs and drafts (per project) ─────────────────────────────────────────────
 

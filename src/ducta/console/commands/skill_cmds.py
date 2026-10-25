@@ -224,7 +224,7 @@ def export_zip(destination: Path) -> Path:
 
 def _project_root(start: Optional[Path] = None) -> Optional[Path]:
     """The project at or above *start* (the current directory): where its ``ducta.yaml`` is."""
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     return find_nearest_project(start or Path.cwd())
 

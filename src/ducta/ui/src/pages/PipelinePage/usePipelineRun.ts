@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useExecutionList } from "../../api/queries";
+import { useExecutionList, useProjectMetrics } from "../../api/queries";
 import { apiErrorMessage, useCancelExecution, useExecutePipeline, useRunNode } from "../../api/mutations";
 import { useLogsStore } from "../../store/logsStore";
 import { useSourceStore } from "../../store/workspace";
@@ -100,11 +100,26 @@ export function usePipelineRun({
     }
     return latest;
   }, [projectRuns]);
+  // The run certificates of this env cover runs started from the CLI too, which
+  // the server's run list never sees: without them a pipeline run from a
+  // terminal said "No runs yet" here while Health showed its run.
+  const { data: metrics } = useProjectMetrics(projectId ?? "", activeEnv);
   /** This pipeline's latest recorded run — what the logs bar says before anything runs here. */
-  const lastRun = useMemo(() => {
-    const runs = (projectRuns?.executions ?? []) as Array<{ pipeline_name?: string | null; status: string; started_at?: string | null; finished_at?: string | null }>;
+  /** The latest run this server started — the latest one with stored logs. */
+  const lastServedRun = useMemo(() => {
+    const runs = (projectRuns?.executions ?? []) as Array<{ id: string; pipeline_name?: string | null; status: string; started_at?: string | null }>;
     return runs.find((run) => run.pipeline_name === pipelineId) ?? null;
   }, [projectRuns, pipelineId]);
+  const lastRun = useMemo(() => {
+    const runs = (projectRuns?.executions ?? []) as Array<{ id?: string; pipeline_name?: string | null; status: string; started_at?: string | null; finished_at?: string | null }>;
+    const served = runs.find((run) => run.pipeline_name === pipelineId) ?? null;
+    const certified = metrics?.pipelines.find((p) => p.pipeline === pipelineId);
+    if (!certified?.last_status || !certified.last_run_at) return served;
+    const fromCertificate = { status: certified.last_status, started_at: certified.last_run_at, finished_at: null };
+    if (!served) return fromCertificate;
+    const servedAt = Date.parse(served.finished_at ?? served.started_at ?? "") || 0;
+    return Date.parse(certified.last_run_at) > servedAt ? fromCertificate : served;
+  }, [projectRuns, metrics, pipelineId]);
 
   const handleRunNode = (node: { id: string; name?: string }) => {
     // A node drawn from an upstream pipeline of the chain runs in its own pipeline.
@@ -260,7 +275,7 @@ export function usePipelineRun({
   return {
     activeEnv, showToast,
     activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
-    logsOpen, setLogsOpen: setLogsOpenSmart, chainStatus, lastRun,
+    logsOpen, setLogsOpen: setLogsOpenSmart, chainStatus, lastRun, lastServedRun,
     handleRunNode, handleExecute, handleValidate, handleCancel, runScoped,
     runSample, sample, sampleExecId: nodeExecId,
     breakpoint, clearBreakpoint: () => setBreakpoint(null),

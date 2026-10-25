@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useProjectList, useProjectPipelines } from "../../hooks/useProjects";
 import { useDeletePipeline } from "../../api/mutations";
 import { Button } from "../../components/ui/Button";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Skeleton } from "../../components/ui/Skeleton";
@@ -110,38 +111,17 @@ export function ProjectPage() {
         </span>
 
         <div className="header-actions">
-          <div className="view-switch" role="group" aria-label="Project view">
-            <Button
-              variant={isMap ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setView("dependencies")}
-              aria-pressed={isMap}
-              title="Cross-pipeline dependency map (explicit deps + shared datasets)"
-              leftIcon={<IconSitemap size={14} />}
-            >
-              Map
-            </Button>
-            <Button
-              variant={view === "pipelines" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setView("pipelines")}
-              aria-pressed={view === "pipelines"}
-              title="Pipelines as a list"
-              leftIcon={<IconList size={14} />}
-            >
-              List
-            </Button>
-            <Button
-              variant={view === "health" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setView("health")}
-              aria-pressed={view === "health"}
-              title="Pipeline health, SLA and recent runs"
-              leftIcon={<IconActivity size={14} />}
-            >
-              Health
-            </Button>
-          </div>
+          <SegmentedControl
+            className="view-switch"
+            aria-label="Project view"
+            value={view}
+            onChange={setView}
+            options={[
+              { value: "dependencies", label: "Map", icon: <IconSitemap size={14} />, title: "Cross-pipeline dependency map (explicit deps + shared datasets)" },
+              { value: "pipelines", label: "List", icon: <IconList size={14} />, title: "Pipelines as a list" },
+              { value: "health", label: "Health", icon: <IconActivity size={14} />, title: "Pipeline health, SLA and recent runs" },
+            ]}
+          />
           {canUseAI && undocumented > 0 && (
             <Button
               variant="secondary"

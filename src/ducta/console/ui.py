@@ -34,8 +34,8 @@ _PROJECT_SUFFIXES = (".yaml", ".yml", ".toml", ".json")
 def _detect_ducta_workspace() -> Optional[str]:
     """Detect if the current directory (or any parent) is a Ducta workspace."""
     from ducta.api.workspace.utils import normalize_workspace_path
-    from ducta.setting.project_context import find_nearest_project
-    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project.context import find_nearest_project
+    from ducta.setting.project.loader import find_project_root
 
     def _is_project_dir(path: Path) -> bool:
         return find_project_root(path) is not None or (path / "config").is_dir()

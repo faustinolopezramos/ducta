@@ -43,7 +43,7 @@ def protected_environments(project_root: Optional[Path]) -> List[str]:
     if project_root is None:
         return list(DEFAULT_PROTECTED)
     try:
-        from ducta.setting.project_loader import validate_project
+        from ducta.setting.project.loader import validate_project
 
         return list(validate_project(Path(project_root)).project.governance.protected_environments)
     except Exception:  # noqa: BLE001 — a broken project is still guarded by the defaults

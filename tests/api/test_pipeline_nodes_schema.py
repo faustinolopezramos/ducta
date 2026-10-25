@@ -241,3 +241,205 @@ class TestFormat2Quality:
             {"sanity_checks": {"inputs": {"bronze.a": {"checks": {"empty_dataset": {}}}}}}
         )
         assert q is not None and q.is_sanity and [c.name for c in q.checks] == ["empty_dataset"]
+
+
+class TestNodeDurationIsTheNodes:
+    """A node's last run reported the run's wall time (start-up and shutdown
+    included) as the node's: 7.2 s on the card for a node that took 4.8 s."""
+
+    def _service(self, tmp_path, run):
+        class Projects(_Projects):
+            def project_dir(self, project_id):
+                return tmp_path
+
+        return NodeSchemaService(Projects(), _Nodes(tmp_path), _Executions([run]), _Datasets())
+
+    def _run(self, **kw):
+        return SimpleNamespace(
+            id="exec-2",
+            pipeline_name="silver.clean",
+            node_name="silver.clean_education",
+            status=SimpleNamespace(value="success"),
+            started_at=datetime(2026, 10, 20, 21, 27, tzinfo=timezone.utc),
+            duration_seconds=7.197,
+            error_message=None,
+            env="dev",
+            **kw,
+        )
+
+    def test_reads_the_nodes_own_time_from_the_runs_certificate(self, tmp_path, monkeypatch):
+        import ducta.api.services.run_certificates as rc
+
+        monkeypatch.setattr(
+            rc,
+            "load_run_certificate",
+            lambda project_dir, run_id, env=None: {
+                "nodes": [{"name": "silver.clean_education", "duration_seconds": 4.8}]
+            },
+        )
+        node = (
+            self._service(tmp_path, self._run(certificate_run_id="cert-1"))
+            .build_all("batch", "silver.clean")
+            .nodes[1]
+        )
+        assert node.last_execution_duration == 4.8
+
+    def test_falls_back_to_the_runs_time_without_a_certificate(self, tmp_path):
+        node = (
+            self._service(tmp_path, self._run(certificate_run_id=None))
+            .build_all("batch", "silver.clean")
+            .nodes[1]
+        )
+        assert node.last_execution_duration == 7.197
+
+
+class TestLastRunIncludesPipelineRuns:
+    """Only runs of a node alone used to count as its last run, so the list and
+    the panel said "never run" for a node the pipeline ran yesterday while the
+    canvas showed that run's state."""
+
+    def _service(self, tmp_path, monkeypatch, runs, certs):
+        import ducta.api.services.run_certificates as rc
+
+        monkeypatch.setattr(
+            rc, "load_run_certificate", lambda project_dir, run_id, env=None: certs.get(run_id)
+        )
+
+        class Projects(_Projects):
+            def project_dir(self, project_id):
+                return tmp_path
+
+        return NodeSchemaService(Projects(), _Nodes(tmp_path), _Executions(runs), _Datasets())
+
+    def _run(self, id, day, cert=None, node_name=None, node_names=None, status="success"):
+        return SimpleNamespace(
+            id=id,
+            pipeline_name="silver.clean",
+            node_name=node_name,
+            node_names=node_names,
+            status=SimpleNamespace(value=status),
+            started_at=datetime(2026, 10, day, tzinfo=timezone.utc),
+            duration_seconds=9.0,
+            error_message=None,
+            env="dev",
+            certificate_run_id=cert,
+        )
+
+    def _nodes(self, svc):
+        return {n.node_id: n for n in svc.build_all("batch", "silver.clean").nodes}
+
+    def test_a_whole_pipeline_run_is_each_nodes_last_run_with_its_own_status(
+        self, tmp_path, monkeypatch
+    ):
+        certs = {
+            "c1": {
+                "nodes": [
+                    {"name": "silver.clean_student", "status": "success", "duration_seconds": 2.0},
+                    {
+                        "name": "silver.clean_education",
+                        "status": "failed",
+                        "duration_seconds": 1.5,
+                        "error": "boom",
+                    },
+                ]
+            }
+        }
+        nodes = self._nodes(
+            self._service(
+                tmp_path, monkeypatch, [self._run("r1", 20, cert="c1", status="failed")], certs
+            )
+        )
+
+        assert (
+            nodes["silver.clean_student"].last_execution_status,
+            nodes["silver.clean_student"].last_execution_duration,
+        ) == ("success", 2.0)
+        assert nodes["silver.clean_education"].last_execution_status == "failed"
+        assert nodes["silver.clean_education"].last_execution_error_message == "boom"
+
+    def test_a_run_that_stopped_before_the_node_is_not_its_last_run(self, tmp_path, monkeypatch):
+        certs = {
+            "new": {
+                "nodes": [
+                    {"name": "silver.clean_student", "status": "failed", "duration_seconds": 1.0}
+                ]
+            },
+            "old": {
+                "nodes": [
+                    {"name": "silver.clean_education", "status": "success", "duration_seconds": 4.8}
+                ]
+            },
+        }
+        runs = [self._run("r2", 21, cert="new", status="failed"), self._run("r1", 20, cert="old")]
+        node = self._nodes(self._service(tmp_path, monkeypatch, runs, certs))[
+            "silver.clean_education"
+        ]
+
+        assert (node.last_execution_status, node.last_execution_duration) == ("success", 4.8)
+        assert node.last_execution_time.startswith("2026-10-20")
+
+    def test_a_run_of_some_nodes_counts_only_for_those(self, tmp_path, monkeypatch):
+        runs = [self._run("r1", 20, node_names=["silver.clean_student"])]
+        nodes = self._nodes(self._service(tmp_path, monkeypatch, runs, {}))
+
+        assert nodes["silver.clean_student"].last_execution_status == "success"
+        assert nodes["silver.clean_education"].last_execution_status is None
+
+    def test_a_cli_run_counts_through_the_environments_certificates(self, tmp_path, monkeypatch):
+        import ducta.api.services.run_certificates as rc
+
+        cli_cert = {
+            "pipeline": "silver.clean",
+            "status": "success",
+            "started_at": "2026-10-22T10:00:00+00:00",
+            "nodes": [
+                {"name": "silver.clean_education", "status": "success", "duration_seconds": 4.9}
+            ],
+        }
+        other = {"pipeline": "golden.x", "started_at": "2026-10-23T10:00:00+00:00", "nodes": []}
+        monkeypatch.setattr(
+            rc, "certificates", lambda project_dir, env: iter([("dev", cli_cert), ("dev", other)])
+        )
+        svc = self._service(
+            tmp_path,
+            monkeypatch,
+            [self._run("r1", 20, node_names=["silver.clean_education"], status="failed")],
+            {},
+        )
+
+        node = {n.node_id: n for n in svc.build_all("batch", "silver.clean", "dev").nodes}[
+            "silver.clean_education"
+        ]
+
+        # The CLI run (22nd) is newer than the server's (20th).
+        assert (node.last_execution_status, node.last_execution_duration) == ("success", 4.9)
+        # Without an env only the server's runs are known, as before.
+        assert self._nodes(svc)["silver.clean_education"].last_execution_status == "failed"
+
+
+class TestResolvedPaths:
+    """The panel showed `${output_path}/${environment}/silver/…`, the template."""
+
+    def test_fills_in_the_environment_and_output_path(self, tmp_path, monkeypatch):
+        import ducta.api.workspace.manager as wm
+
+        class Projects(_Projects):
+            def project_dir(self, project_id):
+                return tmp_path
+
+        class Manager:
+            def __init__(self, root):
+                pass
+
+            def load_context(self, env):
+                return SimpleNamespace(global_config={"output_path": str(tmp_path / "data")})
+
+        monkeypatch.setattr(wm, "WorkspaceManager", Manager)
+        svc = NodeSchemaService(Projects(), _Nodes(tmp_path), _Executions(), _Datasets())
+        student = svc.build_all("batch", "silver.clean", "dev").nodes[0]
+
+        assert student.outputs[0].path.startswith("${output_path}/${environment}/")
+        assert student.outputs[0].resolved_path == "data/dev/silver/education/student_cleaned"
+
+    def test_without_an_env_the_template_stays(self, service):
+        assert service.build_all("batch", "silver.clean").nodes[0].outputs[0].resolved_path is None

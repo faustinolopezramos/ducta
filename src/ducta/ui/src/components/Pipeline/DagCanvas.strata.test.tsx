@@ -96,13 +96,17 @@ describe("DagCanvas strata and orientation", () => {
     const { container } = render(<DagCanvas items={items} strata={strata} />);
     const drawn = bands(container);
     expect(drawn).toHaveLength(3);
-    expect(drawn.map((b) => b.querySelector(".strata-band-pipe")!.textContent)).toEqual(order);
     expect(drawn.map((b) => b.getAttribute("data-layer"))).toEqual(["bronze", "silver", "gold"]);
+    // The labels are nodes above the edges, so no edge crosses their words.
+    const labels = [...container.querySelectorAll<HTMLElement>('[data-testid="strata-band-label"]')];
+    expect(labels.map((l) => l.querySelector(".strata-band-pipe")!.textContent)).toEqual(order);
+    expect(labels.map((l) => l.closest(".react-flow__node")?.classList.contains("react-flow__node-bandLabel"))).toEqual([true, true, true]);
   });
 
   it("marks the page's own pipeline and draws the rest as context", () => {
     const { container } = render(<DagCanvas items={items} strata={strata} />);
     expect(bands(container).filter((b) => b.classList.contains("current"))).toHaveLength(1);
+    expect(container.querySelectorAll(".strata-band-label.current")).toHaveLength(1);
 
     const context = [...container.querySelectorAll(".node-card--context")].map(
       (el) => el.querySelector(".node-card-name")!.textContent

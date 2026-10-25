@@ -166,6 +166,7 @@ export function usePipelineView(projectId: string | undefined) {
   const fitCanvas = useCallback(() => viewportRef.current?.fitCanvas(), []);
   const zoomIn = useCallback(() => viewportRef.current?.zoomIn(), []);
   const zoomOut = useCallback(() => viewportRef.current?.zoomOut(), []);
+  const resetZoom = useCallback(() => viewportRef.current?.resetZoom(), []);
 
   return {
     navigate,
@@ -175,6 +176,6 @@ export function usePipelineView(projectId: string | undefined) {
     selectNodeById, selectDatasetByName, clearSelection,
     showOnCanvas, focusDatasetOnCanvas, openPipeline,
     codeOpen, openCode, closeCode,
-    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
+    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut, resetZoom,
   };
 }

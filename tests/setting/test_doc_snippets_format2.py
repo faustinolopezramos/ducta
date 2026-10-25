@@ -17,7 +17,7 @@ from typing import Iterator, List, Tuple
 import pytest
 import yaml
 
-from ducta.setting.project_schema import CatalogEntry, PipelineFile, ProjectFile
+from ducta.setting.project.schema import CatalogEntry, PipelineFile, ProjectFile
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCS = [
@@ -91,7 +91,7 @@ def test_the_configuration_guide_examples_form_one_valid_project(tmp_path):
     """Each ducta.yaml in the guide, with its catalog and etl pipeline, validates
     in every environment it overrides — so an override cannot point at a node or
     dataset the other examples do not have."""
-    from ducta.setting.project_loader import compile_project, validate_project
+    from ducta.setting.project.loader import compile_project, validate_project
 
     blocks = list(_rst_blocks((ROOT / "docs" / "configuration.rst").read_text(encoding="utf-8")))
     manifests = [b for b in blocks if b.startswith("# ducta.yaml")]

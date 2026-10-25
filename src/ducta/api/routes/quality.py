@@ -310,7 +310,7 @@ async def validate_config(
     body: ValidateConfigRequest, manager: WorkspaceManagerDep
 ) -> ValidateConfigResponse:
     from ducta.api.repositories.v2_store import workspace_stores
-    from ducta.setting.project_loader import ProjectConfigError
+    from ducta.setting.project.loader import ProjectConfigError
 
     try:
         store = next(

@@ -46,6 +46,10 @@
     linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
   background-position: calc(100% - 9px) 55%, calc(100% - 5px) 55%;
   background-size: 4px 4px; background-repeat: no-repeat;
+  /* Sized to the chosen environment, not to the longest option
+     ("staging · not configured"); browsers without it keep a short cap. */
+  field-sizing: content;
+  max-width: 14ch;
 }
 .env-switcher:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
 .env-switcher__select:focus { outline: none; }
@@ -274,14 +278,6 @@ button.stream-pill--interactive:focus-visible {
 .stream-pill[data-state="failed"] .stream-pill-dot,
 .stream-pill[data-state="error"] .stream-pill-dot { background: var(--danger); }
 
-.pipeline-type-tag--stream {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--primary);
-  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
-}
-
 /* Toolbar labels never wrap inside their buttons. */
 .canvas-controls .canvas-text-btn, .canvas-controls .canvas-segment { white-space: nowrap; }
 
@@ -395,23 +391,49 @@ button.stream-pill--interactive:focus-visible {
 }
 .focus-stale strong { color: var(--warning); }
 
-/* Find on the canvas */
-.canvas-filter {
-  position: absolute; left: 50%; bottom: 44px; transform: translateX(-50%); z-index: 16;
-  display: flex; align-items: center; gap: 4px; padding: 3px; max-width: calc(100% - 140px); overflow-x: auto;
-  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+/* Find on the canvas: the canvas' one search, in its top-right controls */
+.canvas-search { position: relative; display: flex; align-items: center; gap: 2px; }
+.canvas-search__field {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--text-dim);
 }
-.canvas-filter__search { display: flex; align-items: center; gap: 4px; padding: 0 6px; color: var(--text-dim); }
-.canvas-filter__search input { width: 140px; border: 0; background: transparent; color: var(--text); font-size: var(--text-xs); outline: none; }
-.canvas-filter__chip {
-  height: 24px; padding: 0 8px; border: 1px solid var(--border); border-radius: 999px; background: none;
-  color: var(--text-muted); font-size: var(--text-2xs); cursor: pointer; white-space: nowrap;
+.canvas-search__field:focus-within { border-color: var(--primary); box-shadow: var(--focus-ring); }
+.canvas-search__field input { width: 150px; min-width: 60px; border: 0; background: transparent; color: var(--text); font-size: var(--text-xs); outline: none; }
+.canvas-search__key, .canvas-popover__key {
+  font-family: var(--font-mono); font-size: var(--text-2xs); line-height: 1; padding: 2px 4px;
+  border: 1px solid var(--border); border-radius: 3px; color: var(--text-dim); background: var(--surface);
 }
-.canvas-filter__chip.is-on { color: var(--text); border-color: var(--primary); background: color-mix(in srgb, var(--primary) 12%, transparent); }
-.canvas-filter__chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
-.canvas-filter__count { font-size: var(--text-2xs); color: var(--text-muted); white-space: nowrap; padding: 0 4px; }
-.canvas-filter__clear { display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--text-muted); cursor: pointer; }
-.canvas-filter__clear:hover { background: var(--surface-hover); color: var(--text); }
+.canvas-search__count { font-size: var(--text-2xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.canvas-search__none {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; width: max-content; max-width: 320px; margin: 0;
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(0, 0, 0, 0.12)); font-size: var(--text-xs); color: var(--text-muted);
+}
+.canvas-search__none button { padding: 0; border: 0; background: none; color: var(--primary); font: inherit; cursor: pointer; }
+.canvas-search__none button:hover { text-decoration: underline; }
+
+/* A toolbar button that opens a panel of controls (View, Filters) */
+.canvas-popover { position: relative; }
+.canvas-popover__caret { font-size: 10px; color: var(--text-dim); }
+.canvas-popover__panel {
+  position: absolute; top: calc(100% + 8px); z-index: 30; min-width: 220px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(0, 0, 0, 0.12));
+}
+.canvas-popover__panel--start { left: -3px; }
+.canvas-popover__panel--end { right: -3px; }
+.canvas-popover__group { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; border: 0; }
+.canvas-popover__group legend {
+  margin-bottom: 4px; padding: 0; font-size: var(--text-2xs); font-weight: var(--weight-semibold);
+  letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted);
+}
+.canvas-popover__group label { display: flex; align-items: center; gap: 8px; font-size: var(--text-xs); color: var(--text); cursor: pointer; white-space: nowrap; }
+.canvas-popover__group input { margin: 0; accent-color: var(--primary); }
+.canvas-view__summary { color: var(--text-muted); font-weight: var(--weight-regular, 400); }
+.canvas-view__name { white-space: nowrap; }
+.canvas-zoom-readout { min-width: 48px; padding: 0 6px; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.canvas-controls--bottom-left .canvas-text-btn[aria-pressed="true"] { color: var(--primary); background: var(--primary-light); }
 
 /* Inspector: Config and Data tabs */
 .node-config__scroll, .data-preview__scroll { overflow: auto; margin: 0 calc(-1 * var(--space-2)); }
@@ -607,8 +629,19 @@ li[data-outcome="skipped"] .node-tests__dot { background: var(--text-dim); }
 .conflict__diff { height: 280px; border-top: 1px solid var(--border); }
 
 /* A collapsed group: one box for a namespace — click to open it up. */
-.node-card[data-type="group"] { border-style: dashed; border-width: 1.5px; background: color-mix(in srgb, var(--primary) 5%, var(--surface)); }
-.node-card[data-type="group"] .node-card-name::after { content: " ▸"; color: var(--text-dim); }
+/* A collapsed group reads as a stack of cards: an offset card behind it, not a dashed outline. */
+.node-card[data-type="group"] { box-shadow: 3px 3px 0 var(--surface), 3px 3px 0 1px var(--border); }
+.node-card[data-type="group"] .node-card-body { flex-direction: column; align-items: stretch; gap: 2px; }
+.node-card-group-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: var(--text-2xs); color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.node-card-expand {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--tag-radius);
+  background: var(--accent-a20, color-mix(in srgb, var(--primary) 14%, transparent));
+  color: var(--primary);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+}
 
 /* Node quality */
 .node-quality__trend { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-2); }
@@ -654,6 +687,8 @@ li[data-outcome="skipped"] .node-tests__dot { background: var(--text-dim); }
 .run-graph__toggle { display: inline-flex; width: max-content; border: 1px solid var(--border); border-radius: var(--radius-sm, 4px); overflow: hidden; }
 .run-graph__toggle button { padding: 3px 10px; border: 0; background: var(--surface); color: var(--text-muted); font-size: var(--text-xs); cursor: pointer; }
 .run-graph__toggle button[aria-checked="true"] { background: var(--primary); color: var(--primary-contrast, #fff); }
+/* Few nodes and room to spare: a card is as wide as its name, up to 320px, instead of cutting it. */
+.run-graph .node-card { width: auto; min-width: 208px; max-width: 320px; }
 .run-graph__canvas { height: 320px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); overflow: hidden; }
 /* The canvas' 420px floor is for auto-height pages; here the box sets the height,
    and the floor made React Flow frame the graph for a taller box than is shown. */
@@ -724,3 +759,50 @@ a.debug-panel__where { color: var(--primary); }
 .node-quality__ai { display: flex; justify-content: flex-end; }
 .node-quality__propose { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-sm); }
 .node-quality__propose:disabled { opacity: 0.5; cursor: default; }
+
+/* Which run the logs below belong to, when it is not the latest one. */
+.pipeline-dock__note {
+  margin: 0;
+  padding: 6px var(--space-4);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+/* Node panel: five tabs, then More (Review, Comments) styled as a tab of the strip. */
+.node-tabs { display: flex; align-items: stretch; min-width: 0; }
+.node-tabs .tabs { flex: 0 1 auto; min-width: 0; }
+.node-tabs .ducta-menu { display: flex; }
+.node-tabs__more {
+  display: inline-flex; align-items: center; gap: 4px; padding: 9px 6px; margin-bottom: -1px;
+  border: 0; border-bottom: 2px solid transparent; background: none; cursor: pointer; white-space: nowrap;
+  font-family: var(--font-sans); font-size: var(--text-xs); font-weight: var(--weight-medium); color: var(--text-muted);
+}
+.node-tabs__more:hover { color: var(--text); }
+.node-tabs__more.is-active { color: var(--primary); border-bottom-color: var(--primary); font-weight: var(--weight-semibold); }
+.node-tabs__more:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.node-tabs__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
+.node-tabs .tabs { mask-image: none; overflow: visible; }
+
+/* R's confirmation, beside the node it would run */
+.run-node-confirm {
+  position: absolute; z-index: 40; width: 320px; padding: 12px 14px;
+  display: flex; flex-direction: column; gap: 10px;
+  border: 1px solid var(--border-hover); border-radius: var(--radius); background: var(--surface);
+  box-shadow: var(--shadow-md, 0 6px 20px rgba(0, 0, 0, 0.12)); font-size: var(--text-xs); color: var(--text);
+}
+.run-node-confirm p { margin: 0; line-height: 1.45; }
+.run-node-confirm__env {
+  font-family: var(--font-mono); font-size: var(--text-2xs); padding: 1px 6px; border-radius: 3px;
+  background: var(--primary-light); color: var(--primary);
+}
+.run-node-confirm__actions { display: flex; justify-content: flex-end; gap: 8px; }
+.run-node-confirm__actions button {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: 5px;
+  font: var(--weight-medium) var(--text-xs) var(--font-sans); cursor: pointer;
+}
+.run-node-confirm__actions kbd { font-family: var(--font-sans); font-size: var(--text-2xs); opacity: 0.8; }
+.run-node-confirm__cancel { border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+.run-node-confirm__run { border: 0; background: var(--primary); color: var(--text-on-primary, #fff); font-weight: var(--weight-semibold); }
+.run-node-confirm__actions button:focus-visible { outline: none; box-shadow: var(--focus-ring); }

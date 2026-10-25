@@ -199,7 +199,7 @@ def test_cli_reference_is_up_to_date():
 
 
 def test_the_example_project_validates_in_every_environment():
-    from ducta.setting.project_loader import validate_project
+    from ducta.setting.project.loader import validate_project
 
     root = SKILL / "assets" / "examples" / "sales"
     project = validate_project(root)

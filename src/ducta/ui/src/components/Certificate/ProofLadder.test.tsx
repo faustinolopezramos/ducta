@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { ProofLadder } from "./ProofLadder";
 import type { CertificateVerifyResult } from "../../api/certificatesApi";
 
@@ -36,14 +36,24 @@ describe("ProofLadder", () => {
     ).toBeInTheDocument();
   });
 
-  it("flags a signed-but-unkeyed certificate as a weaker pass, not a plain valid", () => {
+  it("reads a signed-but-unkeyed certificate as verified integrity, not a warning, and offers the key check", () => {
+    const onCheckWithKey = vi.fn();
+    const reason = "integrity OK — signed, but the signature was NOT checked";
     render(
       <ProofLadder
-        verify={verify({ ok: true, signature: "present (no key)", reason: "integrity OK — signed, but the signature was NOT checked" })}
+        verify={verify({ ok: true, signature: "present (no key)", reason })}
         reproduce={{ status: "idle" }}
+        onVerify={() => {}}
+        onCheckWithKey={onCheckWithKey}
       />
     );
-    expect(screen.getByText("Integrity OK — signed, signature not checked")).toBeInTheDocument();
+    expect(screen.getByText("Integrity verified")).toBeInTheDocument();
+    expect(screen.getByText("Signed. Add the signing key to also prove who produced it.")).toBeInTheDocument();
+    // The backend reason is no longer repeated under the title.
+    expect(screen.queryByText(reason)).not.toBeInTheDocument();
+    expect(document.querySelector(".proof-hero--pass")).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Check with key" }));
+    expect(onCheckWithKey).toHaveBeenCalled();
   });
 
   it("reports a stripped signature as tampering", () => {
@@ -74,6 +84,6 @@ describe("ProofLadder", () => {
   it("compact mode omits the hero and inline actions", () => {
     render(<ProofLadder compact verify={verify({ signature: "valid" })} reproduce={{ status: "idle" }} onVerify={() => {}} />);
     expect(screen.queryByText("Verified — signed and untampered")).not.toBeInTheDocument();
-    expect(screen.queryByText("Re-verify")).not.toBeInTheDocument();
+    expect(screen.queryByText("Check again")).not.toBeInTheDocument();
   });
 });

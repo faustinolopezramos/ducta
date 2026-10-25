@@ -35,7 +35,7 @@ from loguru import logger
 from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.utils.git_utils import sanitize_git_remote_url
 from ducta.api.utils.validators import URLValidationError, validate_git_url
-from ducta.setting.project_loader import find_project_root
+from ducta.setting.project.loader import find_project_root
 
 _MAX_CLONE_LOCKS = 256
 
@@ -157,19 +157,25 @@ class SourceResolver:
         config_files: List[str] = []
         root = find_project_root(resolved.path)
         if root is not None:
-            try:
-                import yaml  # type: ignore[import-untyped]
+            from ducta.setting.project import files as pf
+            from ducta.setting.project.loader import project_file
 
-                data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
+            try:
+                data = pf.load(project_file(root)) or {}
                 environments = ["base", *(data.get("environments") or {})]
             except Exception as exc:
                 logger.debug("Could not read environments: {exc}", exc=exc)
+
+            def every_format(folder: Path) -> List[Path]:
+                return sorted(f for ext in pf.SUFFIXES for f in folder.rglob(f"*{ext}"))
+
+            # Whichever format the project is written in (ducta.yaml / .toml / .json).
             for f in [
-                root / "ducta.yaml",
-                root / "catalog.yaml",
-                *sorted((root / "catalog").rglob("*.yaml")),
-                root / "quality" / "profiles.yaml",
-                *sorted((root / "pipelines").rglob("*.yaml")),
+                *pf.find_files(root, "ducta"),
+                *pf.find_files(root, "catalog"),
+                *every_format(root / "catalog"),
+                *pf.find_files(root / "quality", "profiles"),
+                *every_format(root / "pipelines"),
             ]:
                 # Not what sits in a hidden folder (an assistant's .claude/, …).
                 if f.is_file() and not any(

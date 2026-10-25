@@ -1,12 +1,14 @@
 """Quality profiles kept in ``quality/profiles.yaml`` instead of ``ducta.yaml``."""
 
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_decompile import write_schemas
-from ducta.setting.project_inspect import convert_project, explain
-from ducta.setting.project_loader import ProjectConfigError, read_project, validate_project
+from ducta.setting.project.decompile import write_schemas
+from ducta.setting.project.inspect import convert_project, explain
+from ducta.setting.project.loader import ProjectConfigError, read_project, validate_project
 
 PROFILES = """\
 strict:

@@ -1,5 +1,9 @@
 import { IconAlertTriangle } from "@tabler/icons-react";
-import type { ProjectDataset } from "../../../api/queries";
+import { Link } from "react-router-dom";
+import type { DatasetPreview, ProjectDataset } from "../../../api/queries";
+import { formatRelative } from "../../../utils/timeLabels";
+import { compactCount } from "../../../utils/nodePresentation";
+import { routes } from "../../../utils/routes";
 import { Skeleton } from "../../ui/Skeleton";
 import { capitalize, formatGlyph } from "../../../utils/nodePresentation";
 import { FocusColumn, FocusPanel } from "./FocusPanel";
@@ -15,6 +19,12 @@ interface DatasetFocusProps {
   /** Open another pipeline, keeping this dataset in focus there. */
   onOpenPipeline: (pipelineId: string) => void;
   onClose: () => void;
+  /** For the link that declares it in the catalog. */
+  projectId?: string;
+  /** What the last run left there (a one-row preview): when it was written, its columns. */
+  preview?: DatasetPreview | null;
+  /** Its path in the active environment, when the canvas' schema resolved it. */
+  resolvedPath?: string | null;
 }
 
 /**
@@ -31,8 +41,14 @@ export function DatasetFocus({
   onSelectNode,
   onOpenPipeline,
   onClose,
+  projectId,
+  preview,
+  resolvedPath,
 }: DatasetFocusProps) {
   const declared = (dataset?.declared_in?.length ?? 0) > 0;
+  // The data as last written: the registry alone said "Path: not declared"
+  // and nothing else about a dataset written three days ago.
+  const written = preview?.available ? formatRelative(preview.modified_at) : null;
   const producers = dataset?.producers ?? [];
   const consumers = dataset?.consumers ?? [];
 
@@ -96,15 +112,32 @@ export function DatasetFocus({
         ) : (
           <KeyValues
             rows={[
-              // The raw ${VAR} form is what the config says; resolving it needs
-              // the environment, so showing the literal is the honest answer.
-              { label: "Path", value: dataset?.path ?? null },
-              { label: "Write mode", value: dataset?.write_mode ?? null, absent: "n/a" },
-              { label: "Schema", value: dataset?.schema ?? null },
+              // Resolved for the active environment when the canvas knows it;
+              // the registry's ${VAR} form otherwise.
+              { label: "Path", value: resolvedPath ?? dataset?.path ?? null },
+              ...(written
+                ? [{
+                    label: "Written",
+                    value:
+                      `${written}${producers[0]?.pipeline ? ` by ${producers[0].pipeline}` : ""}` +
+                      (preview?.total_rows != null ? ` · ${compactCount(preview.total_rows)} rows` : ""),
+                    plain: true,
+                  }]
+                : []),
+              ...(preview?.available && preview.columns.length > 0
+                ? [{ label: "Columns", value: `${preview.columns.length}, from the data`, plain: true }]
+                : []),
+              ...(dataset?.write_mode ? [{ label: "Write mode", value: dataset.write_mode }] : []),
+              ...(dataset?.schema ? [{ label: "Schema", value: dataset.schema }] : []),
               {
-                label: "Declared in",
-                value: declared ? dataset!.declared_in.join(" + ") : null,
-                absent: "neither registry",
+                label: "Catalog",
+                value: declared ? (
+                  dataset!.declared_in.join(" + ")
+                ) : projectId ? (
+                  <>
+                    not declared · <Link to={routes.dataset(projectId, name)}>Declare it</Link>
+                  </>
+                ) : null,
                 plain: true,
               },
               ...Object.entries(dataset?.options ?? {}).map(([key, value]) => ({

@@ -121,15 +121,52 @@ interface NodeFocusProps {
 }
 
 type NodeTab = "overview" | "config" | "quality" | "review" | "data" | "runs" | "comments";
-const nodeTabs = (comments: number, review: boolean) => [
+/**
+ * Five tabs always, the rest under More: seven did not fit the panel's 400 px
+ * and the last one read "Comm…". More carries a dot while a comment is open.
+ */
+const NODE_TABS = [
   { id: "overview" as const, label: "Overview" },
   { id: "config" as const, label: "Config" },
   { id: "quality" as const, label: "Quality" },
-  ...(review ? [{ id: "review" as const, label: "Review" }] : []),
   { id: "data" as const, label: "Data" },
   { id: "runs" as const, label: "Runs" },
-  { id: "comments" as const, label: "Comments", count: comments || undefined },
 ];
+
+function NodeTabs({
+  tab,
+  onChange,
+  comments,
+  review,
+}: {
+  tab: NodeTab;
+  onChange: (tab: NodeTab) => void;
+  comments: number;
+  review: boolean;
+}) {
+  const more = [
+    ...(review ? [{ id: "review" as const, label: "Review" }] : []),
+    { id: "comments" as const, label: comments ? `Comments (${comments})` : "Comments" },
+  ];
+  const inMore = more.find((m) => m.id === tab);
+  return (
+    <div className="node-tabs">
+      <Tabs items={NODE_TABS} value={tab} onChange={onChange} label="Node inspector views" />
+      <Menu
+        trigger={
+          <>
+            {inMore ? inMore.label : "More"}
+            {comments > 0 && !inMore && <span className="node-tabs__dot" aria-hidden="true" />}
+            <span aria-hidden="true"> ▾</span>
+          </>
+        }
+        triggerLabel={`More views: ${more.map((m) => m.label).join(", ")}`}
+        triggerClassName={`node-tabs__more${inMore ? " is-active" : ""}`}
+        items={more.map((m) => ({ key: m.id, label: m.label, current: m.id === tab, onSelect: () => onChange(m.id) }))}
+      />
+    </div>
+  );
+}
 
 /**
  * A node, focused: the datasets it reads and writes on either side of it, its
@@ -232,7 +269,7 @@ export function NodeFocus({
     <FocusPanel
       label={`Focus: node ${name}`}
       onClose={onClose}
-      tabs={<Tabs items={nodeTabs(openComments, canUseAI && hasCode)} value={tab} onChange={setTab} label="Node inspector views" />}
+      tabs={<NodeTabs tab={tab} onChange={setTab} comments={openComments} review={canUseAI && hasCode} />}
     >
       {tab === "comments" && projectId ? (
         <CommentThreads
@@ -443,7 +480,7 @@ export function NodeFocus({
                   schema?.last_execution_time,
                   schema?.last_execution_duration
                 ),
-                absent: "never run on its own",
+                absent: "never run",
                 plain: true,
               },
               {

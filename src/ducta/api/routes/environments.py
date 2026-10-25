@@ -34,6 +34,8 @@ router = APIRouter(prefix="/environments", tags=["Environments"])
 class EnvironmentsResponse(BaseModel):
     environments: List[str]
     count: int
+    #: base plus the environments the project declares; the others run as base.
+    declared: List[str] = []
 
 
 @router.get(
@@ -52,6 +54,7 @@ async def list_environments(
     try:
         manager = manager.for_project(project)
         envs = manager.list_environments()
+        declared = manager.declared_environments()
     except WorkspaceNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
-    return EnvironmentsResponse(environments=envs, count=len(envs))
+    return EnvironmentsResponse(environments=envs, count=len(envs), declared=declared)

@@ -15,7 +15,8 @@ import pandas as pd
 import pytest
 
 from ducta.ai import proposals
-from ducta.ai.builder import load_draft, revise, save_draft
+from ducta.ai.builder import revise
+from ducta.ai.drafts import load_draft, save_draft
 from ducta.ai.errors import AIConfigError
 from ducta.ai.explain import (
     explain_failure,
@@ -177,7 +178,7 @@ def test_the_assembler_refuses_the_current_block(tmp_path):
         "nodes:\n  etl.clean:\n    run: src.m:clean\n    inputs: {orders: raw}\n"
         "    outputs: [clean]\n    quality:\n      empty_dataset: true\n"
     )
-    from ducta.ai.builder import parse_answer
+    from ducta.ai.loop import parse_answer
 
     out = quality_assembler(root, _facts(root))(parse_answer(_answer("empty_dataset: true\n")))
     assert out.rejected and "current block" in out.rejected[0]

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, waitFor, screen } from "@testing-library/react";
 import { DagCanvas, edgePath } from "./DagCanvas";
 import type { CanvasDataset, DagCanvasItem } from "./types";
 
@@ -165,6 +165,13 @@ describe("DagCanvas", () => {
     expect(shown.container.querySelector(".react-flow__minimap")).not.toBeNull();
   });
 
+  it("draws the cards on the minimap, not an empty box", async () => {
+    const { container } = render(<DagCanvas items={items} datasets={datasets} showMinimap />);
+    await waitFor(() =>
+      expect(container.querySelectorAll(".react-flow__minimap-node").length).toBe(items.length)
+    );
+  });
+
   it("renders every node of the chain", () => {
     const { container } = render(<DagCanvas items={items} datasets={datasets} />);
 
@@ -321,6 +328,99 @@ describe("DagCanvas", () => {
     expect(chip.getAttribute("aria-hidden")).toBe("true");
     chip.click();
     expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("draws one chip for a dataset read by two nodes, saying so", () => {
+    const fanOut: DagCanvasItem[] = [
+      ...items,
+      {
+        id: "audit",
+        name: "audit",
+        type: "sink",
+        dependsOn: [],
+        inputs: [{ id: "audit-input-0", name: "bronze.events" }],
+        outputs: [],
+      },
+    ];
+    const { container } = render(<DagCanvas items={fanOut} datasets={datasets} />);
+    const bronze = [...container.querySelectorAll(".ds-chip")].filter((c) =>
+      (c.getAttribute("aria-label") ?? c.getAttribute("title") ?? "").includes("bronze.events"),
+    );
+    expect(bronze).toHaveLength(1);
+    expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(3);
+  });
+
+  it("draws the datasets crossing the border as boundary nodes, without a second chip", () => {
+    const onOpenPipeline = vi.fn();
+    const { container } = render(
+      <DagCanvas
+        items={items.slice(1)}
+        datasets={datasets}
+        externals={[{ dataset: "bronze.events", side: "in", note: "from bronze.ingestion", pipeline: "bronze.ingestion" }]}
+        onOpenPipeline={onOpenPipeline}
+      />,
+    );
+    const ext = screen.getByTestId("external-dataset");
+    expect(ext).toHaveTextContent("from bronze.ingestion");
+    screen.getByRole("button", { name: "from bronze.ingestion ›" }).click();
+    expect(onOpenPipeline).toHaveBeenCalledWith("bronze.ingestion");
+    // Its edge carries no chip of its own: the boundary node is the dataset.
+    expect(container.querySelectorAll(".ds-chip")).toHaveLength(1);
+  });
+
+  it("joins two collapsed groups with one edge that counts their datasets", () => {
+    const grouped: DagCanvasItem[] = [
+      { id: "group:a", name: "a.*", type: "group", members: ["a.x", "a.y"], dependsOn: [], inputs: [],
+        outputs: [{ id: "o1", name: "d1" }, { id: "o2", name: "d2" }] },
+      { id: "group:b", name: "b.*", type: "group", members: ["b.x", "b.y"], dependsOn: [],
+        inputs: [{ id: "i1", name: "d1" }, { id: "i2", name: "d2" }], outputs: [] },
+    ];
+    const { container } = render(<DagCanvas items={grouped} />);
+    expect(container.querySelectorAll(".react-flow__edge")).toHaveLength(1);
+    expect(container.querySelector(".dag-edge-label")).toHaveTextContent("2 datasets");
+  });
+
+  it("dims the chips off the lens's path, not only the nodes", async () => {
+    const { lensEdgeClass } = await import("../../utils/lineage");
+    const lineage = { selectedId: "raw_events", upstream: new Map(), downstream: new Map([["clean_events", 1]]) };
+    const { container } = render(
+      <DagCanvas
+        items={items}
+        datasets={datasets}
+        lineage={lineage}
+        edgeClassName={(from, to) => lensEdgeClass(lineage, from, to)}
+      />
+    );
+    const dimmed = [...container.querySelectorAll(".ds-chip.dag-dimmed")].map((c) => c.getAttribute("title") ?? c.getAttribute("aria-label"));
+    expect(dimmed).toHaveLength(1);
+    expect(dimmed[0]).toContain("silver.events");
+  });
+
+  it("dims the chips and edges the filter leaves out", () => {
+    const { container } = render(
+      <DagCanvas items={items} datasets={datasets} highlight={new Set(["raw_events"])} />
+    );
+    const dimmed = [...container.querySelectorAll(".ds-chip.dag-dimmed")].map((c) => c.getAttribute("title") ?? c.getAttribute("aria-label"));
+    expect(dimmed).toHaveLength(1);
+    expect(dimmed[0]).toContain("silver.events");
+    expect(container.querySelectorAll(".react-flow__edge.dag-edge-dimmed")).toHaveLength(1);
+  });
+
+  it("gives each node one focus stop, its card", () => {
+    const { container } = render(<DagCanvas items={items} datasets={datasets} />);
+    expect(container.querySelectorAll(".react-flow__node[tabindex]")).toHaveLength(0);
+    expect(container.querySelectorAll(".node-card[tabindex='0']")).toHaveLength(3);
+  });
+
+  it("moves focus with the selection while focus is on the graph", () => {
+    const { container, rerender } = render(
+      <DagCanvas items={items} datasets={datasets} selection={{ kind: "node", id: "raw_events" }} />
+    );
+    const card = (id: string) =>
+      container.querySelector<HTMLElement>(`.react-flow__node[data-id="${id}"] .node-card`)!;
+    card("raw_events").focus();
+    rerender(<DagCanvas items={items} datasets={datasets} selection={{ kind: "node", id: "clean_events" }} />);
+    expect(document.activeElement).toBe(card("clean_events"));
   });
 
   it("marks the selected node and the selected dataset", () => {

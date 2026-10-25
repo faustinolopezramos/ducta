@@ -1356,6 +1356,53 @@ class UnifiedArgumentParser:
 
         ai_sub.add_parser("doctor", help="Show the configuration and check the model answers")
 
+        from ducta.ai.evals import CASES
+
+        evaluate = ai_sub.add_parser(
+            "eval",
+            help="Measure how well the configured model drafts, on Ducta's template project",
+            description=(
+                "Runs fixed cases (new pipelines, fixes, a review, an explanation) on fresh "
+                "copies of the medallion_basic template in a temporary folder, and reports "
+                "which pass Ducta's checks, attempts, tokens and time. Nothing of yours is "
+                "read or changed; with a remote model the template is sent to it."
+            ),
+        )
+        evaluate.add_argument(
+            "--case",
+            action="append",
+            choices=[c.id for c in CASES],
+            help="Run only this case (repeatable; default: all)",
+        )
+        evaluate.add_argument(
+            "--repeat",
+            type=int,
+            default=1,
+            metavar="N",
+            help="Run every case N times (1-10): it passes only when every run does",
+        )
+        evaluate.add_argument("--out", help="Also write the report to this JSON file")
+        evaluate.add_argument(
+            "--list",
+            action="store_true",
+            help="List the kept reports (~/.ducta/ai/evals); no model is asked",
+        )
+        evaluate.add_argument(
+            "--compare",
+            nargs="+",
+            metavar="REPORT",
+            help="Compare two reports (ids or files), or one with the model's previous one; "
+            "no model is asked",
+        )
+        evaluate.add_argument(
+            "--yes",
+            action="store_true",
+            help="Do not ask before sending the template to a remote model",
+        )
+        UnifiedArgumentParser._add_output_format_arg(
+            evaluate, "Output format (json prints the report)"
+        )
+
         new = ai_sub.add_parser("new", help="Draft a new pipeline from a description")
         new.add_argument("request", help='What to build, e.g. "silver pipeline that cleans orders"')
         UnifiedArgumentParser._add_discovery_args(new)

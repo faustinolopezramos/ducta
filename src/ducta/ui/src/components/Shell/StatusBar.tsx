@@ -1,9 +1,21 @@
 import type React from "react";
+import { useLocation } from "react-router-dom";
 import { IconGitBranch, IconLayoutList } from "@tabler/icons-react";
 import { useGitStatus } from "../../api/queries";
 import { useStatusBarItems } from "./statusBarStore";
 import { useChangesPanel } from "../Git/changesStore";
 import { useUIStore } from "../../store/uiStore";
+
+/**
+ * Pages whose main content is a table: only there does row density change
+ * anything, so only there the toggle shows (it sat on every page, the canvas
+ * and the editor included).
+ */
+const TABLE_PAGES = [/\/p\/[^/]+\/(runs|schedules|reliability|quality)$/, /\/workspace\/(executions|certificates)$/];
+
+export function hasRowDensity(pathname: string): boolean {
+  return TABLE_PAGES.some((re) => re.test(pathname.replace(/\/+$/, "")));
+}
 
 function changeCount(status: any): number {
   if (!status) return 0;
@@ -22,6 +34,7 @@ export function StatusBar() {
   const setDensity = useUIStore((s) => s.setDensity);
   const changes = changeCount(git);
   const openChanges = useChangesPanel((s) => s.setOpen);
+  const showDensity = hasRowDensity(useLocation().pathname);
 
   return (
     <footer className="ducta-statusbar" aria-label="Status bar">
@@ -47,6 +60,7 @@ export function StatusBar() {
         {items.map((item) => (
           <StatusItem key={item.id} {...item} />
         ))}
+        {showDensity && (
         <button
           type="button"
           className="ducta-statusbar__item"
@@ -57,6 +71,7 @@ export function StatusBar() {
           <IconLayoutList size={13} stroke={1.75} aria-hidden="true" />
           {density === "compact" ? "Compact rows" : "Comfortable rows"}
         </button>
+        )}
       </div>
     </footer>
   );

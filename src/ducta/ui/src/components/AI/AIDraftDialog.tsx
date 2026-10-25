@@ -37,7 +37,7 @@ import { Button } from "../ui/Button";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { Modal } from "../ui/Modal";
 import { Skeleton } from "../ui/Skeleton";
-import { gapsSentence, useElapsed } from "./aiText";
+import { gapsSentence, usageLine, useElapsed } from "./aiText";
 import { ArchitectStepLine, BlueprintStep, ModulesList, QuestionsStep } from "./Architect";
 import { pipelineOf, splitDiff } from "./diff";
 import "./AIDraftDialog.css";
@@ -773,6 +773,7 @@ function ReviewStep({
             <p className="ai-dim">
               {draft.attempts.length} attempt{draft.attempts.length === 1 ? "" : "s"} · {draft.model}
             </p>
+            {usageLine(draft.usage) && <p className="ai-dim">{usageLine(draft.usage)}</p>}
             {otherProblems.length > 0 && (
               <p className="ai-dim">
                 {otherProblems.length} the project already had

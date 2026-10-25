@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import ProjectConfigError, validate_project
+from ducta.setting.project.loader import ProjectConfigError, validate_project
 
 SUB = """
 description: Clean one table — dedupe, then drop rows without a key

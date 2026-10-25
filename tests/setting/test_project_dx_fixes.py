@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     ProjectConfigError,
     _engine_problems,
     compile_project,
@@ -129,7 +129,7 @@ class TestOverridesAreLocatedAtTheOverride:
 
 class TestTheEngineSchemaIsNotShownRaw:
     def test_a_pipeline_without_nodes_is_a_located_message_when_it_is_loaded_to_run(self, tmp_path):
-        from ducta.setting.project_loader import load_project_v2
+        from ducta.setting.project.loader import load_project_v2
 
         root = _project(tmp_path, pipeline="requires_dates: false\n")
         validate_project(root)  # the API creates a pipeline before its first node

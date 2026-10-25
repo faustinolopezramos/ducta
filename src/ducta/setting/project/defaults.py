@@ -42,7 +42,7 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
-from ducta.setting.project_files import with_a_suffix
+from ducta.setting.project.files import with_a_suffix
 
 #: How a template declares a required parameter where there is no null (TOML).
 REQUIRED = "<required>"

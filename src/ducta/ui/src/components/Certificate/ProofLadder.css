@@ -15,59 +15,50 @@
 
 .proof-hero {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  text-align: center;
-  gap: var(--space-2);
-  padding: var(--space-8) var(--space-6);
-  border-radius: var(--radius-lg);
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 
 .proof-hero__icon {
-  margin-bottom: var(--space-2);
+  flex-shrink: 0;
+}
+
+.proof-hero__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 
 .proof-hero__title {
   font-family: var(--font-sans);
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-bold);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
   color: var(--text);
 }
 
 .proof-hero__caption {
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   color: var(--text-muted);
-  max-width: 560px;
 }
 
-.proof-hero--pass {
-  background: var(--status-success-bg);
-  color: var(--status-success-fg);
-}
-.proof-hero--pass .proof-hero__icon { color: var(--status-success-fg); }
-
-.proof-hero--fail {
-  background: var(--status-failed-bg);
-}
-.proof-hero--fail .proof-hero__icon { color: var(--status-failed-fg); }
+/* One calm card for every verdict: the tone colours the icon and the title,
+   never the whole field — most certificates are fine, and a tinted masthead
+   made the normal case look like a warning. */
+.proof-hero--pass .proof-hero__icon,
+.proof-hero--pass .proof-hero__title { color: var(--status-success-fg); }
+.proof-hero--fail { border-color: var(--status-failed-fg); }
+.proof-hero--fail .proof-hero__icon,
 .proof-hero--fail .proof-hero__title { color: var(--status-failed-fg); }
-
-.proof-hero--partial {
-  background: var(--status-warning-bg);
-}
-.proof-hero--partial .proof-hero__icon { color: var(--status-warning-fg); }
+.proof-hero--partial .proof-hero__icon,
 .proof-hero--partial .proof-hero__title { color: var(--status-warning-fg); }
-
-.proof-hero--neutral,
-.proof-hero--pending {
-  background: var(--surface);
-  border: 1px solid var(--border);
-}
 .proof-hero--neutral .proof-hero__icon,
-.proof-hero--pending .proof-hero__icon {
-  color: var(--text-dim);
-}
+.proof-hero--pending .proof-hero__icon { color: var(--text-dim); }
 
 /* ── Stepper ───────────────────────────────────────────────────────────────── */
 

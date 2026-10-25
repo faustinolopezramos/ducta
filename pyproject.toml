@@ -7,7 +7,7 @@ build-backend = "poetry.core.masonry.api"
 # ==============================================================================
 [tool.poetry]
 name = "ducta"
-version = "0.2.0"
+version = "0.3.0"
 description = "A unified data-pipeline framework for batch, streaming, ML, and hybrid workflows."
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
@@ -159,8 +159,8 @@ databricks-connect = { version = "^14.0.0", optional = true }
 
 # --- AI pipeline builder (extra: ai) — `ducta ai`. Local models (Ollama, LM Studio,
 # vLLM) and OpenAI are reached over httpx; Claude through the official SDK. keyring
-# keeps API keys in the OS keychain. Drafts are validated by the API layer, so
-# install it as `ducta[api,ai]`.
+# keeps API keys in the OS keychain. Drafts are validated with the API layer's
+# validator, which needs none of the `api` extra: `ducta[ai]` is enough.
 httpx = { version = ">=0.24", optional = true }
 anthropic = { version = ">=1.13.0,<2.0.0", optional = true }
 keyring = { version = ">=25.0.0", optional = true }

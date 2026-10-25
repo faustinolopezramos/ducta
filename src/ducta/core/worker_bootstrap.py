@@ -47,7 +47,7 @@ def bootstrap_worker_context(
     payload: Dict[str, Any], *, ensure_output_dir: bool = False
 ) -> Tuple[Path, Any]:
     """Build a ``(project_root, context)`` pair for a worker-process payload."""
-    from ducta.setting.project_context import load_project_context
+    from ducta.setting.project.context import load_project_context
 
     project_root, context = load_project_context(
         payload.get("base_path"), payload["env"], chdir=True

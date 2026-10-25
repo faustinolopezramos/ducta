@@ -15,25 +15,15 @@ import { PageContainer, PageHeader, Skeleton, StatusBadge, EmptyState, Button } 
 import { DiagnosePanel } from "../../components/Execution/DiagnosePanel";
 import { SentinelRunNote } from "../SentinelPage/SentinelRunNote";
 import { RunTimeline } from "../../components/Execution/RunTimeline";
+import { timelineBars } from "../../components/Execution/timelineBars";
 import { RunGraph } from "../../components/Execution/RunGraph";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
-import { type LogEntry, type LogLevel } from "../../store/logsStore";
+import { type LogEntry } from "../../store/logsStore";
 import { formatDuration } from "../../utils/formatDuration";
 import { formatRelative } from "../../utils/timeLabels";
 import { routes } from "../../utils/routes";
+import { toLogEntry } from "../../utils/logEntries";
 import "./RunPage.css";
-
-function toLogEntry(raw: any, index: number): LogEntry {
-  return {
-    id: `${raw.timestamp ?? index}-${index}`,
-    timestamp: new Date(raw.timestamp).getTime(),
-    level: (raw.level?.toUpperCase?.() ?? "INFO") as LogLevel,
-    message: raw.extra?.display_message ?? raw.message ?? "",
-    nodeId: raw.extra?.node_id,
-    isNodeStatus: raw.extra?.type === "node_status",
-    render: raw.extra?.render === "cli" || raw.extra?.display_message ? "cli" : "default",
-  };
-}
 
 /**
  * `/p/:projectId/runs/:runId` — one run: how it went, why it failed (when it
@@ -102,6 +92,11 @@ export function RunPage() {
   const stuck = isStuckQueued(run as RunLike);
   // Without a certificate the diagnosis still names the node that failed.
   const certStates: Record<string, string> = Object.fromEntries(((certificate?.nodes as any[]) ?? []).map((n) => [n.name, n.status]));
+  const certDurations: Record<string, number> = Object.fromEntries(
+    ((certificate?.nodes as any[]) ?? [])
+      .filter((n) => typeof n.duration_seconds === "number")
+      .map((n) => [n.name, n.duration_seconds]),
+  );
   const nodeStates =
     Object.keys(certStates).length === 0 && failed && diagnosis?.node ? { [diagnosis.node]: "failed" } : certStates;
   const retryFrom = (node: string) =>
@@ -170,7 +165,9 @@ export function RunPage() {
         </div>
         <div><dt>Environment</dt><dd className="mono">{run.env}</dd></div>
         <div><dt>Started</dt><dd>{formatRelative(run.started_at) ?? "—"}</dd></div>
-        <div><dt>Duration</dt><dd>{run.duration_seconds != null ? formatDuration(run.duration_seconds) : "—"}</dd></div>
+        {/* Same rounding as the run list (7.1s), and named for what it is: the
+            whole run, start-up and shutdown included — the timeline is node time. */}
+        <div><dt>Total time</dt><dd>{run.duration_seconds != null ? formatDuration(run.duration_seconds, "precise") : "—"}</dd></div>
         {run.user_id && <div><dt>By</dt><dd>{run.user_id}</dd></div>}
         {commit && <div><dt>Commit</dt><dd className="mono">{commit.slice(0, 8)}{certificate?.environment?.git_dirty ? " + uncommitted" : ""}</dd></div>}
         {run.certificate_run_id && (
@@ -233,6 +230,7 @@ export function RunPage() {
           commit={commit}
           nodeStates={nodeStates}
           onSelectNode={(node) => navigate(routes.node(projectId, run.pipeline_name, node))}
+          nodeDurations={certDurations}
           successfulNodes={
             run.status === "success"
               ? ((run as { node_names?: string[] | null }).node_names?.length
@@ -245,7 +243,9 @@ export function RunPage() {
 
       {certificate?.nodes && certificate.nodes.length > 0 && (
         <section className="run-page__section" aria-labelledby="run-timeline">
-          <h2 id="run-timeline" className="run-page__h">Where the time went</h2>
+          <h2 id="run-timeline" className="run-page__h">
+            {nodeTimeHeading(certificate.nodes as any, run.duration_seconds)}
+          </h2>
           <RunTimeline nodes={certificate.nodes as any} />
         </section>
       )}
@@ -293,4 +293,20 @@ export function RunPage() {
       )}
     </PageContainer>
   );
+}
+
+/**
+ * The timeline measures node time, which is less than the run's total (start-up,
+ * shutdown, writing the certificate): the heading says how much of it, so 4.8s
+ * under a 7.1s run does not read as a contradiction.
+ */
+export function nodeTimeHeading(
+  nodes: { name: string; status: string; duration_seconds: number; ended_at?: string | null }[],
+  total?: number | null,
+): string {
+  // The timeline's own span: nodes that ran in parallel are not counted twice.
+  const nodeTime = nodes.length ? timelineBars(nodes).total : 0;
+  if (total == null || total <= 0 || nodeTime <= 0) return "Where the time went";
+  if (nodeTime >= total) return `Node time · ${formatDuration(nodeTime, "precise")}`;
+  return `Node time · ${formatDuration(nodeTime, "precise")} of ${formatDuration(total, "precise")} — the rest is start-up and shutdown`;
 }

@@ -40,13 +40,13 @@ Every data pipeline needs to know *what* to run, *where* the data lives, and *ho
 
 ### For Technical Users
 Ducta Setting is the declarative configuration layer of the framework:
-*   **Project model** (`project_schema.py`): strict pydantic models for `ducta.yaml` (`ProjectFile`), `catalog.yaml` (`CatalogEntry`) and `pipelines/<name>.yaml` (`PipelineFile`, with `transform`/`ingest`/`stream` node kinds). Unknown keys are errors with a suggestion; `json_schema()` feeds `ducta config schema` and editor completion.
-*   **Loader** (`project_loader.py`): reads the files keeping each key's file and line, applies `environments.<env>` as a deep merge (dotted keys address one value), validates the result and the references between files, and **compiles** it to the five engine documents (`global_config`, `pipelines_config`, `nodes_config`, `input_config`, `output_config`) that `Context` and the engine consume.
-*   **File formats** (`project_files.py`): `ducta`, `catalog`, `pipelines/` and `templates/` can be YAML, TOML or JSON, with the line of every key kept for errors (TOML: every `key = value` under its table). One file per role: `ducta.yaml` next to `ducta.toml` is an error.
-*   **Split catalog and profiles** (`project_loader.read_project`): the catalog is `catalog.*` **or** a `catalog/` folder of per-layer files (any depth; both together, or a dataset declared twice, is an error naming the files). `quality/profiles.*` is merged into `settings.quality.profiles` before environments apply; a profile in both places is an error. A dataset's contract is `quality:` (same name as on a node).
-*   **Defaults and templates** (`project_defaults.py`): `extends` / `params` build a pipeline on a template (`${params.x}` substitution, no logic), and `defaults` give datasets and nodes the values they do not set. Both run on the raw files, before validation.
-*   **Inspection** (`project_inspect.py`): `resolved_tree`, `explain` (a value's file, template, defaults and environment layers, each with file:line), `diff_trees` and `convert_project` behind `ducta config show | explain | diff | convert`.
-*   **Decompiling** (`project_decompile.py`): engine documents back to project files, used by the API's project store.
+*   **Project model** (`project/schema.py`): strict pydantic models for `ducta.yaml` (`ProjectFile`), `catalog.yaml` (`CatalogEntry`) and `pipelines/<name>.yaml` (`PipelineFile`, with `transform`/`ingest`/`stream` node kinds). Unknown keys are errors with a suggestion; `json_schema()` feeds `ducta config schema` and editor completion.
+*   **Loader** (`project/loader.py`): reads the files keeping each key's file and line, applies `environments.<env>` as a deep merge (dotted keys address one value), validates the result and the references between files, and **compiles** it to the five engine documents (`global_config`, `pipelines_config`, `nodes_config`, `input_config`, `output_config`) that `Context` and the engine consume.
+*   **File formats** (`project/files.py`): `ducta`, `catalog`, `pipelines/` and `templates/` can be YAML, TOML or JSON, with the line of every key kept for errors (TOML: every `key = value` under its table). One file per role: `ducta.yaml` next to `ducta.toml` is an error.
+*   **Split catalog and profiles** (`project/loader.py`'s `read_project`): the catalog is `catalog.*` **or** a `catalog/` folder of per-layer files (any depth; both together, or a dataset declared twice, is an error naming the files). `quality/profiles.*` is merged into `settings.quality.profiles` before environments apply; a profile in both places is an error. A dataset's contract is `quality:` (same name as on a node).
+*   **Defaults and templates** (`project/defaults.py`): `extends` / `params` build a pipeline on a template (`${params.x}` substitution, no logic), and `defaults` give datasets and nodes the values they do not set. Both run on the raw files, before validation.
+*   **Inspection** (`project/inspect.py`): `resolved_tree`, `explain` (a value's file, template, defaults and environment layers, each with file:line), `diff_trees` and `convert_project` behind `ducta config show | explain | diff | convert`.
+*   **Decompiling** (`project/decompile.py`): engine documents back to project files, used by the API's project store.
 *   **Engine settings schema** (`schemas.py`): `GlobalConfigSchema` declares every setting the engine reads — the keys `settings:` accepts — plus the node/pipeline/dataset models the engine documents are validated against.
 *   **Variable interpolation** (`interpolator.py`): `${VAR}` substitution from the process environment, refusing secret-looking names, with circular-reference guards.
 *   **Environments** (`environments.py`): canonical names (`base`/`dev`/`sandbox`/`staging`/`prod`), aliases (`production` → `prod`, `test` → `sandbox`) and `sandbox_<developer>` variants.
@@ -120,7 +120,7 @@ pipeline = context.get_pipeline("sales_daily")
 ### Step 2: Validate and compile without a Context
 ```python
 from pathlib import Path
-from ducta.setting.project_loader import ProjectConfigError, compile_project, validate_project
+from ducta.setting.project import ProjectConfigError, compile_project, validate_project
 
 try:
     docs = compile_project(validate_project(Path("my_project"), "prod"))

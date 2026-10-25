@@ -85,7 +85,7 @@ function renderList(overrides: Partial<Parameters<typeof ContractList>[0]> = {})
   return props;
 }
 
-const rowOf = (text: string) => screen.getByText(text).closest("tr")!;
+const rowOf = (text: string) => screen.getByText(text, { selector: ".contract-node-name" }).closest("tr")!;
 
 describe("ContractList", () => {
   it("groups the chain's nodes under each pipeline, in chain order", () => {
@@ -107,10 +107,11 @@ describe("ContractList", () => {
     renderList();
     const row = rowOf("silver.clean_student");
     expect(within(row).getByText("src.silver:clean_student")).toBeInTheDocument();
-    expect(within(row).getByText("bronze.education.student")).toBeInTheDocument();
-    expect(within(row).getByText("silver.education.student_cleaned")).toBeInTheDocument();
+    // Dataset names are cut in the middle when they do not fit; the whole name is the title.
+    expect(within(row).getByTitle("bronze.education.student")).toBeInTheDocument();
+    expect(within(row).getByTitle("silver.education.student_cleaned")).toBeInTheDocument();
     expect(within(row).getByText("1 sanity · 1 quality · gate")).toBeInTheDocument();
-    expect(within(row).getByText("2.02 s")).toBeInTheDocument();
+    expect(within(row).getByText(/2\.02 s/)).toBeInTheDocument();
   });
 
   it("calls out a failed run in the row", () => {
@@ -135,7 +136,8 @@ describe("ContractList", () => {
   it("opens the selected row in place with its checks, paths and actions", () => {
     const props = renderList({ selectedId: "silver.clean_student" });
 
-    expect(screen.getByText("min 350")).toBeInTheDocument();
+    // One short line per check; the full parameters are its tooltip.
+    expect(screen.getByText("≥ 350")).toHaveAttribute("title", "min 350");
     expect(screen.getByText("max_errors 0")).toBeInTheDocument();
     expect(screen.getByText(/silver\/education\/student_cleaned/)).toBeInTheDocument();
 

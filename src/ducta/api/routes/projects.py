@@ -161,7 +161,7 @@ async def delete_project(project_id: str, svc: ProjectServiceDep, force: bool = 
     dependencies=[Depends(require_permission("project.read"))],
 )
 async def get_project_schema(project_id: str, svc: ProjectServiceDep) -> Dict[str, Any]:
-    from ducta.setting.project_schema import json_schema
+    from ducta.setting.project.schema import json_schema
 
     svc.get_project(project_id)  # 404 for an unknown project
     return json_schema()
@@ -584,6 +584,9 @@ class DatasetPreviewResponse(BaseModel):
     columns: List[DatasetColumn] = Field(default_factory=list)
     rows: List[Dict[str, Any]] = Field(default_factory=list)
     total_rows: Optional[int] = None
+    modified_at: Optional[str] = Field(
+        default=None, description="When the data was last written (local files only)"
+    )
 
 
 @router.get(
@@ -743,8 +746,8 @@ async def get_project_metrics(
     dependencies=[Depends(require_permission("project.read"))],
 )
 async def list_node_templates(project_id: str, svc: ProjectServiceDep) -> Dict[str, Any]:
-    from ducta.setting.project_defaults import NODE_TEMPLATES_DIR, _param_values
-    from ducta.setting.project_files import load
+    from ducta.setting.project.defaults import NODE_TEMPLATES_DIR, _param_values
+    from ducta.setting.project.files import load
 
     root = svc.store(project_id).root
     out = []
@@ -782,8 +785,8 @@ async def list_node_templates(project_id: str, svc: ProjectServiceDep) -> Dict[s
     dependencies=[Depends(require_permission("project.read"))],
 )
 async def list_pipeline_templates(project_id: str, svc: ProjectServiceDep) -> Dict[str, Any]:
-    from ducta.setting.project_defaults import PIPELINE_TEMPLATES_DIR, _param_values
-    from ducta.setting.project_files import load
+    from ducta.setting.project.defaults import PIPELINE_TEMPLATES_DIR, _param_values
+    from ducta.setting.project.files import load
 
     root = svc.store(project_id).root
     folder = root / PIPELINE_TEMPLATES_DIR
@@ -1008,7 +1011,7 @@ async def run_project_tests(
 async def get_node_quality(
     project_id: str, pipeline_name: str, node_name: str, svc: ProjectServiceDep
 ) -> Dict[str, Any]:
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     root = svc.store(project_id).root
 
@@ -1053,7 +1056,7 @@ async def get_column_lineage(
 ) -> Dict[str, Any]:
     from ducta.api.services.column_lineage import ingest_column_lineage
     from ducta.gate.gateway.service import IngestionService
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     root = svc.store(project_id).root
 
@@ -1219,7 +1222,7 @@ def _split_location(loc: str) -> Dict[str, Any]:
     dependencies=[Depends(require_permission("project.read"))],
 )
 async def get_locations(project_id: str, svc: ProjectServiceDep) -> Dict[str, Any]:
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     root = svc.store(project_id).root
 
@@ -1749,8 +1752,8 @@ async def ml_plan_project_pipeline(
     svc: ProjectServiceDep,
     env: str = "base",
 ) -> MLPlanResponse:
-    from ducta.setting.project_inspect import ml_plan
-    from ducta.setting.project_loader import ProjectConfigError
+    from ducta.setting.project.inspect import ml_plan
+    from ducta.setting.project.loader import ProjectConfigError
 
     svc.get_pipeline(project_id, name)  # 404 for an unknown project or pipeline
     with http_error_on(400):
@@ -1926,17 +1929,24 @@ def get_pipeline_node_schemas(
     node_svc: NodeServiceDep,
     exec_manager: ExecutionManagerDep,
     dataset_svc: DatasetServiceDep,
+    env: Optional[str] = None,
 ) -> PipelineNodesSchemaResponse:
     """
     Same detail as the per-node schema endpoint, for all of a pipeline's nodes in
     one request, plus the pipeline's latest run.
 
+    With *env*, each node's last run also comes from that environment's run
+    certificates, so a run started from the CLI counts too.
+
     A plain ``def`` on purpose: it reads the pipelines file, the node specs and
     each node's source file, so FastAPI runs it in the threadpool instead of on
     the event loop.
     """
+    if env:
+        with http_error_on(400):
+            validate_environment_name(env)
     return NodeSchemaService(svc, node_svc, exec_manager, dataset_svc).build_all(
-        project_id, pipeline_name
+        project_id, pipeline_name, env
     )
 
 

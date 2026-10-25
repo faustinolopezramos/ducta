@@ -47,11 +47,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.ai.builder import _pipeline_file, _validate, parse_answer
+from ducta.ai.builder import find_pipeline_file
 from ducta.ai.context import find_secrets, redact_code, redact_config
 from ducta.ai.errors import AINotFoundError
 from ducta.ai.explain import node_function
-from ducta.ai.providers import ChatMessage, LLMProvider
+from ducta.ai.loop import ask, check_fits, parse_answer, prompt_version, validate_files
+from ducta.ai.policy import require_allowed
+from ducta.ai.providers import LLMProvider
 
 SEVERITIES = ("high", "medium", "low")
 AREAS = ("code", "config", "performance", "quality", "security")
@@ -165,6 +167,8 @@ class Review:
     dropped: int = 0
     notes: str = ""
     usage: Dict[str, int] = field(default_factory=dict)
+    #: Which version of the prompt made it (:func:`ducta.ai.loop.prompt_version`).
+    prompt_version: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         out = asdict(self)
@@ -237,10 +241,10 @@ def review_facts(
     passed in when several nodes are looked at: they are the project's, not the node's.
     """
     from ducta.setting.node_effective_config import effective_node_config
-    from ducta.setting.project_loader import apply_environment, read_project
+    from ducta.setting.project.loader import apply_environment, read_project
 
     root = Path(root).resolve()
-    path = _pipeline_file(root, pipeline)
+    path = find_pipeline_file(root, pipeline)
     if resolved is None:
         resolved = apply_environment(read_project(root), env)
     pdoc = (resolved.get("pipelines") or {}).get(pipeline) or yaml.safe_load(
@@ -288,7 +292,7 @@ def review_facts(
     files = {facts.pipeline_rel, (facts.function or {}).get("file")}
     facts.problems = [
         p
-        for p in (problems if problems is not None else _validate(root, {}))
+        for p in (problems if problems is not None else validate_files(root, {}))
         if p.get("severity") in ("error", "warning")
         and (
             p.get("node") == node
@@ -478,7 +482,7 @@ def _in_memory(name: str, call: ast.Call) -> bool:
     )
 
 
-def _code_findings(facts: ReviewFacts) -> List[Finding]:
+def code_findings(facts: ReviewFacts) -> List[Finding]:
     if not facts.function:
         return []
     start = facts.function["line"]
@@ -722,14 +726,14 @@ def _config_findings(facts: ReviewFacts) -> List[Finding]:
 def ducta_checks(facts: ReviewFacts) -> List[Finding]:
     """The findings Ducta is certain of, without a model."""
     order = {s: i for i, s in enumerate(SEVERITIES)}
-    return sorted(_code_findings(facts) + _config_findings(facts), key=lambda f: order[f.severity])
+    return sorted(code_findings(facts) + _config_findings(facts), key=lambda f: order[f.severity])
 
 
 # ── the model's findings, checked ───────────────────────────────────────────
 
 
 def _known_keys() -> Set[str]:
-    from ducta.setting.project_schema import PipelineFile, TransformNode
+    from ducta.setting.project.schema import PipelineFile, TransformNode
 
     return set(TransformNode.model_fields) | set(PipelineFile.model_fields) | {"description"}
 
@@ -845,6 +849,19 @@ def _render(facts: ReviewFacts, found: List[Finding], remote: bool, note: str) -
     return "\n\n".join(parts)
 
 
+def answer_mapping(text: str) -> Dict[str, Any]:
+    """The YAML mapping a review answer holds in its first block, or ``{}``."""
+    answer = parse_answer(text)
+    bodies = [b for lang, b in answer.unnamed if lang in ("yaml", "yml", "")] + list(
+        answer.files.values()
+    )
+    try:
+        data = yaml.safe_load(bodies[0]) if bodies else None
+    except yaml.YAMLError:
+        data = None
+    return data if isinstance(data, dict) else {}
+
+
 def review_node(
     root: Path,
     pipeline: str,
@@ -867,23 +884,26 @@ def review_node(
     )
     if provider is None:
         return review
+    require_allowed(root, provider.config)
     message = _render(facts, found, remote=not provider.config.is_local, note=note)
-    completion = provider.complete(
-        REVIEW_PROMPT.format(max=MAX_AI_FINDINGS), [ChatMessage("user", message)]
+    system = REVIEW_PROMPT.format(max=MAX_AI_FINDINGS)
+    check_fits(provider.config, system, message)
+    completion, review.usage = ask(
+        provider,
+        system,
+        message,
+        readable=lambda text: isinstance(answer_mapping(text).get("findings"), list),
+        again="Answer again with ONLY the ```yaml block holding `findings:`.",
     )
     review.model = completion.model or provider.config.model
-    review.usage = dict(completion.usage)
-    answer = parse_answer(completion.text)
-    bodies = [b for lang, b in answer.unnamed if lang in ("yaml", "yml", "")] + list(
-        answer.files.values()
-    )
-    try:
-        data = yaml.safe_load(bodies[0]) if bodies else None
-    except yaml.YAMLError:
-        data = None
-    raw = (data or {}).get("findings") if isinstance(data, dict) else None
+    review.prompt_version = prompt_version(system)
+    raw = answer_mapping(completion.text).get("findings")
     if not isinstance(raw, list):
-        review.notes = "The model's answer could not be read; only Ducta's findings are shown."
+        review.notes = (
+            "The model's answer was cut off by its output limit; only Ducta's findings are shown."
+            if completion.truncated
+            else "The model's answer could not be read; only Ducta's findings are shown."
+        )
         return review
     asked = raw[: MAX_AI_FINDINGS * 2]
     checked = [f for f in (check_finding(r, facts) for r in asked) if f]

@@ -430,7 +430,7 @@ def test_an_appended_output_downstream_blocks_the_retry(sales):
 
 
 def test_a_stale_node_with_an_appended_output_is_not_rerun(sales):
-    from ducta.setting.project_schema import SentinelPolicy
+    from ducta.setting.project.schema import SentinelPolicy
 
     catalog = sales / "catalog.yaml"
     catalog.write_text(

@@ -68,7 +68,7 @@ class ConfigRepository:
         return self._store().documents(env)
 
     def validate(self, env: str) -> Dict[str, Any]:
-        from ducta.setting.project_loader import ProjectConfigError, validate_project
+        from ducta.setting.project.loader import ProjectConfigError, validate_project
 
         errors: List[Dict[str, Any]] = []
         try:

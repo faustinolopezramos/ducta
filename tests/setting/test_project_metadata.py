@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from ducta.setting.project_loader import validate_project
-from ducta.setting.project_schema import CatalogEntry, PipelineFile, check_metadata
+from ducta.setting.project.loader import validate_project
+from ducta.setting.project.schema import CatalogEntry, PipelineFile, check_metadata
 
 DEMOS = Path.home() / "Desktop" / "demo_ducta" / "projects"
 
@@ -60,7 +60,7 @@ def test_the_demo_projects_still_validate(name):
 
 
 def test_alert_rules_are_checked():
-    from ducta.setting.project_schema import ProjectFile
+    from ducta.setting.project.schema import ProjectFile
 
     base = {"version": 2, "project": "p", "paths": {"input": "d", "output": "d"}}
     ok = ProjectFile.model_validate(

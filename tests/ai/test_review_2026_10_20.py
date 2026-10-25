@@ -23,7 +23,7 @@ from ducta.ai.errors import AIConfigError, AIError
 from ducta.ai.explain import _code_around
 from ducta.ai.extend import _module_changes, existing_changes, new_code_problems
 from ducta.ai.providers import ChatMessage, OllamaProvider, OpenAICompatibleProvider
-from ducta.ai.review import ReviewFacts, _code_findings
+from ducta.ai.review import ReviewFacts, code_findings
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_builder import GOOD, FakeProvider, _project  # noqa: E402
@@ -274,7 +274,7 @@ def _flags(code: str):
     facts = ReviewFacts("", "", "", "dev", {}, {}, {})
     facts.function = {"file": "m.py", "line": 1, "function": "f"}
     facts.code_lines = code.splitlines()
-    return [f.title for f in _code_findings(facts)]
+    return [f.title for f in code_findings(facts)]
 
 
 @pytest.mark.parametrize(

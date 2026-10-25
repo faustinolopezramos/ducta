@@ -27,6 +27,8 @@ export interface CanvasPort {
   id: string;
   /** Dataset reference name this port carries. */
   name: string;
+  /** Declared inline on the node (a stream endpoint's `format`), not in the catalog. */
+  format?: string | null;
 }
 
 export interface CanvasQuality {

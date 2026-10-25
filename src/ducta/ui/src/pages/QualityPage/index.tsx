@@ -7,7 +7,6 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { EnvHint } from "../../components/Shell/EnvHint";
 import { Panel } from "../../components/ui/Panel";
-import { Field } from "../../components/ui/Field";
 import { Select } from "../../components/ui/Select";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { StatusBadge } from "../../components/ui/StatusBadge";
@@ -19,7 +18,6 @@ import { RunChecksModal } from "../../components/Quality/RunChecksModal";
 import { ValidateConfigModal } from "../../components/Quality/ValidateConfigModal";
 import {
   IconPlayerPlay,
-  IconGauge,
   IconShieldCheck,
   IconDatabase,
 } from "@tabler/icons-react";
@@ -28,7 +26,7 @@ import { formatDate } from "../../utils/formatDate";
 import { formatRelative } from "../../utils/timeLabels";
 import { statusMetaFor } from "../../components/ui/statusMeta";
 import { DatasetDetail } from "./DatasetDetail";
-import { ScoreSection } from "./ScoreSection";
+import { ScoreSection, scorePercent } from "./ScoreSection";
 import { ChecksCard } from "./ChecksCard";
 
 // ─────────────────────────────────────────────
@@ -57,7 +55,6 @@ export default function QualityPage() {
 
   const [showRunModal, setShowRunModal] = useState(false);
   const [showValidateModal, setShowValidateModal] = useState(false);
-  const [manualRunId, setManualRunId] = useState("");
   const { data: recentRunsData } = useExecutionList({ project_id: project || undefined, limit: 20 });
   const recentRuns = (recentRunsData?.executions ?? []) as Array<{
     id: string; pipeline_name: string; status: string; env?: string; started_at?: string | null; certificate_run_id?: string | null;
@@ -75,6 +72,16 @@ export default function QualityPage() {
       ),
     [summary.data]
   );
+
+  // The score shows without a click: the latest run that wrote quality
+  // reports (a pipeline listed below), until another is picked — a run's page
+  // links here with ?run_id=, which wins.
+  const reported = new Set((summary.data ?? []).map((d) => d.pipeline_name));
+  const latestRun = recentRuns.find((r) => reported.has(r.pipeline_name)) ?? recentRuns[0];
+  const shownRunId = scoreRunId || (latestRun ? latestRun.certificate_run_id ?? latestRun.id : "");
+  const runWords = (r: (typeof recentRuns)[number]) =>
+    `${r.pipeline_name} · ${(statusMetaFor(r.status)?.label ?? r.status).toLowerCase()} · ${r.env ?? ""} · ${formatRelative(r.started_at) ?? ""}`;
+  const shownRun = recentRuns.find((r) => (r.certificate_run_id ?? r.id) === shownRunId);
 
   const setParam = (patch: Record<string, string | undefined>) => {
     const next = new URLSearchParams(searchParams);
@@ -134,13 +141,18 @@ export default function QualityPage() {
       sortable: true,
       align: "right",
       mono: true,
-      cell: (r) => (typeof r.latest_score === "number" ? r.latest_score.toFixed(3) : "—"),
+      cell: (r) => scorePercent(r.latest_score),
     },
-    {
-      key: "trend",
-      header: "Trend",
-      cell: (r) => <Sparkline values={r.trend} color={scoreColor(r.latest_score)} />,
-    },
+    // A trend needs two points: with one run per dataset the column was empty.
+    ...(datasets.some((d) => (d.trend?.length ?? 0) > 1)
+      ? [
+          {
+            key: "trend",
+            header: "Trend",
+            cell: (r: QualityDatasetSummary) => <Sparkline values={r.trend} color={scoreColor(r.latest_score)} />,
+          },
+        ]
+      : []),
     {
       key: "run_count",
       header: "Runs",
@@ -182,13 +194,34 @@ export default function QualityPage() {
         }
       />
 
-      {scoreRunId && (
+      {shownRunId && (
         <ScoreSection
-          runId={scoreRunId}
+          runId={shownRunId}
           env={env || undefined}
           pipelineName={pipelineName || undefined}
           project={project || undefined}
-          onClear={() => setParam({ run_id: undefined })}
+          title={scoreRunId ? "Pipeline quality score" : "Latest run score"}
+          runLabel={shownRun ? runWords(shownRun) : undefined}
+          onClear={scoreRunId ? () => setParam({ run_id: undefined }) : undefined}
+          picker={
+            recentRuns.length > 1 && (
+              <Select
+                size="sm"
+                fullWidth={false}
+                style={{ maxWidth: 320 }}
+                value=""
+                onChange={(e) => e.target.value && setParam({ run_id: e.target.value })}
+                aria-label="Show the score of another run"
+              >
+                <option value="">Other runs…</option>
+                {recentRuns.map((r) => (
+                  <option key={r.id} value={r.certificate_run_id ?? r.id}>
+                    {runWords(r)}
+                  </option>
+                ))}
+              </Select>
+            )
+          }
         />
       )}
 
@@ -197,9 +230,10 @@ export default function QualityPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
           {sectionTitle(<IconDatabase size={16} color={colors.accent} />, "Datasets")}
           <div style={{ flex: 1 }} />
-          {!routeProject && <Field label="Project">
+          {!routeProject && (
             <Select
               size="sm"
+              fullWidth={false}
               style={{ minWidth: 160 }}
               value={project}
               onChange={(e) => handleProjectChange(e.target.value)}
@@ -212,11 +246,12 @@ export default function QualityPage() {
                 </option>
               ))}
             </Select>
-          </Field>}
-          {/* The environment is the header's; this only picks pipeline runs vs ad-hoc checks. */}
-          <Field label="Reports">
+          )}
+          {/* The environment is the header's; this only picks pipeline runs vs ad-hoc checks.
+              No floating "Reports" label: the option says what it shows. */}
             <Select
               size="sm"
+              fullWidth={false}
               style={{ minWidth: 160 }}
               value={adhoc ? ADHOC_ENV : env}
               onChange={(e) => handleEnvChange(e.target.value)}
@@ -226,7 +261,6 @@ export default function QualityPage() {
               {!adhoc && env !== activeEnv && <option value={env}>Runs in {env}</option>}
               <option value={ADHOC_ENV}>{ADHOC_LABEL}s (ad-hoc)</option>
             </Select>
-          </Field>
         </div>
 
         {project && !adhoc && datasets.length === 0 && !summary.isLoading && <EnvHint projectId={project} />}
@@ -265,41 +299,6 @@ export default function QualityPage() {
           project={project || undefined}
           onClose={() => setParam({ dataset: undefined, pipeline_name: undefined })}
         />
-      )}
-
-      {/* ── Manual composite-score lookup (fallback when not linked from a run) ── */}
-      {!scoreRunId && (
-        <Panel>
-          {sectionTitle(<IconGauge size={16} color={colors.accent} />, "Pipeline quality score")}
-          <p className="quality-score-hint">
-            Pick a recent run to see its composite quality score.
-          </p>
-          <div className="quality-score-pick">
-            <Field label="Run">
-              <Select
-                size="sm"
-                value={manualRunId}
-                onChange={(e) => setManualRunId(e.target.value)}
-                aria-label="Run to score"
-              >
-                <option value="">Choose a run…</option>
-                {recentRuns.map((r) => (
-                  <option key={r.id} value={r.certificate_run_id ?? r.id}>
-                    {r.pipeline_name} · {(statusMetaFor(r.status)?.label ?? r.status).toLowerCase()} · {r.env ?? ""} · {formatRelative(r.started_at) ?? ""}
-                  </option>
-                ))}
-              </Select>
-            </Field>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setParam({ run_id: manualRunId.trim() })}
-              disabled={!manualRunId.trim()}
-            >
-              Show score
-            </Button>
-          </div>
-        </Panel>
       )}
 
       <ChecksCard />

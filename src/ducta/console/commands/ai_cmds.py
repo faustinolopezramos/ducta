@@ -27,7 +27,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
@@ -42,7 +42,7 @@ def _console():
 
 
 def _project_root(parsed_args) -> Path:
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     # At or above, as every other command finds its project: from a project's
     # subfolder this used to fail with "No Ducta project".
@@ -76,6 +76,7 @@ class AICommands:
             "login": AICommands.login,
             "logout": AICommands.logout,
             "doctor": AICommands.doctor,
+            "eval": AICommands.evaluate,
             "new": AICommands.new,
             "fix": AICommands.fix,
             "extend": AICommands.extend,
@@ -279,7 +280,8 @@ class AICommands:
 
     @staticmethod
     def revise(parsed_args) -> int:
-        from ducta.ai.builder import load_draft, revise
+        from ducta.ai.builder import revise
+        from ducta.ai.drafts import load_draft
 
         root = _project_root(parsed_args)
         previous = load_draft(root, parsed_args.draft_id)
@@ -383,7 +385,156 @@ class AICommands:
             console.print(
                 f"\n[dim]{diagnosis['title']} — explained by {explanation.model}. Nothing was changed.[/]"
             )
+            _print_usage(console, explanation.usage)
         return ExitCode.SUCCESS.value
+
+    @staticmethod
+    def evaluate(parsed_args) -> int:
+        from ducta.ai import evals
+        from ducta.ai.config import load_config
+        from ducta.ai.drafts import usage_line
+        from ducta.ai.providers import make_provider
+
+        as_json = getattr(parsed_args, "output_format", "rich") == "json"
+        console = _console()
+        if getattr(parsed_args, "list", False):
+            return AICommands._eval_list(console, as_json)
+        if getattr(parsed_args, "compare", None):
+            return AICommands._eval_compare(console, parsed_args.compare, as_json)
+        cases = evals.select(getattr(parsed_args, "case", None))
+        repeat = getattr(parsed_args, "repeat", 1) or 1
+        if not 1 <= repeat <= evals.MAX_REPEAT:
+            raise AIConfigError(f"--repeat goes from 1 to {evals.MAX_REPEAT}")
+        config = load_config()
+        config.require_model()
+        provider = make_provider(config)
+        if not config.is_local:
+            console.print(
+                f"The eval sends Ducta's {evals.TEMPLATE} template project (no files of yours) "
+                f"to {config.endpoint}, {len(cases) * repeat} run(s), several requests each."
+            )
+            if not _confirm("Run it?", getattr(parsed_args, "yes", False)):
+                return ExitCode.GENERAL_ERROR.value
+
+        def report(result: Any) -> None:
+            if as_json:
+                return
+            mark = "[green]✓[/]" if result.passed else "[red]✗[/]"
+            runs = f"{result.passes}/{result.runs} · " if result.runs > 1 else ""
+            tries = f", {result.attempts} attempt(s)" if result.attempts else ""
+            flaky = " [yellow]flaky[/]" if result.flaky else ""
+            console.print(
+                f"{mark} {result.case:<22} [dim]{runs}{result.seconds:.0f}s{tries}[/]{flaky}",
+                highlight=False,
+            )
+            for miss in result.misses[:2]:
+                console.print(f"    [dim]{miss}[/]", highlight=False)
+
+        if not as_json:
+            times = f", {repeat} runs per case" if repeat > 1 else ""
+            console.print(f"Evaluating [cyan]{config.model}[/] ({config.label}{times})…")
+        evaluation = evals.run_eval(provider, cases, repeat=repeat, on_result=report)
+        evaluation.source = "cli"
+        evals.save_report(evaluation)
+        data = evaluation.to_dict()
+        out = getattr(parsed_args, "out", None)
+        if out:
+            Path(out).write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        if as_json:
+            print(json.dumps(data, indent=2, ensure_ascii=False))
+            return ExitCode.SUCCESS.value
+        summary = data["summary"]
+        drafted = any(r.kind in evals.DRAFT_KINDS for r in evaluation.results)
+        attempts = f"{summary['mean_attempts']} attempts per draft · " if drafted else ""
+        console.print(
+            f"\n[bold]{summary['passed']}/{summary['total']} passed[/] · "
+            f"{attempts}{summary['seconds']:.0f}s"
+        )
+        if summary["flaky"]:
+            console.print(f"[yellow]Flaky:[/] {', '.join(summary['flaky'])}", highlight=False)
+        line = usage_line(summary["usage"])
+        if line:
+            console.print(f"[dim]Model usage: {line}[/]", highlight=False)
+        console.print(f"[dim]Kept as {evaluation.id} (ducta ai eval --list)[/]", highlight=False)
+        if out:
+            console.print(f"[dim]Report: {out}[/]")
+        previous = evals.previous_report(evaluation)
+        if previous:
+            AICommands._print_comparison(console, evals.compare(previous, evaluation))
+        return ExitCode.SUCCESS.value
+
+    @staticmethod
+    def _eval_list(console, as_json: bool) -> int:
+        from ducta.ai.evals import list_reports, reports_dir
+
+        reports = list_reports()
+        if as_json:
+            print(json.dumps([r.head() for r in reports], indent=2, ensure_ascii=False))
+            return ExitCode.SUCCESS.value
+        if not reports:
+            console.print(f"No eval reports in {reports_dir()}. Run `ducta ai eval`.")
+            return ExitCode.SUCCESS.value
+        for r in reports:
+            head = r.head()
+            runs = f" ×{r.repeat}" if r.repeat > 1 else ""
+            flaky = f" · {len(head['flaky'])} flaky" if head["flaky"] else ""
+            console.print(
+                f"{r.id:<42} [cyan]{r.model}[/] [dim]({r.provider})[/] "
+                f"{head['passed']}/{head['total']}{runs}{flaky}",
+                highlight=False,
+            )
+        return ExitCode.SUCCESS.value
+
+    @staticmethod
+    def _eval_compare(console, refs: List[str], as_json: bool) -> int:
+        from ducta.ai.evals import compare, load_report, previous_report
+
+        if len(refs) > 2:
+            raise AIConfigError("--compare takes one report or two")
+        if len(refs) == 2:
+            a, b = load_report(refs[0]), load_report(refs[1])
+        else:
+            b = load_report(refs[0])
+            found = previous_report(b)
+            if found is None:
+                raise AIConfigError(
+                    f"No earlier report of {b.model} ({b.provider}) to compare {refs[0]} with"
+                )
+            a = found
+        comparison = compare(a, b)
+        if as_json:
+            print(json.dumps(comparison, indent=2, ensure_ascii=False))
+        else:
+            AICommands._print_comparison(console, comparison)
+        return ExitCode.SUCCESS.value
+
+    @staticmethod
+    def _print_comparison(console, comparison: Dict[str, Any]) -> None:
+        a, b = comparison["a"], comparison["b"]
+        console.print(
+            f"\n[bold]{a['id']}[/] ({a['model']}) → [bold]{b['id']}[/] ({b['model']})",
+            highlight=False,
+        )
+        marks = {
+            "gained": "[green]+ gained[/]",
+            "lost": "[red]- lost[/]",
+            "same": "[dim]= same[/]",
+            "added": "[dim]new case[/]",
+            "removed": "[dim]not run[/]",
+        }
+        for c in comparison["cases"]:
+            prompt = " [dim](prompt changed)[/]" if c["prompt_changed"] else ""
+            console.print(
+                f"  {c['case']:<22} {c['a'] or '—':>5} → {c['b'] or '—':<5} "
+                f"{marks[c['change']]}{prompt}",
+                highlight=False,
+            )
+        rate = comparison["pass_rate"]
+        console.print(
+            f"  pass rate {rate:+.0%} · attempts {comparison['mean_attempts']:+} · "
+            f"tokens {comparison['tokens']:+,} · {comparison['seconds']:+.0f}s",
+            highlight=False,
+        )
 
     @staticmethod
     def review(parsed_args) -> int:
@@ -474,6 +625,7 @@ class AICommands:
                     f" ({result.dropped} dropped: they cited lines or settings that do not exist)"
                 )
         console.print(summary + ". Nothing was changed.[/]")
+        _print_usage(console, getattr(result, "usage", None) or {})
         if result.notes:
             console.print(f"[yellow]{result.notes}[/]")
         ideas = getattr(result, "ideas", None) or []
@@ -491,7 +643,7 @@ class AICommands:
     def drafts(parsed_args) -> int:
         from rich.table import Table
 
-        from ducta.ai.builder import list_drafts
+        from ducta.ai.drafts import list_drafts
 
         root = _project_root(parsed_args)
         drafts = list_drafts(root)
@@ -514,8 +666,8 @@ class AICommands:
 
     @staticmethod
     def _draft(parsed_args, verb: str, make: Callable[..., Any]) -> int:
-        from ducta.ai.builder import save_draft
         from ducta.ai.config import load_config
+        from ducta.ai.drafts import save_draft
         from ducta.ai.providers import make_provider
 
         root = _project_root(parsed_args)
@@ -581,7 +733,7 @@ class AICommands:
 
     @staticmethod
     def apply(parsed_args) -> int:
-        from ducta.ai.builder import load_draft
+        from ducta.ai.drafts import load_draft
 
         root = _project_root(parsed_args)
         draft = load_draft(root, parsed_args.draft_id)
@@ -655,6 +807,16 @@ class AICommands:
         )
         if draft.ok and draft.kind == "fix":
             console.print("  Checked without running it: run the pipeline in dev to confirm.")
+        _print_usage(console, draft.usage)
+
+
+def _print_usage(console, usage: Dict[str, int]) -> None:
+    """The tokens a model request took, when the provider said."""
+    from ducta.ai.drafts import usage_line
+
+    line = usage_line(usage)
+    if line:
+        console.print(f"[dim]Model usage: {line}[/]", highlight=False)
 
 
 _CODE_MODEL = re.compile(r"cod(?:e|er|estral)|devstral|starcoder", re.IGNORECASE)

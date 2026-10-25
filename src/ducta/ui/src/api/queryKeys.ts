@@ -62,8 +62,11 @@ export const qk = {
       ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "ml-plan", env] as const,
     datasets: (projectId: string) =>
       ["server-projects", sourceKey(), projectId, "datasets"] as const,
-    nodeSchemas: (projectId: string, pipeline: string) =>
-      ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema"] as const,
+    /** Without `env` the key is the prefix that invalidates every environment's. */
+    nodeSchemas: (projectId: string, pipeline: string, env?: string) =>
+      env
+        ? (["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema", env] as const)
+        : (["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", "schema"] as const),
     nodeSchema: (projectId: string, pipeline: string, node: string) =>
       ["server-projects", sourceKey(), projectId, "pipelines", pipeline, "nodes", node, "schema"] as const,
     codeIndex: (projectId: string) =>
@@ -96,8 +99,9 @@ export const qk = {
 
   ingestion: {
     all: () => ["ingestion", sourceKey()] as const,
-    connections: () => ["ingestion", sourceKey(), "connections"] as const,
-    usage: (name: string) => ["ingestion", sourceKey(), "connections", name, "usage"] as const,
+    connections: (project?: string) => ["ingestion", sourceKey(), project ?? null, "connections"] as const,
+    usage: (name: string, project?: string) =>
+      ["ingestion", sourceKey(), project ?? null, "connections", name, "usage"] as const,
   },
 
   certificates: {
@@ -124,6 +128,12 @@ export const qk = {
   ai: {
     settings: () => ["ai", "settings"] as const,
     models: () => ["ai", "models"] as const,
+    // The server's model measured: server-wide, like its settings.
+    evals: () => ["ai", "evals"] as const,
+    evalCases: () => ["ai", "evals", "cases"] as const,
+    evalReport: (reportId: string) => ["ai", "evals", "report", reportId] as const,
+    evalComparison: (b: string, a: string) => ["ai", "evals", "compare", b, a] as const,
+    evalJob: (jobId: string) => ["ai", "evals", "jobs", jobId] as const,
     project: (projectId: string) => ["ai", sourceKey(), projectId] as const,
     job: (projectId: string, jobId: string) => ["ai", sourceKey(), projectId, "jobs", jobId] as const,
     drafts: (projectId: string) => ["ai", sourceKey(), projectId, "drafts"] as const,

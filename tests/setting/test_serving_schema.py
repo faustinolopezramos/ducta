@@ -5,9 +5,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ducta.setting.project_decompile import _decompile_node
-from ducta.setting.project_loader import compile_project, validate_project
-from ducta.setting.project_schema import BUILTIN_SCORER, ModelRef, TransformNode
+from ducta.setting.project.decompile import _decompile_node
+from ducta.setting.project.loader import compile_project, validate_project
+from ducta.setting.project.schema import BUILTIN_SCORER, ModelRef, TransformNode
 
 
 def _node(**kw):

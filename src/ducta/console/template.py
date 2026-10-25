@@ -1833,7 +1833,7 @@ class TemplateGenerator:
 
     def _write_config_files(self, template: BaseTemplate) -> None:
         """``ducta.*``, ``catalog.*``, ``pipelines/*.*`` and the editor schemas."""
-        from ducta.setting.project_decompile import write_schemas
+        from ducta.setting.project.decompile import write_schemas
 
         ext = self.config_format.value
         schemas = ".ducta/schema"

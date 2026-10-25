@@ -7,17 +7,11 @@ from typing import List
 
 import pytest
 
-from ducta.ai.builder import (
-    apply_draft,
-    fix,
-    generate,
-    list_drafts,
-    load_draft,
-    parse_answer,
-    save_draft,
-)
+from ducta.ai.builder import apply_draft, fix, generate
 from ducta.ai.config import AIConfig
+from ducta.ai.drafts import list_drafts, load_draft, save_draft
 from ducta.ai.errors import AIError
+from ducta.ai.loop import parse_answer
 from ducta.ai.providers import ChatMessage, Completion
 
 GOOD = """Here it is.

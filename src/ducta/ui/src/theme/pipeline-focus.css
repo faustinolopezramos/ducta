@@ -261,10 +261,13 @@
 }
 
 .focus-check-params {
+  min-width: 0;
   font-family: var(--font-mono);
   text-align: right;
   color: var(--text);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .focus-check--gate .focus-check-name {
@@ -323,6 +326,15 @@
   color: var(--text-dim);
 }
 
+.contract-node-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.contract-node-cell > .node-card-status { flex: none; }
+.contract-last { white-space: nowrap; }
+
 .contract-node {
   display: flex;
   flex-direction: column;
@@ -332,24 +344,29 @@
 .contract-node-name {
   font-weight: var(--weight-semibold);
   color: var(--text);
-  overflow-wrap: anywhere;
+  /* Breaks at its seams (<wbr> after "." and "_"), never mid-word. */
+  overflow-wrap: normal;
 }
 
 .contract-node-fn {
   font-family: var(--font-mono);
   font-size: var(--text-2xs);
   color: var(--text-dim);
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
 .contract-ds-list {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
+  align-items: stretch;
   gap: 2px;
+  min-width: 0;
 }
 
 .contract-ds {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
   background: none;
   border: none;
@@ -408,28 +425,46 @@
    CHAIN STRIP — the pipelines a run executes, in order, in the top bar.
    ═══════════════════════════════════════════════════════════════════════════ */
 .pipeline-chain {
-  display: flex;
-  align-items: center;
-  gap: 4px;
+  position: relative;
   flex: 1 1 0;
   min-width: 0;
   margin: 0 0 0 var(--space-2);
   padding: 0 var(--space-3);
-  overflow-x: auto;
-  list-style: none;
-  /* Scrolls with the wheel or a trackpad; no scrollbar strip under the pills. */
-  scrollbar-width: none;
-  /* A wider fade on the right reads as "more this way" when the chain overflows. */
-  mask-image: linear-gradient(to right, transparent, #000 var(--space-3), #000 calc(100% - 40px), transparent);
 }
-.pipeline-chain::-webkit-scrollbar { display: none; }
+.pipeline-chain__list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+/* The natural width of every pill, for deciding what to fold. */
+.pipeline-chain__measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  gap: 4px;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.pipeline-chain__measure-item { display: flex; align-items: center; gap: 4px; }
+.pipeline-chain-fold {
+  background: var(--surface);
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.pipeline-chain-fold:hover { border-color: var(--border-hover); color: var(--text); }
 
 /* Too narrow for the strip: the trail's switcher and the canvas's Chain scope cover it. */
 @media (max-width: 1100px) {
   .pipeline-chain { display: none; }
 }
 
-.pipeline-chain li {
+.pipeline-chain__list li {
   display: flex;
   flex: none;
   align-items: center;

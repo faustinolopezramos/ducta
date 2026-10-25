@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import ProjectConfigError, compile_project, validate_project
+from ducta.setting.project.loader import ProjectConfigError, compile_project, validate_project
 
 _CATALOG = """\
 raw: {format: parquet, path: data/raw}

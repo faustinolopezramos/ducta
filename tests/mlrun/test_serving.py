@@ -19,7 +19,7 @@ from ducta.mlrun.serving import (
     score,
 )
 from ducta.mlrun.storage import LocalStorageBackend
-from ducta.setting.project_schema import ModelRef
+from ducta.setting.project.schema import ModelRef
 
 sklearn = pytest.importorskip("sklearn")
 joblib = pytest.importorskip("joblib")

@@ -90,3 +90,13 @@
     display: none;
   }
 }
+
+/* A qualifier on a tab ("server" on AI, which every project shares). */
+.tabs-tag {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: var(--text-2xs, 11px);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+}

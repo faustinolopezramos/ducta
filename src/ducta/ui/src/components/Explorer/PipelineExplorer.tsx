@@ -75,7 +75,7 @@ export function PipelineExplorer({
           type="search"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Filter nodes, datasets…"
+          placeholder="Filter the tree"
           aria-label="Filter the explorer"
         />
       </div>

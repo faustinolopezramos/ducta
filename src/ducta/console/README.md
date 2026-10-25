@@ -40,7 +40,7 @@ Ducta Console is the CLI/UX layer, implementing:
 *   **Unified dispatch**: `UnifiedCLI` maps each subcommand to a `(validator, handler)` pair, restores the working directory no matter how a handler exits, and translates failures into stable `ExitCode`s (`cli.py`).
 *   **Argument parsing**: a composed `UnifiedArgumentParser` builds the full subcommand tree (`parser.py`).
 *   **Project discovery**: `ConfigManager` finds the project a command works on — the nearest `ducta.yaml` with `version: 2` from `--base-path` (or the cwd) upwards — runs the command from its root, and reports a missing project with how to create one (`config.py`).
-*   **Validation**: field/enum/JSON/date validators for command-line arguments (`validation.py`); project files are validated by `ducta.setting.project_loader`.
+*   **Validation**: field/enum/JSON/date validators for command-line arguments (`validation.py`); project files are validated by `ducta.setting.project.loader`.
 *   **Execution bridge**: `load_context(path, env)` builds a project's `Context`; thin wrappers construct a `PipelineExecutor` and run batch/streaming pipelines (`execution.py`).
 *   **Project scaffolding**: `template.py` generates runnable projects (`ducta.yaml`, `catalog.yaml` or `catalog/<layer>`, `quality/profiles`, `pipelines/`), verified to compile in every environment; `template_layout.py` cuts the single-file templates into the split layout without losing their comments.
 *   **Rich UX**: Rich-based logging, schema formatters, and an `error_analyzer` that turns tracebacks into actionable developer guidance (`ux/`).
@@ -54,6 +54,8 @@ Invoked as `ducta <subcommand> [options]`:
 
 | Subcommand | Purpose |
 |------------|---------|
+| `list`     | Show the project's pipelines |
+| `check`    | Validate the project without running it (`--env`) |
 | `start`    | Run a batch/ML/hybrid pipeline (`--pipeline`, `--env`, `--start-date`, `--end-date`, `--node`, `--dry-run`, `--validate-only`) |
 | `stream`   | `run` / `status` / `stop` a streaming pipeline (`--mode sync\|async`, `--execution-id`) |
 | `init project` | Create a project in the recommended layout (`--name`, `--type batch|ml|streaming|hybrid`, `--format yaml|toml|json`, `--path`, `--layout split|single`) |
@@ -66,7 +68,7 @@ Invoked as `ducta <subcommand> [options]`:
 | `init`     | `project` (above), or `ingestion setup` / `list` / `test` / `info` for database connections |
 | `certify`  | `list` / `show` / `verify` / `diff` Run Certificates (`--env`, `--dir`, `--base-path`) |
 | `profile`  | Assay a data file and propose the quality spec it already satisfies |
-| `ai`       | Draft, fix, review and explain with a model; `architect` and `sentinel` agents |
+| `ai`       | Work with a model. Setup: `setup` / `login` / `logout` / `doctor`. Drafts (validated, written only on `apply`): `new` / `fix` / `extend` / `quality` / `document` / `revise` / `drafts` / `apply`. Read-only: `review` / `explain`. Measure a model: `eval`. Agents: `architect` / `sentinel` |
 | `skill`    | `install` / `export` / `path` the agent skill for AI assistants |
 
 Global flags: `-V/--version`, `-v/--verbose` and `-q/--quiet` (the last two also
@@ -123,6 +125,12 @@ ducta quality run --input data/sales.parquet --format parquet --config checks.ya
 # MLOps
 ducta experiment list --storage-path ./mlops_data
 ducta model promote sales_model 3 production --env prod
+
+# AI (see docs/ai.rst)
+ducta ai new "clean the orders and count them by day"
+ducta ai review etl
+ducta ai eval --repeat 3            # how well the configured model drafts (kept, compared)
+ducta ai eval --list
 
 # Run certificate + local UI
 ducta certify verify --run-id <run_id>

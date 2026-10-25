@@ -86,7 +86,7 @@ _URI_PREFIXES: tuple[str, ...] = (
 
 def _project_owns_pipeline(project_dir: Path, pipeline_name: str) -> bool:
     """Whether the Ducta project in *project_dir* defines *pipeline_name*."""
-    from ducta.setting.project_loader import find_project_root, read_project
+    from ducta.setting.project.loader import find_project_root, read_project
 
     root = find_project_root(project_dir)
     if root is None:
@@ -108,7 +108,7 @@ def resolve_project_source(source_path: Path, pipeline_name: str) -> Path:
     Falls back to *source_path* unchanged when no match is found or when
     *source_path* is already a single-project directory.
     """
-    from ducta.setting.project_loader import find_project_root
+    from ducta.setting.project.loader import find_project_root
 
     # A single project: no lookup needed.
     if find_project_root(source_path) is not None:

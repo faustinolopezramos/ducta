@@ -4,6 +4,7 @@ import {
   formatKind,
   formatLabel,
 } from "../../utils/nodePresentation";
+import { MiddleTruncate } from "./MiddleTruncate";
 import type { CanvasDataset } from "./types";
 
 interface DatasetChipProps {
@@ -12,6 +13,8 @@ interface DatasetChipProps {
   dimmed?: boolean;
   /** `shape` collapses the chip to its dot; `flow` drops format and rows. */
   tier?: "shape" | "flow" | "detail";
+  /** Nodes that read it: one chip stands for every edge it fans out to. */
+  readers?: number;
   onSelect?: (name: string) => void;
 }
 
@@ -27,6 +30,7 @@ export function DatasetChip({
   selected = false,
   dimmed = false,
   tier = "detail",
+  readers = 1,
   onSelect,
 }: DatasetChipProps) {
   const { name, format, writeMode, declared, layer, rows } = dataset;
@@ -36,6 +40,7 @@ export function DatasetChip({
     declared ? format : null,
     writeMode,
     rowLabel ? `${rowLabel} rows` : null,
+    readers > 1 ? `read by ${readers}` : null,
   ].filter(Boolean) as string[];
 
   const className = [
@@ -64,7 +69,7 @@ export function DatasetChip({
 
   const label = `Dataset ${name}, ${formatLabel(declared ? format : null)}${
     rowLabel ? `, ${rowLabel} rows` : ""
-  }`;
+  }${readers > 1 ? `, read by ${readers} nodes` : ""}`;
 
   return (
     <button
@@ -86,7 +91,7 @@ export function DatasetChip({
         {formatGlyph(declared ? format : null)}
       </span>
       <span className="ds-chip-text">
-        <span className="ds-chip-name">{name}</span>
+        <MiddleTruncate className="ds-chip-name" text={name} />
         {tier === "detail" &&
           (meta.length > 0 ? (
             <span className="ds-chip-meta">{meta.join(", ")}</span>

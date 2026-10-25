@@ -15,7 +15,7 @@ import yaml
 from ducta.api.exceptions import ProjectAlreadyExistsError, ProjectNotFoundError, ValidationError
 from ducta.api.models.project import ProjectCreateRequest, ProjectUpdateRequest
 from ducta.api.services.project import ProjectService
-from ducta.setting.project_loader import compile_project, validate_project
+from ducta.setting.project.loader import compile_project, validate_project
 
 
 @pytest.fixture

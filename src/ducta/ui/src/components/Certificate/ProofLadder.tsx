@@ -30,6 +30,9 @@ export interface ProofLadderProps {
   reproduce?: ReproduceState;
   onReproduce?: () => void;
   reproducing?: boolean;
+  /** Offered when the signature could not be checked here (no key on this
+   *  server): opens a check that takes the key. */
+  onCheckWithKey?: () => void;
   /** Condensed variant for the Execution History modal: icon+label chips, no
    *  connectors, no inline actions. */
   compact?: boolean;
@@ -51,23 +54,29 @@ const TONE_ICON: Record<ProofTone, IconComponent> = {
 // backend's raw `reason` string directly, so the phrase always matches one of
 // the states this component actually knows how to color. `reason` still shows
 // verbatim underneath, so the precise mechanical explanation is never lost.
-function heroFromVerify(verify: CertificateVerifyResult | null): { tone: ProofTone; title: string } {
+//
+// `next` is the one line under the verdict: what it means or what to do next.
+// It replaced the backend reason, which repeated the title in monospace; the
+// reason stays on the hero as a tooltip.
+function heroFromVerify(verify: CertificateVerifyResult | null): { tone: ProofTone; title: string; next?: string } {
   if (!verify) return { tone: "pending", title: "Not yet verified" };
   const sig = verify.signature;
   if (!verify.ok) {
-    if (sig === "invalid") return { tone: "fail", title: "Tampered — signature invalid" };
-    if (sig === "stripped") return { tone: "fail", title: "Tampered — signature was removed" };
-    if (sig === "unverifiable") return { tone: "partial", title: "Cannot verify authenticity — pre-1.3 certificate" };
-    return { tone: "fail", title: "Hash mismatch — certificate was modified" };
+    if (sig === "invalid") return { tone: "fail", title: "Tampered — signature invalid", next: "The signature does not match the key: do not trust this certificate." };
+    if (sig === "stripped") return { tone: "fail", title: "Tampered — signature was removed", next: "It declares a signature that is no longer there." };
+    if (sig === "unverifiable") return { tone: "partial", title: "Cannot verify authenticity — pre-1.3 certificate", next: "Older certificates cannot tell “never signed” from “signature removed”." };
+    return { tone: "fail", title: "Hash mismatch — certificate was modified", next: "Its content changed after it was written." };
   }
-  if (sig === "valid") return { tone: "pass", title: "Verified — signed and untampered" };
+  if (sig === "valid") return { tone: "pass", title: "Verified — signed and untampered", next: "The hash matches and the signature matches the key." };
   // Without a checked signature the self-hash only rules out corruption:
   // anyone who edits a field can recompute it. "Untampered" is reserved for
   // the signed-and-checked case above.
   if (verify.policy_satisfied === false)
-    return { tone: "partial", title: "Incomplete — this certificate's policy requires a checked signature" };
-  if (sig === "present (no key)") return { tone: "partial", title: "Integrity OK — signed, signature not checked" };
-  return { tone: "partial", title: "Integrity OK — unsigned, not proof against deliberate edits" };
+    return { tone: "partial", title: "Incomplete — this certificate's policy requires a checked signature", next: "Add the signing key to complete the check." };
+  // Signed with no key at hand is the normal case for most certificates: the
+  // integrity check passed, so it reads as a pass, not a warning.
+  if (sig === "present (no key)") return { tone: "pass", title: "Integrity verified", next: "Signed. Add the signing key to also prove who produced it." };
+  return { tone: "partial", title: "Integrity OK — unsigned, not proof against deliberate edits", next: "Sign certificates to make deliberate edits detectable." };
 }
 
 // Integrity is checked first, unconditionally, inside the same backend call —
@@ -84,7 +93,7 @@ function integrityFromVerify(verify: CertificateVerifyResult | null): { tone: Pr
 const AUTHENTICITY_COPY: Record<CertificateSignatureState, { tone: ProofTone; label: string }> = {
   unsigned: { tone: "neutral", label: "This certificate was never signed." },
   valid: { tone: "pass", label: "Signed, and the signature matches the supplied key." },
-  "present (no key)": { tone: "partial", label: "Signed, but no key was supplied to check it." },
+  "present (no key)": { tone: "neutral", label: "Not checked yet — this server has no signing key." },
   invalid: { tone: "fail", label: "Signature does not match the supplied key." },
   stripped: { tone: "fail", label: "Declares signed=true, but the signature was removed." },
   unverifiable: { tone: "partial", label: "Pre-1.3 certificate — can't tell “never signed” from “removed”." },
@@ -149,6 +158,7 @@ export function ProofLadder({
   reproduce = { status: "idle" },
   onReproduce,
   reproducing,
+  onCheckWithKey,
   compact = false,
 }: ProofLadderProps) {
   const hero = heroFromVerify(verify);
@@ -156,7 +166,7 @@ export function ProofLadder({
   const authenticity = verify ? AUTHENTICITY_COPY[verify.signature] : { tone: "pending" as ProofTone, label: "Not yet checked." };
 
   let reproTone: ProofTone = "pending";
-  let reproLabel = "Not yet checked — re-running the pipeline proves the data itself reproduces.";
+  let reproLabel = "Not checked yet — re-running the pipeline proves the data itself reproduces.";
   if (reproduce.status === "unavailable") {
     reproTone = "neutral";
     reproLabel = "Not available — no local execution to re-run.";
@@ -174,10 +184,12 @@ export function ProofLadder({
   return (
     <div className={cx("proof-ladder-wrap", compact && "proof-ladder-wrap--compact")}>
       {!compact && (
-        <div className={cx("proof-hero", `proof-hero--${hero.tone}`)}>
-          <HeroIcon size={40} stroke={1.6} className="proof-hero__icon" />
-          <div className="proof-hero__title">{hero.title}</div>
-          {verify && <div className="proof-hero__caption">{verify.reason}</div>}
+        <div className={cx("proof-hero", `proof-hero--${hero.tone}`)} title={verify?.reason}>
+          <HeroIcon size={28} stroke={1.75} className="proof-hero__icon" aria-hidden="true" />
+          <div className="proof-hero__text">
+            <div className="proof-hero__title">{hero.title}</div>
+            {hero.next && <div className="proof-hero__caption">{hero.next}</div>}
+          </div>
         </div>
       )}
 
@@ -189,7 +201,6 @@ export function ProofLadder({
           description={integrity.label}
           compact={compact}
         />
-        <div className={cx("proof-ladder__connector", !verify && "is-dashed")} />
         <ProofNode
           icon={TONE_ICON[authenticity.tone]}
           tone={authenticity.tone}
@@ -197,14 +208,17 @@ export function ProofLadder({
           description={authenticity.label}
           compact={compact}
           action={
-            !compact && onVerify ? (
+            compact ? undefined : verify?.signature === "present (no key)" && onCheckWithKey ? (
+              <Button size="sm" variant="secondary" onClick={onCheckWithKey} leftIcon={<IconShieldCheck size={13} />}>
+                Check with key
+              </Button>
+            ) : onVerify ? (
               <Button size="sm" variant="secondary" onClick={onVerify} loading={verifying} leftIcon={<IconShieldCheck size={13} />}>
-                {verify ? "Re-verify" : "Verify"}
+                {verify ? "Check again" : "Verify"}
               </Button>
             ) : undefined
           }
         />
-        <div className={cx("proof-ladder__connector", reproduce.status === "idle" && "is-dashed")} />
         <ProofNode
           icon={reproduce.status === "running" || reproducing ? IconLoader2 : TONE_ICON[reproTone]}
           tone={reproTone}

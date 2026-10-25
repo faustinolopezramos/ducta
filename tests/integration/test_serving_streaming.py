@@ -11,7 +11,7 @@ import pytest
 
 from ducta.mlrun import serving as serving_mod
 from ducta.mlrun.serving import ResolvedModel, ServingError, ServingModel
-from ducta.setting.project_schema import ModelRef
+from ducta.setting.project.schema import ModelRef
 from ducta.stream.query_manager import StreamingQueryManager
 
 sklearn = pytest.importorskip("sklearn")

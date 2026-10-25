@@ -26,7 +26,7 @@ const base = { selected: false, dimmed: false, onClick: () => {} };
 describe("NodeCard", () => {
   it("names the node", () => {
     render(<NodeCard node={node} {...base} />);
-    expect(screen.getByText("clean_results")).toBeInTheDocument();
+    expect(screen.getByTitle("clean_results")).toBeInTheDocument();
   });
 
   it("marks the medallion layer of its output with a swatch", () => {
@@ -114,7 +114,7 @@ describe("NodeCard", () => {
       const { container } = render(
         <NodeCard node={node} {...base} tier="shape" execState="success" />
       );
-      expect(screen.getByText("clean_results")).toBeInTheDocument();
+      expect(screen.getByTitle("clean_results")).toBeInTheDocument();
       expect(container.querySelector(".node-card-swatch")).toBeNull();
       expect(container.querySelector(".node-card-fact")).toBeNull();
       expect(container.querySelector(".node-card-status")).not.toBeNull();
@@ -167,5 +167,14 @@ describe("NodeCard on a running stream", () => {
     expect(fact(container)).toBe("failed");
     expect(container.querySelector(".node-card-fact--failed")).not.toBeNull();
     expect(container.querySelector(".node-card-status")).toHaveAttribute("title", "AnalysisException");
+  });
+});
+
+describe("NodeCard on a run's graph", () => {
+  it("says a node the run left out was not in this run, with no status dot", () => {
+    const { container } = render(<NodeCard node={node} {...base} dimmed execState="not_run" />);
+    expect(screen.getByText("not in this run")).toBeInTheDocument();
+    expect(container.querySelector(".node-card-status")).toBeNull();
+    expect(container.querySelector(".node-card--not-run")).not.toBeNull();
   });
 });

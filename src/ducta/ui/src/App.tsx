@@ -64,11 +64,19 @@ function WorkspaceShellWrapper() {
 // closing `projects` into the route element would recreate the router (and
 // re-render the whole tree) on every project change.
 function ProjectsListRoute() {
-  const { projects } = useProjectList();
+  const { projects, isLoading, error, refetch } = useProjectList();
   // The dashboard names the workspace it is showing; it was never passed, so
   // the header always fell back to a generic line.
   const { selectedSource } = useWorkspaceSelection();
-  return <ProjectsList workspacePath={selectedSource ?? undefined} projects={projects} />;
+  return (
+    <ProjectsList
+      workspacePath={selectedSource ?? undefined}
+      projects={projects}
+      loading={isLoading}
+      error={error}
+      onRetry={refetch}
+    />
+  );
 }
 
 // Runs and Schedules are one rail section: one header, two tabs.
@@ -77,7 +85,12 @@ function ProjectRunsRoute() {
   return (
     <ExecutionHistoryPage
       projectId={projectId}
-      header={{ title: "Runs", tabs: <RunsTabs projectId={projectId} current="history" /> }}
+      header={{
+        title: "Runs",
+        // Every Runs tab has a line here, so switching tabs never moves the tabs.
+        description: "Every run of this project. Click a row for its logs.",
+        tabs: <RunsTabs projectId={projectId} current="history" />,
+      }}
     />
   );
 }

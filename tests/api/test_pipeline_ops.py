@@ -175,3 +175,146 @@ def test_add_node_from_a_template():
     assert node["with"] == {"key": "id"}
     apply_op(doc, inverse)
     assert _dump(doc) == PIPELINE
+
+
+# ── comments after a node survive adding and removing others ────────────────
+
+TRAILING = """\
+nodes:
+  a:
+    run: src.m:a
+    outputs: [x]
+  b:
+    run: src.m:b
+    options: {trigger: 1 minute}
+    # about b, after its last key
+    # on two lines.
+"""
+
+BEFORE_NEXT = """\
+nodes:
+  b:
+    run: src.m:b
+    options: {trigger: 1 minute}
+    # about b
+  c:
+    run: src.m:c
+  d:
+    run: src.m:d
+"""
+
+
+def _reloaded(doc):
+    return _doc(_dump(doc))
+
+
+def test_a_node_added_after_one_with_trailing_comments_leaves_them_with_it():
+    doc = _doc(TRAILING)
+    inverse = apply_op(doc, {"op": "add_node", "node": "zz", "run": "src.m:f"})
+    text = _dump(doc)
+    assert text.index("# on two lines.") < text.index("  zz:")
+    doc = _reloaded(doc)  # what the next request reads
+    apply_op(doc, inverse)
+    assert _dump(doc) == TRAILING
+
+
+def test_trailing_comments_stay_before_the_next_top_level_key():
+    text = TRAILING + "schedule: daily\n"
+    doc = _doc(text)
+    inverse = apply_op(doc, {"op": "add_node", "node": "zz", "run": "src.m:f"})
+    added = _dump(doc)
+    assert added.index("# on two lines.") < added.index("  zz:") < added.index("schedule:")
+    doc = _reloaded(doc)
+    apply_op(doc, inverse)
+    assert _dump(doc) == text
+
+
+def test_removing_a_node_keeps_the_comments_written_above_it():
+    doc = _doc(BEFORE_NEXT)
+    apply_op(doc, {"op": "remove_node", "node": "c"})
+    text = _dump(doc)
+    assert "# about b" in text and text.index("# about b") < text.index("  d:")
+
+
+def test_removing_the_last_node_keeps_the_comments_above_it():
+    doc = _doc(BEFORE_NEXT)
+    apply_op(doc, {"op": "remove_node", "node": "d"})
+    apply_op(doc, {"op": "remove_node", "node": "c"})
+    assert "# about b" in _dump(doc)
+
+
+ABOVE_NEXT = """\
+nodes:
+  a:
+    run: src.m:a
+    params:
+      k: 1
+      # about a's k
+  # b reads the orders
+  b:
+    run: src.m:b
+    outputs: [x]
+
+  # c writes them
+  c:
+    run: src.m:c
+"""
+
+
+@pytest.mark.parametrize("victim", ["a", "b"])
+def test_removing_a_node_keeps_the_comment_above_the_next_one(victim):
+    following = {"a": "b", "b": "c"}[victim]
+    above = {"a": "# b reads the orders", "b": "# c writes them"}[victim]
+    doc = _doc(ABOVE_NEXT)
+    apply_op(doc, {"op": "remove_node", "node": victim})
+    text = _dump(_reloaded(doc))
+    assert above in text and text.index(above) < text.index(f"  {following}:")
+
+
+def test_a_removed_node_takes_only_its_own_comments():
+    doc = _doc(ABOVE_NEXT)
+    apply_op(doc, {"op": "remove_node", "node": "a"})
+    text = _dump(doc)
+    assert "# about a's k" not in text
+    assert text.startswith("nodes:\n  # b reads the orders\n  b:\n")
+
+
+# The undo rebuilds a node from its plain body: what is inside it (its own
+# comments, flow style) is not kept, so this one has neither.
+UNDOABLE = """\
+# about the pipeline
+nodes:
+  # a cleans
+  a:
+    run: src.m:a
+    params:
+      k: 1
+  # b reads the orders
+  b:
+    run: src.m:b
+    outputs:
+    - x
+
+  # c writes them
+  c:
+    run: src.m:c
+"""
+
+
+@pytest.mark.parametrize("victim", ["a", "b", "c"])
+def test_removing_a_node_and_undoing_it_leaves_the_file_as_it_was(victim):
+    doc = _doc(UNDOABLE)
+    inverse = apply_op(doc, {"op": "remove_node", "node": victim})
+    doc = _reloaded(doc)  # what the next request reads
+    apply_op(doc, inverse)
+    assert _dump(doc) == UNDOABLE
+
+
+def test_an_undo_puts_the_node_back_between_its_comments():
+    doc = _doc(ABOVE_NEXT)  # b ends with a flow list: ruamel keeps c's comment elsewhere
+    inverse = apply_op(doc, {"op": "remove_node", "node": "b"})
+    doc = _reloaded(doc)
+    apply_op(doc, inverse)
+    text = _dump(doc)
+    order = ["# b reads the orders", "  b:", "# c writes them", "  c:"]
+    assert [text.index(s) for s in order] == sorted(text.index(s) for s in order)

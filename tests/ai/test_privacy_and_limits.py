@@ -14,17 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from ducta.ai import secrets
-from ducta.ai.builder import (
-    Draft,
-    _sha,
-    apply_draft,
-    fix,
-    generate,
-    load_draft,
-    message_budget,
-    revise,
-    save_draft,
-)
+from ducta.ai.builder import apply_draft, fix, generate, revise
 from ducta.ai.config import AIConfig, build_config, load_config
 from ducta.ai.context import (
     build_context,
@@ -33,10 +23,12 @@ from ducta.ai.context import (
     redact_code,
     redact_config,
 )
+from ducta.ai.drafts import Draft, load_draft, save_draft, text_sha
 from ducta.ai.errors import AIConfigError, AIConflictError, AIEnvironmentError, AIError
 from ducta.ai.explain import explanation_message
+from ducta.ai.loop import message_budget
 from ducta.ai.providers import AnthropicProvider, ChatMessage
-from ducta.ai.review import ReviewFacts, _code_findings, _render
+from ducta.ai.review import ReviewFacts, _render, code_findings
 
 sys.path.insert(0, str(Path(__file__).parent))
 from test_builder import FakeProvider, _project  # noqa: E402
@@ -153,7 +145,7 @@ def test_a_revision_on_a_remote_model_rechecks_the_files_it_resends(sales):
         pipeline="bronze.sales",
         prompt="the files, whole",
         raw_answer="an answer",
-        seen={rel: _sha((sales / rel).read_text())},
+        seen={rel: text_sha((sales / rel).read_text())},
     )
     remote = RemoteFake("never asked")
     with pytest.raises(AIConfigError, match="credential"):
@@ -239,7 +231,7 @@ def test_a_proposal_may_only_edit_its_own_yaml(sales):
         pipeline="silver.sales",
         target="clean_orders",
         files={rel: "version: 2\nproject: hijacked\n"},
-        base={rel: _sha((sales / rel).read_text())},
+        base={rel: text_sha((sales / rel).read_text())},
     )
     with pytest.raises(AIConflictError, match="only edits"):
         apply_draft(sales, draft, force=True)
@@ -363,7 +355,7 @@ def test_writing_a_file_handle_is_not_writing_a_dataframe():
     ]
     facts = ReviewFacts("p", "pipelines/p.yaml", "n", "dev", {}, {}, {})
     facts.function, facts.code_lines = {"file": "m.py", "line": 1, "function": "f"}, lines
-    io = [f.line for f in _code_findings(facts) if f.area == "code"]
+    io = [f.line for f in code_findings(facts) if f.area == "code"]
     assert io == [4]
 
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import { useProjectName } from "../../hooks/useProjects";
 import { IconCircleCheck, IconCircleX } from "@tabler/icons-react";
 import {
   type AISettings as AISettingsData,
@@ -20,6 +21,7 @@ import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import "../../components/AI/AIDraftDialog.css";
 import { Skeleton, SkeletonText } from "../../components/ui/Skeleton";
 import "./AISettings.css";
+import { ModelEval } from "./ModelEval";
 
 const HINT: Record<string, string> = {
   ollama: "Local · no key",
@@ -43,8 +45,12 @@ const providerName = (p: AIProviderInfo) => p.label.replace(/ \((local|Claude)\)
  * server, not the project, and only an admin (`ai.configure`) changes it. A key
  * is written once and never shown again — only where it comes from, masked.
  */
-export function AISettings() {
+export function AISettings({ projectId }: { projectId?: string } = {}) {
   const { data: settings, isLoading } = useAISettings();
+  const projectName = useProjectName()(projectId);
+  const canConfigure = usePermission("ai.configure");
+  // Discard remounts the form from what is saved.
+  const [discarded, setDiscarded] = useState(0);
   if (isLoading || !settings) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)", maxWidth: 540, padding: "var(--space-4) 0" }}>
@@ -55,10 +61,27 @@ export function AISettings() {
     );
   }
   // Keyed on what was saved: a save (or another admin's) starts the form afresh.
-  return <AISettingsForm key={`${settings.provider}|${settings.model}|${settings.base_url}`} settings={settings} />;
+  return (
+    <>
+      {/* The tab sits under a project's Settings, but what it sets is the
+          server's: changing it here changes it for every project. */}
+      <p className="ai-scope" role="note">
+        <b>Server-wide setting.</b> Every project on this server uses this model
+        {projectId ? <> — not only {projectName}.</> : "."}
+      </p>
+      <AISettingsForm
+        key={`${settings.provider}|${settings.model}|${settings.base_url}|${discarded}`}
+        settings={settings}
+        onDiscard={() => setDiscarded((n) => n + 1)}
+      />
+      {/* Measuring the model spends the server's key: admins only. Outside the
+          form, so a save (which remounts it) keeps an evaluation on screen. */}
+      {canConfigure && settings.configured && <ModelEval settings={settings} />}
+    </>
+  );
 }
 
-function AISettingsForm({ settings }: { settings: AISettingsData }) {
+function AISettingsForm({ settings, onDiscard }: { settings: AISettingsData; onDiscard: () => void }) {
   const canConfigure = usePermission("ai.configure");
   const update = useUpdateAISettings();
   // An admin tests what is in the form, saved or not; anyone else, what is saved.
@@ -164,7 +187,7 @@ function AISettingsForm({ settings }: { settings: AISettingsData }) {
           <label className="projects-modal__label" htmlFor="ai-model">
             Model
           </label>
-          <div className="ai-settings__inline">
+          <div className="ai-settings__inline ai-settings__inline--field">
             <input
               id="ai-model"
               className="projects-modal__input"
@@ -306,9 +329,15 @@ function AISettingsForm({ settings }: { settings: AISettingsData }) {
           {apiErrorMessage(update.error, "Couldn’t save.")}
         </p>
       )}
-      {canConfigure && (
-        <div className="ai-actions ai-settings__actions">
-          <Button type="submit" variant="primary" loading={update.isPending} disabled={!dirty}>
+      {/* Save stays in reach at the bottom of the window while there is
+          something to save; it used to sit below the fold of a long form. */}
+      {canConfigure && dirty && (
+        <div className="ai-savebar" role="region" aria-label="Unsaved changes">
+          <span className="ai-savebar__state">Unsaved changes</span>
+          <Button type="button" variant="ghost" size="sm" onClick={onDiscard} disabled={update.isPending}>
+            Discard
+          </Button>
+          <Button type="submit" variant="primary" size="sm" loading={update.isPending}>
             Save
           </Button>
         </div>

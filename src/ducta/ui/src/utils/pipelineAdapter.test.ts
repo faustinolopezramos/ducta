@@ -129,3 +129,31 @@ describe("pipelinesFromServer", () => {
     expect(pipelinesFromServer({}, {})).toEqual([]);
   });
 });
+
+describe("stream endpoints", () => {
+  // The same rule as the API's `stream_endpoint_name`: the writer's output and
+  // the reader's input are one path, so they get one name and the canvas joins them.
+  const nodes = {
+    bronze: {
+      inputs: [{ format: "kafka", options: { subscribe: "ecommerce-events" } }],
+      outputs: [{ format: "delta", path: "${output_path}/${environment}/bronze/fraud_events" }],
+    },
+    silver: {
+      dependencies: ["bronze"],
+      inputs: [{ format: "delta_stream", path: "${output_path}/${environment}/bronze/fraud_events" }],
+      outputs: [{ format: "delta", path: "${output_path}/${environment}/silver/clean" }],
+    },
+  };
+
+  it("names an endpoint by its path without the placeholder root, or by its topic", () => {
+    expect(nodeIoNames(nodes.bronze, "input")).toEqual(["kafka:ecommerce-events"]);
+    expect(nodeIoNames(nodes.bronze, "output")).toEqual(["bronze/fraud_events"]);
+    expect(nodeIoNames(nodes.silver, "input")).toEqual(["bronze/fraud_events"]);
+  });
+
+  it("carries each endpoint's format onto its port", () => {
+    const [pipeline] = pipelinesFromServer({ fraud: { nodes: ["bronze", "silver"] } }, nodes);
+    const silver = pipeline.nodes.find((n) => n.id === "silver")!;
+    expect(silver.inputs).toEqual([{ id: "silver-input-0", name: "bronze/fraud_events", format: "delta_stream" }]);
+  });
+});

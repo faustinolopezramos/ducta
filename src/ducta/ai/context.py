@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
 
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     CATALOG_DIR,
     PIPELINES_DIR,
     ProjectConfigError,

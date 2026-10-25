@@ -3,7 +3,14 @@ import { type ExecutionListFilters, useEnvironments, useServerProjects } from ".
 import { IconSearch, IconX } from "@tabler/icons-react";
 import { DATE_PRESETS, datePresetSince } from "./helpers";
 import { EXECUTION_STATUSES, STATUS_META } from "../../components/ui/statusMeta";
+import { FilterMenu } from "./FilterMenu";
 import "./FilterBar.css";
+
+/** "7d" reads "Last 7 days" in the date menu; "Today" stays itself. */
+function presetLabel(label: string): string {
+  const days = /^(\d+)d$/.exec(label)?.[1];
+  return days ? `Last ${days} days` : label;
+}
 
 export function FilterBar({
   filters,
@@ -52,6 +59,13 @@ export function FilterBar({
   const customApplied =
     Boolean(filters.until) || (Boolean(filters.since) && !DATE_PRESETS.some(({ days }) => presetActive(days)));
   const showCustom = customOpen || customApplied;
+  const activePreset = DATE_PRESETS.find(({ days }) => presetActive(days));
+  const dateText = activePreset
+    ? presetLabel(activePreset.label)
+    : customApplied
+      ? `${filters.since ?? "…"} → ${filters.until ?? "…"}`
+      : "Any time";
+  const statuses = (filters.status ?? "").split(",").filter(Boolean);
 
   return (
     <div className="run-filters" role="search" aria-label="Filter runs">
@@ -66,112 +80,82 @@ export function FilterBar({
         />
       </label>
 
-      <div className="run-filters__group" role="group" aria-label="Status">
-        {EXECUTION_STATUSES.map((s) => (
-          <button
-            key={s}
-            type="button"
-            className="run-filters__chip"
-            onClick={() => onChange({ ...filters, status: filters.status === s ? undefined : s })}
-            aria-pressed={filters.status === s}
-          >
-            {STATUS_META[s].label}
-          </button>
-        ))}
-      </div>
+      <FilterMenu
+        label="Status"
+        multiple
+        options={EXECUTION_STATUSES.map((st) => ({ value: st, label: STATUS_META[st].label }))}
+        selected={statuses}
+        onChange={(vals) => onChange({ ...filters, status: vals.length ? vals.join(",") : undefined })}
+      />
 
       {pipelines.length > 0 && (
-        <select
-          className="run-filters__select"
-          value={filters.pipeline_name ?? ""}
-          onChange={(e) => onChange({ ...filters, pipeline_name: e.target.value || undefined })}
-          aria-label="Filter by pipeline"
-        >
-          <option value="">All pipelines</option>
-          {pipelines.map((p) => (
-            <option key={p} value={p}>{p}</option>
-          ))}
-        </select>
+        <FilterMenu
+          label="Pipeline"
+          options={pipelines.map((p) => ({ value: p, label: p }))}
+          selected={filters.pipeline_name ? [filters.pipeline_name] : []}
+          onChange={([p]) => onChange({ ...filters, pipeline_name: p })}
+        />
       )}
 
       {envs.length > 0 && (
-        <select
-          className="run-filters__select"
-          value={filters.env ?? ""}
-          onChange={(e) => onChange({ ...filters, env: e.target.value || undefined })}
-          aria-label="Filter by environment"
-        >
-          <option value="">All environments</option>
-          {envs.map((env) => (
-            <option key={env} value={env}>{env}</option>
-          ))}
-        </select>
+        <FilterMenu
+          label="Environment"
+          options={envs.map((env) => ({ value: env, label: env }))}
+          selected={filters.env ? [filters.env] : []}
+          onChange={([env]) => onChange({ ...filters, env })}
+        />
       )}
 
       {!lockedProject && projects.length > 0 && (
-        <select
-          className="run-filters__select"
-          value={filters.project_id ?? ""}
-          onChange={(e) => onChange({ ...filters, project_id: e.target.value || undefined })}
-          aria-label="Filter by project"
-        >
-          <option value="">All projects</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name ?? p.id}</option>
-          ))}
-        </select>
+        <FilterMenu
+          label="Project"
+          options={projects.map((p) => ({ value: p.id, label: p.name ?? p.id }))}
+          selected={filters.project_id ? [filters.project_id] : []}
+          onChange={([project_id]) => onChange({ ...filters, project_id })}
+        />
       )}
 
-      {/* Start-date range: the presets and the two dates are one control. */}
-      <div className="run-filters__group" role="group" aria-label="Started">
-        {DATE_PRESETS.map(({ label, days }) => (
-          <button
-            key={label}
-            type="button"
-            className="run-filters__chip"
-            aria-pressed={presetActive(days)}
-            onClick={() => {
-              const nextSince = presetActive(days) ? undefined : datePresetSince(days);
-              onChange({ ...filters, since: nextSince, until: undefined });
-            }}
-            title={`Since ${label === "Today" ? "today" : `${label} ago`}`}
-          >
-            {label}
-          </button>
-        ))}
-        {!showCustom && (
-          <button
-            type="button"
-            className="run-filters__chip"
-            aria-expanded={false}
-            onClick={() => setCustomOpen(true)}
-            title="Pick a start and end date"
-          >
-            Custom range…
-          </button>
-        )}
-        {showCustom && (
-          <>
-            <input
-              type="date"
-              className="run-filters__date"
-              value={filters.since ?? ""}
-              onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
-              aria-label="From date"
-              title="From date"
-            />
-            <span className="run-filters__sep" aria-hidden="true">→</span>
-            <input
-              type="date"
-              className="run-filters__date"
-              value={filters.until ?? ""}
-              onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
-              aria-label="To date"
-              title="To date"
-            />
-          </>
-        )}
-      </div>
+      {/* Start-date range: the presets and the two dates are one menu. */}
+      <FilterMenu
+        label="Started"
+        options={DATE_PRESETS.map(({ label, days }) => ({ value: String(days), label: presetLabel(label) }))}
+        selected={activePreset ? [String(activePreset.days)] : []}
+        buttonText={dateText}
+        filtering={customApplied}
+        onChange={([days]) => {
+          setCustomOpen(false);
+          onChange({ ...filters, since: days != null ? datePresetSince(Number(days)) : undefined, until: undefined });
+        }}
+        footer={
+          <div className="run-filters__custom">
+            {!showCustom ? (
+              <button type="button" className="run-filters__option" aria-expanded={false} onClick={() => setCustomOpen(true)}>
+                Custom range…
+              </button>
+            ) : (
+              <>
+                <input
+                  type="date"
+                  className="run-filters__date"
+                  value={filters.since ?? ""}
+                  onChange={(e) => onChange({ ...filters, since: e.target.value || undefined })}
+                  aria-label="From date"
+                  title="From date"
+                />
+                <span className="run-filters__sep" aria-hidden="true">→</span>
+                <input
+                  type="date"
+                  className="run-filters__date"
+                  value={filters.until ?? ""}
+                  onChange={(e) => onChange({ ...filters, until: e.target.value || undefined })}
+                  aria-label="To date"
+                  title="To date"
+                />
+              </>
+            )}
+          </div>
+        }
+      />
 
       {hasFilters && (
         <button
@@ -182,7 +166,7 @@ export function FilterBar({
             onChange(lockedProject ? { project_id: lockedProject } : {});
           }}
         >
-          <IconX size={12} aria-hidden="true" /> Clear
+          <IconX size={12} aria-hidden="true" /> Clear filters
         </button>
       )}
     </div>

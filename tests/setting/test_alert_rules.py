@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ducta.setting.project_schema import AlertRule
+from ducta.setting.project.schema import AlertRule
 
 SLACK = [{"type": "slack", "webhook_env": "SLACK_WEBHOOK_URL"}]
 

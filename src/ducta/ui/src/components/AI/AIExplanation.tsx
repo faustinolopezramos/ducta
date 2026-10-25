@@ -10,7 +10,7 @@ import {
 import { apiErrorMessage } from "../../api/mutations/errors";
 import { formatRelative } from "../../utils/timeLabels";
 import { Button } from "../ui/Button";
-import { useElapsed } from "./aiText";
+import { usageLine, useElapsed } from "./aiText";
 import "./AIDraftDialog.css";
 
 /**
@@ -87,6 +87,7 @@ export function AIExplanation({
           <>
             <span className="ai-dim ai-explanation__meta">
               {kept.model} · {formatRelative(kept.created_at) ?? kept.created_at}
+              {usageLine(kept.usage) && ` · ${usageLine(kept.usage)}`}
             </span>
             <button type="button" className="ai-link ai-explanation__again" onClick={ask} aria-label="Explain again">
               <IconRefresh size={14} aria-hidden="true" />

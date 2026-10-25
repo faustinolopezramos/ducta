@@ -38,6 +38,10 @@ class IOItem(BaseModel):
     path: Optional[str] = Field(
         default=None, description="Declared filepath, with ${VAR} placeholders intact"
     )
+    resolved_path: Optional[str] = Field(
+        default=None,
+        description="The path with ${environment} and ${output_path} filled in for the requested env",
+    )
     write_mode: Optional[str] = Field(
         default=None, description="Declared write mode (outputs only)"
     )

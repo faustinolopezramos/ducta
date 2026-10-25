@@ -35,7 +35,7 @@ def _workspace() -> str:
     """The project the current directory is in (its root), else the current directory."""
     from pathlib import Path
 
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     root = find_nearest_project(Path.cwd())
     return str(root) if root is not None else "."

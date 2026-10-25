@@ -18,7 +18,7 @@ Install
 
 .. code-block:: bash
 
-   pip install "ducta[api,ai]"
+   pip install "ducta[ai]"
 
 Choose a model
 --------------
@@ -519,6 +519,96 @@ to. With Ollama, a request too large for ``context_tokens`` is refused before it
 is sent.
 With a remote provider, ``ducta ai new``, ``fix`` and the UI say where this —
 configuration and code — is being sent before they send it.
+
+What a project allows: the ``ai:`` block
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Which model answers is the machine's choice (``~/.ducta/ai.toml``); whether a
+project may be sent to one is the project's, in ``ducta.yaml`` (or the
+``[ai]`` table of ``ducta.toml``, the ``"ai"`` key of ``ducta.json``):
+
+.. code-block:: yaml
+
+   ai:
+     enabled: true    # false: no AI feature runs on this project
+     remote: false    # only a local model (Ollama, LM Studio, a server on this machine)
+
+Both default to ``true``. Every feature checks the block before its first
+request — drafts, fixes, extensions, proposals, Architect, reviews,
+explanations and Sentinel's proposals — and refuses with a message that names
+the key (HTTP ``403`` from the API). Only this block is read, so it holds for a
+project that does not validate too; a block that cannot be read allows nothing.
+It is the same in every environment. Sentinel's own ``sentinel.propose.remote``
+still decides whether Sentinel proposes *on its own* with a remote model.
+
+Measure a model: ``ducta ai eval``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. code-block:: bash
+
+   ducta ai eval                                  # every case, once
+   ducta ai eval --repeat 3                       # every case three times
+   ducta ai eval --case fix-wrong-dataset --case new-spanish
+   ducta ai eval --list                           # the kept reports
+   ducta ai eval --compare 20261024T101500Z-qwen2.5-coder-14b   # with its previous one
+   ducta ai eval --out qwen14b.json --output-format json  # also a copy, as JSON
+
+Runs ten fixed cases — three new pipelines (one asked in Spanish), two fixes of
+a broken pipeline, new nodes for an existing pipeline (``extend``), a draft
+revised with a note, an Architect blueprint, a pipeline review and an
+explanation of a failed run — each on a fresh copy of the ``medallion_basic``
+template in a temporary folder, with the configured model. A case passes on
+Ducta's checks alone: the draft validates and reads what the case asks for (an
+extension adds a node and changes none of the others), the review or
+explanation came back readable and complete. The report gives the pass rate,
+attempts per draft, time, tokens and the ``prompt_version`` of each result, so
+two models, or two versions of Ducta's prompts, can be compared. Nothing of
+yours is read or changed; with a remote model the template project is sent to
+it, so the command asks first (``--yes`` to skip).
+
+A model does not answer the same way twice. With ``--repeat N`` (1–10) every
+case runs N times, each on its own copy: it passes only when every run does
+(``2/3`` when one did not), and a case that passes some runs and fails others is
+reported as *flaky*.
+
+Every report is kept in ``~/.ducta/ai/evals/`` (``$DUCTA_HOME``; the last 50),
+named by when it ran and the model. After a run, the command compares it with
+the same model's previous report: which cases it gained or lost, and the change
+in pass rate, attempts, tokens and time — a case whose prompt changed in between
+says so. ``--list`` and ``--compare A [B]`` (ids from ``--list``, or files
+written with ``--out``) read the reports without asking any model.
+
+The web app's server can measure its own model too, for admins
+(``ai.configure``): ``POST /api/ai/evals`` with ``{"cases": [...], "repeat": 3,
+"confirm_remote": true}`` starts a job (``confirm_remote`` is required with a
+remote model; without it the answer is ``409`` and says what would be sent),
+``GET /api/ai/evals/jobs/{id}`` shows each case as it ends and ``DELETE`` stops
+it, and ``GET /api/ai/evals``, ``/api/ai/evals/{id}`` and
+``/api/ai/evals/compare?a=…&b=…`` read the same reports as the CLI. The
+evaluation reads no project, so a project's ``ai:`` block does not apply to it.
+
+In the web app this is **Settings › AI › Measure this model**, shown to admins
+only: tick the cases, choose 1, 3 or 5 runs per case and run it (with a remote
+model, a dialog says what is sent where and asks first). Each case shows up as it
+ends, with its first reason for failing; Stop ends it and keeps nothing. The
+report gives the pass rate, flaky cases, attempts per draft, time and tokens,
+what was gained or lost since the same model's previous report, and a row per
+case; *Download JSON* saves it. Every kept report — the CLI's too, marked CLI or
+server — is listed below, and *Open* shows it.
+
+Tokens and retries
+~~~~~~~~~~~~~~~~~~
+
+``ducta ai new``, ``fix``, ``review``, ``explain`` and ``eval`` end with the
+tokens the model took (``Model usage: 12,345 tokens in (8,000 cached) · 2,345
+out``); drafts, reviews and explanations keep them (``usage``) with the
+``prompt_version`` that made them, and the API returns both; the web app shows
+the same words on a draft, a review and an explanation. A hosted
+OpenAI-compatible endpoint that answers ``429`` (rate limited) or ``500``/
+``502``/``503``/``504``/``529`` is asked again up to twice, after its
+``Retry-After`` (up to 60 s) or 2 s and then 4 s; Claude's SDK retries on its
+own. A review or an explanation whose answer cannot be read, or was cut off
+by the output limit, is asked once more.
 
 Choosing a local model
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -31,8 +31,8 @@ from typing import Optional
 from loguru import logger  # type: ignore
 
 from ducta.console.core import ConfigurationError, SecurityError, SecurityValidator
-from ducta.setting.project_context import find_nearest_project
-from ducta.setting.project_loader import PROJECT_FILE, project_file
+from ducta.setting.project.context import find_nearest_project
+from ducta.setting.project.loader import PROJECT_FILE, project_file
 
 __all__ = ["ConfigManager", "find_nearest_project"]
 

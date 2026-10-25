@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import ast
 import copy
+import re
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -61,6 +63,10 @@ _MERGEABLE_FIELDS = (
 )
 
 
+#: A ``${name}`` placeholder in a dataset path.
+_PLACEHOLDER = re.compile(r"\$\{(\w+)\}")
+
+
 class NodeSchemaService:
     """Assemble a :class:`PipelineNodeSchemaResponse` for a node in a pipeline."""
 
@@ -90,12 +96,14 @@ class NodeSchemaService:
         if pipeline_name not in pipelines:
             raise PipelineNotFoundError(f"Pipeline '{pipeline_name}' not found")
 
-        node = self._build_node(pipelines[pipeline_name], pipeline_name, node_id)
+        node = self._build_node(pipelines[pipeline_name], pipeline_name, node_id, project_id)
         return PipelineNodeSchemaResponse(
             project_id=project_id, pipeline_name=pipeline_name, node=node
         )
 
-    def build_all(self, project_id: str, pipeline_name: str) -> PipelineNodesSchemaResponse:
+    def build_all(
+        self, project_id: str, pipeline_name: str, env: Optional[str] = None
+    ) -> PipelineNodesSchemaResponse:
         """Return the enriched schema of every node in *pipeline_name*, in declared order.
 
         The canvas, the contract list and the focus panel all need quality and
@@ -107,19 +115,33 @@ class NodeSchemaService:
             raise PipelineNotFoundError(f"Pipeline '{pipeline_name}' not found")
 
         pipeline_spec = pipelines[pipeline_name]
+        # One history read for the whole pipeline; each node finds its run in it.
+        runs = self._recent_runs(pipeline_name, project_id)
+        certs: Dict[str, Optional[Dict[str, Any]]] = {}
+        env_certs = self._env_certificates(project_id, pipeline_name, env)
+        self._path_vars = self._env_path_vars(project_id, env)
         nodes = [
-            self._build_node(pipeline_spec, pipeline_name, node_id)
+            self._build_node(
+                pipeline_spec, pipeline_name, node_id, project_id, runs, certs, env_certs
+            )
             for node_id in self._node_ids(pipeline_spec)
         ]
         return PipelineNodesSchemaResponse(
             project_id=project_id,
             pipeline_name=pipeline_name,
             nodes=nodes,
-            last_execution=self._last_pipeline_execution(pipeline_name),
+            last_execution=self._last_pipeline_execution(pipeline_name, project_id),
         )
 
     def _build_node(
-        self, pipeline_spec: Dict[str, Any], pipeline_name: str, node_id: str
+        self,
+        pipeline_spec: Dict[str, Any],
+        pipeline_name: str,
+        node_id: str,
+        project_id: Optional[str] = None,
+        runs: Optional[List[Any]] = None,
+        certs: Optional[Dict[str, Optional[Dict[str, Any]]]] = None,
+        env_certs: Optional[List[Dict[str, Any]]] = None,
     ) -> NodeSchemaResponse:
         node_spec = self._find_node_spec(pipeline_spec, node_id)
         if node_spec is None:
@@ -139,7 +161,12 @@ class NodeSchemaService:
                 info.code, node_spec.get("fn", "execute"), node_id
             )
 
-        last_exec = self._last_execution(node_id)
+        if runs is None:
+            runs = self._recent_runs(pipeline_name, project_id)
+        last_exec = self._newest(
+            self._last_execution(node_id, project_id, runs, certs if certs is not None else {}),
+            self._last_certified(node_id, env_certs or []),
+        )
 
         dependencies = node_spec.get("dependencies", [])
         dependencies = [str(d) for d in dependencies] if isinstance(dependencies, list) else []
@@ -215,6 +242,7 @@ class NodeSchemaService:
                     declared=ref.declared,
                     format=ref.format,
                     path=ref.path,
+                    resolved_path=self._resolve_path(ref.path),
                     write_mode=ref.write_mode,
                     schema=ref.schema_,
                     layer=ref.layer,
@@ -352,11 +380,13 @@ class NodeSchemaService:
             params={k: v for k, v in gate.items() if k not in ("enabled", "behavior")},
         )
 
-    def _last_pipeline_execution(self, pipeline_name: str) -> Optional[PipelineRunSummary]:
+    def _last_pipeline_execution(
+        self, pipeline_name: str, project_id: Optional[str] = None
+    ) -> Optional[PipelineRunSummary]:
         """The most recent execution targeting *pipeline_name* (best-effort)."""
         try:
             runs, _ = self._exec_manager.list_executions_paginated(
-                skip=0, limit=1, pipeline_name=pipeline_name
+                skip=0, limit=1, pipeline_name=pipeline_name, project_id=project_id
             )
         except Exception as exc:  # noqa: BLE001 - history lookup must never break the schema
             logger.warning(
@@ -442,23 +472,187 @@ class NodeSchemaService:
             break
         return inputs, outputs
 
-    def _last_execution(self, node_id: str) -> Dict[str, Any]:
-        """Look up the most recent execution for *node_id* (best-effort)."""
+    # How far back a node looks for the last run that included it.
+    _RECENT_RUNS = 50
+
+    def _recent_runs(self, pipeline_name: str, project_id: Optional[str]) -> List[Any]:
+        """The pipeline's latest runs, newest first (best-effort)."""
         try:
-            last_execs, _ = self._exec_manager.list_executions_paginated(
-                skip=0, limit=1, node_name=node_id
+            runs, _ = self._exec_manager.list_executions_paginated(
+                skip=0, limit=self._RECENT_RUNS, pipeline_name=pipeline_name, project_id=project_id
             )
         except Exception as exc:  # noqa: BLE001 - history lookup must never break the schema
             logger.warning(
-                "Last-execution lookup failed for node {node}: {exc}", node=node_id, exc=exc
+                "Last-execution lookup failed for pipeline {p}: {exc}", p=pipeline_name, exc=exc
             )
+            return []
+        return list(runs)
+
+    def _last_execution(
+        self,
+        node_id: str,
+        project_id: Optional[str],
+        runs: List[Any],
+        certs: Dict[str, Optional[Dict[str, Any]]],
+    ) -> Dict[str, Any]:
+        """The last run that included *node_id*: on its own, in a subset, or the whole pipeline.
+
+        Only runs of the node alone used to count, so a node the pipeline ran
+        yesterday read "never run" in the list and the panel while the canvas
+        showed that run's state. A run's certificate says what the node itself
+        did there — its status and its own time, not the run's wall time (7.2 s
+        for a node that took 4.8 s) — and that it ran at all: a run whose
+        certificate does not list the node stopped before it, and is skipped.
+        """
+        for run in runs:
+            if not self._run_targets(run, node_id):
+                continue
+            cert = self._certificate(project_id, run, certs)
+            entry = self._cert_node(cert, node_id)
+            if cert is not None and entry is None:
+                continue
+            status = (entry or {}).get("status") or (
+                run.status.value if hasattr(run.status, "value") else str(run.status)
+            )
+            duration = (entry or {}).get("duration_seconds")
+            return {
+                "status": status,
+                "time": run.started_at.isoformat() if run.started_at else None,
+                "duration": float(duration)
+                if isinstance(duration, (int, float))
+                else run.duration_seconds,
+                "error_message": (entry or {}).get("error") or run.error_message,
+            }
+        return {}
+
+    #: ``${name}`` → value for the env the schema was asked for (none: paths stay templates).
+    _path_vars: Dict[str, str] = {}
+
+    def _env_path_vars(self, project_id: Optional[str], env: Optional[str]) -> Dict[str, str]:
+        """What ``${environment}`` and ``${output_path}`` stand for in *env*.
+
+        The panel showed ``${output_path}/${environment}/silver/…`` — the
+        template, not where the data is. ``output_path`` is given relative to
+        the project when it lies inside it, as the project's files name it.
+        """
+        if not project_id or not env:
             return {}
-        if not last_execs:
-            return {}
-        last = last_execs[0]
-        return {
-            "status": last.status.value if hasattr(last.status, "value") else str(last.status),
-            "time": last.started_at.isoformat() if last.started_at else None,
-            "duration": last.duration_seconds,
-            "error_message": last.error_message,
-        }
+        out: Dict[str, str] = {"environment": env, "env": env}
+        try:
+            from pathlib import Path
+
+            from ducta.api.workspace.manager import WorkspaceManager
+
+            project_dir = Path(self._project_svc.project_dir(project_id))
+            ctx = WorkspaceManager(project_dir).load_context(env)
+            output = (getattr(ctx, "global_config", {}) or {}).get("output_path")
+            if output:
+                p = Path(str(output))
+                if p.is_absolute():
+                    try:
+                        p = p.resolve().relative_to(project_dir.resolve())
+                    except ValueError:
+                        pass
+                out["output_path"] = str(p)
+        except Exception as exc:  # noqa: BLE001 - a path hint must never break the schema
+            logger.debug("Path variables unavailable for {env}: {exc}", env=env, exc=exc)
+        return out
+
+    def _resolve_path(self, path: Optional[str]) -> Optional[str]:
+        if not path or not self._path_vars:
+            return None
+        resolved = _PLACEHOLDER.sub(lambda m: self._path_vars.get(m.group(1), m.group(0)), path)
+        return resolved if resolved != path else None
+
+    def _env_certificates(
+        self, project_id: Optional[str], pipeline_name: str, env: Optional[str]
+    ) -> List[Dict[str, Any]]:
+        """*pipeline_name*'s run certificates in *env*, newest first.
+
+        They cover runs started from the CLI, which the server's run list never
+        sees: a pipeline run from a terminal showed its state on the logs bar
+        and in Health while every node in the list said it had never run.
+        """
+        if not project_id or not env:
+            return []
+        try:
+            from ducta.api.services.run_certificates import certificates
+
+            found = [
+                data
+                for _env, data in certificates(self._project_svc.project_dir(project_id), env)
+                if str(data.get("pipeline") or "") == pipeline_name
+            ]
+        except Exception as exc:  # noqa: BLE001 - history lookup must never break the schema
+            logger.debug("Certificate scan failed for {p}: {exc}", p=pipeline_name, exc=exc)
+            return []
+        return sorted(found, key=lambda c: str(c.get("started_at") or ""), reverse=True)
+
+    def _last_certified(self, node_id: str, env_certs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """The newest certificate that lists *node_id*, as a last run."""
+        for cert in env_certs:
+            entry = self._cert_node(cert, node_id)
+            if entry is None:
+                continue
+            duration = entry.get("duration_seconds")
+            return {
+                "status": entry.get("status") or cert.get("status"),
+                "time": cert.get("started_at"),
+                "duration": float(duration) if isinstance(duration, (int, float)) else None,
+                "error_message": entry.get("error"),
+            }
+        return {}
+
+    @staticmethod
+    def _newest(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+        """Whichever last run started later (ISO times compare as instants once parsed)."""
+        if not a or not b:
+            return a or b
+
+        def at(r: Dict[str, Any]) -> datetime:
+            try:
+                t = datetime.fromisoformat(str(r.get("time")).replace("Z", "+00:00"))
+            except ValueError:
+                return datetime.min.replace(tzinfo=timezone.utc)
+            return t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+
+        return b if at(b) > at(a) else a
+
+    @staticmethod
+    def _run_targets(run: Any, node_id: str) -> bool:
+        """Whether *run* was meant to execute *node_id*."""
+        node_name = getattr(run, "node_name", None)
+        node_names = getattr(run, "node_names", None)
+        if node_name:
+            return node_name == node_id
+        if node_names:
+            return node_id in node_names
+        return True  # the whole pipeline
+
+    def _certificate(
+        self, project_id: Optional[str], run: Any, certs: Dict[str, Optional[Dict[str, Any]]]
+    ) -> Optional[Dict[str, Any]]:
+        """*run*'s certificate, read once per schema request."""
+        cert_id = getattr(run, "certificate_run_id", None)
+        if not project_id or not cert_id:
+            return None
+        if cert_id not in certs:
+            try:
+                from ducta.api.services.run_certificates import load_run_certificate
+
+                certs[cert_id] = load_run_certificate(
+                    self._project_svc.project_dir(project_id),
+                    cert_id,
+                    env=getattr(run, "env", None),
+                )
+            except Exception as exc:  # noqa: BLE001 - history lookup must never break the schema
+                logger.debug("Certificate lookup failed for {run}: {exc}", run=cert_id, exc=exc)
+                certs[cert_id] = None
+        return certs[cert_id]
+
+    @staticmethod
+    def _cert_node(cert: Optional[Dict[str, Any]], node_id: str) -> Optional[Dict[str, Any]]:
+        for node in (cert or {}).get("nodes") or []:
+            if node.get("name") == node_id:
+                return node
+        return None

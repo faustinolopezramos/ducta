@@ -122,7 +122,7 @@ def _compiled_project(
 
         project_root = WorkspaceManager(source_path).for_project(project).root
     try:
-        from ducta.setting.project_loader import (
+        from ducta.setting.project.loader import (
             compile_project,
             find_project_root,
             validate_project,
@@ -293,7 +293,7 @@ def resolve_served_models(
     Reads registry metadata only; nothing is downloaded or loaded.
     """
     from ducta.mlrun.serving import ServingError, resolve_model
-    from ducta.setting.project_schema import ModelRef
+    from ducta.setting.project.schema import ModelRef
 
     registry: Optional[ModelRegistry] = None
     for item in nodes.values():

@@ -345,7 +345,7 @@ class Existing:
 
     @classmethod
     def of(cls, root: Path, ctx: Any) -> "Existing":
-        from ducta.setting.project_loader import read_project
+        from ducta.setting.project.loader import read_project
 
         formats: Dict[str, str] = {}
         try:
@@ -677,7 +677,7 @@ def render(
     *modules* (project-relative path → source) replaces a pipeline's stub
     module once its code is written.
     """
-    from ducta.ai.builder import _catalog_with
+    from ducta.ai.builder import catalog_with
 
     folder = code_folder_of(root)
     files: Dict[str, str] = {}
@@ -691,7 +691,7 @@ def render(
             base[rel] = None
     entries = {name: _catalog_entry(ds, existing) for name, ds in bp.datasets.items()}
     if entries:
-        rel, text, sha = _catalog_with(root, entries, bp.name)
+        rel, text, sha = catalog_with(root, entries, bp.name)
         files[rel] = text
         base[rel] = sha
     return files, base

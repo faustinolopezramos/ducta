@@ -42,25 +42,8 @@
 .rel-off { gap: var(--space-1); font-size: var(--text-sm); line-height: var(--leading-normal); }
 .rel-off code { font-family: var(--font-mono); font-size: 0.92em; }
 
-.rel-filters { display: flex; gap: var(--space-2); flex-wrap: wrap; }
-.rel-filter {
-  height: 32px;
-  padding: 0 var(--space-3);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-muted);
-  font: inherit;
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-.rel-filter[aria-pressed="true"] {
-  border-color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 9%, var(--surface));
-  color: var(--primary);
-  font-weight: 600;
-}
-.rel-filter:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+/* The incident filter is a SegmentedControl; it sits at its own width. */
+.rel-filters { align-self: flex-start; justify-self: start; width: fit-content; }
 
 .rel-empty { margin: 0; padding: var(--space-5) 0; text-align: center; font-size: var(--text-sm); }
 

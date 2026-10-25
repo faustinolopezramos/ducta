@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     ProjectConfigError,
     catalog_location,
     compile_project,

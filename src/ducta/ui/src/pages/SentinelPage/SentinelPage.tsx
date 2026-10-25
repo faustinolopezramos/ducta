@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { PageContainer, PageHeader } from "../../components/ui";
 import { PermittedButton } from "../../components/ui/PermittedButton";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import type { SectionHeader } from "../../components/App/SectionTabs";
 import {
   usePauseSentinel,
@@ -92,20 +93,17 @@ export function SentinelPage({ projectId: propProjectId, header }: { projectId?:
         {status && !status.enabled && !status.error && <Off />}
         {status?.enabled && <Cards status={status} />}
 
-        <div className="rel-filters" role="group" aria-label="Show incidents">
-          {FILTERS.map(([id, label]) => (
-            <button
-              key={id}
-              type="button"
-              className="rel-filter"
-              aria-pressed={filter === id}
-              onClick={() => setParam("status", id === "active" ? null : id)}
-            >
-              {label}
-              {id === "active" && status ? ` · ${status.active}` : ""}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          className="rel-filters"
+          aria-label="Show incidents"
+          value={filter}
+          onChange={(id) => setParam("status", id === "active" ? null : id)}
+          options={FILTERS.map(([id, label]) => ({
+            value: id,
+            label,
+            count: id === "active" && status ? status.active : undefined,
+          }))}
+        />
 
         <IncidentList
           incidents={incidents}

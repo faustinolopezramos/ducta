@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ducta.ai.context import find_secrets, redact, redact_code, redact_config
-from ducta.ai.providers import ChatMessage, LLMProvider
+from ducta.ai.providers import LLMProvider
 
 EXPLAIN_PROMPT = """\
 You explain why a run of a Ducta data pipeline failed, to the person who has to \
@@ -69,6 +69,8 @@ class Explanation:
     model: str
     created_at: str
     usage: Dict[str, int] = field(default_factory=dict)
+    #: Which version of the prompt made it (:func:`ducta.ai.loop.prompt_version`).
+    prompt_version: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -106,7 +108,7 @@ def node_function(root: Path, node: str) -> Optional[Dict[str, Any]]:
     import yaml  # type: ignore[import-untyped]
 
     from ducta.api.services.code_index import module_file
-    from ducta.setting.project_loader import PIPELINES_DIR, visible_in
+    from ducta.setting.project.loader import PIPELINES_DIR, visible_in
 
     root = Path(root).resolve()
     folder = root / PIPELINES_DIR
@@ -199,15 +201,30 @@ def explain_failure(
     note: str = "",
 ) -> Explanation:
     """The model's explanation of a failed run, from Ducta's *diagnosis* of it."""
+    from ducta.ai.loop import ask, check_fits, prompt_version
+    from ducta.ai.policy import require_allowed
+
+    require_allowed(Path(root), provider.config)
     message = explanation_message(
         Path(root), diagnosis, error, note, remote=not provider.config.is_local
     )
-    completion = provider.complete(EXPLAIN_PROMPT, [ChatMessage("user", message)])
+    check_fits(provider.config, EXPLAIN_PROMPT, message)
+    completion, usage = ask(
+        provider,
+        EXPLAIN_PROMPT,
+        message,
+        readable=lambda text: bool(text.strip()),
+        again="Answer again, in at most 140 words, with the three parts.",
+    )
+    text = completion.text.strip()
+    if completion.truncated:
+        text += "\n\n_(The model's answer was cut off by its output limit.)_"
     return Explanation(
-        text=completion.text.strip(),
+        text=text,
         model=completion.model or provider.config.model or "",
         created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        usage=dict(completion.usage),
+        usage=usage,
+        prompt_version=prompt_version(EXPLAIN_PROMPT),
     )
 
 
@@ -231,7 +248,9 @@ def load_explanation(root: Path, run_id: str) -> Optional[Explanation]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         return Explanation(
-            **{k: data[k] for k in ("text", "model", "created_at")}, usage=data.get("usage") or {}
+            **{k: data[k] for k in ("text", "model", "created_at")},
+            usage=data.get("usage") or {},
+            prompt_version=str(data.get("prompt_version") or ""),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None

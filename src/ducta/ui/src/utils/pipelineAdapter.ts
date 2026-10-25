@@ -61,11 +61,61 @@ export function ioNames(value: unknown): string[] {
   return [];
 }
 
+const STREAM_KEYS = ["path", "format", "options", "table"];
+
+/**
+ * The name a stream node's `{format, path, options}` endpoint goes by — the
+ * same rule as `stream_endpoint_name` in the API's dataset_service.
+ *
+ * A stream node reads and writes by path or topic, not by dataset name, so its
+ * ends had no name and the canvas drew no dataset between them. Named by the
+ * path without its placeholder root (`${output_path}/${environment}/bronze/x`
+ * → `bronze/x`), the writer's and the reader's ends match; a Kafka source is
+ * `kafka:<topic>`.
+ */
+export function streamEndpointName(entry: Record<string, any>): string | null {
+  const named = entry.name ?? entry.id;
+  if (named) return String(named);
+  const path = entry.path ?? entry.table;
+  if (typeof path === "string" && path.trim()) {
+    const p = path.trim();
+    return p.replace(/^(?:\$\{[^}]*\}\/)+/, "").replace(/\/+$/, "") || p;
+  }
+  const options = entry.options && typeof entry.options === "object" ? entry.options : {};
+  const topic = options.subscribe ?? options.topic ?? entry.topic;
+  return topic ? `${entry.format ?? "kafka"}:${topic}` : null;
+}
+
+function isStreamEndpoints(value: unknown): value is Record<string, any>[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (e) => e && typeof e === "object" && !Array.isArray(e) && !(e.name ?? e.id) && STREAM_KEYS.some((k) => k in e),
+    )
+  );
+}
+
+/** The format each stream endpoint declares, by its name; empty for a batch node. */
+export function streamEndpointFormats(spec: any, side: "input" | "output"): Map<string, string> {
+  const value = spec?.[`${side}s`] ?? spec?.[side];
+  const out = new Map<string, string>();
+  if (!isStreamEndpoints(value)) return out;
+  for (const e of value) {
+    const name = streamEndpointName(e);
+    if (name && typeof e.format === "string") out.set(name, e.format);
+  }
+  return out;
+}
+
 /** Dataset names a node spec declares on `side` ("input" or "output"). */
 export function nodeIoNames(spec: any, side: "input" | "output"): string[] {
   if (!spec) return [];
   const plural = `${side}s`;
   const value = spec[plural] ?? spec[side];
+  if (isStreamEndpoints(value)) {
+    return value.map(streamEndpointName).filter((n): n is string => Boolean(n));
+  }
   if (side === "input") {
     // Inputs as {param: dataset} — alone, or as a list item, which is how the
     // API returns a format-2 node's: the datasets are the values, the keys are
@@ -162,6 +212,8 @@ export function pipelinesFromServer(
         const ns = nodeSpecs[nodeName] ?? entryObj;
         const inputNames = nodeIoNames(ns, "input");
         const outputNames = nodeIoNames(ns, "output");
+        const inputFormats = streamEndpointFormats(ns, "input");
+        const outputFormats = streamEndpointFormats(ns, "output");
         // Streaming nodes carry `function: { key, module }` (object); coerce to
         // string fn/module so the graph never renders an object (React #31).
         const { fn, module } = coerceFnSpec(
@@ -182,8 +234,16 @@ export function pipelinesFromServer(
           module,
           fn,
           description: ns.description ?? undefined,
-          inputs: inputNames.map((dataset, i) => ({ id: `${nodeName}-input-${i}`, name: dataset })),
-          outputs: outputNames.map((dataset, i) => ({ id: `${nodeName}-output-${i}`, name: dataset })),
+          inputs: inputNames.map((dataset, i) => ({
+            id: `${nodeName}-input-${i}`,
+            name: dataset,
+            ...(inputFormats.has(dataset) ? { format: inputFormats.get(dataset) } : {}),
+          })),
+          outputs: outputNames.map((dataset, i) => ({
+            id: `${nodeName}-output-${i}`,
+            name: dataset,
+            ...(outputFormats.has(dataset) ? { format: outputFormats.get(dataset) } : {}),
+          })),
           active: true,
           status: "idle",
           // Dependencies are the node's own declared ones. The canvas derives

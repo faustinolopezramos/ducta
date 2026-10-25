@@ -167,7 +167,7 @@ def write_modes(
     root: Path, env: str, pipeline: str, nodes: Optional[List[str]] = None
 ) -> Dict[str, str]:
     """How each output of *pipeline* (of *nodes*, when given) is written in *env*."""
-    from ducta.setting.project_loader import apply_environment, read_project
+    from ducta.setting.project.loader import apply_environment, read_project
 
     resolved = apply_environment(read_project(root), env)
     catalog = resolved.get("catalog") or {}
@@ -202,7 +202,7 @@ def rerun_nodes(root: Path, env: str, pipeline: str, nodes: List[str]) -> List[s
     Empty when *nodes* is: the whole pipeline. Otherwise the nodes are named
     even when they are all of them, so a re-run never starts upstream pipelines.
     """
-    from ducta.setting.project_loader import apply_environment, read_project
+    from ducta.setting.project.loader import apply_environment, read_project
 
     if not nodes:
         return []
@@ -252,7 +252,7 @@ def appended(root: Path, env: str, pipeline: str, nodes: List[str]) -> List[str]
 
 
 def upstream_of(root: Path, pipeline: str) -> List[str]:
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     spec = (read_project(root, expand=False).pipelines or {}).get(pipeline) or {}
     return [str(p) for p in spec.get("depends_on") or []]

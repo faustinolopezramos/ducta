@@ -124,4 +124,39 @@ def preview(path: Optional[str], fmt: str, limit: int = 100) -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = json.loads(
         df.head(limit).to_json(orient="records", date_format="iso")
     )
-    return {"path": str(p), "format": fmt, "columns": columns, "rows": rows, "total_rows": total}
+    return {
+        "path": str(p),
+        "format": fmt,
+        "columns": columns,
+        "rows": rows,
+        "total_rows": total,
+        "modified_at": _modified_at(p),
+    }
+
+
+#: Files looked at to date a dataset directory that is not a Delta table.
+_MAX_FILES_DATED = 2000
+
+
+def _modified_at(p: Path) -> Optional[str]:
+    """When the data at *p* was last written: the newest file under a dataset directory.
+
+    A Delta table's last write is its newest commit in ``_delta_log`` — read
+    there rather than over every data file, which a large table has thousands of.
+    """
+    from datetime import datetime, timezone
+    from itertools import islice
+
+    try:
+        if p.is_dir():
+            log = p / "_delta_log"
+            files = log.glob("*.json") if log.is_dir() else p.rglob("*")
+            times = [f.stat().st_mtime for f in islice(files, _MAX_FILES_DATED) if f.is_file()]
+            if not times:
+                return None
+            at = max(times)
+        else:
+            at = p.stat().st_mtime
+    except OSError:
+        return None
+    return datetime.fromtimestamp(at, tz=timezone.utc).isoformat()

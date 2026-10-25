@@ -27,7 +27,7 @@ import pytest
 
 from ducta.check.core import DFAdapter
 from ducta.console.template import MedallionBasicTemplate, TemplateGenerator, TemplateType
-from ducta.setting.project_loader import compile_project, validate_project
+from ducta.setting.project.loader import compile_project, validate_project
 
 
 @pytest.fixture

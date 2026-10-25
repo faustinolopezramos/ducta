@@ -1,3 +1,4 @@
+from ducta.setting import project
 from ducta.setting.contexts import (
     Context,
     MLConfigMixin,
@@ -35,6 +36,16 @@ from ducta.setting.loaders import (
     TomlConfigLoader,
     YamlConfigLoader,
 )
+from ducta.setting.project import (
+    Project,
+    ProjectConfigError,
+    ProjectFile,
+    compile_project,
+    load_project,
+    load_project_v2,
+    read_project,
+    validate_project,
+)
 from ducta.setting.schemas import (
     ChainReuseConfig,
     ConfigSchema,
@@ -70,6 +81,16 @@ from ducta.setting.validators import (
 )
 
 __all__ = [
+    # project
+    "compile_project",
+    "load_project",
+    "load_project_v2",
+    "project",
+    "read_project",
+    "validate_project",
+    "Project",
+    "ProjectConfigError",
+    "ProjectFile",
     # contexts
     "Context",
     "MLConfigMixin",

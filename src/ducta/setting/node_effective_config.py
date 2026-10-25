@@ -28,8 +28,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ducta.setting.project_loader import apply_environment, read_project
-from ducta.setting.project_schema import TransformNode
+from ducta.setting.project.loader import apply_environment, read_project
+from ducta.setting.project.schema import TransformNode
 
 BASE = "base"
 KEYS: Tuple[str, ...] = ("retry", "timeout_seconds", "on_missing_input", "fail_fast", "metadata")
@@ -51,12 +51,12 @@ def _defaults_node(doc: Any) -> Dict[str, Any]:
 
 def _template_body(root: Path, ndoc: Any) -> Dict[str, Any]:
     """The node a ``use:`` instance gets from its template, parameters filled; {} if none."""
-    from ducta.setting.project_defaults import (
+    from ducta.setting.project.defaults import (
         NODE_TEMPLATES_DIR,
         _param_values,
         _substitute,
     )
-    from ducta.setting.project_files import load, with_a_suffix
+    from ducta.setting.project.files import load, with_a_suffix
 
     ref = ndoc.get("use") if isinstance(ndoc, dict) else None
     if not isinstance(ref, str):

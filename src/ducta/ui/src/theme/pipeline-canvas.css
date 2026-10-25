@@ -90,6 +90,15 @@
   pointer-events: none;
 }
 
+/* On a run's graph, a node the run left out: quieter and dashed, but its
+   "not in this run" must stay readable, and it still opens the node. */
+.node-card.node-card--not-run.dag-dimmed {
+  opacity: 0.7;
+  border-style: dashed;
+  box-shadow: none;
+  pointer-events: auto;
+}
+
 /* Straddles the top border like a callout on a drawing, clear of the head row. */
 .lens-tag {
   position: absolute;
@@ -335,11 +344,16 @@
   background: color-mix(in srgb, var(--primary) 3%, transparent);
 }
 
+/* The label is a node of its own, above the edges: a capsule with its own
+   ground, so an edge passing under it never cuts the words. */
 .strata-band-label {
-  position: absolute;
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   font-size: var(--text-2xs);
   font-weight: var(--weight-semibold);
   letter-spacing: 0.08em;
@@ -347,16 +361,6 @@
   line-height: 1;
   color: var(--text-muted);
   white-space: nowrap;
-}
-
-.strata-band[data-orientation="vertical"] .strata-band-label {
-  top: 10px;
-  left: 16px;
-}
-
-.strata-band[data-orientation="horizontal"] .strata-band-label {
-  top: 14px;
-  left: 14px;
 }
 
 .strata-band-pipe {
@@ -367,7 +371,7 @@
   color: var(--text-dim);
 }
 
-.strata-band.current .strata-band-pipe {
+.strata-band-label.current .strata-band-pipe {
   color: var(--text);
 }
 
@@ -377,9 +381,9 @@
   background: var(--edge);
 }
 
-.strata-band[data-layer="bronze"] .strata-band-swatch { background: var(--layer-bronze); }
-.strata-band[data-layer="silver"] .strata-band-swatch { background: var(--layer-silver); }
-.strata-band[data-layer="gold"] .strata-band-swatch { background: var(--layer-gold); }
+.strata-band-label[data-layer="bronze"] .strata-band-swatch { background: var(--layer-bronze); }
+.strata-band-label[data-layer="silver"] .strata-band-swatch { background: var(--layer-silver); }
+.strata-band-label[data-layer="gold"] .strata-band-swatch { background: var(--layer-gold); }
 
 /* React Flow mounts the viewport portal after the nodes. Inside the viewport's
    own stacking context a negative z-index puts the bands behind the edges and
@@ -461,6 +465,61 @@
   opacity: 0.3;
   pointer-events: none;
 }
+
+/* A dataset on the drawing's border (K1): it lives in another pipeline, or
+   nothing drawn reads it. Dashed like an undeclared chip, because it is not
+   this pipeline's; its note leads to the pipeline on the other side. */
+.ext-node {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 208px;
+  box-sizing: border-box;
+  padding: 4px 8px 5px;
+  background: var(--surface);
+  border: 1px dashed var(--border-hover);
+  border-radius: var(--tag-radius);
+}
+.ext-node.selected {
+  border-style: solid;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--accent-a20);
+}
+.ext-node.dag-dimmed { opacity: 0.3; }
+.ext-node__name {
+  display: flex;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-medium);
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+.ext-node__note {
+  font-size: var(--text-2xs);
+  line-height: 1.35;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+.ext-node__note--link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary);
+  cursor: pointer;
+}
+.ext-node__note--link:hover { text-decoration: underline; }
+.ext-node__name:focus-visible,
+.ext-node__note--link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 2px; }
+.ext-node__handle { opacity: 0; width: 1px; height: 1px; min-width: 0; min-height: 0; border: 0; }
 
 .ds-chip-glyph {
   flex: none;
@@ -954,4 +1013,48 @@
   .pipeline-supernode {
     width: 250px;
   }
+}
+
+/* A name cut in the middle (MiddleTruncate): the head shrinks with an
+   ellipsis, the distinctive tail always shows. Inherits the name's styles.
+   The box is as wide as the whole name (its invisible ::before copy) or the
+   room it has, whichever is less; the visible text is laid over it, cut to
+   that width in JS. */
+.middle-trunc {
+  position: relative;
+  display: inline-block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  /* The name classes ask for an end ellipsis; here it would be drawn for the
+     hidden ::before copy, as a stray "…" after the visible name. */
+  text-overflow: clip !important;
+}
+.middle-trunc::before {
+  content: attr(data-text);
+  visibility: hidden;
+}
+.middle-trunc__text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  overflow: hidden;
+}
+.middle-trunc__head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.middle-trunc__tail {
+  flex-shrink: 0;
+}
+.middle-trunc__dots {
+  margin-right: -0.18em;
+}
+/* Cut in JS: the head is exactly as long as fits, so its own CSS ellipsis
+   must not fire on a fraction of a pixel. */
+.middle-trunc--fitted .middle-trunc__head {
+  text-overflow: clip;
 }

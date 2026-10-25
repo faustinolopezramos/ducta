@@ -74,7 +74,7 @@ def test_execute_route_refuses_a_developer_in_prod(batch, monkeypatch):
 
 
 def test_governance_warnings_and_turning_them_off(batch):
-    from ducta.setting.project_loader import validate_project
+    from ducta.setting.project.loader import validate_project
 
     problems = governance_problems(validate_project(batch))
     codes = {p.code for p in problems}

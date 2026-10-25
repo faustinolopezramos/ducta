@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from ducta.console.template import ConfigFormat, TemplateError, TemplateGenerator, TemplateType
-from ducta.setting.project_loader import compile_project, find_project_root, validate_project
+from ducta.setting.project.loader import compile_project, find_project_root, validate_project
 
 
 def _generate(tmp_path: Path, kind: str, fmt=ConfigFormat.YAML, **kw) -> Path:

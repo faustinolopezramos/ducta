@@ -9,6 +9,7 @@ import { Tabs, TabPanel, type TabItem } from "../../components/ui/Tabs";
 import { EnvHint } from "../../components/Shell/EnvHint";
 import { useSourceStore } from "../../store/workspace";
 import { useMlPipelineOptions } from "./shared";
+import { useExecutionList } from "../../api/queries";
 import { ExperimentsTab } from "./ExperimentsTab";
 import { ModelRegistryTab } from "./ModelRegistryTab";
 
@@ -36,14 +37,22 @@ export function MLOpsPage() {
   const activeEnv = useSourceStore((st) => st.activeEnv) || "base";
 
   const { data: allPipelineOptions, isLoading: pipelinesLoading } = useMlPipelineOptions();
-  // Under a project, only its ML pipelines; the first one is shown until
-  // another is picked, so the page never opens on an empty "pick one" state.
+  // Under a project, only its ML pipelines; until another is picked the one
+  // that ran last is shown, so the page never opens on an empty "pick one"
+  // state — nor on an alphabetical first pick that has never run.
   const pipelineOptions = useMemo(
     () => (allPipelineOptions ?? []).filter((p) => !routeProject || p.projectId === routeProject),
     [allPipelineOptions, routeProject],
   );
+  const { data: recentRuns } = useExecutionList({ project_id: routeProject, limit: 100 });
+  const lastRanPipeline = useMemo(() => {
+    const names = new Set(pipelineOptions.map((p) => p.pipelineName));
+    return ((recentRuns?.executions ?? []) as { pipeline_name?: string }[]).find(
+      (r) => r.pipeline_name && names.has(r.pipeline_name),
+    )?.pipeline_name;
+  }, [recentRuns, pipelineOptions]);
   const env = searchParams.get("env") ?? activeEnv;
-  const pipeline = searchParams.get("pipeline") ?? pipelineOptions[0]?.pipelineName ?? "";
+  const pipeline = searchParams.get("pipeline") ?? lastRanPipeline ?? pipelineOptions[0]?.pipelineName ?? "";
   const project =
     searchParams.get("project") ??
     pipelineOptions.find((p) => p.pipelineName === pipeline)?.projectId ??

@@ -33,6 +33,15 @@ if TYPE_CHECKING:
 
 node_status_re = re.compile(r"^\[node_status\] node_id=(\S+) status=(\S+)$")
 _ansi_re = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# uvicorn's access log: `INFO:     127.0.0.1:52045 - "GET /api/... HTTP/1.1" 200 OK`.
+# The server shares the process with the run, so its requests landed in the
+# run's logs — with the workspace path from the query string.
+_access_log_re = re.compile(r'^\s*[A-Z]+:\s+\S+ - "[A-Z]+ \S* HTTP/[\d.]+"')
+
+
+def is_server_access_log(line: str) -> bool:
+    """Return True if *line* is one of the API server's own access-log lines."""
+    return bool(_access_log_re.match(line))
 
 
 def strip_ansi(value: str) -> str:
@@ -149,7 +158,7 @@ class ProcessOutputCapture:
 
     def _append_line(self, line: str) -> None:
         clean = strip_ansi(line)
-        if looks_like_loguru_serialized(clean):
+        if looks_like_loguru_serialized(clean) or is_server_access_log(clean):
             return
 
         # `clean` (ANSI-stripped) was only ever used to classify the line —

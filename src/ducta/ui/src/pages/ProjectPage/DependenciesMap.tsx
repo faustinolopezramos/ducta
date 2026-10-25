@@ -1,5 +1,5 @@
 import { useNavigate } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   useProjectDatasets,
   useProjectDependencies,
@@ -12,7 +12,9 @@ import { DagCanvas } from "../../components/Pipeline/DagCanvas";
 import { formatGlyph } from "../../utils/nodePresentation";
 import { dependsOnFromEdges } from "../../utils/pipelineChain";
 import { useUIStore } from "../../store/uiStore";
-import { IconSitemap, IconArrowRight } from "@tabler/icons-react";
+import { IconSitemap, IconArrowRight, IconZoomIn, IconZoomOut } from "@tabler/icons-react";
+import { ZoomReadout } from "../../components/Pipeline/HUDToolbar";
+import type { CanvasViewport } from "../../components/Pipeline/useCanvasViewport";
 import { routes } from "../../utils/routes";
 
 /** Boundary datasets listed per side before the rest are summarised. */
@@ -58,6 +60,10 @@ function BoundaryList({ label, refs }: { label: string; refs: DatasetRef[] }) {
  */
 export function ProjectDependenciesView({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
+  const viewport = useRef<CanvasViewport | null>(null);
+  const onViewportReady = useCallback((v: CanvasViewport) => {
+    viewport.current = v;
+  }, []);
   const { data, isLoading, isError } = useProjectDependencies(projectId);
   const { data: pipelinesData } = useServerProjectPipelines(projectId);
   const { data: datasetsData } = useProjectDatasets(projectId);
@@ -170,9 +176,14 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
 
   return (
     <div className="project-map">
+      <MapViewportControls viewport={viewport} />
       <DagCanvas
         items={items}
-        fitMinZoom={0.8}
+        // Framed whole when it reads at that zoom; from the top, readable, when
+        // it does not — and Fit then shows it all.
+        fitMinZoom={0.6}
+        onViewportReady={onViewportReady}
+        reportZoom
         orientation={orientation}
         edgeLabel={(from, to) => labels.get(`${from}->${to}`) ?? null}
         edgeClassName={(from, to) => lensEdgeClass(lineage, from, to)}
@@ -239,6 +250,28 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
           other's nodes nor consume each other's output datasets.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The map's viewport controls, as on the pipeline canvas: it opened on part of
+ * a tall project with no way to zoom out or frame it but the wheel.
+ */
+function MapViewportControls({ viewport }: { viewport: React.MutableRefObject<CanvasViewport | null> }) {
+  return (
+    <div className="canvas-controls canvas-controls--bottom-left project-map-controls" role="group" aria-label="Map viewport" data-no-pan>
+      <button type="button" className="canvas-icon-btn" onClick={() => viewport.current?.zoomOut()} title="Zoom out" aria-label="Zoom out">
+        <IconZoomOut size={16} stroke={1.75} />
+      </button>
+      <ZoomReadout onReset={() => viewport.current?.resetZoom()} />
+      <button type="button" className="canvas-icon-btn" onClick={() => viewport.current?.zoomIn()} title="Zoom in" aria-label="Zoom in">
+        <IconZoomIn size={16} stroke={1.75} />
+      </button>
+      <span className="canvas-controls-sep" aria-hidden="true" />
+      <button type="button" className="canvas-text-btn" onClick={() => viewport.current?.fitCanvas()} title="Fit the map" aria-label="Fit map">
+        Fit
+      </button>
     </div>
   );
 }

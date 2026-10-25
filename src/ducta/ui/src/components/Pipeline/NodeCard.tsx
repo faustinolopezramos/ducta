@@ -7,6 +7,10 @@ import {
   type ZoomTier,
 } from "../../utils/nodePresentation";
 import { formatRate } from "../../utils/streaming";
+
+/** `execState` for a node the run being shown did not include. */
+export const NOT_RUN = "not_run";
+import { MiddleTruncate } from "./MiddleTruncate";
 import type { DagCanvasItem, StreamNodeBadge } from "./types";
 
 interface NodeCardProps {
@@ -40,6 +44,22 @@ interface NodeCardProps {
 }
 
 const FAILED = new Set(["failed", "error"]);
+
+/** A collapsed group's line: how many nodes, and how the worst of them went. */
+function groupSummary(members: number, state: string | undefined): string {
+  const how =
+    state === "success" || state === "completed"
+      ? "all success"
+      : state && FAILED.has(state)
+        ? "failed"
+        : state === "running"
+          ? "running"
+          : state
+            ? state.replace(/_/g, " ")
+            : null;
+  // No state known (nodes of another pipeline of the chain): say only how many.
+  return `${members} node${members === 1 ? "" : "s"}${how ? ` · ${how}` : ""}`;
+}
 
 /** The dot of a live stream node: its query's state, or what deserves a look about it. */
 function streamDot(stream: StreamNodeBadge): string {
@@ -94,9 +114,14 @@ export function NodeCard({
   // A live stream query outranks the run's own state: the run is "running" for as long
   // as the stream lives, which says nothing about whether this node is healthy.
   const live = stream ? streamDot(stream) : null;
-  const dotState = live ?? execState;
+  // A run's graph shows every node of the pipeline; the ones that run left out
+  // say so instead of looking exactly like the ones it ran.
+  const notRun = execState === NOT_RUN;
+  const dotState = notRun ? undefined : live ?? execState;
   const failed = live ? live === "failed" : execState ? FAILED.has(execState) : false;
-  const fact = stream
+  const fact = notRun
+    ? "not in this run"
+    : stream
     ? streamFact(stream)
     : failed
       ? "failed"
@@ -104,8 +129,11 @@ export function NodeCard({
         ? "running"
         : compactDuration(node.lastDuration);
 
-  const label =
-    `Node ${name}${dotState ? `, ${stream ? `stream ${dotState}` : dotState}` : ""}` +
+  const isGroup = node.type === "group";
+  const members: number = isGroup ? (node.members?.length ?? 0) : 0;
+  const label = isGroup
+    ? `Group ${name}, ${groupSummary(members, execState)}, expand`
+    : `Node ${name}${dotState ? `, ${stream ? `stream ${dotState}` : dotState}` : ""}${notRun ? ", not in this run" : ""}` +
     (design ? `, has ${design === "error" ? "errors" : "warnings"}` : "") +
     (freshness === "stale" ? ", stale since its last good run" : "") +
     (comments > 0 ? `, ${comments} open comment${comments === 1 ? "" : "s"}` : "") +
@@ -136,6 +164,7 @@ export function NodeCard({
         context ? "node-card--context" : "",
         lensDir ? `lens-${lensDir}` : "",
         dotState ? `status-${dotState}` : "",
+        notRun ? "node-card--not-run" : "",
         design ? `design-${design}` : "",
         freshness ? `fresh-${freshness}` : "",
       ]
@@ -162,7 +191,9 @@ export function NodeCard({
           {showLayer && layer && tier !== "shape" && (
             <span className="node-card-swatch" aria-hidden="true" />
           )}
-          <span className="node-card-name">{name}</span>
+          {/* Cut in the middle so nodes sharing a long prefix stay apart; the
+              full name is the tooltip (and the card's aria-label). */}
+          <MiddleTruncate className="node-card-name" text={name} />
           {design && (
             <span className={`node-card-design node-card-design--${design}`} aria-hidden="true" title={design === "error" ? "Has errors — see Problems" : "Has warnings — see Problems"}>
               {design === "error" ? "✕" : "⚠"}
@@ -184,13 +215,19 @@ export function NodeCard({
                 aria-hidden="true"
               />
             )}
-            {tier === "detail" && fact && (
+            {tier === "detail" && fact && !isGroup && (
               <span className={`node-card-fact${failed ? " node-card-fact--failed" : ""}`}>
                 {fact}
               </span>
             )}
           </span>
         </div>
+        {isGroup && tier !== "shape" && (
+          <span className="node-card-group-line">
+            {tier === "detail" && <span>{groupSummary(members, execState)}</span>}
+            <span className="node-card-expand" aria-hidden="true">Expand</span>
+          </span>
+        )}
       </div>
 
       {inputs.length > 0 && <PortRail ports={inputs} side="in" orientation={orientation} />}

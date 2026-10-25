@@ -30,6 +30,8 @@ export interface DatasetPreview {
   columns: { name: string; type: string }[];
   rows: Record<string, unknown>[];
   total_rows?: number | null;
+  /** When the data was last written (local files only). */
+  modified_at?: string | null;
 }
 
 /** GET /projects/{id}/datasets/{name}/preview — first rows and columns, as materialized in `env`. */

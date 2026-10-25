@@ -86,7 +86,7 @@ export function usePipelineKeyboardShortcuts(params: {
       // off the URL, next to a second, project-wide undo that is gone now.
       const key = e.key.toLowerCase();
       if (mod && (key === "z" || key === "y")) {
-        const target = e.target as HTMLElement | null;
+        const target = e.target instanceof HTMLElement ? e.target : null;
         if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
         e.preventDefault();
         if (onUndo && onRedo) {
@@ -115,11 +115,19 @@ export function usePipelineKeyboardShortcuts(params: {
         return;
       }
       if (useCommandMenu.getState().open || mod || e.altKey) return;
-      const target = e.target as HTMLElement | null;
+      const target = e.target instanceof HTMLElement ? e.target : null;
       if (target?.closest("input, textarea, select, [contenteditable=true]")) return;
       if (isCodeEditorOpen || addNodeOpen || lens === "yaml") return;
 
       const onCanvas = lens === "flow";
+      // The graph's keys (Tab, arrows, Space, F, O, R, Enter) belong to the
+      // graph: they act only while focus is on it — a card, the list, or
+      // nothing at all after a click on the pane. They used to act page-wide,
+      // so Tab and the arrows never reached the top bar, the tree or the panel.
+      const onGraph =
+        !target ||
+        target === document.body ||
+        Boolean(target.closest?.(".dag-canvas-root, .contract-list"));
       const select = (id: string | undefined) => {
         if (!id) return;
         setSelectedNodeId(id);
@@ -135,6 +143,7 @@ export function usePipelineKeyboardShortcuts(params: {
         onFocusSearch();
         return;
       }
+      if (!onGraph) return;
       if (onCanvas && (e.key === "f" || e.key === "F")) {
         e.preventDefault();
         fitCanvas();
@@ -157,13 +166,14 @@ export function usePipelineKeyboardShortcuts(params: {
         return;
       }
       if (onCanvas && e.key === "Tab") {
-        e.preventDefault();
         const nodeIds = pipelineNodes.map((n) => n.id);
         if (nodeIds.length === 0) return;
         const currentIdx = selectedNodeId ? nodeIds.indexOf(selectedNodeId) : -1;
-        const nextIdx = e.shiftKey
-          ? (currentIdx <= 0 ? nodeIds.length - 1 : currentIdx - 1)
-          : (currentIdx >= nodeIds.length - 1 ? 0 : currentIdx + 1);
+        const nextIdx = e.shiftKey ? (currentIdx < 0 ? nodeIds.length - 1 : currentIdx - 1) : currentIdx + 1;
+        // Past the last node (or before the first) Tab is the browser's again,
+        // so focus can leave the graph instead of cycling inside it forever.
+        if (nextIdx < 0 || nextIdx >= nodeIds.length) return;
+        e.preventDefault();
         select(nodeIds[nextIdx]);
         return;
       }

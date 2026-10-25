@@ -43,23 +43,22 @@ from ducta.ai.agents.architect.blueprint import (
     parse_blueprint,
     render,
 )
-from ducta.ai.builder import (
-    _MIN_CONTEXT_CHARS,
-    MAX_CHARS,
+from ducta.ai.builder import MAX_CHARS, build_context
+from ducta.ai.drafts import Draft
+from ducta.ai.errors import AIConfigError, AIError
+from ducta.ai.loop import (
+    MIN_CONTEXT_CHARS,
     Assembled,
-    Draft,
     ParsedAnswer,
     Scope,
-    _describe,
-    _judge,
-    _key,
-    _run,
-    _too_large,
-    _validate,
-    build_context,
+    describe_problem,
+    judge_problems,
     message_budget,
+    problem_key,
+    run_loop,
+    too_large,
+    validate_files,
 )
-from ducta.ai.errors import AIConfigError, AIError
 from ducta.ai.providers import LLMProvider
 
 ARCHITECT_PROMPT = """\
@@ -172,11 +171,13 @@ def check(root: Path, text: str) -> CheckReport:
     if report.errors:
         return report
     report.files, _ = render(root, bp, existing)
-    baseline = {_key(p) for p in _validate(root, {}) if p.get("severity") == "error"}
-    problems_after = _validate(root, report.files)
-    report.errors += [_describe(p) for p in _judge(problems_after, baseline, Scope())]
+    baseline = {problem_key(p) for p in validate_files(root, {}) if p.get("severity") == "error"}
+    problems_after = validate_files(root, report.files)
+    report.errors += [
+        describe_problem(p) for p in judge_problems(problems_after, baseline, Scope())
+    ]
     report.warnings += [
-        _describe(p)
+        describe_problem(p)
         for p in problems_after
         if p.get("severity") == "warning" and p.get("file") in report.files
     ]
@@ -258,8 +259,8 @@ def _first_message(root: Path, provider: LLMProvider, request: str, note: str) -
     budget = message_budget(provider.config, ARCHITECT_PROMPT)
     if budget is not None:
         room = min(room, budget - len(tail))
-        if room < _MIN_CONTEXT_CHARS:
-            raise _too_large(provider.config, _MIN_CONTEXT_CHARS + len(tail))
+        if room < MIN_CONTEXT_CHARS:
+            raise too_large(provider.config, MIN_CONTEXT_CHARS + len(tail))
     return ctx.render(room) + tail
 
 
@@ -283,14 +284,13 @@ def design(
     first = _first_message(root, provider, request, note)
     ctx = build_context(root)
     warnings: List[str] = []
-    draft = _run(
+    draft = run_loop(
         root,
         provider,
         system=ARCHITECT_PROMPT,
         first_message=first,
         scope=Scope(kind="new", purpose="blueprint"),
         request=request.strip(),
-        ctx=ctx,
         max_attempts=max_attempts,
         on_attempt=on_attempt,
         should_stop=should_stop,
@@ -320,7 +320,7 @@ def blueprint_of(draft: Draft) -> Blueprint:
     """The blueprint a ``blueprint`` draft holds (its last answer)."""
     if draft.kind != "blueprint":
         raise AIConfigError(f"Draft {draft.id} is a {draft.kind} draft, not a blueprint")
-    from ducta.ai.builder import parse_answer
+    from ducta.ai.loop import parse_answer
 
     body = _blueprint_body(parse_answer(draft.raw_answer))
     bp, problems = load_blueprint(body or "")

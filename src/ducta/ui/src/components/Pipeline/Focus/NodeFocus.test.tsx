@@ -94,7 +94,7 @@ describe("NodeFocus", () => {
     renderFocus();
     expect(screen.getByText("src.ml:train_performance_model")).toBeInTheDocument();
     expect(screen.getByText("1 sanity · 1 quality")).toBeInTheDocument();
-    expect(screen.getByText("columns G3 · threshold 0")).toBeInTheDocument();
+    expect(screen.getByText("G3 · threshold 0")).toHaveAttribute("title", "columns G3 · threshold 0");
     expect(screen.getByRole("alert")).toHaveTextContent("Phase 1: load into Pandas");
   });
 
@@ -127,7 +127,8 @@ describe("NodeFocus", () => {
 
   it("counts the open comments on its tab", () => {
     renderFocus();
-    expect(screen.getByRole("tab", { name: /Comments/ })).toHaveTextContent("Comments1");
+    // Comments sits under More, which names it with its count.
+    expect(screen.getByRole("button", { name: /More views: .*Comments \(1\)/ })).toBeInTheDocument();
   });
 
   it("makes a template from the node, from the More actions menu", () => {

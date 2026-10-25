@@ -23,7 +23,7 @@ The API contract does not change with the file format: clients read and write
 nodes, pipelines and configuration documents in the engine's shape (``module``
 /``function``/``input``/``output``…). For a format-2 project this store
 compiles those views from ``ducta.yaml``/``catalog.yaml``/``pipelines/`` and
-translates writes back with ``ducta.setting.project_decompile``.
+translates writes back with ``ducta.setting.project.decompile``.
 
 Every write is a transaction: edit the files (round-trip YAML, so comments and
 key order in files people also edit by hand survive), re-validate the whole
@@ -48,7 +48,7 @@ from ducta.api.exceptions import (
     ValidationError,
 )
 from ducta.api.utils.git_utils import content_version, validate_version
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     CATALOG_DIR,
     CATALOG_FILE,
     PIPELINES_DIR,
@@ -137,9 +137,37 @@ def style_of(text: str) -> Dict[str, int]:
     return {"mapping": mapping, "sequence": offset + 2, "offset": offset}
 
 
+def _not_yaml(path: Path) -> Optional[Path]:
+    """The TOML or JSON file *path* stands for, when the project is not written in YAML.
+
+    The web app edits YAML only (comments and layout kept). Written as YAML
+    beside ``ducta.toml``, an edit left the project with two ``ducta.*`` files —
+    a configuration error — so it is refused instead.
+    """
+    from ducta.setting.project import files as pf
+
+    if path.suffix.lower() not in (".yaml", ".yml"):
+        return path
+    if path.exists():
+        return None
+    others = [
+        f
+        for f in pf.find_files(path.parent, path.stem)
+        if f.suffix.lower() not in (".yaml", ".yml")
+    ]
+    return others[0] if others else None
+
+
 def _load_rt(path: Path) -> Any:
     from ruamel.yaml.comments import CommentedMap
 
+    other = _not_yaml(path)
+    if other is not None:
+        raise ValidationError(
+            f"{other.name} is {other.suffix.lstrip('.').upper()}: the web app edits YAML "
+            "projects only. Convert it with `ducta config convert --to yaml --out <dir>`, "
+            "or edit the file directly"
+        )
     if not path.exists():
         return CommentedMap()
     data = round_trip_yaml().load(path.read_text(encoding="utf-8"))
@@ -390,7 +418,7 @@ class V2ProjectStore:
         return self.commit_sha(self.pipelines_dir)
 
     def _to_v2_node(self, name: str, spec: Dict[str, Any], project: Project) -> Dict[str, Any]:
-        from ducta.setting.project_decompile import _decompile_node, _producers
+        from ducta.setting.project.decompile import _decompile_node, _producers
 
         nodes = copy.deepcopy(compile_project(project)["nodes_config"])
         nodes[name] = spec
@@ -544,7 +572,7 @@ class V2ProjectStore:
 
         from ruamel.yaml.comments import CommentedMap
 
-        from ducta.setting.project_defaults import NODE_TEMPLATES_DIR
+        from ducta.setting.project.defaults import NODE_TEMPLATES_DIR
 
         if not re.fullmatch(r"[A-Za-z_][\w-]*", template or ""):
             raise ValidationError(
@@ -629,7 +657,7 @@ class V2ProjectStore:
 
         from ruamel.yaml.comments import CommentedMap
 
-        from ducta.setting.project_defaults import PIPELINE_TEMPLATES_DIR
+        from ducta.setting.project.defaults import PIPELINE_TEMPLATES_DIR
 
         if not re.fullmatch(r"[A-Za-z_][\w-]*", template or ""):
             raise ValidationError(
@@ -757,7 +785,7 @@ class V2ProjectStore:
         ``env``, must be equivalent to the documents the client sent, or
         nothing is kept.
         """
-        from ducta.setting.project_decompile import _SAME, _diff, canonical, decompile
+        from ducta.setting.project.decompile import _SAME, _diff, canonical, decompile
 
         if doc_name not in _DOC_KEYS:
             raise ConfigFileNotFoundError(
@@ -842,7 +870,7 @@ class V2ProjectStore:
 
         def verify() -> None:
             after = compile_project(validate_project(self.root, None if base_env else env))
-            from ducta.setting.project_decompile import _first_difference
+            from ducta.setting.project.decompile import _first_difference
 
             diff = _first_difference(canonical(intended), canonical(after))
             if diff:

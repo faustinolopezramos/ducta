@@ -31,6 +31,9 @@ __all__ = ["make_log_filter", "make_log_sink"]
 
 _internal_logger = logging.getLogger("ducta.api.execution.log_sink")
 
+# Loggers that describe the server's own traffic, never a run.
+_SERVER_LOGGERS = ("ducta.api.middleware",)
+
 
 def _current_execution_id(get_active_id: Any) -> Optional[str]:  # noqa: ANN001
     return execution_id_var.get() or get_active_id()
@@ -40,6 +43,10 @@ def make_log_filter(get_active_id: Any, log_manager: Any):  # noqa: ANN001
     """Return a loguru filter function bound to *log_manager*."""
 
     def _log_filter(record: dict) -> bool:  # type: ignore[type-arg]
+        # The API's request log ("-> GET /api/...") is the server's, not the run's:
+        # while a run is active every request made meanwhile was attributed to it.
+        if (record.get("name") or "").startswith(_SERVER_LOGGERS):
+            return False
         exec_id = _current_execution_id(get_active_id)
         return exec_id is not None and log_manager.get_buffer(exec_id) is not None
 

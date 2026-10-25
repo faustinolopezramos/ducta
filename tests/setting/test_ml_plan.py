@@ -6,8 +6,8 @@ import textwrap
 
 import pytest
 
-from ducta.setting.project_inspect import ml_plan
-from ducta.setting.project_loader import ProjectConfigError
+from ducta.setting.project.inspect import ml_plan
+from ducta.setting.project.loader import ProjectConfigError
 
 PROJECT = "version: 2\nproject: p\npaths: {input: d, output: o}\n"
 CATALOG = "d: {format: csv, path: d.csv}\nml.x.f: {format: parquet}\nml.x.m: {format: parquet}\n"

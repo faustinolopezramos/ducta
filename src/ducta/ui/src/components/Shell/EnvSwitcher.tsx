@@ -13,7 +13,12 @@ export function EnvSwitcher({ projectId }: { projectId?: string | null }) {
   const setActiveEnv = useSourceStore((s) => s.setActiveEnv);
   const { data } = useEnvironments(projectId ?? undefined);
   const envs: string[] = useMemo(() => data?.environments ?? [], [data]);
-  const options = ["base", ...envs.filter((e) => e !== "base")];
+  // Under a project, the canonical environments it does not declare say so:
+  // they run, but with the base configuration — "staging" looked as real as dev.
+  const declared: string[] | null = projectId && data?.declared?.length ? data.declared : null;
+  const options = ["base", ...envs.filter((e) => e !== "base")].sort((a, b) =>
+    declared ? Number(!declared.includes(a)) - Number(!declared.includes(b)) : 0,
+  );
 
   useEffect(() => {
     // A fallback, not a choice: it leaves the first-visit pick below free to run.
@@ -42,13 +47,14 @@ export function EnvSwitcher({ projectId }: { projectId?: string | null }) {
       <span className="sr-only">Environment</span>
       <select
         className="env-switcher__select"
+        title={declared && !declared.includes(activeEnv) ? `${activeEnv} is not configured in this project: it runs with the base settings` : undefined}
         value={activeEnv}
         onChange={(e) => setActiveEnv(e.target.value)}
         aria-label="Environment"
       >
         {options.map((env) => (
           <option key={env} value={env}>
-            {env}
+            {declared && !declared.includes(env) ? `${env} · not configured` : env}
           </option>
         ))}
       </select>

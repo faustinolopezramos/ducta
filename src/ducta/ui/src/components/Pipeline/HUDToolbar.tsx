@@ -1,23 +1,20 @@
 import type React from "react";
 import {
   IconArrowBackUp,
-  IconArrowDown,
   IconArrowForwardUp,
-  IconArrowRight,
+  IconArrowsMaximize,
+  IconArrowsMinimize,
   IconCode,
-  IconEye,
-  IconEyeOff,
   IconLayoutList,
-  IconMap,
-  IconMaximize,
   IconPlus,
-  IconSearch,
   IconSitemap,
   IconZoomIn,
   IconZoomOut,
 } from "@tabler/icons-react";
 import { useBuilderStore } from "../../store/builderStore";
 import { useUIStore, type PipelineLens, type PipelineOrientation } from "../../store/uiStore";
+import { CanvasPopover } from "./CanvasPopover";
+import { useCanvasZoom } from "./canvasZoom";
 
 export type { PipelineLens, PipelineOrientation } from "../../store/uiStore";
 
@@ -32,12 +29,18 @@ interface HUDToolbarProps {
   scope?: PipelineScope;
   /** Absent when the pipeline has no upstream pipelines to show. */
   onScopeChange?: (scope: PipelineScope) => void;
+  /** Namespaces that can collapse into one box, and whether any is collapsed. */
+  groups?: { count: number; collapsed: number; onCollapseAll: () => void; onExpandAll: () => void };
   onAddNode: () => void;
-  onFind: () => void;
+  /** The pipeline a new node goes into, named on the button. */
+  addNodeTarget?: string;
+  /** The canvas search (find and filters), shown in the Flow lens. */
+  search?: React.ReactNode;
   /** Canvas viewport, handed up by DagCanvas. Absent outside the Flow lens. */
   onZoomIn?: () => void;
   onZoomOut?: () => void;
   onFitView?: () => void;
+  onResetZoom?: () => void;
   showMinimap?: boolean;
   /** Absent where the current lens has no minimap to toggle. */
   onToggleMinimap?: () => void;
@@ -51,13 +54,33 @@ const LENSES: Array<{ id: PipelineLens; label: string; icon: React.ComponentType
   { id: "yaml", label: "YAML", icon: IconCode, hint: "The pipeline's YAML specification" },
 ];
 
+export function ZoomReadout({ onReset }: { onReset?: () => void }) {
+  const zoom = useCanvasZoom((s) => s.zoom);
+  const pct = `${Math.round(zoom * 100)}%`;
+  return (
+    <button
+      type="button"
+      className="canvas-text-btn canvas-zoom-readout"
+      onClick={onReset}
+      aria-label={`Zoom ${pct}, reset to 100%`}
+      title="Reset to 100%"
+    >
+      {pct}
+    </button>
+  );
+}
+
 /**
  * The controls that sit on the workspace itself, one cluster per corner so none
- * of them covers the graph: how you are looking top-left, editing top-right,
- * the viewport bottom-left. Running and the environment live in PipelineTopBar.
+ * of them covers the graph: how you are looking top-left, finding and editing
+ * top-right, the viewport bottom-left. Running and the environment live in
+ * PipelineTopBar.
  *
- * The three lenses are three ways to work on the same pipeline; switching keeps
- * the selection, so a node picked in the list is the node focused on the canvas.
+ * Top-left holds only the lenses — three ways to work on the same pipeline;
+ * switching keeps the selection. How the graph is drawn (what it includes,
+ * which way it runs, groups) lives in one View menu that says what is on:
+ * drawn as three more segmented controls, "Pipeline / Chain" read as a fourth
+ * and fifth lens.
  */
 export function HUDToolbar({
   lens,
@@ -66,11 +89,14 @@ export function HUDToolbar({
   onOrientationChange,
   scope = "pipeline",
   onScopeChange,
+  groups,
   onAddNode,
-  onFind,
+  addNodeTarget,
+  search,
   onZoomIn,
   onZoomOut,
   onFitView,
+  onResetZoom,
   showMinimap = false,
   onToggleMinimap,
   history,
@@ -79,7 +105,6 @@ export function HUDToolbar({
   const builderCanRedo = useBuilderStore((s) => s.historyIndex < s.history.length - 1);
   const builderUndo = useBuilderStore((s) => s.undo);
   const builderRedo = useBuilderStore((s) => s.redo);
-  // The page's own history (edits to the pipeline file) when it gives one.
   const canUndo = history ? history.canUndo : builderCanUndo;
   const canRedo = history ? history.canRedo : builderCanRedo;
   const undo = history ? history.undo : builderUndo;
@@ -87,10 +112,17 @@ export function HUDToolbar({
   const zenMode = useUIStore((s) => s.zenMode);
   const toggleZenMode = useUIStore((s) => s.toggleZenMode);
 
-  // The zoom controls act on React Flow's own viewport, passed up from the
-  // canvas. They used to call into `builderStore`, which nothing applied to the
-  // DOM after the React Flow migration — so all three buttons did nothing.
   const canZoom = Boolean(onZoomIn && onZoomOut && onFitView);
+  const onCanvas = lens === "flow";
+  const showGroups = onCanvas && groups && groups.count > 0;
+  const grouped = Boolean(groups && groups.collapsed > 0);
+
+  const summary = [
+    onScopeChange ? (scope === "chain" ? "with chain" : "this pipeline") : null,
+    onCanvas ? (orientation === "vertical" ? "↓" : "→") : null,
+    showGroups && grouped ? "grouped" : null,
+  ].filter(Boolean);
+  const hasView = lens !== "yaml" && (Boolean(onScopeChange) || onCanvas);
 
   return (
     <>
@@ -113,58 +145,59 @@ export function HUDToolbar({
           ))}
         </div>
 
-        {lens !== "yaml" && onScopeChange && (
-          <>
-            <span className="canvas-controls-sep" aria-hidden="true" />
-            <div className="canvas-segmented" role="group" aria-label="What to draw">
-              <button
-                type="button"
-                className={`canvas-segment${scope === "pipeline" ? " active" : ""}`}
-                aria-pressed={scope === "pipeline"}
-                title="Only this pipeline's nodes"
-                onClick={() => onScopeChange("pipeline")}
-              >
-                <span className="canvas-segment__keep">Pipeline</span>
-              </button>
-              <button
-                type="button"
-                className={`canvas-segment${scope === "chain" ? " active" : ""}`}
-                aria-pressed={scope === "chain"}
-                title="With the upstream pipelines a run executes first, one band each"
-                onClick={() => onScopeChange("chain")}
-              >
-                <span className="canvas-segment__keep">Chain</span>
-              </button>
-            </div>
-          </>
-        )}
-
-        {lens === "flow" && (
-          <>
-            <span className="canvas-controls-sep" aria-hidden="true" />
-            <div className="canvas-segmented" role="group" aria-label="Layer direction">
-              <button
-                type="button"
-                className="canvas-icon-btn"
-                aria-pressed={orientation === "vertical"}
-                aria-label="Layers top to bottom"
-                title="Layers top to bottom (O)"
-                onClick={() => onOrientationChange("vertical")}
-              >
-                <IconArrowDown size={16} stroke={1.75} />
-              </button>
-              <button
-                type="button"
-                className="canvas-icon-btn"
-                aria-pressed={orientation === "horizontal"}
-                aria-label="Layers left to right"
-                title="Layers left to right (O)"
-                onClick={() => onOrientationChange("horizontal")}
-              >
-                <IconArrowRight size={16} stroke={1.75} />
-              </button>
-            </div>
-          </>
+        {hasView && (
+          <CanvasPopover
+            label={
+              <>
+                <span className="canvas-view__name">
+                  View<span className="canvas-view__colon">{summary.length > 0 ? ":" : ""}</span>
+                </span>
+                {summary.length > 0 && <span className="canvas-view__summary">{summary.join(" · ")}</span>}
+              </>
+            }
+            ariaLabel={`View${summary.length ? `: ${summary.join(", ")}` : ""}`}
+            title="What the graph includes, which way it runs, groups"
+          >
+            {onScopeChange && (
+              <fieldset className="canvas-popover__group">
+                <legend>Show</legend>
+                <label>
+                  <input type="radio" name="canvas-scope" checked={scope === "pipeline"} onChange={() => onScopeChange("pipeline")} />
+                  Only this pipeline
+                </label>
+                <label>
+                  <input type="radio" name="canvas-scope" checked={scope === "chain"} onChange={() => onScopeChange("chain")} />
+                  With the upstream chain
+                </label>
+              </fieldset>
+            )}
+            {onCanvas && (
+              <fieldset className="canvas-popover__group">
+                <legend>Direction</legend>
+                <label>
+                  <input type="radio" name="canvas-direction" checked={orientation === "vertical"} onChange={() => onOrientationChange("vertical")} />
+                  Top to bottom
+                </label>
+                <label>
+                  <input type="radio" name="canvas-direction" checked={orientation === "horizontal"} onChange={() => onOrientationChange("horizontal")} />
+                  Left to right <kbd className="canvas-popover__key">O</kbd>
+                </label>
+              </fieldset>
+            )}
+            {showGroups && (
+              <fieldset className="canvas-popover__group">
+                <legend>Groups</legend>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={grouped}
+                    onChange={() => (grouped ? groups!.onExpandAll() : groups!.onCollapseAll())}
+                  />
+                  Collapse each namespace ({groups!.count})
+                </label>
+              </fieldset>
+            )}
+          </CanvasPopover>
         )}
       </div>
 
@@ -176,13 +209,22 @@ export function HUDToolbar({
           <button type="button" className="canvas-icon-btn" onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
             <IconArrowForwardUp size={16} stroke={1.75} />
           </button>
+          {onCanvas && search && (
+            <>
+              <span className="canvas-controls-sep" aria-hidden="true" />
+              {search}
+            </>
+          )}
           <span className="canvas-controls-sep" aria-hidden="true" />
-          <button type="button" className="canvas-icon-btn" onClick={onFind} title="Find node or pipeline (Ctrl/⌘+K)" aria-label="Find node or pipeline">
-            <IconSearch size={16} stroke={1.75} />
-          </button>
-          <button type="button" className="canvas-text-btn" onClick={onAddNode} aria-label="Add node">
+          <button
+            type="button"
+            className="canvas-text-btn"
+            onClick={onAddNode}
+            aria-label={addNodeTarget ? `Add node to ${addNodeTarget}` : "Add node"}
+            title={addNodeTarget ? `Add a node to ${addNodeTarget}` : undefined}
+          >
             <IconPlus size={15} stroke={2} aria-hidden="true" />
-            <span>Add node</span>
+            <span>{addNodeTarget ? `Add node to ${addNodeTarget}` : "Add node"}</span>
           </button>
         </div>
       )}
@@ -192,37 +234,36 @@ export function HUDToolbar({
           <button type="button" className="canvas-icon-btn" onClick={onZoomOut} title="Zoom out" aria-label="Zoom out">
             <IconZoomOut size={16} stroke={1.75} />
           </button>
+          <ZoomReadout onReset={onResetZoom} />
           <button type="button" className="canvas-icon-btn" onClick={onZoomIn} title="Zoom in" aria-label="Zoom in">
             <IconZoomIn size={16} stroke={1.75} />
           </button>
-          <button type="button" className="canvas-icon-btn" onClick={onFitView} title="Fit graph (F)" aria-label="Fit graph">
-            <IconMaximize size={15} stroke={1.75} />
+          <span className="canvas-controls-sep" aria-hidden="true" />
+          <button type="button" className="canvas-text-btn" onClick={onFitView} title="Fit the graph (F)" aria-label="Fit graph">
+            Fit <kbd className="canvas-popover__key">F</kbd>
           </button>
+          {onToggleMinimap && (
+            <button
+              type="button"
+              className="canvas-text-btn"
+              onClick={onToggleMinimap}
+              aria-pressed={showMinimap}
+              title={showMinimap ? "Hide minimap" : "Show minimap"}
+              aria-label="Minimap"
+            >
+              Minimap
+            </button>
+          )}
           <button
             type="button"
             className="canvas-icon-btn"
             onClick={toggleZenMode}
             aria-pressed={zenMode}
-            title={zenMode ? "Exit Zen mode (⌥Z)" : "Zen mode — fullscreen canvas (⌥Z)"}
-            aria-label="Zen mode"
+            title={zenMode ? "Exit full screen (⌥Z)" : "Full screen canvas (⌥Z)"}
+            aria-label="Full screen canvas"
           >
-            {zenMode ? <IconEyeOff size={16} stroke={1.75} /> : <IconEye size={16} stroke={1.75} />}
+            {zenMode ? <IconArrowsMinimize size={16} stroke={1.75} /> : <IconArrowsMaximize size={16} stroke={1.75} />}
           </button>
-          {onToggleMinimap && (
-            <>
-              <span className="canvas-controls-sep" aria-hidden="true" />
-              <button
-                type="button"
-                className="canvas-icon-btn"
-                onClick={onToggleMinimap}
-                aria-pressed={showMinimap}
-                title={showMinimap ? "Hide minimap" : "Show minimap"}
-                aria-label="Minimap"
-              >
-                <IconMap size={16} stroke={1.75} />
-              </button>
-            </>
-          )}
         </div>
       )}
     </>

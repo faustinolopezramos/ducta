@@ -3,7 +3,7 @@
 Ducta can draft a new pipeline, or a fix for one, with a local model (Ollama, LM
 Studio, vLLM…) or a remote one (Anthropic, OpenAI, any OpenAI-compatible endpoint).
 A draft is validated, shown as a diff, and written only when accepted; nothing is run
-or committed. Needs `pip install "ducta[api,ai]"`.
+or committed. Needs `pip install "ducta[ai]"`.
 
 ## Set up the model (per machine: `~/.ducta/ai.toml`)
 
@@ -24,6 +24,18 @@ needs a terminal: ask the user to run it, and never ask for the key in the chat.
 Local models: use a code model of ~7B+ (`qwen2.5-coder:7b`/`:14b`); 3B models rarely
 produce a valid draft. For Ollama, raise `context_tokens` in `ai.toml` if the request
 "fills the context window".
+
+`ducta ai eval` measures the configured model on Ducta's own template (ten fixed
+cases: new pipelines, fixes, an extension, a revision, a blueprint, a review, an
+explanation) and reports pass rate, attempts, tokens and time; nothing of the
+user's is read. `--repeat N` runs each case N times and names the *flaky* ones.
+Reports are kept in `~/.ducta/ai/evals/`: `ducta ai eval --list` and
+`--compare A [B]` read them without a model. With a remote model it sends the
+template there and asks first — do not pass `--yes` without the user's OK.
+
+A project can restrict this in its `ducta.*` file (YAML, TOML or JSON): `ai: {enabled: false}` turns every AI
+feature off; `ai: {remote: false}` allows only a local model. Respect it — never
+suggest removing it to get a draft.
 
 ## Draft, review, apply
 
@@ -87,3 +99,5 @@ and on a failed run), **Explain with AI** (on a failed run), **Propose with AI**
 | "fills Ollama's context window" / "does not fit the model's context window" | raise `context_tokens` in `~/.ducta/ai.toml` |
 | draft "still invalid after N attempts" | a bigger model, a more precise request, or `ducta ai revise` |
 | "The project does not validate now" | fix the project first (`ducta ai fix PIPELINE` can help) |
+| "This project turns Ducta AI off" / "allows only a local model" | the project's `ai:` block in `ducta.yaml` decides; use a local model, or ask its owner |
+| "is limiting requests (HTTP 429)" | Ducta already retried; wait a minute or use a plan/model with higher limits |

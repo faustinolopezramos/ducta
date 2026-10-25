@@ -75,7 +75,7 @@ def resolve_signing_key_from_dir(project_root: Path) -> Optional[bytes]:
     """
     gs: Dict[str, Any] = {}
     try:
-        from ducta.setting.project_loader import (
+        from ducta.setting.project.loader import (
             compile_project,
             find_project_root,
             validate_project,

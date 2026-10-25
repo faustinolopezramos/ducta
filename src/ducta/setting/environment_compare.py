@@ -31,7 +31,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
-from ducta.setting.project_loader import apply_environment, read_project
+from ducta.setting.project.loader import apply_environment, read_project
 
 BASE = "base"
 _FULL = ("paths", "settings")

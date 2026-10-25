@@ -10,8 +10,8 @@ import tomli_w
 import yaml
 
 from ducta.console.template import TemplateGenerator, TemplateType
-from ducta.setting import project_files as pf
-from ducta.setting.project_loader import (
+from ducta.setting.project import files as pf
+from ducta.setting.project.loader import (
     ProjectConfigError,
     compile_project,
     find_project_root,

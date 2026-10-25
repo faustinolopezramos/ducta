@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from ducta.setting.problems import parse_problem, parse_problems
-from ducta.setting.project_loader import ProjectConfigError, validate_project
+from ducta.setting.project.loader import ProjectConfigError, validate_project
 
 PROJECT = """\
 version: 2

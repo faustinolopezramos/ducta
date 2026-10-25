@@ -29,14 +29,6 @@
   border-radius: var(--radius-md);
 }
 
-.run-filters__group {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.run-filters__chip,
 .run-filters__clear {
   display: inline-flex;
   align-items: center;
@@ -52,15 +44,8 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.run-filters__chip:hover,
 .run-filters__clear:hover { border-color: var(--border-hover); color: var(--text); }
-.run-filters__chip[aria-pressed="true"] {
-  color: var(--primary);
-  background: var(--accent-bg, var(--surface-hover));
-  border-color: var(--primary);
-}
 
-.run-filters__select,
 .run-filters__date {
   height: 30px;
   padding: 0 var(--space-2);
@@ -72,6 +57,79 @@
   border-radius: var(--radius-md);
   cursor: pointer;
 }
-.run-filters__select { max-width: 200px; }
 .run-filters__sep { color: var(--text-dim); font-size: var(--text-xs); }
-.run-filters__clear { border-style: dashed; }
+.run-filters__clear { margin-left: auto; border: none; color: var(--primary); }
+
+/* One kind of control for every filter: a button that names it and opens a
+   short list. Petrol while it filters, like a pressed chip used to be. */
+.run-filters__menu { position: relative; }
+.run-filters__menu-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 var(--space-3);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+  max-width: 280px;
+}
+.run-filters__menu-btn > span { overflow: hidden; text-overflow: ellipsis; }
+.run-filters__menu-btn:hover { border-color: var(--border-hover); }
+.run-filters__menu-btn[data-active] {
+  color: var(--primary);
+  font-weight: var(--weight-semibold);
+  background: var(--accent-bg, var(--surface-hover));
+  border-color: var(--primary);
+}
+.run-filters__menu-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.run-filters__popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 220px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: var(--space-1);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgba(15, 27, 32, 0.08);
+}
+
+.run-filters__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  font: inherit;
+  font-size: var(--text-sm);
+  color: var(--text);
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.run-filters__option:hover { background: var(--overlay-subtle); }
+.run-filters__option[aria-pressed="true"],
+.run-filters__option:has(input:checked) { background: var(--accent-bg, var(--overlay-subtle)); }
+
+.run-filters__custom {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+  padding-top: var(--space-1);
+  border-top: 1px solid var(--border);
+}

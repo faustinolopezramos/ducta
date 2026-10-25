@@ -140,7 +140,7 @@ describe("Reliability page", () => {
     renderAt();
     expect(await screen.findByText("3 of 10")).toBeInTheDocument();
     expect(screen.getByText("observes and proposes in prod")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Active · 2" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Active 2" })).toHaveAttribute("aria-pressed", "true");
     const table = await screen.findByRole("table");
     expect(within(table).getByText("Needs a person · fix drafted")).toBeInTheDocument();
     expect(within(table).getByText("Connection refused (infrastructure)")).toBeInTheDocument();

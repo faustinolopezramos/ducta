@@ -78,7 +78,7 @@ class ConnectionSpec:
 def _sources_path(workspace: Path) -> str:
     """Where the project keeps its connections — the engine's answer: a format-2
     project's ``settings.ingestion.sources_path``, else ``config/sources.yaml``."""
-    from ducta.setting import project_files as pf
+    from ducta.setting.project import files as pf
 
     # ducta.yaml, .toml or .json: reading only the YAML one sent a TOML or JSON
     # project's connections to config/sources.yaml, where its runs never look.

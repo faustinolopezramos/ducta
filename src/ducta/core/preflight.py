@@ -587,7 +587,7 @@ def _check_serving_models(
     earlier pipeline of the same run.
     """
     from ducta.mlrun.serving import ServingError, mlflow_client_from_context, resolve_model
-    from ducta.setting.project_schema import ModelRef
+    from ducta.setting.project.schema import ModelRef
 
     registry: Any = None
     for name, cfg in node_configs.items():

@@ -75,6 +75,33 @@ export function formatParams(params: Record<string, unknown> | undefined | null)
     .join(" · ");
 }
 
+/**
+ * A check's parameters in one short line, for the overview: the columns it
+ * looks at, its bounds, then the rest — `university_id · max 0`,
+ * `2 columns · threshold 0`, `Programs ≥ 1`. The full parameters stay in its
+ * tooltip and in the Quality tab; written out in full they wrapped onto two
+ * ragged lines.
+ */
+export function summarizeParams(params: Record<string, unknown> | undefined | null): string {
+  if (!params) return "";
+  const { column, columns, min, max, ...rest } = params as Record<string, unknown>;
+  const cols = Array.isArray(columns) ? columns : columns != null ? [columns] : column != null ? [column] : [];
+  const colText = cols.length === 1 ? String(cols[0]) : cols.length > 1 ? `${cols.length} columns` : null;
+  const bound =
+    min != null && max != null
+      ? `${formatValue(min)}–${formatValue(max)}`
+      : min != null
+        ? `≥ ${formatValue(min)}`
+        : max != null
+          ? `≤ ${formatValue(max)}`
+          : null;
+  const others = Object.entries(rest).map(([key, value]) => {
+    const short = key.startsWith("max_") ? "max" : key.startsWith("min_") ? "min" : key;
+    return `${short} ${formatValue(value)}`;
+  });
+  return [[colText, bound].filter(Boolean).join(" "), ...others].filter(Boolean).join(" · ");
+}
+
 /** How a node is guarded, in one line: `1 sanity · 3 quality · gate`. */
 export function qualityLine(quality: NodeSchema["quality"] | undefined): string | null {
   if (!quality) return null;
@@ -123,7 +150,9 @@ export function ChecksList({ quality }: { quality: NodeSchema["quality"] | undef
       {checks.map((check) => (
         <li key={`${check.phase}:${check.name}`}>
           <span className="focus-check-name">{check.name}</span>
-          <span className="focus-check-params">{formatParams(check.params) || check.phase}</span>
+          <span className="focus-check-params" title={formatParams(check.params) || undefined}>
+            {summarizeParams(check.params) || check.phase}
+          </span>
         </li>
       ))}
       {gates.map((gate) => (
@@ -142,6 +171,8 @@ export interface DatasetRefItem {
   declared?: boolean;
   format?: string | null;
   path?: string | null;
+  /** The path for the active environment; the template stays in the tooltip. */
+  resolved_path?: string | null;
   write_mode?: string | null;
   layer?: string | null;
   alias?: string | null;
@@ -156,7 +187,7 @@ export function DatasetRef({
   onSelect?: (name: string) => void;
 }) {
   const declared = item.declared ?? true;
-  const meta = [declared ? item.format : null, item.write_mode, item.path].filter(Boolean) as string[];
+  const meta = [declared ? item.format : null, item.write_mode, item.resolved_path ?? item.path].filter(Boolean) as string[];
   return (
     <button
       type="button"
@@ -164,6 +195,7 @@ export function DatasetRef({
       data-layer={item.layer ?? undefined}
       onClick={() => onSelect?.(item.name)}
       title={declared ? item.path ?? undefined : "No entry in input_config / output_config"}
+      data-resolved={item.resolved_path ? "true" : undefined}
     >
       <span className="inspector-io-swatch" aria-hidden="true" />
       <span className="inspector-io-glyph" aria-hidden="true">

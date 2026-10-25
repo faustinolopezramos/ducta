@@ -33,4 +33,15 @@ export const certificateColumns = (
     mono: true,
     cell: (ex) => (ex.certificate_run_id ? ex.certificate_run_id.slice(0, 8) : "—"),
   },
+  {
+    // Shown on hover/focus: the row opens the certificate.
+    key: "open",
+    header: "",
+    align: "right",
+    cell: () => (
+      <span className="cert-row-go" aria-hidden="true">
+        ›
+      </span>
+    ),
+  },
 ];

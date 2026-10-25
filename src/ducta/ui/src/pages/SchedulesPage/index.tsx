@@ -42,10 +42,14 @@ export function SchedulesPage({ projectId, header }: { projectId?: string; heade
         title={header?.title ?? "Schedules"}
         description={header?.description ?? "Pipelines that run on their own. Times are UTC."}
         tabs={header?.tabs}
+        // With no schedules the empty state carries the one "New schedule";
+        // the header gets it back once there is a list to add to.
         actions={
-          <PermittedButton permission="execution.write" variant="primary" leftIcon={<IconPlus size={16} />} onClick={() => setShowCreateModal(true)}>
-            New schedule
-          </PermittedButton>
+          (schedules?.length ?? 0) > 0 && (
+            <PermittedButton permission="execution.write" variant="primary" leftIcon={<IconPlus size={16} />} onClick={() => setShowCreateModal(true)}>
+              New schedule
+            </PermittedButton>
+          )
         }
       />
 
@@ -59,11 +63,11 @@ export function SchedulesPage({ projectId, header }: { projectId?: string; heade
       ) : !isLoading && (schedules?.length ?? 0) === 0 ? (
         <EmptyState
           icon={IconCalendarEvent}
-          title="No automated schedules"
-          description="Set up cron expressions to automatically run data pipelines at scheduled intervals."
+          title="No schedules yet"
+          description="Run a pipeline on a cron expression, without anyone pressing Run."
           action={
             <PermittedButton permission="execution.write" variant="primary" leftIcon={<IconPlus size={16} />} onClick={() => setShowCreateModal(true)}>
-              Create first schedule
+              New schedule
             </PermittedButton>
           }
         />

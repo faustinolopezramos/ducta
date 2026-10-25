@@ -13,7 +13,7 @@ from ducta.console.template import (
     TemplateGenerator,
     TemplateType,
 )
-from ducta.setting.project_loader import compile_project, validate_project
+from ducta.setting.project.loader import compile_project, validate_project
 from ducta.stream.validators import StreamingValidator
 
 

@@ -29,7 +29,7 @@ Unknown keys are errors, not warnings: a misspelled key that was kept "as-is"
 and ignored is how a typo silently changes behaviour. Free-form data goes
 under ``metadata``.
 
-The engine does not read these models. ``ducta.setting.project_loader``
+The engine does not read these models. ``ducta.setting.project.loader``
 compiles them to the five configuration documents the engine has always
 consumed, so a project behaves identically in either format.
 """
@@ -202,6 +202,22 @@ class SentinelPolicy(_Strict):
     propose: SentinelPropose = Field(default_factory=SentinelPropose)
 
 
+class AIPolicy(_Strict):
+    """What Ducta's AI features may do with this project, whichever model a machine or
+    server has set up (``~/.ducta/ai.toml``). The engine ignores it."""
+
+    enabled: bool = Field(
+        default=True,
+        description="Allow the AI features (drafts, reviews, explanations, Sentinel's "
+        "proposals) on this project",
+    )
+    remote: bool = Field(
+        default=True,
+        description="Allow a remote model (it receives the project's configuration and code). "
+        "Off: only a local model (Ollama, LM Studio, a server on this machine)",
+    )
+
+
 class Paths(_Strict):
     input: str = Field(..., min_length=1, description="Base directory/URI for input data")
     output: str = Field(..., min_length=1, description="Base directory/URI for output data")
@@ -296,6 +312,11 @@ class ProjectFile(_Strict):
         default_factory=SentinelPolicy,
         description="Ducta Sentinel: incidents for failed and late runs, and the safe re-runs "
         "it may make outside protected environments",
+    )
+    ai: AIPolicy = Field(
+        default_factory=AIPolicy,
+        description="Ducta AI: whether its features may run on this project, and whether a "
+        "remote model may receive it",
     )
 
     @model_validator(mode="after")

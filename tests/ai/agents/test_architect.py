@@ -12,7 +12,8 @@ import yaml
 from ducta.ai.agents.architect.blueprint import load_blueprint
 from ducta.ai.agents.architect.build import build, module_problems
 from ducta.ai.agents.architect.design import NeedsAnswers, blueprint_of, check, design
-from ducta.ai.builder import apply_draft, load_draft, revise, save_draft
+from ducta.ai.builder import apply_draft, revise
+from ducta.ai.drafts import load_draft, save_draft
 from ducta.ai.errors import AIConfigError, AIConflictError
 
 sys.path.insert(0, str(Path(__file__).parents[1]))

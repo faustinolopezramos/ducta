@@ -6,13 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import (
+from ducta.setting.project.loader import (
     ProjectConfigError,
     compile_project,
     find_project_root,
     validate_project,
 )
-from ducta.setting.project_schema import PipelineFile, json_schema
+from ducta.setting.project.schema import PipelineFile, json_schema
 
 PROJECT = """\
 version: 2

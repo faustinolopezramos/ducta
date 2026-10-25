@@ -13,7 +13,18 @@ vi.mock("../../components/Execution/StreamingStatusPanel", () => ({
   StreamingStatusPanel: ({ fullView }: { fullView?: boolean }) => <div>streaming panel {fullView ? "full" : "compact"}</div>,
 }));
 vi.mock("../../components/Execution/InlineLogs", () => ({
-  InlineLogs: () => <div>logs body</div>,
+  InlineLogs: ({ logs, finalStatus }: { logs?: unknown[]; finalStatus?: string }) => (
+    <div>
+      logs body{logs ? ` · ${logs.length} past lines · ${finalStatus}` : ""}
+    </div>
+  ),
+}));
+const fetchedLogs = vi.hoisted(() => ({ calls: [] as string[] }));
+vi.mock("../../api/queries", () => ({
+  useExecutionLogs: (id: string) => {
+    fetchedLogs.calls.push(id);
+    return { data: id ? { logs: [{ timestamp: "2026-10-20T21:27:00Z", level: "info", message: "done" }] } : undefined };
+  },
 }));
 
 function renderDock(props: Partial<PipelineDockProps>) {
@@ -77,5 +88,28 @@ describe("PipelineDock tabs", () => {
     expect(screen.getByRole("tab", { name: /Stream/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("3/3")).toBeInTheDocument();
     expect(screen.getByText("streaming panel full")).toBeInTheDocument();
+  });
+});
+
+describe("PipelineDock logs before anything runs", () => {
+  it("shows the pipeline's last run's logs instead of 'No logs'", () => {
+    renderDock({ lastRun: { id: "run-1", status: "success" } });
+    expect(screen.getByText("logs body · 1 past lines · success")).toBeInTheDocument();
+  });
+
+  it("shows the live logs while a run is going", () => {
+    renderDock({ lastRun: { id: "run-1", status: "success" }, isExecuting: true });
+    expect(screen.getByText("logs body")).toBeInTheDocument();
+  });
+});
+
+describe("PipelineDock after a CLI run", () => {
+  it("shows the latest run with stored logs and says the later one came from the CLI", () => {
+    renderDock({
+      lastRun: { status: "success" },
+      lastServedRun: { id: "run-0", status: "success", started_at: "2026-10-20T21:27:00Z" },
+    });
+    expect(screen.getByText("logs body · 1 past lines · success")).toBeInTheDocument();
+    expect(screen.getByRole("note")).toHaveTextContent("started from the CLI");
   });
 });

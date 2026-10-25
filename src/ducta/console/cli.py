@@ -186,7 +186,7 @@ def _log_file_for(parsed_args: argparse.Namespace) -> Optional[str]:
         return str(explicit)
     if _is_projectless(parsed_args):
         return None
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     start = Path(getattr(parsed_args, "base_path", None) or Path.cwd())
     root = find_nearest_project(start)

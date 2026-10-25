@@ -144,7 +144,7 @@ def _real_engine(tmp_path, nodes_yaml, pipeline_extra="", datasets=None):
     import textwrap
 
     from ducta.core.executors.facade import PipelineExecutor
-    from ducta.setting.project_loader import load_project_v2
+    from ducta.setting.project.loader import load_project_v2
 
     root = tmp_path / "proj"
     (root / "pipelines").mkdir(parents=True)

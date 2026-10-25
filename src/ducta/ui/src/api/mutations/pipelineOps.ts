@@ -7,7 +7,7 @@ export type PipelineOp =
   | { op: "connect"; node: string; dataset: string; alias?: string | null }
   | { op: "disconnect"; node: string; dataset: string }
   | { op: "add_output" | "remove_output"; node: string; dataset: string }
-  | { op: "add_node"; node: string; use?: string; with?: Record<string, unknown>; run?: string; kind?: string; description?: string; inputs?: Record<string, string> | string[]; outputs?: string[]; body?: Record<string, unknown> }
+  | { op: "add_node"; node: string; use?: string; with?: Record<string, unknown>; run?: string; kind?: string; description?: string; inputs?: Record<string, string> | string[]; outputs?: string[]; body?: Record<string, unknown>; before?: string; before_comments?: number }
   | { op: "remove_node"; node: string }
   | { op: "set"; node: string; key: string; value: unknown };
 

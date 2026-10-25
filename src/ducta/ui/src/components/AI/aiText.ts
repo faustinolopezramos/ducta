@@ -29,3 +29,19 @@ export function gapsSentence(g: AIDocsGaps): string {
   const total = g.datasets + g.pipelines + g.nodes;
   return `${list} ${total === 1 ? "has" : "have"} no description.`;
 }
+
+/**
+ * The tokens a model request took, in the CLI's words: `12,345 tokens in (8,000
+ * cached) · 2,345 out`; "" when the provider said nothing (Ducta's checks alone).
+ * Anthropic counts cache reads apart from input tokens; OpenAI-compatible APIs do not.
+ */
+export function usageLine(usage?: Record<string, number> | null): string {
+  const u = usage ?? {};
+  const tokensIn = u.input_tokens ?? 0;
+  const cached = u.cache_read_input_tokens ?? 0;
+  const tokensOut = u.output_tokens ?? 0;
+  if (!(tokensIn || cached || tokensOut)) return "";
+  const totalIn = tokensIn + cached + (u.cache_creation_input_tokens ?? 0);
+  const fmt = (n: number) => n.toLocaleString("en-US");
+  return `${fmt(totalIn)} tokens in${cached ? ` (${fmt(cached)} cached)` : ""} · ${fmt(tokensOut)} out`;
+}

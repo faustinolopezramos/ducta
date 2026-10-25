@@ -80,7 +80,7 @@ class WorkspaceManager:
         )
 
     def _project_root(self) -> Optional[Path]:
-        from ducta.setting.project_loader import find_project_root
+        from ducta.setting.project.loader import find_project_root
 
         for candidate in (self._project_path, self.root):
             if candidate is not None:
@@ -91,16 +91,33 @@ class WorkspaceManager:
 
     def list_environments(self) -> List[str]:
         """The canonical environments, plus any other the project declares overrides for."""
-        import yaml  # type: ignore[import-untyped]
-
         from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
         envs = list(DEFAULT_ENVIRONMENTS)
-        root = self._project_root()
-        if root is not None:
-            data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
-            envs += [e for e in (data.get("environments") or {}) if e not in envs]
+        envs += [e for e in self._declared_environments() if e not in envs]
         return envs
+
+    def declared_environments(self) -> List[str]:
+        """``base`` plus the environments the project declares overrides for.
+
+        A canonical environment the project does not declare still runs, with
+        the base configuration — the environment picker says so.
+        """
+        return ["base", *[e for e in self._declared_environments() if e != "base"]]
+
+    def _project_document(self) -> Dict[str, Any]:
+        """The project's ``ducta.*`` file as data, whichever format it is written in."""
+        from ducta.setting.project import files as pf
+        from ducta.setting.project.loader import project_file
+
+        root = self._project_root()
+        if root is None:
+            return {}
+        data = pf.load(project_file(root))
+        return data if isinstance(data, dict) else {}
+
+    def _declared_environments(self) -> List[str]:
+        return [str(e) for e in (self._project_document().get("environments") or {})]
 
     def for_project(self, project_id: Optional[str]) -> "WorkspaceManager":
         """Return a manager scoped to *project_id* within this same workspace
@@ -121,7 +138,7 @@ class WorkspaceManager:
     def load_context(self, env: str) -> Any:
         """The Context of this workspace's project for ``env`` (API runs never
         import Python from configuration: ``allow_python_config=False``)."""
-        from ducta.setting.project_loader import load_project_v2
+        from ducta.setting.project.loader import load_project_v2
 
         root = self._project_root()
         if root is None:
@@ -347,16 +364,11 @@ class WorkspaceManager:
             git_remote = sanitize_git_remote_url(git_remote)
 
         active_env: Optional[str] = None
-        root = self._project_root()
-        if root is not None:
-            try:
-                import yaml  # type: ignore[import-untyped]
-
-                data = yaml.safe_load((root / "ducta.yaml").read_text(encoding="utf-8")) or {}
-                settings = data.get("settings") or {}
-                active_env = settings.get("environment") or settings.get("env")
-            except Exception:
-                pass
+        try:
+            settings = self._project_document().get("settings") or {}
+            active_env = settings.get("environment") or settings.get("env")
+        except Exception:
+            pass
 
         return {
             "name": self.root.name,

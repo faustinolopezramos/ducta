@@ -532,16 +532,24 @@ export function ModelRegistryTab({
           marginBottom: 16,
         }}
       >
+        {/* The registry belongs to the project: every ML pipeline registers into
+            the same one, and a model does not record which pipeline trained it,
+            so the pipeline picked above does not narrow this list. */}
         <span style={{ fontSize: "var(--text-sm)", color: colors.textMuted }}>
-          {models.length} model{models.length !== 1 ? "s" : ""}
+          {models.length} model{models.length !== 1 ? "s" : ""} in this project's registry
         </span>
         <div style={{ display: "flex", gap: 8 }}>
-          <Button variant="ghost" size="sm" onClick={() => refetch()}>
-            <IconRefresh size={14} />
+          <Button variant="ghost" size="sm" onClick={() => refetch()} leftIcon={<IconRefresh size={14} />}>
             Refresh
           </Button>
-          <PermittedButton permission="model.delete" variant="ghost" size="sm" onClick={() => setShowGc(true)}>
-            <IconTrash size={14} />
+          <PermittedButton
+            permission="model.delete"
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowGc(true)}
+            leftIcon={<IconTrash size={14} />}
+            title="Delete old, unused model versions to free disk space"
+          >
             Run GC
           </PermittedButton>
         </div>

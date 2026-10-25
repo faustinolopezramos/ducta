@@ -72,18 +72,30 @@
 
 .verify-cert-advanced-toggle {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: none;
   border: none;
-  color: var(--text-muted);
+  color: var(--primary);
   font-family: var(--font-sans);
-  font-size: var(--text-xs);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   cursor: pointer;
   padding: 0;
   margin-top: var(--space-2);
 }
 
 .verify-cert-advanced-toggle:hover {
-  color: var(--text);
+  text-decoration: underline;
+}
+
+.verify-cert-advanced-chevron {
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+
+.verify-cert-advanced-toggle[aria-expanded="true"] .verify-cert-advanced-chevron {
+  transform: rotate(90deg);
 }
 
 .verify-cert-key-input {

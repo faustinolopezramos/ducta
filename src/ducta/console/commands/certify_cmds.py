@@ -54,7 +54,7 @@ def _env_arg(parsed_args) -> Optional[str]:
 
 def _project_root(parsed_args) -> Optional[Path]:
     """The project at or above ``--base-path`` (default: the current directory)."""
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     return find_nearest_project(Path(getattr(parsed_args, "base_path", None) or Path.cwd()))
 
@@ -69,7 +69,7 @@ def _search_envs(parsed_args) -> List[str]:
     root = _project_root(parsed_args)
     if root is not None:
         try:
-            from ducta.setting.project_loader import validate_project
+            from ducta.setting.project.loader import validate_project
 
             declared = list(validate_project(root).project.environments)
         except Exception:  # noqa: BLE001 — a broken project still has the canonical ones
@@ -91,7 +91,7 @@ def _resolve_run_certificate_dir(parsed_args, env: str) -> Optional[Path]:
     and the project summary once per environment searched.
     """
     from ducta.core.settings import CoreSettings
-    from ducta.setting.project_loader import load_project_v2
+    from ducta.setting.project.loader import load_project_v2
 
     root = _project_root(parsed_args)
     if root is None:

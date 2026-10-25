@@ -31,18 +31,20 @@ disconnect         node no longer reads dataset                connect (alias)
 add_output         node writes dataset                         remove_output
 remove_output      node no longer writes dataset               add_output
 add_node           a new node                                  remove_node
-remove_node        a node is gone                              add_node (body)
+remove_node        a node is gone                              add_node (body, before)
 set                one key of a node (``value: null`` drops)   set (old value)
 =================  ==========================================  =================
 
-Every result says what the inverse is, so undo does not have to guess.
+Every result says what the inverse is, so undo does not have to guess. An
+``add_node`` with ``before`` puts the node back in front of that one, and
+``before_comments`` says how many comment lines above ``before`` are its own.
 """
 
 from __future__ import annotations
 
 import copy
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _ALIAS = re.compile(r"[^A-Za-z0-9_]")
 #: Keys `set` may change. Structure (inputs/outputs/kind/run) has its own ops.
@@ -97,6 +99,169 @@ def _quiet_position(mapping: Any) -> int:
     return position
 
 
+def _end_slot(doc: Any) -> Optional[List[Any]]:
+    """Where ruamel keeps the comments written after the last node: the document's
+    end, or what comes before the next top-level key (``None`` when there are none)."""
+    keys = list(doc.keys())
+    if "nodes" not in keys:
+        return None
+    index = keys.index("nodes")
+    if index == len(keys) - 1:
+        return doc.ca.end  # type: ignore[no-any-return]
+    item = doc.ca.items.get(keys[index + 1])
+    return item[1] if item and len(item) > 1 else None
+
+
+def _take_node_tail(doc: Any) -> List[Any]:
+    """The indented comments after the last node, removed from where ruamel keeps
+    them. A key added after that node would otherwise carry them off — they read as
+    the new node's, and leave with it when it is removed (an undo dropped them)."""
+    slot = _end_slot(doc)
+    if not slot:
+        return []
+    n = 0
+    while n < len(slot) and (slot[n].column > 0 or not str(slot[n].value).strip()):
+        n += 1
+    taken = list(slot[:n])
+    del slot[:n]
+    return taken
+
+
+def _give_node_tail(doc: Any, tokens: List[Any]) -> None:
+    """Put *tokens* back after the last node (see :func:`_take_node_tail`)."""
+    keys = list(doc.keys())
+    index = keys.index("nodes")
+    if index == len(keys) - 1:
+        doc.ca.end = tokens + list(doc.ca.end or [])
+        if doc.ca.comment is None:  # ruamel writes the end comments only with this slot
+            doc.ca.comment = [None, None]
+        return
+    item = doc.ca.items.setdefault(keys[index + 1], [None, None, None, None])
+    item[1] = tokens + list(item[1] or [])
+
+
+def _last_comment(value: Any) -> Optional[Tuple[List[Any], int]]:
+    """Where ruamel keeps what is written after *value*'s last line: the comment slot
+    of its deepest last scalar (``None`` when it has none)."""
+    from ruamel.yaml.comments import CommentedMap, CommentedSeq
+
+    if isinstance(value, CommentedMap) and len(value):
+        key = list(value.keys())[-1]
+        deeper = _last_comment(value[key])
+        if deeper:
+            return deeper
+        item = value.ca.items.get(key)
+        return (item, 2) if item and len(item) > 2 and item[2] is not None else None
+    if isinstance(value, CommentedSeq) and len(value):
+        deeper = _last_comment(value[-1])
+        if deeper:
+            return deeper
+        item = value.ca.items.get(len(value) - 1)
+        return (item, 0) if item and item[0] is not None else None
+    return None
+
+
+#: One line of a comment block: its indentation and text ("" for a blank line).
+_Line = Tuple[int, str]
+
+
+def _line(raw: str, column: int) -> _Line:
+    if not raw.strip():
+        return (0, "")
+    indent = len(raw) - len(raw.lstrip())
+    return (indent if indent else column, raw.strip())
+
+
+def _cut_tail(body: Any, column: int) -> List[_Line]:
+    """Cut from *body*'s tail the comments written at *column* or left of it — above
+    the next node, not in this one — with the blank lines before them."""
+    slot = _last_comment(body)
+    if slot is None:
+        return []
+    holder, index = slot
+    lines = str(holder[index].value).split("\n")  # lines[0] ends the value's own line
+    first = next(
+        (
+            i
+            for i, raw in enumerate(lines)
+            if i and raw.strip().startswith("#") and len(raw) - len(raw.lstrip()) <= column
+        ),
+        None,
+    )
+    if first is None:
+        return []
+    while first > 1 and not lines[first - 1].strip():
+        first -= 1
+    rest = "\n".join(lines[:first]) + "\n"
+    if rest.strip():
+        holder[index].value = rest
+    else:
+        holder[index] = None
+    cut = lines[first:]
+    if cut and cut[-1] == "":
+        cut.pop()
+    return [_line(raw, column) for raw in cut]
+
+
+def _take_above(doc: Any, name: str, column: int) -> List[_Line]:
+    """Take every comment line written above node *name* at the nodes' indentation,
+    wherever ruamel keeps it: the previous node's tail, the top of ``nodes:``, or
+    the slot before the key."""
+    nodes = doc["nodes"]
+    names = list(nodes.keys())
+    index = names.index(name)
+    lines: List[_Line] = []
+    if index:
+        lines += _cut_tail(nodes[names[index - 1]], column)
+    else:
+        top = nodes.ca.comment[1] if nodes.ca.comment and len(nodes.ca.comment) > 1 else None
+        slot = doc.ca.items.get("nodes")
+        if not top and slot and len(slot) > 3:
+            top = slot[3]
+        for token in top or []:
+            lines += _token_lines(token)
+        if nodes.ca.comment and len(nodes.ca.comment) > 1:
+            nodes.ca.comment[1] = None
+        if slot and len(slot) > 3:
+            slot[3] = None
+    item = nodes.ca.items.get(name)
+    if item and len(item) > 1 and item[1]:
+        for token in item[1]:
+            lines += _token_lines(token)
+        item[1] = None
+    return lines
+
+
+def _token_lines(token: Any) -> List[_Line]:
+    raws = str(token.value).split("\n")
+    if raws and raws[-1] == "":
+        raws.pop()
+    return [_line(raw, token.column) for raw in raws]
+
+
+def _put_above(nodes: Any, name: str, lines: List[_Line]) -> None:
+    """Write *lines* above node *name* (the slot ruamel writes before its key)."""
+    if not lines:
+        return
+    from ruamel.yaml.error import CommentMark
+    from ruamel.yaml.tokens import CommentToken
+
+    tokens = [
+        CommentToken(f"{text}\n" if text else "\n", CommentMark(indent if text else 0), None)
+        for indent, text in lines
+    ]
+    item = nodes.ca.items.setdefault(name, [None, None, None, None])
+    item[1] = tokens + list(item[1] or [])
+
+
+def _node_column(nodes: Any) -> int:
+    """The column the node names are written at (2 for a new file)."""
+    for key in nodes:
+        if key in nodes.lc.data:
+            return int(nodes.lc.data[key][1])
+    return 2
+
+
 def _node(doc: Any, name: str) -> Any:
     nodes = doc.get("nodes") if isinstance(doc, dict) else None
     if not isinstance(nodes, dict) or name not in nodes:
@@ -135,14 +300,57 @@ def apply_op(doc: Any, op: Dict[str, Any]) -> Dict[str, Any]:
             body["outputs"] = CommentedSeq(outputs)
         for key, value in (op.get("body") or {}).items():
             body[key] = copy.deepcopy(value)
+        before = op.get("before")
+        if isinstance(before, str) and before in nodes:
+            # Back where it was (an undo of remove_node): of the comments above
+            # `before`, its own last `before_comments` lines stay with it; the rest
+            # were written above this node.
+            lines = _take_above(doc, before, _node_column(nodes))
+            own = op.get("before_comments")
+            own = min(own, len(lines)) if isinstance(own, int) and own > 0 else 0
+            nodes.insert(list(nodes.keys()).index(before), name, body)
+            _put_above(nodes, name, lines[: len(lines) - own])
+            _put_above(nodes, before, lines[len(lines) - own :])
+            return {"op": "remove_node", "node": name}
+        # The last node's trailing comments stay above the new one, still the last node's.
+        tail = _take_node_tail(doc) if len(nodes) else []
         nodes[name] = body
+        if tail:
+            nodes.ca.items[name] = [None, tail, None, None]
         return {"op": "remove_node", "node": name}
 
     node = _node(doc, name)
 
     if kind == "remove_node":
         body = _plain(node)
-        del doc["nodes"][name]
+        nodes = doc["nodes"]
+        names = list(nodes.keys())
+        following = names[names.index(name) + 1] if names.index(name) + 1 < len(names) else None
+        if following is not None:
+            # No comment leaves with the node: the ones above it and the ones above
+            # the next node (ruamel keeps those in this node's tail) stay, above the
+            # next node. The undo puts the node back between them.
+            column = _node_column(nodes)
+            above_this = _take_above(doc, name, column)
+            above_next = _take_above(doc, following, column)
+            del nodes[name]
+            nodes.ca.items.pop(name, None)
+            _put_above(nodes, following, above_this + above_next)
+            return {
+                "op": "add_node",
+                "node": name,
+                "body": body,
+                "before": following,
+                "before_comments": len(above_next),
+            }
+        # The comments written above the last node belong to the one before it: they
+        # stay after the last one.
+        before = nodes.ca.items.get(name)
+        kept = [t for t in (before[1] or [])] if before and len(before) > 1 else []
+        del nodes[name]
+        nodes.ca.items.pop(name, None)
+        if kept:
+            _give_node_tail(doc, kept)
         return {"op": "add_node", "node": name, "body": body}
 
     if kind == "connect":

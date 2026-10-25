@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from ducta.setting.project_loader import ProjectConfigError, validate_project
-from ducta.setting.project_schema import json_schema
+from ducta.setting.project.loader import ProjectConfigError, validate_project
+from ducta.setting.project.schema import json_schema
 
 
 def _write(root: Path, rel: str, text: str) -> None:

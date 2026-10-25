@@ -7,13 +7,14 @@ import {
   DatasetFocus,
   HUDToolbar,
   NodeFocus,
-  PipelineFlowBar,
   ConnectionModal,
 } from "../../components/Pipeline";
-import { useMlPlan } from "../../api/queries";
+import { useDatasetPreview, useMlPlan } from "../../api/queries";
 import { useExecutionStreaming } from "../../api/queries/executions";
 import { streamBadges, streamSummary } from "../../utils/streaming";
 import { NodeCodePane } from "../../components/Pipeline/NodeCodePane";
+import { externalEnds } from "./canvasExternals";
+import { RunNodeConfirm } from "./RunNodeConfirm";
 import { PipelineExplorer } from "../../components/Explorer/PipelineExplorer";
 import { ResizeHandle } from "../../components/ui/ResizeHandle";
 import { useUIStore } from "../../store/uiStore";
@@ -62,7 +63,6 @@ import { apiErrorMessage, useExtractNodeTemplate, useExtractSubpipeline, useRest
 import { ExtractSubpipelineDialog } from "./ExtractSubpipelineDialog";
 import { toastStore } from "../../hooks/useModalStack";
 import { ExtractTemplateDialog } from "./ExtractTemplateDialog";
-import { useCommandMenu } from "../../components/Shell/commandStore";
 import { collapseGroups, GROUP_PREFIX, groupsOf, worstState } from "../../components/Pipeline/canvasGroups";
 import { envKind } from "../../components/Shell/envKind";
 
@@ -89,7 +89,7 @@ export function PipelinePage() {
     selectNodeById, selectDatasetByName, setSelection, clearSelection,
     showOnCanvas, focusDatasetOnCanvas, openPipeline,
     codeOpen, openCode, closeCode,
-    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut,
+    onViewportReady, centerOnNode, fitCanvas, zoomIn, zoomOut, resetZoom,
   } = usePipelineView(projectId);
   const {
     explorerOpen, explorerWidth, setExplorerWidth,
@@ -111,7 +111,7 @@ export function PipelinePage() {
   const {
     activeEnv, showToast,
     activeExecutionId, setActiveExecutionId, runningNodeId, execStatus, setExecStatus, isExecuting,
-    logsOpen, setLogsOpen, chainStatus, lastRun,
+    logsOpen, setLogsOpen, chainStatus, lastRun, lastServedRun,
     handleRunNode, handleExecute, handleCancel, runScoped, runSample, sample, breakpoint, clearBreakpoint,
     runDebug, debugRun, clearDebugRun, runWithBreakpoint, runWithOptions,
   } = usePipelineRun({ projectId, pipelineId, itemById });
@@ -188,8 +188,10 @@ export function PipelinePage() {
           size="sm"
           onClick={() => setReviewOpen(true)}
           leftIcon={<IconChecklist size={15} stroke={1.75} />}
+          aria-label="Review pipeline"
+          title="Review pipeline"
         >
-          Review pipeline
+          <span className="pipeline-action-label">Review pipeline</span>
         </PermittedButton>
         <PermittedButton
           permission="ai.use"
@@ -197,8 +199,10 @@ export function PipelinePage() {
           size="sm"
           onClick={() => setExtendRequest("")}
           leftIcon={<IconPlus size={15} stroke={1.75} />}
+          aria-label="Add nodes with AI"
+          title="Add nodes with AI"
         >
-          Add nodes with AI
+          <span className="pipeline-action-label">Add nodes with AI</span>
         </PermittedButton>
       </>
     ) : null;
@@ -281,7 +285,21 @@ export function PipelinePage() {
       : null;
   // Production: every run is confirmed by typing the pipeline's name.
   const [confirmRun, setConfirmRun] = useState<null | (() => void)>(null);
-  const guard = (fn: () => void) => () => (envKind(activeEnv) === "prod" ? setConfirmRun(() => fn) : fn());
+  /** The node a confirmed run is limited to; null for the pipeline. */
+  const [confirmNode, setConfirmNode] = useState<string | null>(null);
+  const guard = (fn: () => void, node: string | null = null) => () => {
+    if (envKind(activeEnv) !== "prod") return fn();
+    setConfirmNode(node);
+    setConfirmRun(() => fn);
+  };
+  // One node runs in the environment as much as the pipeline does: R, the
+  // panel's Run node and the code pane's all take the same confirmation.
+  const runNode = (node: { id: string; name?: string }) => guard(() => handleRunNode(node), node.name ?? node.id)();
+  // R asks first: beside the node outside production, typed in it.
+  const [pendingRun, setPendingRun] = useState<{ id: string; name?: string } | null>(null);
+  const askRunNode = (node: { id: string; name?: string }) =>
+    envKind(activeEnv) === "prod" ? runNode(node) : setPendingRun(node);
+  const canvasAreaRef = useRef<HTMLDivElement>(null);
   const [runOptionsOpen, setRunOptionsOpen] = useState(false);
 
   const runOptionsRaw: RunOption[] = [
@@ -379,6 +397,16 @@ export function PipelinePage() {
       }),
     [dagItems, canvasFilter, designStates, freshness, nodeStates],
   );
+  // The filter matches nodes; a collapsed group is drawn as one box, which
+  // stays lit when any of its members matches (it was dimmed whatever matched).
+  const canvasHighlight = useMemo(() => {
+    if (!highlight || collapsedGroups.size === 0) return highlight;
+    const out = new Set(highlight);
+    for (const item of canvasItems) {
+      if (item.type === "group" && item.members.some((m: string) => highlight.has(m))) out.add(item.id);
+    }
+    return out;
+  }, [highlight, collapsedGroups, canvasItems]);
 
   // Only the medallion layers this graph has get a filter chip.
   const presentLayers = useMemo(
@@ -429,6 +457,24 @@ export function PipelinePage() {
     [projectDatasets, pipelineId],
   );
   const datasetNames = useMemo(() => (projectDatasets?.datasets ?? []).map((d) => d.name).sort(), [projectDatasets]);
+  // The selected dataset as last written: when, and its columns (one row is enough).
+  const { data: datasetPreview } = useDatasetPreview(projectId ?? "", selectedDatasetName, activeEnv, 1);
+  /** Each dataset's path in the active environment, as this pipeline's schema resolved it. */
+  const resolvedPaths = useMemo(() => {
+    const out = new Map<string, string>();
+    for (const schema of schemaById.values()) {
+      for (const io of [...(schema.inputs ?? []), ...(schema.outputs ?? [])]) {
+        if (io.resolved_path && !out.has(io.name)) out.set(io.name, io.resolved_path);
+      }
+    }
+    return out;
+  }, [schemaById]);
+  // A pipeline drawn alone shows what it reads from, and writes for, the rest
+  // of the project on its border; a chain already draws those between bands.
+  const externals = useMemo(
+    () => (strata ? [] : externalEnds(canvasItems, projectDatasets?.datasets ?? [], pipelineId ?? "")),
+    [strata, canvasItems, projectDatasets, pipelineId],
+  );
   const [addNodeInitial, setAddNodeInitial] = useState<Partial<NewNode> | undefined>(undefined);
 
   /** A dataset or a function dropped from the explorer: a new node that reads / runs it. */
@@ -540,7 +586,7 @@ export function PipelinePage() {
     isCodeEditorOpen: false, addNodeOpen,
     lens, orientation, onToggleOrientation: toggleOrientation,
     selectedNodeId, setSelectedNodeId: selectNodeById, pipelineNodes: dagItems, listOrder,
-    navMaps, parentsMap, isExecuting, runningNodeId, handleRunNode,
+    navMaps, parentsMap, isExecuting, runningNodeId, handleRunNode: askRunNode,
     centerOnNode, fitCanvas,
     onOpenCode: openCode,
     onToggleCode: toggleCode,
@@ -702,7 +748,7 @@ export function PipelinePage() {
       onSelectNode={selectNodeById}
       onSelectDataset={selectDatasetByName}
       onClose={clearSelection}
-      onRunNode={handleRunNode}
+      onRunNode={runNode}
       onEditCode={() => openCode(selectedNodeId)}
       staleReasons={staleness?.find((f) => f.node === selectedNodeId)?.reasons}
       activeEnv={activeEnv}
@@ -776,6 +822,9 @@ export function PipelinePage() {
       onSelectNode={selectNodeById}
       onOpenPipeline={(name) => openPipeline(name, { kind: "dataset", id: selectedDatasetName })}
       onClose={clearSelection}
+      projectId={projectId}
+      preview={datasetPreview}
+      resolvedPath={resolvedPaths.get(selectedDatasetName) ?? null}
     />
   );
 
@@ -857,7 +906,20 @@ export function PipelinePage() {
 
         <div className="pipeline-center">
           <div className="pipeline-center-row">
-            <div className="pipeline-canvas-area" data-lens={lens}>
+            <div className="pipeline-canvas-area" data-lens={lens} ref={canvasAreaRef}>
+              {pendingRun && (
+                <RunNodeConfirm
+                  nodeId={pendingRun.id}
+                  nodeName={pendingRun.name ?? pendingRun.id}
+                  env={activeEnv}
+                  container={canvasAreaRef}
+                  onRun={() => {
+                    handleRunNode(pendingRun);
+                    setPendingRun(null);
+                  }}
+                  onCancel={() => setPendingRun(null)}
+                />
+              )}
               <div style={{ display: "none" }}>
                 {projectId && pipelineId && (
                   <ExecutionControls
@@ -876,11 +938,23 @@ export function PipelinePage() {
                 onOrientationChange={setOrientation}
                 scope={scope}
                 onScopeChange={hasChain ? setScope : undefined}
+                groups={{
+                  count: canvasGroups.size,
+                  collapsed: collapsedGroups.size,
+                  onCollapseAll: () => setCollapsedGroups(new Set(canvasGroups.keys())),
+                  onExpandAll: () => setCollapsedGroups(new Set()),
+                }}
                 onAddNode={() => setAddNodeOpen(true)}
-                onFind={() => useCommandMenu.getState().show("@")}
+                addNodeTarget={pipelineId}
+                search={
+                  <CanvasFilterBar ref={filterInputRef} value={canvasFilter} onChange={setCanvasFilter}
+                    matches={highlight ? highlight.size : null}
+                    layers={presentLayers} />
+                }
                 onZoomIn={onCanvas ? zoomIn : undefined}
                 onZoomOut={onCanvas ? zoomOut : undefined}
                 onFitView={onCanvas ? fitCanvas : undefined}
+                onResetZoom={onCanvas ? resetZoom : undefined}
                 showMinimap={showMinimap}
                 onToggleMinimap={onCanvas ? () => setShowMinimap((v) => !v) : undefined}
                 history={editing}
@@ -915,16 +989,6 @@ export function PipelinePage() {
                 />
               ) : (
                 <div className="pipeline-flow" onDragOver={onCanvasDragOver} onDrop={onCanvasDrop}>
-                  {onCanvas && (
-                    <PipelineFlowBar
-                      items={canvasItems}
-                      freshness={freshness}
-                      designStates={designStates}
-                      executionStates={executionStates}
-                      filter={canvasFilter}
-                      onFilterChange={setCanvasFilter}
-                    />
-                  )}
                   {lens === "list" ? (
                     <ContractList
                       rows={contractRows}
@@ -935,7 +999,7 @@ export function PipelinePage() {
                       runningNodeId={runningNodeId}
                       onSelect={selectNodeById}
                       onSelectDataset={focusDatasetOnCanvas}
-                      onRunNode={handleRunNode}
+                      onRunNode={runNode}
                       onOpenCode={openCode}
                       onShowOnCanvas={showOnCanvas}
                     />
@@ -962,11 +1026,14 @@ export function PipelinePage() {
                       designStates={designStates}
                       freshness={freshness}
                       comments={commentCounts}
-                      highlight={highlight}
+                      highlight={canvasHighlight}
                       onViewportReady={onViewportReady}
                       showMinimap={showMinimap || dagItems.length > MINIMAP_AUTO_NODES}
                       orientation={orientation}
                       strata={strata}
+                      externals={externals}
+                      reportZoom
+                      onOpenPipeline={(name) => openPipeline(name)}
                     />
                   )}
 
@@ -982,17 +1049,6 @@ export function PipelinePage() {
                     />
                   )}
 
-                  {onCanvas && (
-                    <CanvasFilterBar ref={filterInputRef} value={canvasFilter} onChange={setCanvasFilter}
-                      matches={highlight ? highlight.size : null}
-                      layers={presentLayers}
-                      groups={{
-                        count: canvasGroups.size,
-                        collapsed: collapsedGroups.size,
-                        onCollapseAll: () => setCollapsedGroups(new Set(canvasGroups.keys())),
-                        onExpandAll: () => setCollapsedGroups(new Set()),
-                      }} />
-                  )}
 
                   {addNodeOpen && (
                     <AddNodeForm
@@ -1048,7 +1104,7 @@ export function PipelinePage() {
                     onClose={closeCode}
                     onSelectNode={(id) => openCode(id)}
                     onShowInGraph={showInGraph}
-                    onRunNode={(id) => handleRunNode(itemById.get(id) ?? { id })}
+                    onRunNode={(id) => runNode(itemById.get(id) ?? { id })}
                     onRunSample={(id) => { runSample(id); setBottomPanelTab("preview"); }}
                   />
                 </div>
@@ -1079,6 +1135,8 @@ export function PipelinePage() {
               executionStates={executionStates}
               isStreamPipeline={isStreamPipeline}
               streamSummary={runStreamSummary}
+              lastRun={lastRun}
+              lastServedRun={lastServedRun}
             />
           )}
         </div>
@@ -1109,6 +1167,7 @@ export function PipelinePage() {
           guard(() => runWithOptions(o))();
         }}
         confirmRun={confirmRun}
+        confirmNode={confirmNode}
         onCancelConfirmRun={() => setConfirmRun(null)}
         onConfirmRun={() => {
           confirmRun?.();

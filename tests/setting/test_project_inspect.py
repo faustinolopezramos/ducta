@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ducta.setting import project_inspect as inspect
-from ducta.setting.project_loader import ProjectConfigError, compile_project, validate_project
+from ducta.setting.project import inspect
+from ducta.setting.project.loader import ProjectConfigError, compile_project, validate_project
 
 PROJECT = """\
 version: 2

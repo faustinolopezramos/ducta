@@ -258,3 +258,40 @@ describe("Creating a project", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("Choose a unique name");
   });
 });
+
+describe("Project listing failure", () => {
+  it("says the listing failed and offers a retry, instead of 'No projects yet'", () => {
+    const onRetry = vi.fn();
+    render(
+      <MemoryRouter>
+        <ProjectsList projects={[]} error={new Error("Invalid project_id: '.claude'")} onRetry={onRetry} />
+      </MemoryRouter>
+    );
+    expect(screen.getByText("Couldn't load the projects")).toBeInTheDocument();
+    expect(screen.queryByText("No projects yet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(onRetry).toHaveBeenCalled();
+  });
+
+  it("shows no empty state while the listing is still loading", () => {
+    render(
+      <MemoryRouter>
+        <ProjectsList projects={[]} loading />
+      </MemoryRouter>
+    );
+    expect(screen.queryByText("No projects yet")).not.toBeInTheDocument();
+  });
+});
+
+describe("Empty workspace", () => {
+  it("offers one 'New project', in the empty state — not a second one in the header", () => {
+    renderDashboard([]);
+    expect(screen.getAllByRole("button", { name: /New project/ })).toHaveLength(1);
+  });
+
+  it("puts 'New project' back in the header once there are projects", () => {
+    renderDashboard();
+    expect(screen.getAllByRole("button", { name: /New project/ })).toHaveLength(1);
+    expect(screen.queryByText("No projects yet")).not.toBeInTheDocument();
+  });
+});

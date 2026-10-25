@@ -67,3 +67,9 @@ class AICancelledError(AIError):
 
     exit_code = 1
     http_status = 409
+
+
+class AIPolicyError(AIConfigError):
+    """The project's ``ai:`` block in ``ducta.yaml`` does not allow it."""
+
+    http_status = 403

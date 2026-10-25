@@ -78,7 +78,7 @@ def test_a_freshly_generated_project_has_no_unknown_keys(
     warnings for keys the template itself wrote — noise that teaches users to
     ignore the one warning that catches real typos."""
     from ducta.console.template import TemplateGenerator, TemplateType
-    from ducta.setting.project_loader import compile_project, validate_project
+    from ducta.setting.project.loader import compile_project, validate_project
 
     root = tmp_path / "p"
     TemplateGenerator(root).generate_project(

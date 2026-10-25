@@ -13,8 +13,8 @@ from ducta.console.template import (
     TemplateGenerator,
     TemplateType,
 )
-from ducta.setting.project_loader import ProjectConfigError, compile_project, validate_project
-from ducta.setting.project_schema import BUILTIN_SCORER
+from ducta.setting.project.loader import ProjectConfigError, compile_project, validate_project
+from ducta.setting.project.schema import BUILTIN_SCORER
 
 
 def _docs(tmp_path: Path) -> dict:

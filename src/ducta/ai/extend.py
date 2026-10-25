@@ -45,28 +45,27 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 import yaml  # type: ignore[import-untyped]
 
 from ducta.ai.builder import (
-    _BASE_PROMPT,
-    _MAX_EDITABLE_CHARS,
-    _MIN_CONTEXT_CHARS,
+    BASE_PROMPT,
     MAX_CHARS,
-    Assembled,
-    Attempt,
-    Draft,
-    ParsedAnswer,
-    Scope,
-    _is_pipeline,
-    _read,
-    _refuse_credentials,
-    _run,
-    _sha,
-    _too_large,
+    MAX_EDITABLE_CHARS,
     assemble,
     build_context,
     fix_scope,
-    message_budget,
+    is_pipeline_file,
+    refuse_credentials,
     where_code_goes,
 )
+from ducta.ai.drafts import Attempt, Draft, read_text, text_sha
 from ducta.ai.errors import AIConfigError
+from ducta.ai.loop import (
+    MIN_CONTEXT_CHARS,
+    Assembled,
+    ParsedAnswer,
+    Scope,
+    message_budget,
+    run_loop,
+    too_large,
+)
 from ducta.ai.providers import LLMProvider
 
 EXTEND_RULES = """Rules — you are EXTENDING an existing pipeline with NEW nodes:
@@ -82,7 +81,7 @@ imports) or in a NEW module in the project's code folder.
 - Explain what you added in one or two lines, in the language of the request.
 """
 
-EXTEND_PROMPT = _BASE_PROMPT + EXTEND_RULES
+EXTEND_PROMPT = BASE_PROMPT + EXTEND_RULES
 AGAIN_EXTEND = (
     "answer again with the COMPLETE pipeline file (existing nodes unchanged, plus the new "
     "ones) and every module you add to."
@@ -223,11 +222,11 @@ def existing_changes(root: Path, pipeline: str, files: Dict[str, str]) -> List[s
     scope = extend_scope(root, pipeline)
     out: List[str] = []
     added: List[str] = []
-    pipeline_rel = next((r for r in scope.editable if _is_pipeline(r)), None)
+    pipeline_rel = next((r for r in scope.editable if is_pipeline_file(r)), None)
     for rel, text in files.items():
         if rel not in scope.editable:
             continue
-        before = _read(root / rel) or ""
+        before = read_text(root / rel) or ""
         if rel == pipeline_rel:
             problems, added = _pipeline_changes(rel, before, text)
             out += problems
@@ -242,13 +241,13 @@ def existing_changes(root: Path, pipeline: str, files: Dict[str, str]) -> List[s
 
 def new_code_problems(root: Path, files: Dict[str, str]) -> List[str]:
     """What Ducta's review flags (I/O, ``collect()``, credentials) in the code the draft adds."""
-    from ducta.ai.review import ReviewFacts, _code_findings
+    from ducta.ai.review import ReviewFacts, code_findings
 
     out: List[str] = []
     for rel, text in files.items():
         if not rel.endswith(".py"):
             continue
-        old_source = _read(root / rel) or ""
+        old_source = read_text(root / rel) or ""
         before = set(_statements(old_source) or [])
         # A line the file already had is not the draft's: a fix that touches a function
         # which reads a file does not have to take that read out.
@@ -268,7 +267,7 @@ def new_code_problems(root: Path, files: Dict[str, str]) -> List[str]:
             facts.code_lines = lines[first - 1 : last]
             out += [
                 f"{rel}:{f.line or first}: {f.title} — {f.suggestion}"
-                for f in _code_findings(facts)
+                for f in code_findings(facts)
                 if not (f.code and f.code in old_lines)
             ]
     return out
@@ -281,9 +280,9 @@ def extension_summary(root: Path, draft: Draft) -> Dict[str, Any]:
     nodes: List[Dict[str, Any]] = []
     functions: List[str] = []
     for rel, text in draft.files.items():
-        if _is_pipeline(rel):
+        if is_pipeline_file(rel):
             try:
-                old = _nodes(yaml.safe_load(_read(root / rel) or "") or {})
+                old = _nodes(yaml.safe_load(read_text(root / rel) or "") or {})
                 new = _nodes(yaml.safe_load(text) or {})
             except yaml.YAMLError:
                 continue
@@ -303,7 +302,7 @@ def extension_summary(root: Path, draft: Draft) -> Dict[str, Any]:
                     }
                 )
         elif rel.endswith(".py"):
-            before = {n.name for n in _top_level_functions(_read(root / rel) or "")}
+            before = {n.name for n in _top_level_functions(read_text(root / rel) or "")}
             functions += [
                 f"{rel}: {n.name}()" for n in _top_level_functions(text) if n.name not in before
             ]
@@ -347,8 +346,8 @@ def extend_assembler(root: Path, ctx: Any, scope: Scope) -> Callable[[ParsedAnsw
         changes = existing_changes(root, scope.pipeline or "", out.files)
         out.rejected += changes + new_code_problems(root, out.files)
         if not changes:
-            for rel in [r for r in out.files if _is_pipeline(r) and r in scope.editable]:
-                out.files[rel] = _with_additions(_read(root / rel) or "", out.files[rel])
+            for rel in [r for r in out.files if is_pipeline_file(r) and r in scope.editable]:
+                out.files[rel] = _with_additions(read_text(root / rel) or "", out.files[rel])
         return out
 
     return assemble_extension
@@ -379,34 +378,33 @@ def extend(
     seen: Dict[str, Optional[str]] = {}
     for rel in sorted(scope.editable):
         lang = "python" if rel.endswith(".py") else "yaml"
-        text = _read(root / rel)
-        seen[rel] = _sha(text)
-        _refuse_credentials(rel, text, provider)
+        text = read_text(root / rel)
+        seen[rel] = text_sha(text)
+        refuse_credentials(rel, text, provider)
         parts.append(f"```{lang} file={rel}\n{(text or '').rstrip()}\n```")
     parts.append("# What to add\n" + request.strip())
     own = sum(len(x) + 2 for x in parts)
-    if own > _MAX_EDITABLE_CHARS:
+    if own > MAX_EDITABLE_CHARS:
         raise AIConfigError(
             f"Pipeline '{pipeline}' and its modules are too large to send whole "
-            f"({own:,} characters; the limit is {_MAX_EDITABLE_CHARS:,}). Add the nodes in a "
+            f"({own:,} characters; the limit is {MAX_EDITABLE_CHARS:,}). Add the nodes in a "
             "new pipeline that reads its outputs (`ducta ai new`)."
         )
     where = "\n\n" + where_code_goes(root)
-    room = max(_MIN_CONTEXT_CHARS, MAX_CHARS - own)
+    room = max(MIN_CONTEXT_CHARS, MAX_CHARS - own)
     budget = message_budget(provider.config, EXTEND_PROMPT)
     if budget is not None:
         room = min(room, budget - own - len(where) - 2)
-        if room < _MIN_CONTEXT_CHARS:
-            raise _too_large(provider.config, own + _MIN_CONTEXT_CHARS)
+        if room < MIN_CONTEXT_CHARS:
+            raise too_large(provider.config, own + MIN_CONTEXT_CHARS)
     parts.insert(0, ctx.render(room) + where)
-    return _run(
+    return run_loop(
         root,
         provider,
         system=EXTEND_PROMPT,
         first_message="\n\n".join(parts),
         scope=scope,
         request=request.strip(),
-        ctx=ctx,
         max_attempts=max_attempts,
         on_attempt=on_attempt,
         seen=seen,

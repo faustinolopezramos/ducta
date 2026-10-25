@@ -144,7 +144,7 @@ def test_login_with_nothing_configured_says_what_to_run(tmp_path, monkeypatch):
 
 
 def test_a_hidden_folder_in_pipelines_is_not_read(tmp_path):
-    from ducta.setting.project_loader import read_project
+    from ducta.setting.project.loader import read_project
 
     root = _project(tmp_path)
     hidden = root / "pipelines" / ".claude" / "skills" / "ducta" / "examples"

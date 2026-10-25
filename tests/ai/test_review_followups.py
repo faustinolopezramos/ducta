@@ -9,11 +9,11 @@ import os
 import pytest
 
 from ducta.ai import fsutil
-from ducta.ai.builder import Draft, list_drafts, load_draft
 from ducta.ai.config import AIConfig, save_config
 from ducta.ai.context import _imports, redact
+from ducta.ai.drafts import Draft, list_drafts, load_draft
 from ducta.ai.errors import AIConfigError
-from ducta.ai.review import ReviewFacts, _code_findings
+from ducta.ai.review import ReviewFacts, code_findings
 from ducta.ai.secrets import keychain_user
 
 # ── redact: a credential's name may carry a prefix ──────────────────────────
@@ -65,7 +65,7 @@ def _titles(code: str):
     facts = ReviewFacts("", "", "", "dev", {}, {}, {})
     facts.function = {"file": "m.py", "line": 1, "function": ""}
     facts.code_lines = code.splitlines()
-    return [f.title for f in _code_findings(facts)]
+    return [f.title for f in code_findings(facts)]
 
 
 @pytest.mark.parametrize(

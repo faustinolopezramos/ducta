@@ -12,6 +12,8 @@ export interface NodeSchemaIO {
   declared: boolean;
   format?: string | null;
   path?: string | null;
+  /** The path for the active environment (asked with `env`), when it has placeholders. */
+  resolved_path?: string | null;
   write_mode?: string | null;
   schema?: string | null;
   layer?: "bronze" | "silver" | "gold" | null;
@@ -104,14 +106,15 @@ export interface PipelineNodeSchemas {
  *
  * Every node of the pipeline with the same detail as `useNodeSchema`, plus the
  * pipeline's latest run — one request for the canvas, the contract list and the
- * focus panel instead of one per node.
+ * focus panel instead of one per node. With `env`, each node's last run also
+ * counts that environment's run certificates (runs started from the CLI).
  */
-export const usePipelineNodeSchemas = (projectId: string, pipeline: string) =>
+export const usePipelineNodeSchemas = (projectId: string, pipeline: string, env?: string) =>
   useQuery<PipelineNodeSchemas>({
-    queryKey: qk.projects.nodeSchemas(projectId, pipeline),
+    queryKey: qk.projects.nodeSchemas(projectId, pipeline, env),
     queryFn: () =>
       client
-        .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/schema`)
+        .get(`/projects/${projectId}/pipelines/${pipeline}/nodes/schema`, { params: env ? { env } : undefined })
         .then((r) => r.data),
     staleTime: 15 * 1000,
     enabled: !!projectId && !!pipeline,

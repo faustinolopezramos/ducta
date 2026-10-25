@@ -95,7 +95,8 @@ def propose(
         if should_stop and should_stop():
             raise AICancelledError("Stopped")
         try:
-            from ducta.ai.builder import fix, save_draft
+            from ducta.ai.builder import fix
+            from ducta.ai.drafts import save_draft
 
             draft = fix(root, event.pipeline, provider, error=event.error, should_stop=should_stop)
             save_draft(root, draft)

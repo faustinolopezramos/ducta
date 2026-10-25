@@ -40,7 +40,7 @@ from ducta.core import PipelineExecutor
 from ducta.core.results import PipelineRunResult
 from ducta.setting.contexts import Context
 from ducta.setting.exceptions import ConfigurationError as SettingConfigurationError
-from ducta.setting.project_loader import load_project_v2
+from ducta.setting.project.loader import load_project_v2
 
 
 def report_run_outcome(

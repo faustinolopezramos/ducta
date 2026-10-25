@@ -231,15 +231,18 @@ export default function IngestionPage({ header }: { header?: SectionHeader } = {
         title={header?.title ?? "Connections"}
         description={header?.description ?? "The databases your ingestion nodes read from."}
         tabs={header?.tabs}
+        // With no connections the empty state carries the one "New connection".
         actions={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setModal({ kind: "create" })}
-            leftIcon={<IconPlus size={15} />}
-          >
-            New connection
-          </Button>
+          connections.length > 0 && (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setModal({ kind: "create" })}
+              leftIcon={<IconPlus size={15} />}
+            >
+              New connection
+            </Button>
+          )
         }
       />
 
@@ -273,8 +276,8 @@ export default function IngestionPage({ header }: { header?: SectionHeader } = {
             title="No connections yet"
             description="Register a database connection, then create declarative ingestion nodes from it — no Python needed."
             action={
-              <Button variant="ghost" size="sm" onClick={() => setModal({ kind: "create" })}>
-                <IconPlus size={14} /> Add your first connection
+              <Button variant="primary" size="sm" onClick={() => setModal({ kind: "create" })} leftIcon={<IconPlus size={15} />}>
+                New connection
               </Button>
             }
           />

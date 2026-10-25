@@ -13,10 +13,11 @@ import httpx
 import pytest
 
 from ducta.ai import secrets
-from ducta.ai.builder import apply_draft, assemble, fix, generate, parse_answer
+from ducta.ai.builder import apply_draft, assemble, fix, generate
 from ducta.ai.config import AIConfig, build_config, load_config, save_config, update_config
 from ducta.ai.context import build_context, find_secrets, redact_code
 from ducta.ai.errors import AICancelledError, AIConfigError, AIError
+from ducta.ai.loop import parse_answer
 from ducta.ai.providers import AnthropicProvider, ChatMessage, OpenAICompatibleProvider
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -268,9 +269,9 @@ def test_anthropic_older_models_get_no_effort(fake_sdk):  # noqa: F811
 
 def test_a_problems_fix_reaches_the_model():
     """A Problem's fix is {label, replace: [old, new]}: the model is told both."""
-    from ducta.ai.builder import _describe
+    from ducta.ai.loop import describe_problem
 
-    text = _describe(
+    text = describe_problem(
         {
             "file": "pipelines/etl.yaml",
             "line": 4,

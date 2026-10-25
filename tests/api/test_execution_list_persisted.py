@@ -162,3 +162,19 @@ class TestListingIsScopedToTheWorkspace:
         )
         runs, _ = _manager([], store).list_executions_paginated(workspace=here)
         assert [r.id for r in runs] == ["kept"]
+
+
+def test_status_filter_takes_several_statuses():
+    """The Runs page filters on several statuses at once ("failed,cancelled")."""
+    mgr = _manager(
+        [
+            _record("ok", status=ExecutionStatus.SUCCESS),
+            _record("bad", status=ExecutionStatus.FAILED),
+            _record("stop", status=ExecutionStatus.CANCELLED),
+        ],
+        None,
+    )
+    both, total = mgr.list_executions_paginated(status="failed,cancelled")
+    assert {e.id for e in both} == {"bad", "stop"} and total == 2
+    one, _ = mgr.list_executions_paginated(status="failed")
+    assert [e.id for e in one] == ["bad"]

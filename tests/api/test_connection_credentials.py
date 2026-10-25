@@ -45,3 +45,21 @@ def test_credentials_say_where_they_are_set_and_never_what(project):
         {"name": "CRM_PASSWORD", "set": True, "where": "environment"},
     ]
     assert "alice" not in r.text and "s3cret" not in r.text
+
+
+def test_an_unknown_project_is_a_404_not_the_workspaces_sources(project):
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id="a", username="a", email="a@example.com", roles=["admin"]
+    )
+    client = TestClient(app)
+    src = {"source": str(project)}
+    r = client.get("/api/ingestion/connections", params={**src, "project": "nope"})
+    assert r.status_code == 404 and "nope" in r.text
+    body = {"name": "x", "type": "postgresql", "host": "h", "port": 5432, "database": "d"}
+    r = client.post("/api/ingestion/connections", params={**src, "project": "nope"}, json=body)
+    assert r.status_code == 404
+    assert "x:" not in (project / "sources.yaml").read_text()  # nothing written
+    # The workspace's own project, by its folder name, is still the workspace.
+    r = client.get("/api/ingestion/connections", params={**src, "project": project.name})
+    assert r.status_code == 200 and [c["name"] for c in r.json()["connections"]] == ["crm"]

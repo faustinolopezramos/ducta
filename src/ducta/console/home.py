@@ -39,13 +39,13 @@ class ProjectSummary:
 
 def project_summary(start: Optional[Path] = None) -> Optional[ProjectSummary]:
     """The project at or above *start*, read without Spark (milliseconds)."""
-    from ducta.setting.project_context import find_nearest_project
+    from ducta.setting.project.context import find_nearest_project
 
     root = find_nearest_project(start or Path.cwd())
     if root is None:
         return None
     try:
-        from ducta.setting.project_loader import validate_project
+        from ducta.setting.project.loader import validate_project
 
         project = validate_project(root)
         return ProjectSummary(

@@ -15,7 +15,7 @@ import { routes } from "../../utils/routes";
 import { formatRelative } from "../../utils/timeLabels";
 import { Button } from "../ui/Button";
 import { AIDraftDialog } from "./AIDraftDialog";
-import { useElapsed } from "./aiText";
+import { usageLine, useElapsed } from "./aiText";
 import "./AIDraftDialog.css";
 
 const SEVERITY: Record<AIReviewFinding["severity"], string> = { high: "High", medium: "Med", low: "Low" };
@@ -79,7 +79,7 @@ export function NodeReview({
       <div className="node-review__bar">
         <span className="ai-dim node-review__when">
           {review
-            ? `Reviewed ${formatRelative(review.created_at) ?? review.created_at} · ${review.env}${review.model ? ` · ${review.model}` : " · Ducta's checks"}`
+            ? `Reviewed ${formatRelative(review.created_at) ?? review.created_at} · ${review.env}${review.model ? ` · ${review.model}` : " · Ducta's checks"}${usageLine(review.usage) ? ` · ${usageLine(review.usage)}` : ""}`
             : isLoading
               ? "Loading…"
               : ""}

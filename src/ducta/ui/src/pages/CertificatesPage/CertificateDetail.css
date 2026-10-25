@@ -49,6 +49,12 @@
   color: var(--text-dim);
 }
 
+.cert-detail__compare-hint {
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
 .cert-detail__compare-row {
   display: flex;
   gap: var(--space-2);
@@ -56,7 +62,7 @@
 
 .cert-detail__compare-input {
   flex: 1;
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -70,3 +76,9 @@
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 18%, transparent);
 }
+
+/* The certificates list: a chevron appears on the row under the pointer or
+   focus, saying that the row opens the certificate. */
+.cert-row-go { opacity: 0; color: var(--text-muted); font-size: var(--text-lg); line-height: 1; }
+.tui-table__row--clickable:hover .cert-row-go,
+.tui-table__row--clickable:focus-visible .cert-row-go { opacity: 1; }

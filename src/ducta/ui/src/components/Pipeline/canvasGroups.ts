@@ -72,7 +72,7 @@ export function collapseGroups(items: DagCanvasItem[], collapsed: ReadonlySet<st
     box.outputs = uniq(
       members.flatMap((m) => (m.outputs ?? []).filter((p: CanvasPort) => readOutside.has(p.name) || !readInside.has(p.name))),
     );
-    box.name = `${box.id.slice(GROUP_PREFIX.length)}.* · ${box.members.length} nodes`;
+    box.name = `${box.id.slice(GROUP_PREFIX.length)}.*`;
     box.description = `${box.members.length} nodes: ${box.members.join(", ")}`;
   }
   return out;

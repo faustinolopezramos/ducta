@@ -50,7 +50,7 @@ Ducta Gate acts as the physical layer of the Ducta ecosystem, implementing:
 ## 2. Configuration & Schemas
 
 Users declare datasets once in the project's `catalog.yaml` (see
-`docs/configuration.rst`). `ducta.setting.project_loader` compiles the catalog
+`docs/configuration.rst`). `ducta.setting.project.loader` compiles the catalog
 into the two documents Gate reads — `input_config` and `output_config` — with
 `path` becoming `filepath` and the `write:` block flattened into
 `write_mode`, `merge`, `partition`, … — everything below is what Gate sees at
