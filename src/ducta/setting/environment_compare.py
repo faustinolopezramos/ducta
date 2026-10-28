@@ -29,27 +29,21 @@ identical rows.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ducta.setting.project.loader import apply_environment, read_project
+from ducta.setting.utils import leaves
 
 BASE = "base"
 _FULL = ("paths", "settings")
 _CHANGED_ONLY = ("catalog", "pipelines")
 
 
-def _leaves(value: Any, prefix: str) -> Iterator[Tuple[str, Any]]:
-    if isinstance(value, dict) and value:
-        for key, sub in value.items():
-            yield from _leaves(sub, f"{prefix}.{key}")
-    else:
-        yield prefix, value
-
-
 def _flatten(tree: Dict[str, Any], sections: Tuple[str, ...]) -> Dict[str, Any]:
     out: Dict[str, Any] = {}
     for section in sections:
-        out.update(dict(_leaves(tree.get(section) or {}, section)))
+        for path, value in leaves(tree.get(section) or {}, (section,)).items():
+            out[".".join(path)] = value
     return out
 
 

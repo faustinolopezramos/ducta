@@ -252,3 +252,107 @@ class TestSettings:
             {"run_lock": {"backend": "storage", "dir": "s3://bucket/locks"}, "environment": "dev"}
         )
         assert s.run_lock_dir.startswith("s3://bucket/locks/")
+
+
+class TestLockIsNeverLeftHeldByAFailure:
+    class _Store:
+        """A lease store whose second key fails."""
+
+        def __init__(self):
+            self.created = []
+            self.deleted = []
+
+        def create(self, name, body):
+            if self.created:
+                raise OSError("store unavailable")
+            self.created.append(name)
+            return body
+
+        def read(self, name):
+            return None
+
+        def replace(self, name, body, token):
+            return None
+
+        def delete(self, name, token):
+            self.deleted.append(name)
+
+    def test_keys_already_taken_are_released_when_a_later_key_raises(self, tmp_path):
+        store = self._Store()
+        lock = RunLock(
+            RunLockSettings(backend="storage", lock_dir=str(tmp_path)),
+            ["a", "b"],
+            pipeline="p",
+            run_id="r1",
+            store=store,
+        )
+        with pytest.raises(OSError, match="unavailable"):
+            lock.acquire()
+        assert len(store.deleted) == 1  # the lease on "a" was given back
+
+
+class TestFileLeaseIsNeverAbsentWhileRenewed:
+    def test_a_fresh_create_cannot_slip_in_between_two_renewals(self, tmp_path):
+        store = _FileLeaseStore(tmp_path)
+        token = store.create("k.lock", b"v0")
+        stop = threading.Event()
+        stolen = []
+
+        def intruder():
+            while not stop.is_set():
+                if store.create("k.lock", b"intruder") is not None:
+                    stolen.append(True)
+                    return
+
+        thread = threading.Thread(target=intruder)
+        thread.start()
+        try:
+            for i in range(1, 300):
+                token = store.replace("k.lock", f"v{i}".encode(), token)
+                assert token is not None
+        finally:
+            stop.set()
+            thread.join()
+        assert stolen == []
+
+    def test_a_stale_guard_from_a_dead_process_is_taken_over(self, tmp_path):
+        store = _FileLeaseStore(tmp_path)
+        token = store.create("k.lock", b"v0")
+        guard = tmp_path / "k.lock.guard"
+        guard.write_text("")
+        old = time.time() - 60
+        os.utime(guard, (old, old))
+        assert store.replace("k.lock", b"v1", token) == b"v1"
+
+    def test_a_late_waiter_puts_back_the_fresh_guard_it_moved(self, tmp_path, monkeypatch):
+        # Two waiters judged the dead guard stale; the first already replaced it with
+        # its own. The second must not take that live guard away.
+        from ducta.core import run_lock
+
+        store = _FileLeaseStore(tmp_path)
+        guard = tmp_path / "k.lock.guard"
+        guard.write_bytes(b"first-waiter")
+        real = time.time
+        looks = iter([real() + 60])  # the stale look happened before the swap
+        monkeypatch.setattr(run_lock.time, "time", lambda: next(looks, None) or real())
+        assert store._take_over_if_stale(guard) is False
+        assert guard.read_bytes() == b"first-waiter"
+        assert [p.name for p in tmp_path.iterdir()] == ["k.lock.guard"]
+
+    def test_the_guard_left_is_someone_elses_and_stays(self, tmp_path):
+        store = _FileLeaseStore(tmp_path)
+        guard = tmp_path / "k.lock.guard"
+        with store._guard("k.lock"):
+            guard.write_bytes(b"taken over by another process")
+        assert guard.read_bytes() == b"taken over by another process"
+
+    def test_a_busy_guard_is_reported_not_taken_as_a_lost_lease(self, tmp_path):
+        from ducta.core.run_lock import LeaseGuardBusy
+
+        store = _FileLeaseStore(tmp_path)
+        store.GUARD_WAIT_SECONDS = 0.1
+        token = store.create("k.lock", b"v0")
+        (tmp_path / "k.lock.guard").write_text("")
+        with pytest.raises(LeaseGuardBusy):
+            store.replace("k.lock", b"v1", token)
+        assert (tmp_path / "k.lock").read_bytes() == b"v0"

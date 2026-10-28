@@ -486,6 +486,7 @@ class SanityPhaseRunner:
         # one runner across every node in the pipeline, so without this a
         # node's fail_fast: false would be silently ignored during preflight.
         fail_fast = sanity_config_dict.get("fail_fast", self.fail_fast)
+        configured_fail_fast = fail_fast
 
         # A declared sanity_gate is the thing that decides what a failure means,
         # so it must get to decide. `fail_fast` defaults to true for this phase,
@@ -595,6 +596,7 @@ class SanityPhaseRunner:
         # IMPORTANT: Gate evaluation happens BEFORE raising QualityChecksFailed
         # in non-fail-fast mode so that gate result is always available
         node_gate_cfg = sanity_config_dict.get("sanity_gate")
+        gate_result = None
         try:
             QualityGateEvaluator = None
             try:
@@ -610,35 +612,40 @@ class SanityPhaseRunner:
                 )
                 if gate_result is not None:
                     report.score = gate_result.score
+                    report.gate_decided = True
                     if not gate_result.passed:
                         _raise_or_warn_gate(gate_result, node_name)
+                else:
+                    report.score = QualityGateEvaluator.compute_score(report, {})
             elif QualityGateEvaluator:
                 report.score = QualityGateEvaluator.compute_score(report, {})
         except QualityGateBlocked:
             raise
+        except ImportError:
+            pass
         except Exception as e:
+            # A gate was declared and it could not be evaluated (`max_errors: null`, a
+            # bug): the node fails closed, as the data-quality phase already does. It
+            # used to fall back to a plain score, and since a declared gate also turns
+            # off fail_fast and the final raise, the errors passed silently.
             logger.exception(f"Sanity gate evaluation failed for node '{node_name}': {e}")
-            try:
-                from ducta.check.gate import QualityGateEvaluator as _GE  # lazy import
+            if node_gate_cfg or self._global_gate_config:
+                raise
 
-                report.score = _GE.compute_score(report, {})
-            except Exception as score_error:  # noqa: BLE001
-                logger.warning(
-                    "Quality score for node '{}' could not be computed; the report keeps "
-                    "its default score: {}",
-                    node_name,
-                    score_error,
-                )
-
-        # Non-fail-fast mode: raise collected failures (AFTER gate so gate result
-        # is available). Skipped when a gate was in charge — it has already had
-        # its say above, and for `warn_only` that say was "log this and carry
-        # on". Raising here anyway would take the node down for the failures the
-        # gate just declared tolerable, which is the same way round the
-        # fail-fast raise used to pre-empt the gate.
-        if not fail_fast and not gate_will_decide:
+        # Only a gate that actually evaluated has had its say: for `warn_only` that say
+        # was "log this and carry on". A gate that is disabled (`enabled: false`) decides
+        # nothing, so the node is judged as if none were declared: an ERROR fails it.
+        if not report.gate_decided:
             errors = [r for r in results if r.is_error]
             if errors:
+                if configured_fail_fast:
+                    first = errors[0]
+                    raise QualityCheckError(
+                        check_name=first.check_name,
+                        message=first.message,
+                        node_name=node_name,
+                        severity=first.severity.value,
+                    )
                 raise QualityChecksFailed(results, node_name)
 
         return report
@@ -800,7 +807,21 @@ class ValidationPhaseRunner:
                         "Missing 'output_path' in global_config or 'base_path' in global_config.quality.output."
                     )
                 env = gs.get("environment", "base")
-                base_path = _default_quality_dir(Path(global_output) / env)
+                from ducta.gate.constants import is_cloud_path
+
+                if is_cloud_path(str(global_output)):
+                    # pathlib would collapse "s3://bucket" to "s3:/bucket"
+                    base_path = f"{str(global_output).rstrip('/')}/{env}/{QUALITY_DIR_NAME}"
+                else:
+                    base_path = _default_quality_dir(Path(global_output) / env)
+
+            if not format and not output_cfg.get("format"):
+                from ducta.gate.constants import is_cloud_path
+
+                if is_cloud_path(str(base_path)):
+                    # JSON reports are local files; a cloud location with no format
+                    # chosen gets parquet instead of failing every quality node.
+                    output_fmt = "parquet"
 
             self.workspace_path = base_path
             self.storage = storage_backend or ContextAwareStorageBackend(
@@ -1177,21 +1198,19 @@ class ValidationPhaseRunner:
         gate_action: Optional[str] = None,
         pipeline_name: str = DEFAULT_PIPELINE_NAME,
     ) -> None:
-        """Append run metrics to history."""
-        try:
-            from datetime import datetime, timezone
+        """Append run metrics to history. Errors propagate: the caller records them in
+        ``report.persistence_warnings``."""
+        from datetime import datetime, timezone
 
-            metric_entry: Dict[str, Any] = {
-                "row_count": adapter.count(),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "score": report.score if report is not None else 1.0,
-                "errors_count": report.errors_count if report is not None else 0,
-                "warnings_count": report.warnings_count if report is not None else 0,
-                "gate_action": gate_action or "none",
-            }
-            self.storage.append_history(dataset_name, metric_entry, pipeline_name)
-        except Exception as e:
-            logger.warning(f"Failed to append to history: {e}")
+        metric_entry: Dict[str, Any] = {
+            "row_count": adapter.count(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "score": report.score if report is not None else 1.0,
+            "errors_count": report.errors_count if report is not None else 0,
+            "warnings_count": report.warnings_count if report is not None else 0,
+            "gate_action": gate_action or "none",
+        }
+        self.storage.append_history(dataset_name, metric_entry, pipeline_name)
 
     def render_report(self, report: QualityReport, verbose: bool = False) -> None:
         """Render a validation report.

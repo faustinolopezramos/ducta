@@ -93,3 +93,41 @@ class TestHandleTemplateCommandRejectsBadInputBeforeGenerating(object):
 
         assert result == ExitCode.VALIDATION_ERROR.value
         assert called["generate"] is False
+
+
+class TestAFailedGenerationLeavesNothingBehind:
+    @staticmethod
+    def _failing_generator(output_dir):
+        from unittest.mock import MagicMock
+
+        generator = MagicMock()
+
+        def generate(*_args, **_kwargs):
+            (output_dir / "pipelines").mkdir(parents=True)
+            (output_dir / "ducta.yaml").write_text("half")
+            raise OSError("disk full")
+
+        generator.generate_project.side_effect = generate
+        return generator
+
+    def test_a_new_folder_is_removed_so_the_command_can_be_run_again(self, tmp_path):
+        from unittest.mock import patch
+
+        target = tmp_path / "proj"
+        with patch("ducta.console.template.TemplateGenerator") as make:
+            make.return_value = self._failing_generator(target)
+            code = TemplateCommand()._generate_template(
+                "medallion_basic", "proj", str(target), True
+            )
+        assert code == ExitCode.GENERAL_ERROR.value
+        assert not target.exists()
+
+    def test_an_empty_folder_that_was_there_is_kept_but_emptied(self, tmp_path):
+        from unittest.mock import patch
+
+        target = tmp_path / "proj"
+        target.mkdir()
+        with patch("ducta.console.template.TemplateGenerator") as make:
+            make.return_value = self._failing_generator(target)
+            TemplateCommand()._generate_template("medallion_basic", "proj", str(target), True)
+        assert target.is_dir() and list(target.iterdir()) == []

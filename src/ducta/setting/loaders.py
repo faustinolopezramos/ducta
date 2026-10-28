@@ -18,11 +18,8 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import importlib.util
 import json
 import os
-import sys
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -152,63 +149,15 @@ class TomlConfigLoader(BaseFormatLoader):
             raise ConfigLoadError(f"Invalid TOML syntax in {safe_path}: {str(e)}") from e
 
 
-class PythonConfigLoader(BaseFormatLoader):
-    FILE_SUFFIXES = (".py",)
-    FORMAT_NAME = "Python"
-
-    def _load_format(self, safe_path: Path) -> Dict[str, Any]:
-        warnings.warn(
-            f"PythonConfigLoader: executing Python file '{safe_path}'. "
-            "Python config files run arbitrary code — only load files from "
-            "trusted, controlled sources.",
-            UserWarning,
-            stacklevel=4,
-        )
-        module = self._load_module(safe_path)
-        return self._extract_config(module, safe_path)
-
-    def _load_module(self, path: Path):
-        """Load and execute a Python module."""
-        module_name = f"ducta_config_{abs(hash(str(path)))}"
-        spec = importlib.util.spec_from_file_location(module_name, path)
-
-        if not spec or not spec.loader:
-            raise ConfigLoadError(f"Could not load Python module: {path}")
-
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[module_name] = module
-
-        try:
-            spec.loader.exec_module(module)
-        except Exception as e:
-            raise ConfigLoadError(f"Error executing module {path}: {str(e)}") from e
-        finally:
-            sys.modules.pop(module_name, None)
-
-        return module
-
-    @staticmethod
-    def _extract_config(module, path: Path) -> Dict[str, Any]:
-        """Extract config variable from module."""
-        if not hasattr(module, "config"):
-            raise ConfigLoadError(f"Python module {path} must define 'config' variable")
-        if not isinstance(module.config, dict):
-            raise ConfigLoadError(f"'config' in {path} must be a dict")
-        return module.config
-
-
 class ConfigLoaderFactory:
     """Factory for creating appropriate configuration loaders."""
 
-    def __init__(self, allow_python: bool = True):
+    def __init__(self) -> None:
         self._loaders: List[ConfigLoader] = [
             YamlConfigLoader(),
             JsonConfigLoader(),
             TomlConfigLoader(),
         ]
-
-        if allow_python:
-            self._loaders.append(PythonConfigLoader())
 
     def get_loader(self, source: Union[str, Path]) -> ConfigLoader:
         for loader in self._loaders:

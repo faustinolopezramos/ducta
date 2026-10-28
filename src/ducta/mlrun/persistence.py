@@ -27,6 +27,8 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.mlrun.validators import plain_number
+
 
 def _serialize(model: Any, path: Path) -> str:
     """Serialize ``model`` to ``path``; prefer joblib, fall back to pickle."""
@@ -129,6 +131,7 @@ def log_run_metrics(ml_context: Any, metrics: Optional[Mapping[str, Any]]) -> No
     if tracker is None or not run_id or not metrics:
         return
     for key, value in metrics.items():
+        value = plain_number(value)
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             logger.warning(
                 "Metric '{}' is not a number ({}): not logged to run {}", key, value, run_id

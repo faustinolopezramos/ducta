@@ -7,6 +7,7 @@ import pytest
 
 from ducta.gate.exceptions import ConfigurationError, MissingDependencyError, ReadOperationError
 from ducta.gate.input import InputLoader
+from ducta.gate.input_paths import has_glob_pattern
 
 
 class TestInputLoaderInit:
@@ -126,18 +127,18 @@ class TestGetFilepath:
             loader._get_filepath({"filepath": pattern}, "ds1")
 
 
-class TestContainsGlobPattern:
+class TestHasGlobPattern:
     def test_asterisk(self):
-        assert InputLoader._contains_glob_pattern("/path/to/*.csv") is True
+        assert has_glob_pattern("/path/to/*.csv") is True
 
     def test_question_mark(self):
-        assert InputLoader._contains_glob_pattern("/path/to/file?.csv") is True
+        assert has_glob_pattern("/path/to/file?.csv") is True
 
     def test_brackets(self):
-        assert InputLoader._contains_glob_pattern("/path/to/[ab].csv") is True
+        assert has_glob_pattern("/path/to/[ab].csv") is True
 
     def test_no_glob(self):
-        assert InputLoader._contains_glob_pattern("/path/to/file.csv") is False
+        assert has_glob_pattern("/path/to/file.csv") is False
 
 
 class TestInputsAvailable:
@@ -282,7 +283,7 @@ class TestEnforceFingerprintPolicy:
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(columns={"a": "int64", "c": "bool"})
 
-        with patch("ducta.gate.input.logger") as mock_logger:
+        with patch("ducta.gate.fingerprinting.logger") as mock_logger:
             loader._enforce_fingerprint_policy("ds1", fingerprint)
 
         message = mock_logger.warning.call_args[0][1]
@@ -298,7 +299,7 @@ class TestEnforceFingerprintPolicy:
         loader = InputLoader(dict_context)
         fingerprint = self._make_fingerprint(columns={"a": "int64"})
 
-        with patch("ducta.gate.input.logger") as mock_logger:
+        with patch("ducta.gate.fingerprinting.logger") as mock_logger:
             loader._enforce_fingerprint_policy("ds1", fingerprint)
 
         message = mock_logger.warning.call_args[0][1]
@@ -425,3 +426,21 @@ class TestReadFallbackPaths:
 
         with pytest.raises(ConfigurationError, match="does not exist"):
             loader._get_filepath({"filepath": str(temp_dir / "trial_2" / "part.parquet")}, "ds1")
+
+
+class TestFillNoneLeavesAGapInTheEvidence:
+    def test_a_dataset_replaced_by_none_is_noted(self, dict_context):
+        dict_context["global_config"]["fill_none_on_error"] = True
+        loader = InputLoader(dict_context)
+        loader._note_evidence_gap = MagicMock()
+
+        def fake_load(input_key, *_window):
+            if input_key == "bad":
+                raise ReadOperationError("boom")
+            return input_key.upper()
+
+        with patch.object(loader, "_load_single_dataset", side_effect=fake_load):
+            loader._load_inputs_parallel(["a", "bad"], fail_fast=False)
+
+        reason = loader._note_evidence_gap.call_args[0][0]
+        assert "bad" in reason and "boom" in reason and "None" in reason

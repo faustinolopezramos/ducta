@@ -33,7 +33,7 @@ from ducta.gate.constants import SupportedFormats, WriteMode, is_cloud_path
 from ducta.gate.exceptions import ConfigurationError, FormatNotSupportedError, WriteOperationError
 from ducta.gate.factories import WriterFactory
 from ducta.gate.output.dataframes import _DataFrameManager
-from ducta.gate.output.paths import _newest_mtime, _PathManager, join_cloud_path
+from ducta.gate.output.paths import _newest_mtime, _PathManager, join_cloud_path, path_has_data
 from ducta.gate.output.unity_catalog import UnityCatalogConfig, UnityCatalogManager
 from ducta.gate.sql import UnityCatalogDDL
 from ducta.gate.validators import DataValidator
@@ -78,7 +78,7 @@ class DataOutputManager(BaseIO):
             path = self.path_manager.resolve_output_path(config, out_key, env)
             if is_cloud_path(path):
                 return False
-            return self._path_has_data(path)
+            return path_has_data(path)
         except Exception as error:  # noqa: BLE001 — a failed check must never skip
             logger.debug("Materialization check failed for output '{}': {}", out_key, error)
             return False
@@ -96,27 +96,6 @@ class DataOutputManager(BaseIO):
         except Exception as error:  # noqa: BLE001 — a failed check must never skip
             logger.debug("Could not compute output mtime for '{}': {}", out_key, error)
             return None
-
-    @staticmethod
-    def _path_has_data(path: str) -> bool:
-        """True if *path* holds a completed write (file, or non-empty dir)."""
-        p = Path(path)
-        if not p.exists():
-            return False
-        if p.is_file():
-            return p.stat().st_size > 0
-        if p.is_dir():
-            entries = list(p.iterdir())
-            if not entries:
-                return False
-            has_part_files = any(e.name.startswith("part-") for e in entries)
-            if has_part_files:
-                if (p / "_SUCCESS").exists():
-                    return True
-                delta_log = p / "_delta_log"
-                return delta_log.is_dir() and any(delta_log.iterdir())
-            return True
-        return False
 
     def _output_keys_for_empty_result(self, output_keys: List[str]) -> List[str]:
         """Which of *output_keys* still get written when the node produced no rows."""
@@ -145,15 +124,6 @@ class DataOutputManager(BaseIO):
             logger.warning("{}.", reason)
             self._note_evidence_gap(reason)
         return writable
-
-    def _note_evidence_gap(self, reason: str) -> None:
-        """Record on the run ledger that an output was not written. Best-effort."""
-        try:
-            from ducta.core.ledger import ledger_for
-
-            ledger_for(self.context).note_gap(reason)
-        except Exception as error:  # noqa: BLE001 — bookkeeping must never break a write
-            logger.debug("Could not record evidence gap '{}': {}", reason, error)
 
     def save_output(
         self,
@@ -200,6 +170,9 @@ class DataOutputManager(BaseIO):
                     logger.error("Error saving output '{}': {}", out_key, error)
                     if fail_on_error:
                         raise
+                    self._note_evidence_gap(
+                        f"output '{out_key}' was not written (fail_on_error=false): {error}"
+                    )
 
         finally:
             if persisted_here:
@@ -215,6 +188,9 @@ class DataOutputManager(BaseIO):
                 logger.error("Error saving model artifacts: {}", error)
                 if fail_on_error:
                     raise
+                self._note_evidence_gap(
+                    f"model artifacts were not saved (fail_on_error=false): {error}"
+                )
 
     def _save_single_output(
         self,
@@ -248,21 +224,10 @@ class DataOutputManager(BaseIO):
     ) -> None:
         """Write to Unity Catalog."""
         parsed = self.config_validator.validate_output_key(out_key)
+        # `env` is spliced into the catalog, schema and table names below.
+        env = self.config_validator.validate_path_segment(env, "environment")
 
-        uc_config = UnityCatalogConfig(
-            catalog_name=config["catalog_name"].format(environment=env),
-            schema=config.get("schema", parsed["schema"]).format(environment=env),
-            table_name=config.get("table_name", parsed["table_name"]).format(environment=env),
-            uc_table_mode=config.get("uc_table_mode", "external"),
-            write_mode=config.get("write_mode", WriteMode.OVERWRITE.value),
-            overwrite_schema=config.get("overwrite_schema", True),
-            partition_col=config.get("partition_col"),
-            description=config.get("description"),
-            optimize=config.get("optimize", True),
-            vacuum=config.get("vacuum", False),
-            vacuum_retention_hours=config.get("vacuum_retention_hours"),
-            options=config.get("options", {}),
-        )
+        uc_config = UnityCatalogConfig.from_output_config(config, parsed, env)
 
         if config.get("overwrite_strategy", "").lower() == "replacewhere":
             if not (start_date and end_date):
@@ -289,7 +254,7 @@ class DataOutputManager(BaseIO):
             else:
                 table_location = join_cloud_path(
                     base_location,
-                    env,
+                    self.config_validator.validate_path_segment(env, "environment"),
                     parsed.get("schema"),
                     parsed.get("sub_folder", ""),
                     uc_config.table_name,
@@ -372,6 +337,7 @@ class DataOutputManager(BaseIO):
             )
             return
 
+        failed: List[str] = []
         for artifact in node.get("model_artifacts", []):
             if not (artifact and isinstance(artifact, dict) and artifact.get("name")):
                 continue
@@ -400,6 +366,11 @@ class DataOutputManager(BaseIO):
 
             except Exception as error:
                 logger.error("Error saving artifact {}: {}", artifact.get("name", "unknown"), error)
+                failed.append(f"{artifact.get('name', 'unknown')}: {error}")
+
+        if failed:
+            # One bad artifact does not stop the others, but the run does not read as clean.
+            raise WriteOperationError("Could not save model artifact(s): " + "; ".join(failed))
 
     def _get_output_keys(self, node: Dict[str, Any]) -> List[str]:
         """Get and validate output keys from node."""

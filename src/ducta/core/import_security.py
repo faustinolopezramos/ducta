@@ -140,6 +140,16 @@ class SecureModuleImporter:
             logger.warning("Error validating search path {}: {}", path, e)
             return None
 
+    @staticmethod
+    def _matches_prefix(module_path: str, prefix: str) -> bool:
+        """``prefix`` ending in a dot covers what is under it; without one it names a package.
+
+        A bare ``nodes`` must not let ``nodes_evil`` through.
+        """
+        if prefix.endswith("."):
+            return module_path.startswith(prefix)
+        return module_path == prefix or module_path.startswith(prefix + ".")
+
     def validate_module_path(self, module_path: str) -> bool:
         """
         Validate that a module path is safe to import.
@@ -158,19 +168,23 @@ class SecureModuleImporter:
                     f"Module path contains forbidden pattern '{pattern}': {module_path}"
                 )
 
-        if not re.match(r"^[a-zA-Z0-9_\.]+$", module_path):
+        if not re.fullmatch(r"[a-zA-Z0-9_\.]+", module_path):
             raise ModuleImportError(
                 f"Module path contains invalid characters (only [a-zA-Z0-9_.] allowed): {module_path}"
             )
 
         if self.strict_mode:
-            if not any(module_path.startswith(prefix) for prefix in self.allowed_prefixes):
+            if not any(
+                self._matches_prefix(module_path, prefix) for prefix in self.allowed_prefixes
+            ):
                 raise ModuleImportError(
                     f"Module path '{module_path}' not in whitelist. "
                     f"Allowed prefixes: {', '.join(self.allowed_prefixes)}"
                 )
         else:
-            if not any(module_path.startswith(prefix) for prefix in self.allowed_prefixes):
+            if not any(
+                self._matches_prefix(module_path, prefix) for prefix in self.allowed_prefixes
+            ):
                 logger.warning(
                     f"Module '{module_path}' not in whitelist prefixes but allowed because "
                     "strict_mode is disabled (global_config.strict_module_import: false). "
@@ -263,7 +277,7 @@ class SecureModuleImporter:
         """
         Securely import a module and extract a specific function.
         """
-        if not re.match(r"^[a-zA-Z_]\w*$", function_name):
+        if not re.fullmatch(r"[a-zA-Z_]\w*", function_name):
             raise ModuleImportError(
                 f"Invalid function name format: {function_name}. "
                 "Must start with letter or underscore, followed by alphanumeric/underscore."

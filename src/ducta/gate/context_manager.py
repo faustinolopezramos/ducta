@@ -31,7 +31,7 @@ class ContextManager:
     def __init__(self, context: Any):
         """Initialize context manager with either dict or object context."""
         if context is None:
-            raise ConfigurationError("Context cannot be None") from None
+            raise ConfigurationError("Context cannot be None")
         self._context = context
         self._is_dict_context = isinstance(context, dict)
         logger.debug(

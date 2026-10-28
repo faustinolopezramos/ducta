@@ -64,7 +64,7 @@ import yaml  # type: ignore[import-untyped]
 #: Medallion layers, in the only order data may flow.
 LAYERS = {"bronze": 0, "silver": 1, "gold": 2}
 WRITE_MODES = ("overwrite", "append", "merge")
-_NAME = re.compile(r"^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*)*$")
+_NAME = re.compile(r"^[A-Za-z_][\w-]*(\.[A-Za-z_][\w-]*)*\Z")
 _STUB = 'raise NotImplementedError("written by `ducta ai architect build`")'
 
 _TOP_KEYS = {"name", "goal", "assumptions", "datasets", "pipelines"}

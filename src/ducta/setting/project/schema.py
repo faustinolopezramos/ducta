@@ -342,6 +342,24 @@ class ProjectFile(_Strict):
             )
         return self
 
+    @field_validator("environments")
+    @classmethod
+    def _environment_names_are_distinct(
+        cls, value: Dict[str, Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        from ducta.setting.environments import normalize_environment
+
+        seen: Dict[str, str] = {}
+        for key in value:
+            canonical = normalize_environment(str(key)) or str(key)
+            if canonical in seen:
+                raise ValueError(
+                    f"environments '{seen[canonical]}' and '{key}' both mean '{canonical}'; "
+                    "keep one block"
+                )
+            seen[canonical] = str(key)
+        return value
+
     @field_validator("settings")
     @classmethod
     def _settings_are_known(cls, value: Dict[str, Any]) -> Dict[str, Any]:
@@ -770,6 +788,19 @@ class IngestSpec(_Strict):
     where: Optional[str] = None
     options: Dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("options")
+    @classmethod
+    def _options_leave_the_statement_alone(cls, value: Dict[str, Any]) -> Dict[str, Any]:
+        from ducta.gate.gateway.connector import reserved_read_options
+
+        reserved = reserved_read_options(value)
+        if reserved:
+            raise ValueError(
+                f"options cannot set {', '.join(reserved)}: the connection comes from `source` and "
+                "the statement from `table`/`query`, which Ducta checks before running them"
+            )
+        return value
+
 
 class IngestNode(_NodeBase):
     kind: Literal["ingest"]
@@ -978,9 +1009,9 @@ class StreamQuarantine(_Strict):
     @field_validator("reject_when")
     @classmethod
     def _plain_predicate(cls, value: str) -> str:
-        from ducta.check.checks.business import BusinessRulesCheck
+        from ducta.gate.sql import validate_predicate
 
-        BusinessRulesCheck._validate_sql_rule(value)
+        validate_predicate(value)
         return value
 
 

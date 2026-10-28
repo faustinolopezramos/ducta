@@ -37,7 +37,12 @@ class SupportedFormats(Enum):
 
 
 class WriteMode(Enum):
-    """Supported write modes."""
+    """Supported write modes.
+
+    Mirrors ``ducta.setting.schemas.WriteMode``: ``gate`` cannot import ``setting`` when it
+    loads (``setting`` imports ``check``, which imports ``gate``), so the two are kept equal
+    by ``tests/gate/test_constants.py`` instead.
+    """
 
     OVERWRITE = "overwrite"
     APPEND = "append"
@@ -48,9 +53,10 @@ class WriteMode(Enum):
 
 
 class ExecutionMode(Enum):
-    """Execution modes."""
+    """Execution modes. Mirrors ``ducta.setting.schemas.ExecutionMode`` (see ``WriteMode``)."""
 
     LOCAL = "local"
+    DATABRICKS = "databricks"
     DISTRIBUTED = "distributed"
 
 

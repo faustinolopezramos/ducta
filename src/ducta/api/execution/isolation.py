@@ -20,9 +20,13 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import functools
 import sys
+import sysconfig
 import threading
-from typing import Set
+from pathlib import Path
+from types import ModuleType
+from typing import Optional, Set, Tuple
 
 from loguru import logger
 
@@ -33,7 +37,11 @@ class ModuleIsolationManager:
     This is in-process namespace hygiene only — it stops a pipeline's own
     `import` side effects (module-level caches, monkeypatches, singleton
     state) from leaking into the next execution that reuses the same
-    process. It is NOT a security sandbox: node code still runs with the
+    process. Only the project's own code is removed: a library or the standard
+    library stays loaded, because a C extension cannot always be initialised twice
+    in one process (numpy 2 refuses with "cannot load module more than once per
+    process", so every run after the first one that imported it failed). It is
+    NOT a security sandbox: node code still runs with the
     server's full privileges, in the server's own process, with access to
     every module already importable there (including this one). Real
     isolation would require running each pipeline in its own OS process (or
@@ -87,7 +95,7 @@ class ModuleIsolationManager:
         to_remove = current - original
 
         # Don't remove protected modules
-        to_remove = {m for m in to_remove if not self._is_protected(m)}
+        to_remove = {m for m in to_remove if not self._is_protected(m, sys.modules.get(m))}
 
         removed_count = 0
         for module_name in to_remove:
@@ -117,13 +125,15 @@ class ModuleIsolationManager:
         self._original_modules.clear()
 
     @staticmethod
-    def _is_protected(module_name: str) -> bool:
+    def _is_protected(module_name: str, module: Optional[ModuleType] = None) -> bool:
         """Return True if this module should not be removed."""
         # Check protected list
         if module_name in ModuleIsolationManager.PROTECTED_MODULES:
             return True
+        if module is not None and _is_installed(module):
+            return True
 
-        # Check prefixes: builtins, stdlib, site-packages
+        # Check prefixes: builtins, private modules, ducta itself
         if module_name.startswith("_"):
             return True
         if module_name.startswith("ducta."):
@@ -133,6 +143,35 @@ class ModuleIsolationManager:
             return True
 
         return False
+
+
+#: Where the standard library and installed packages live (everything that is not
+#: the project's own code).
+_INSTALLED_MARKERS = ("site-packages", "dist-packages")
+
+
+@functools.lru_cache(maxsize=1)
+def _installed_roots() -> Tuple[Path, ...]:
+    paths = sysconfig.get_paths()
+    keys = ("stdlib", "platstdlib", "purelib", "platlib")
+    return tuple(Path(paths[k]).resolve() for k in keys if paths.get(k))
+
+
+def _is_installed(module: ModuleType) -> bool:
+    """True for a module of the standard library or an installed package.
+
+    A module with no file (built-in, frozen, namespace package) is not judged here.
+    """
+    file = getattr(module, "__file__", None)
+    if not isinstance(file, str):
+        return False
+    if any(marker in file for marker in _INSTALLED_MARKERS):
+        return True
+    try:
+        resolved = Path(file).resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(resolved.is_relative_to(root) for root in _installed_roots())
 
 
 # Singleton instance

@@ -34,6 +34,37 @@ ParamGrid = Dict[str, Sequence[Union[str, int, float]]]
 """sklearn-style param_grid: ``{param_name: [values]}``."""
 
 Distribution = Dict[str, Any]
+
+
+class IntegerRange:
+    """Whole numbers in ``[low, high]`` on a ``step`` grid, uniform or log-uniform.
+
+    Quacks like a ``scipy.stats`` frozen distribution (``rvs(random_state=...)``), so
+    ``RandomizedSearchCV`` and the random strategy sample it unchanged. A ``{min: 50,
+    max: 300}`` range is whole numbers under ``grid``; sampling it as floats gave
+    ``n_estimators=259.01`` that sklearn rejects.
+    """
+
+    def __init__(self, low: int, high: int, step: int = 1, log: bool = False) -> None:
+        self.low, self.high, self.step, self.log = int(low), int(high), int(step), bool(log)
+
+    def rvs(self, size: Any = None, random_state: Any = None) -> Any:
+        import numpy as np
+
+        rng = (
+            random_state
+            if isinstance(random_state, np.random.RandomState)
+            else np.random.RandomState(random_state)
+        )
+        count = (self.high - self.low) // self.step
+        if self.log and self.low > 0 and self.high > self.low:
+            raw = float(np.exp(rng.uniform(math.log(self.low), math.log(self.high))))
+            index = min(count, max(0, int(round((raw - self.low) / self.step))))
+        else:
+            index = int(rng.randint(0, count + 1))
+        return self.low + index * self.step
+
+
 """sklearn-style distribution dict for RandomizedSearchCV."""
 
 
@@ -92,6 +123,7 @@ class HyperparamConfig:
                 )
 
         self._validate_dependencies()
+        self._validate_ranges()
 
     @classmethod
     def from_dict(cls, data: dict) -> "HyperparamConfig":
@@ -130,6 +162,19 @@ class HyperparamConfig:
         """Return names of params without ``depends_on``."""
         return [n for n, s in self.search_space.items() if not self._is_conditional(s)]
 
+    def _validate_ranges(self) -> None:
+        """A ``log: true`` range must start above zero: log(0) is undefined, and Optuna
+        rejects an integer log range below 1."""
+        for name, spec in self.search_space.items():
+            if not (self._is_range_spec(spec) and spec.get("log")):
+                continue
+            whole = self._is_int_range(spec)
+            if (spec["min"] < 1) if whole else (spec["min"] <= 0):
+                raise HyperparamConfigError(
+                    f"Param '{name}': a log range needs 'min' "
+                    f"{'>= 1 for whole numbers' if whole else '> 0'} (got {spec['min']!r})"
+                )
+
     def _validate_dependencies(self) -> None:
         """Validate that all dependency references are resolvable."""
         for name, spec in self.search_space.items():
@@ -166,6 +211,14 @@ class HyperparamConfig:
     def _is_range_spec(v: Any) -> bool:
         return isinstance(v, dict) and "min" in v and "max" in v and "depends_on" not in v
 
+    @classmethod
+    def _is_int_range(cls, v: Any) -> bool:
+        """A range spec whose grid expansion is whole numbers (see ``_values_for``):
+        ``min``, ``max`` and ``step`` all whole. ``{min: 1, max: 1.5}`` is a float range."""
+        return cls._is_range_spec(v) and not any(
+            isinstance(x, float) for x in (v.get("step", 1), v["min"], v["max"])
+        )
+
     def _values_for(self, name: str) -> list:
         """Return the discrete list of values for a parameter, expanding range specs."""
         spec = self.search_space.get(name)
@@ -183,7 +236,7 @@ class HyperparamConfig:
             return result
         if self._is_range_spec(spec):
             step = spec.get("step", 1)
-            if isinstance(step, float) or isinstance(spec.get("min"), float):
+            if not self._is_int_range(spec):
                 return self._frange(spec["min"], spec["max"], step)
             return list(range(int(spec["min"]), int(spec["max"]) + 1, int(step)))
         return list(spec)
@@ -288,7 +341,11 @@ class HyperparamConfig:
                 )
 
         for name, spec in self.search_space.items():
-            if self._is_range_spec(spec):
+            if self._is_int_range(spec):
+                dists[name] = IntegerRange(
+                    spec["min"], spec["max"], int(spec.get("step", 1)), bool(spec.get("log"))
+                )
+            elif self._is_range_spec(spec):
                 if spec.get("log", False):
                     dists[name] = loguniform(spec["min"], spec["max"])
                 else:
@@ -321,6 +378,13 @@ class HyperparamConfig:
                         "choices": all_choices,
                     },
                 }
+            elif self._is_int_range(spec):
+                args: Dict[str, Any] = {"low": int(spec["min"]), "high": int(spec["max"])}
+                if spec.get("log", False):
+                    args["log"] = True
+                elif int(spec.get("step", 1)) != 1:
+                    args["step"] = int(spec["step"])
+                space[name] = {"type": "int", "args": args}
             elif self._is_range_spec(spec):
                 if spec.get("log", False):
                     space[name] = {
@@ -375,12 +439,23 @@ class HyperparamConfig:
 
         for name in conditional:
             allowed = self._allowed_values_for(name, params)
-            params[name] = trial.suggest_categorical(name, allowed)
+            # Optuna fixes the choices of a name for the whole study, and the choices
+            # here depend on the parent's value: suggest under one name per parent value.
+            parent = self.search_space[name]["depends_on"]["param"]
+            params[name] = trial.suggest_categorical(
+                f"{name}__{parent}={params[parent]!r}", allowed
+            )
 
         return params
 
     def _suggest_one(self, trial: Any, name: str, spec: Any) -> Any:
         """Suggest a single parameter value from an Optuna trial."""
+        if self._is_int_range(spec):
+            if spec.get("log", False):
+                return trial.suggest_int(name, int(spec["min"]), int(spec["max"]), log=True)
+            return trial.suggest_int(
+                name, int(spec["min"]), int(spec["max"]), step=int(spec.get("step", 1))
+            )
         if self._is_range_spec(spec):
             if spec.get("log", False):
                 return trial.suggest_float(name, spec["min"], spec["max"], log=True)

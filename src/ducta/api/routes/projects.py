@@ -1055,7 +1055,7 @@ async def get_column_lineage(
     project_id: str, pipeline_name: str, node_name: str, svc: ProjectServiceDep
 ) -> Dict[str, Any]:
     from ducta.api.services.column_lineage import ingest_column_lineage
-    from ducta.gate.gateway.service import IngestionService
+    from ducta.setting.connections import IngestionService
     from ducta.setting.project.loader import read_project
 
     root = svc.store(project_id).root

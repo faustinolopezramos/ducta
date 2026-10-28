@@ -21,7 +21,12 @@ SPDX-License-Identifier: Apache-2.0
 from loguru import logger
 
 from ducta.console.core import ExitCode
-from ducta.gate.gateway import ConnectionSpec, IngestionService, IngestionServiceError
+from ducta.setting.connections import (
+    ConnectionSpec,
+    IngestionService,
+    IngestionServiceError,
+    validate_connection_name,
+)
 
 #: What a skipped test means. The CLI never has a Spark session, so this is the
 #: usual answer here; it used to read "✓ Connection successful!".
@@ -88,9 +93,13 @@ class IngestionSetupCommands:
             print("\nStep 2/7: Connection Name")
             print("-" * 70)
             print("Examples: education_db, sales_db, users_db")
-            source_name = input("Enter connection name: ").strip()
-            if not source_name:
-                raise ValueError("Connection name is required")
+            while True:
+                source_name = input("Enter connection name: ").strip()
+                try:
+                    validate_connection_name(source_name)
+                    break
+                except IngestionServiceError as e:
+                    print(f"  {e}")
 
             # A connection of this name already exists — `create_connection`
             # was always called with overwrite=True below, silently replacing

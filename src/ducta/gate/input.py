@@ -28,6 +28,9 @@ from ducta.gate.concurrency import run_parallel
 from ducta.gate.constants import is_cloud_path
 from ducta.gate.exceptions import ConfigurationError, MissingDependencyError, ReadOperationError
 from ducta.gate.factories import ReaderFactory
+from ducta.gate.fingerprinting import check_fingerprint_policy
+from ducta.gate.input_paths import resolve_local_path
+from ducta.gate.readers import spark_xml_available
 
 _ON_MISSING_INPUT = frozenset({"skip", "fail"})
 
@@ -50,7 +53,7 @@ class InputLoader(BaseIO):
         """Initialize the InputLoader."""
         super().__init__(context)
         self.reader_factory = ReaderFactory(context)
-        self._register_custom_formats()
+        self._verify_format_dependencies()
 
     def load_inputs(
         self,
@@ -163,14 +166,14 @@ class InputLoader(BaseIO):
         if fail_fast and outcome.errors:
             idx, error = outcome.errors[0]
             key = input_keys[idx]
-            logger.exception("Error loading dataset '{}': {}", key, error)
+            logger.error("Error loading dataset '{}': {}", key, error)
             raise ReadOperationError(f"Error loading dataset '{key}': {error}") from error
 
         results = outcome.results
         errors: List[str] = []
         for idx, error in outcome.errors:
             key = input_keys[idx]
-            logger.exception("Error loading dataset '{}': {}", key, error)
+            logger.error("Error loading dataset '{}': {}", key, error)
             errors.append(f"Error loading dataset '{key}': {error}")
             results[idx] = None
 
@@ -182,20 +185,16 @@ class InputLoader(BaseIO):
                     "placeholders instead of aborting."
                 )
             logger.warning("Completed loading with {} errors: {}", len(errors), errors)
+            for message in errors:
+                self._note_evidence_gap(f"{message} (fill_none_on_error: the node got None)")
 
         logger.info("Successfully loaded {} datasets", len(results) - len(errors))
         return results
 
     def _print_loading_message(self, dataset_count: int) -> None:
-        """Print data loading message via progress_reporter if provided in context."""
-        reporter = self._ctx_get("progress_reporter", None)
-        if reporter and hasattr(reporter, "report_loading"):
-            try:
-                reporter.report_loading(dataset_count)
-                return
-            except Exception:
-                pass
-        logger.info("Loading {} datasets", dataset_count)
+        """Tell the progress reporter (or the log) how many datasets are loading."""
+        if not self._report_progress("report_loading", dataset_count):
+            logger.info("Loading {} datasets", dataset_count)
 
     def _load_single_dataset(
         self,
@@ -208,7 +207,7 @@ class InputLoader(BaseIO):
         format_name = config.get("format", "").lower()
 
         if not format_name:
-            raise ReadOperationError(f"Format not specified for dataset '{input_key}'") from None
+            raise ReadOperationError(f"Format not specified for dataset '{input_key}'")
 
         reader = self.reader_factory.get_reader(format_name)
 
@@ -233,7 +232,11 @@ class InputLoader(BaseIO):
             from ducta.gate.fingerprinting import delta_identity
 
             pinned = config.get("versionAsOf", config.get("version"))
-            delta = delta_identity(self._ctx_spark(), filepath, pinned)
+            as_of_time = config.get("timestampAsOf", config.get("timestamp")) is not None
+            # A read as of a timestamp has no version here, and the latest commit is not
+            # what it read: leave the identity out and let the data be hashed.
+            if pinned is not None or not as_of_time:
+                delta = delta_identity(self._ctx_spark(), filepath, pinned)
 
         data_fingerprint = self._record_fingerprint(
             "input", input_key, filepath, dataframe, window=window, delta=delta
@@ -287,55 +290,16 @@ class InputLoader(BaseIO):
 
     def _enforce_fingerprint_policy(self, input_key: str, data_fingerprint) -> None:
         """Apply fingerprint_policy against the previous successful run."""
-        message = None
         try:
             policy = self.context_manager.get_nested("global_config.fingerprint_policy", "record")
-
             if policy not in ("warn", "fail"):
                 return
-
             previous_all = self._ctx_get("_previous_input_fingerprints", None) or {}
             previous = previous_all.get(input_key) or {}
-            previous_hash = previous.get("fingerprint")
-            if not previous_hash or previous_hash == data_fingerprint.fingerprint:
-                return
-
-            from ducta.mlrun.fingerprint import comparable
-
-            can_compare, why = comparable(previous, data_fingerprint.to_dict())
-            if not can_compare:
-                logger.info(
-                    "Skipping fingerprint_policy for '{}': the recorded fingerprint is "
-                    "not comparable to this run's ({}). This run's fingerprint becomes "
-                    "the new baseline.",
-                    input_key,
-                    why,
-                )
-                return
-
-            message = (
-                f"Input '{input_key}' changed since the previous successful run: "
-                f"fingerprint {previous_hash[:12]}… → {data_fingerprint.fingerprint[:12]}… "
-                f"(rows {previous.get('row_count')} → {data_fingerprint.row_count}, "
-                f"mtime {previous.get('file_mtime')} → {data_fingerprint.file_mtime})"
-            )
-            from ducta.gate.fingerprinting import diff_schema_columns
-
-            column_diff = diff_schema_columns(
-                previous.get("columns"), getattr(data_fingerprint, "columns", None)
-            )
-            if column_diff:
-                message += f" | schema drift: {column_diff}"
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 — a malformed record never blocks a read
             logger.debug("Fingerprint policy check skipped for '{}': {}", input_key, error)
             return
-
-        if policy == "fail":
-            raise ReadOperationError(
-                f"{message}. Aborting because fingerprint_policy=fail. "
-                "Re-run with fingerprint_policy=warn (or record) to accept the new data."
-            )
-        logger.warning("{}. Results may not be comparable to the previous run.", message)
+        check_fingerprint_policy(policy, previous, data_fingerprint, input_key)
 
     def _get_dataset_config(self, input_key: str) -> Dict[str, Any]:
         """Get configuration for a dataset with validation."""
@@ -343,87 +307,30 @@ class InputLoader(BaseIO):
         config = input_cfg.get(input_key)
 
         if not config:
-            raise ConfigurationError(f"Missing configuration for dataset '{input_key}'") from None
+            raise ConfigurationError(f"Missing configuration for dataset '{input_key}'")
 
         if not isinstance(config, dict):
             raise ConfigurationError(
                 f"Invalid configuration format for dataset '{input_key}': expected dict, got {type(config)}"
-            ) from None
+            )
         return config
 
     def _get_filepath(self, config: Dict[str, Any], input_key: str) -> str:
         """Get filepath for a dataset, supporting glob patterns in local mode."""
         path = config.get("filepath")
         if not path:
-            raise ConfigurationError(f"Missing filepath for dataset '{input_key}'") from None
+            raise ConfigurationError(f"Missing filepath for dataset '{input_key}'")
 
         if is_cloud_path(path):
             return str(path)
 
         if self._is_local():
-            return self._handle_local_filepath(path)
+            return resolve_local_path(
+                path,
+                self._ctx_get("_read_fallback_paths", None) or [],
+                self._ctx_get("output_path", None),
+            )
         return str(path)
-
-    def _handle_local_filepath(self, path: str) -> str:
-        """Handle local file path with glob pattern support."""
-        path_obj = Path(path)
-
-        if path_obj.is_dir() or path_obj.is_file():
-            return path_obj.as_posix()
-
-        if self._contains_glob_pattern(path):
-            return self._handle_glob_pattern(path_obj, path)
-
-        if not path_obj.exists():
-            fallback = self._try_read_fallback(path_obj)
-            if fallback is not None:
-                return fallback
-            raise ConfigurationError(f"File '{path}' does not exist in local mode") from None
-
-        return path_obj.as_posix()
-
-    def _try_read_fallback(self, path_obj: Path) -> Optional[str]:
-        """Resolve a missing local input from a shared read-fallback prefix, if configured."""
-        fallback_paths = self._ctx_get("_read_fallback_paths", None) or []
-        own_output_path = self._ctx_get("output_path", None)
-        if not fallback_paths or not own_output_path:
-            return None
-
-        try:
-            relative = path_obj.resolve().relative_to(Path(own_output_path).resolve())
-        except ValueError:
-            return None
-
-        for fallback_root in fallback_paths:
-            candidate = Path(fallback_root) / relative
-            if candidate.exists():
-                logger.debug(
-                    "Input '{}' not found under trial output_path; resolved from "
-                    "shared prefix '{}' instead.",
-                    path_obj,
-                    fallback_root,
-                )
-                return candidate.as_posix()
-        return None
-
-    @staticmethod
-    def _contains_glob_pattern(path: str) -> bool:
-        """Check if path contains glob pattern characters."""
-        return any(character in str(path) for character in ("*", "?", "["))
-
-    def _handle_glob_pattern(self, path_obj: Path, path: str) -> str:
-        """Handle glob pattern matching for local files."""
-        if not path_obj.parent.exists():
-            raise ConfigurationError(
-                f"Parent directory for glob pattern '{path}' does not exist"
-            ) from None
-
-        matches = list(path_obj.parent.glob(path_obj.name))
-        if matches:
-            logger.debug("Glob pattern '{}' matched {} files", path, len(matches))
-            return path_obj.as_posix()  # Return original pattern normalized for Spark to handle
-
-        raise ConfigurationError(f"Glob pattern '{path}' matched no files in local mode") from None
 
     @staticmethod
     def _is_named_input_map(keys: Any) -> bool:
@@ -455,13 +362,13 @@ class InputLoader(BaseIO):
                 if not isinstance(key, str) or not key.strip():
                     raise ConfigurationError(
                         f"Invalid input key: {key}. All input keys must be non-empty strings."
-                    ) from None
+                    )
                 result.append(key.strip())
             return result
         raise ConfigurationError(
             f"Invalid input format: expected string, list, or {{param: dataset_key}} map, "
             f"got {type(keys)}"
-        ) from None
+        )
 
     def _get_configured_formats(self) -> Set[str]:
         """Inspect input_config and return the set of formats in use."""
@@ -479,8 +386,8 @@ class InputLoader(BaseIO):
 
         return formats
 
-    def _register_custom_formats(self) -> None:
-        """Register custom format handlers if configured."""
+    def _verify_format_dependencies(self) -> None:
+        """Warn early when a configured format needs a package that is missing."""
         configured_formats = self._get_configured_formats()
         checks = {
             "delta": self._verify_delta_dependencies,
@@ -505,10 +412,8 @@ class InputLoader(BaseIO):
 
     def _verify_xml_dependencies(self) -> None:
         """Verify Spark XML support is available when XML inputs are configured."""
-        try:
-            spark = self._ctx_spark()
-            if spark:
-                spark._jvm.com.databricks.spark.xml  # type: ignore[attr-defined]
+        spark = self._ctx_spark()
+        if spark and not spark_xml_available(spark):
+            logger.warning("XML format configured but package 'spark-xml' is not available")
+        else:
             logger.debug("XML format dependencies verified")
-        except Exception as error:
-            logger.warning("XML format configured but dependencies not available: {}", error)

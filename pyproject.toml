@@ -353,7 +353,6 @@ module = [
     "ducta.core.utils",
     "ducta.gate.gateway.connector",
     "ducta.gate.gateway.manager",
-    "ducta.gate.gateway.service",
     "ducta.gate.gateway.spark_setup",
     "ducta.gate.input",
     "ducta.gate.output.dataframes",

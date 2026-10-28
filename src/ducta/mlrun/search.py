@@ -147,7 +147,8 @@ class RandomSearch(SearchStrategy):
         params: Dict[str, Any] = {}
         for name, dist in self._distributions.items():
             if hasattr(dist, "rvs"):
-                params[name] = float(dist.rvs(random_state=self._rng.randint(0, 2**31 - 1)))
+                value = dist.rvs(random_state=self._rng.randint(0, 2**31 - 1))
+                params[name] = value if isinstance(value, int) else float(value)
             else:
                 params[name] = self._rng.choice(list(dist))
         return params

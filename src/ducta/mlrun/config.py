@@ -54,6 +54,27 @@ def _active_env(context: "Context") -> Optional[str]:
     return getattr(context, "env", None) or getattr(context, "environment", None)
 
 
+def _expand_path_placeholders(path: str, context: "Context", gs: Dict[str, Any]) -> str:
+    """``${output_path}``, ``${input_path}`` and ``${environment}`` in a configured path.
+
+    The same placeholders every other path setting takes (format 2 writes them
+    ``${paths.output}``, ``${paths.input}``, ``${env}``). Without this an explicit
+    ``mlops_path`` was used as written and a literal ``${output_path}`` directory appeared.
+    """
+    if "${" not in path:
+        return path
+    from ducta.setting.environments import sanitize_env_for_path
+    from ducta.setting.interpolator import VariableInterpolator
+
+    variables = {
+        **gs,
+        "output_path": getattr(context, "output_path", None) or gs.get("output_path") or ".",
+        "input_path": getattr(context, "input_path", None) or gs.get("input_path") or ".",
+        "environment": sanitize_env_for_path(_active_env(context) or gs.get("environment")),
+    }
+    return VariableInterpolator.interpolate(path, variables)
+
+
 @dataclass
 class MLOpsConfig:
     """Configuration for MLOps initialization."""
@@ -247,7 +268,7 @@ class StorageBackendFactory:
         gs = getattr(context, "global_config", {}) or {}
 
         if gs.get("mlops_path"):
-            return gs["mlops_path"]
+            return _expand_path_placeholders(str(gs["mlops_path"]), context, gs)
 
         output_path = getattr(context, "output_path", None)
         if output_path and pipeline_name:
@@ -414,9 +435,13 @@ def _resolve_component_storage(
         )
         return None
 
+    # Only the local backend has a ``base_path``; the Databricks one is a UC volume.
+    base = getattr(storage, "base_path", None)
+    if base is None and hasattr(storage, "volume_name"):
+        base = f"/Volumes/{storage.catalog}/{storage.schema}/{storage.volume_name}"
     logger.info(
         f"Creating {component_name} with {storage.__class__.__name__} "
-        f"at base '{storage.base_path}' "
+        f"at base '{base}' "
         f"(env: {_active_env(context) or 'none'}, {path_label}: {path_value})"
     )
     return storage

@@ -464,3 +464,13 @@ class TestFingerprintComparability:
         differs = diff_certificates(_cert("c"), _cert("d"))["outputs"][0]
         assert same["match"] is True
         assert differs["match"] is False
+
+
+class TestUnsignedWithAKeyIsSaidPlainly:
+    KEY = b"k" * 32
+
+    def test_it_stays_valid_but_does_not_claim_authorship(self, tmp_path):
+        path = write_certificate(_make_cert(), tmp_path)
+        result = verify_certificate(path, signing_key=self.KEY)
+        assert result.ok is True and result.level == "integrity"
+        assert "NOT attested" in result.reason

@@ -207,8 +207,12 @@ class NodeExecutor:
                     pipeline_name=self.pipeline_name,
                 )
 
+                from ducta.gate import handoff
+
                 for idx, df in enumerate(input_dfs):
-                    if df is not None:
+                    # A frame served from the in-memory handoff is shared with the nodes
+                    # still to come: it is not this node's to release when it ends.
+                    if df is not None and not handoff.is_shared(self.context, df):
                         resource_type = resource_manager.detect_resource_type(df)
                         resource_manager.register(
                             resource=df,
@@ -230,16 +234,7 @@ class NodeExecutor:
 
                 node_retries = int(node_config.get("retry", 0) or 0)
                 if node_retries > 0:
-                    from ducta.check import QualityChecksFailed
-                    from ducta.check.core import QualityGateBlocked
-                    from ducta.core.resilience import RetryPolicy
-
-                    result_df = RetryPolicy(
-                        max_retries=node_retries,
-                        delay=1,
-                        backoff_factor=2.0,
-                        non_retryable=(QualityGateBlocked, QualityChecksFailed),
-                    ).execute(command.execute)
+                    result_df = self._execute_with_retries(command, node_name, node_retries)
                 else:
                     result_df = command.execute()
 
@@ -267,6 +262,13 @@ class NodeExecutor:
                         resource=result_df,
                         resource_type=resource_type,
                         context_id=f"node_{node_name}",
+                        # The write below may offer this very frame to the in-memory
+                        # handoff; then the next nodes read it and `clear` releases it.
+                        cleanup_callback=(
+                            self._release_unless_handed_off
+                            if resource_type == ResourceType.SPARK_DF
+                            else None
+                        ),
                         metadata={"stage": "output"},
                     )
 
@@ -340,6 +342,41 @@ class NodeExecutor:
                     node_error,
                     ml=self._ml_evidence(command, node_name, ml_info),
                 )
+
+    def _execute_with_retries(self, command: Any, node_name: str, retries: int) -> Any:
+        """Run ``command`` with up to ``retries`` more attempts on a transient error."""
+        from ducta.check import QualityChecksFailed
+        from ducta.check.core import QualityGateBlocked
+        from ducta.core.resilience import RetryPolicy
+
+        try:
+            return RetryPolicy(
+                max_retries=retries,
+                delay=1,
+                backoff_factor=2.0,
+                non_retryable=(QualityGateBlocked, QualityChecksFailed, NodeCancelledError),
+                cancel_check=lambda: is_cancelled(self.context, node_name),
+            ).execute(command.execute)
+        except NodeCancelledError:
+            raise
+        except Exception as exc:
+            # Cancelled during a backoff, the policy re-raises the last transient error:
+            # report the cancellation instead, as the run_in_process path does.
+            if is_cancelled(self.context, node_name):
+                raise NodeCancelledError(node_name) from exc
+            raise
+
+    def _release_unless_handed_off(self, dataframe: Any) -> None:
+        """Unpersist a node's cached output when the node ends, unless the in-memory
+        handoff now holds it for the nodes still to come (``handoff.clear`` releases it)."""
+        from ducta.gate import handoff
+
+        if handoff.is_shared(self.context, dataframe):
+            return
+        try:
+            dataframe.unpersist()
+        except Exception:  # noqa: BLE001 — as ManagedResource's default release
+            pass
 
     def _enforce_split(
         self, command: Any, node_name: str, node_config: Dict[str, Any], ml_info: Dict[str, Any]
@@ -474,6 +511,7 @@ class NodeExecutor:
             OUTCOME_SUCCESS,
             build_node_payload,
         )
+        from ducta.core.worker_bootstrap import capture_run_overrides
         from ducta.gate.exceptions import MissingDependencyError
 
         payload = build_node_payload(
@@ -485,6 +523,7 @@ class NodeExecutor:
             end_date=end_date,
             base_path=str(getattr(self.context, "base_path", "") or "") or None,
             output_path=str(getattr(self.context, "output_path", "") or "") or None,
+            overrides=capture_run_overrides(self.context),
         )
 
         logger.debug("Running node '{}' in a worker process (run_in_process)", node_name)

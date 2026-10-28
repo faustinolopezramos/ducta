@@ -2,8 +2,9 @@ from datetime import datetime
 
 import pytest
 
-from ducta.gate.exceptions import ConfigurationError
+from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 from ducta.gate.output import DataOutputManager, parse_iso_datetime, validate_date_range
+from ducta.gate.output.paths import path_has_data
 
 
 class TestParseISODatetime:
@@ -55,27 +56,27 @@ class TestDataOutputManager:
     def test_path_has_data_file(self, temp_dir):
         p = temp_dir / "test.txt"
         p.write_text("data")
-        assert DataOutputManager._path_has_data(str(p)) is True
+        assert path_has_data(str(p)) is True
 
     def test_path_has_data_empty_file(self, temp_dir):
         p = temp_dir / "empty.txt"
         p.touch()
-        assert DataOutputManager._path_has_data(str(p)) is False
+        assert path_has_data(str(p)) is False
 
     def test_path_has_data_missing(self, temp_dir):
-        assert DataOutputManager._path_has_data(str(temp_dir / "missing")) is False
+        assert path_has_data(str(temp_dir / "missing")) is False
 
     def test_path_has_data_dir_with_success(self, temp_dir):
         d = temp_dir / "out.parquet"
         d.mkdir()
         (d / "part-00000.parquet").write_text("data")
         (d / "_SUCCESS").write_text("")
-        assert DataOutputManager._path_has_data(str(d)) is True
+        assert path_has_data(str(d)) is True
 
     def test_path_has_data_empty_dir(self, temp_dir):
         d = temp_dir / "empty"
         d.mkdir()
-        assert DataOutputManager._path_has_data(str(d)) is False
+        assert path_has_data(str(d)) is False
 
     def test_path_has_data_dir_with_delta_log(self, temp_dir):
         d = temp_dir / "delta"
@@ -84,7 +85,7 @@ class TestDataOutputManager:
         dl = d / "_delta_log"
         dl.mkdir()
         (dl / "000000.json").write_text("{}")
-        assert DataOutputManager._path_has_data(str(d)) is True
+        assert path_has_data(str(d)) is True
 
     def test_empty_df_is_still_written_when_write_mode_is_overwrite(
         self, dict_context_with_spark, spark_dataframe_spec
@@ -184,7 +185,8 @@ class TestSaveModelArtifacts:
         dom = DataOutputManager(dict_context)
 
         node = {"name": "my_node", "model_artifacts": [{"name": "../../escaped"}]}
-        dom._save_model_artifacts(node, "v1")
+        with pytest.raises(WriteOperationError, match="escaped"):
+            dom._save_model_artifacts(node, "v1")
 
         assert not (temp_dir / "escaped").exists()
         assert list(registry_dir.iterdir()) == []
@@ -196,7 +198,8 @@ class TestSaveModelArtifacts:
         dom = DataOutputManager(dict_context)
 
         node = {"name": "my_node", "model_artifacts": [{"name": "valid_name"}]}
-        dom._save_model_artifacts(node, "../../escaped")
+        with pytest.raises(WriteOperationError, match="escaped"):
+            dom._save_model_artifacts(node, "../../escaped")
 
         assert not (temp_dir / "escaped").exists()
 
@@ -210,3 +213,30 @@ class TestSaveModelArtifacts:
         dom._save_model_artifacts(node, "v1")
 
         assert (registry_dir / "my_model" / "v1" / "metadata.json").exists()
+
+
+class TestSkippedFailuresLeaveAGapInTheEvidence:
+    def test_a_failed_output_with_fail_on_error_false_is_noted(self, dict_context, spark_dataframe):
+        from unittest.mock import MagicMock
+
+        dict_context["global_config"]["fail_on_error"] = False
+        spark_dataframe.isEmpty.return_value = False
+        dom = DataOutputManager(dict_context)
+        dom.df_manager.is_spark_dataframe = MagicMock(return_value=True)
+        dom._save_single_output = MagicMock(side_effect=RuntimeError("disk full"))
+        dom._note_evidence_gap = MagicMock()
+
+        dom.save_output("dev", {"output": ["a.b.c"]}, spark_dataframe)
+
+        reason = dom._note_evidence_gap.call_args[0][0]
+        assert "a.b.c" in reason and "disk full" in reason and "fail_on_error" in reason
+
+    def test_with_fail_on_error_true_it_still_raises(self, dict_context, spark_dataframe):
+        from unittest.mock import MagicMock
+
+        spark_dataframe.isEmpty.return_value = False
+        dom = DataOutputManager(dict_context)
+        dom.df_manager.is_spark_dataframe = MagicMock(return_value=True)
+        dom._save_single_output = MagicMock(side_effect=RuntimeError("disk full"))
+        with pytest.raises(RuntimeError, match="disk full"):
+            dom.save_output("dev", {"output": ["a.b.c"]}, spark_dataframe)

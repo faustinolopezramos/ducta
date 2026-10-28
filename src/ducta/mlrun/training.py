@@ -92,13 +92,17 @@ def _evaluate(model: Any, X_test: Any, y_test: Any, task: str) -> Dict[str, floa
 
     classes = sorted(set(y_test))
     average = "binary" if len(classes) <= 2 else "macro"
+    # "binary" scores the label ``pos_label`` (1 by default), which a target of
+    # 'yes'/'no', {0, 2} or {-1, 1}-without-a-1 does not have: the greater label is the
+    # positive class, as it is for roc_auc_score and predict_proba's second column.
+    options: Dict[str, Any] = {"average": average, "zero_division": 0}
+    if average == "binary":
+        options["pos_label"] = classes[-1]
     out = {
         "accuracy": float(skm.accuracy_score(y_test, predicted)),
-        "f1": float(skm.f1_score(y_test, predicted, average=average, zero_division=0)),
-        "precision": float(
-            skm.precision_score(y_test, predicted, average=average, zero_division=0)
-        ),
-        "recall": float(skm.recall_score(y_test, predicted, average=average, zero_division=0)),
+        "f1": float(skm.f1_score(y_test, predicted, **options)),
+        "precision": float(skm.precision_score(y_test, predicted, **options)),
+        "recall": float(skm.recall_score(y_test, predicted, **options)),
     }
     if hasattr(model, "predict_proba") and len(classes) == 2:
         out["auc_roc"] = float(skm.roc_auc_score(y_test, model.predict_proba(X_test)[:, 1]))

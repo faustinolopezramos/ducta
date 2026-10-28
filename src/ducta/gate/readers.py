@@ -26,6 +26,16 @@ from loguru import logger  # type: ignore
 from ducta.gate.base import BaseIO
 from ducta.gate.constants import DEFAULT_CSV_OPTIONS, DEFAULT_ENCODING
 from ducta.gate.exceptions import ConfigurationError, ReadOperationError
+from ducta.gate.sql import checked_predicate
+
+
+def spark_xml_available(spark: Any) -> bool:
+    """True when the session's JVM has the ``com.databricks:spark-xml`` package."""
+    try:
+        spark._jvm.com.databricks.spark.xml  # noqa: B018 — attribute access is the probe
+        return True
+    except Exception:  # noqa: BLE001 — py4j raises its own errors for a missing class
+        return False
 
 
 class SparkReaderBase(BaseIO):
@@ -36,6 +46,8 @@ class SparkReaderBase(BaseIO):
         partition_filter = config.get("partition_filter")
         if not partition_filter:
             return dataframe
+        # Spark parses this string as SQL: only a plain predicate may reach it.
+        partition_filter = checked_predicate(partition_filter, "partition_filter")
 
         logger.info("Applying partition_filter: {}", partition_filter)
         try:
@@ -63,7 +75,7 @@ class SparkReaderBase(BaseIO):
         if spark is None:
             raise ReadOperationError(
                 f"Spark session is not available in context; cannot read {format_name.upper()} from {filepath}"
-            ) from None
+            )
         logger.info("Reading {} data from: {}", format_name.upper(), filepath)
         try:
             reader = spark.read.options(**config.get("options", {})).format(format_name)
@@ -105,7 +117,7 @@ class DeltaReader(SparkReaderBase):
         if spark is None:
             raise ReadOperationError(
                 f"Spark session is not available in context; cannot read DELTA from {source}"
-            ) from None
+            )
 
         reader = spark.read.options(**config.get("options", {})).format("delta")
 
@@ -142,7 +154,7 @@ class PickleReader(SparkReaderBase):
         if not config.get("allow_untrusted_pickle", False):
             raise ReadOperationError(
                 "Reading pickle requires allow_untrusted_pickle=True due to security risks (arbitrary code execution)."
-            ) from None
+            )
 
         use_pandas = config.get("use_pandas", False)
         spark = self._ctx_spark()
@@ -282,15 +294,11 @@ class XMLReader(SparkReaderBase):
         if spark is None:
             raise ReadOperationError(
                 f"Spark session is not available in context; cannot read XML from {source}"
-            ) from None
-        try:
-            # Validate XML package availability
-            _xml_package_check = spark._jvm.com.databricks.spark.xml
-            logger.warning(f"availability: {_xml_package_check}")
-        except Exception as error:
+            )
+        if not spark_xml_available(spark):
             raise ConfigurationError(
                 "XML reader requires the com.databricks:spark-xml package. Install the jar or add --packages com.databricks:spark-xml:latest_2.12"
-            ) from error
+            )
         logger.info("Reading XML file with row tag '{}': {}", row_tag, source)
         return (
             spark.read.format("com.databricks.spark.xml")
@@ -310,10 +318,10 @@ class QueryReader(BaseIO):
             if not query or not str(query).strip():
                 raise ConfigurationError(
                     "Query format specified without SQL query or query is empty"
-                ) from None
+                )
 
             if not self._spark_available():
-                raise ReadOperationError("Spark session is required to execute queries") from None
+                raise ReadOperationError("Spark session is required to execute queries")
 
             sanitized = self.sanitize_sql_query(str(query))
 

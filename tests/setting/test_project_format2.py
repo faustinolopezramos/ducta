@@ -270,12 +270,13 @@ class TestWriteModeDefault:
 
     def test_an_unset_mode_reaches_the_writer_unset(self, tmp_path):
         import ducta
-        from ducta.gate.writers import SparkWriterMixin
+        from ducta.gate.writers import BaseSparkWriter
 
         ctx = ducta.load_project(_project(tmp_path), env="dev")
         unset = [n for n, cfg in ctx.output_config.items() if "write_mode" not in cfg]
         assert unset, "the fixture needs an output without write:"
-        assert SparkWriterMixin()._determine_write_mode(ctx.output_config[unset[0]]) == "overwrite"
+        writer = BaseSparkWriter({})
+        assert writer._determine_write_mode(ctx.output_config[unset[0]]) == "overwrite"
 
     def test_an_explicit_mode_is_kept(self, tmp_path):
         import ducta
@@ -366,3 +367,52 @@ class TestStreamNodes:
         )
         node = compile_project(validate_project(root, None))["nodes_config"]["n"]
         assert node["function"] == {"key": "clean", "module": "m", "params": {"x": 1}}
+
+
+class TestEnvironmentBlockNames:
+    """A block is found by its normalized name, however it was spelled."""
+
+    @pytest.mark.parametrize("spelling", ["production", "Prod", "PROD"])
+    def test_an_alias_or_cased_block_serves_the_normalized_environment(self, tmp_path, spelling):
+        root = _project(tmp_path, project=PROJECT.replace("  prod:", f"  {spelling}:"))
+        assert _compile(root, "prod")["global_config"]["max_parallel_nodes"] == 8
+        assert _compile(root, "production")["global_config"]["max_parallel_nodes"] == 8
+
+    def test_two_blocks_for_one_environment_are_an_error(self, tmp_path):
+        root = _project(
+            tmp_path, project=PROJECT + "  production:\n    settings: {max_parallel_nodes: 2}\n"
+        )
+        with pytest.raises(ProjectConfigError, match="both mean 'prod'"):
+            validate_project(root, "prod")
+
+    def test_an_override_error_still_points_at_the_block(self, tmp_path):
+        root = _project(
+            tmp_path,
+            project=PROJECT.replace("  prod:", "  production:")
+            + "    settings.max_paralel_nodes: 2\n",
+        )
+        with pytest.raises(ProjectConfigError, match="did you mean 'max_parallel_nodes'"):
+            validate_project(root, "prod")
+
+
+class TestQualityExtensionsMustLoad:
+    def test_a_module_that_fails_to_import_stops_the_load(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from ducta.setting.project.loader import load_context_quality_extensions
+
+        def boom(_modules):
+            raise ImportError("No module named 'my_checks'")
+
+        monkeypatch.setattr("ducta.check.core.load_quality_extensions", boom)
+        ctx = SimpleNamespace(global_config={"quality": {"extensions": ["my_checks"]}})
+        with pytest.raises(ProjectConfigError, match="quality.extensions.*my_checks"):
+            load_context_quality_extensions(ctx, allow_python_config=True)
+
+    def test_not_allowed_still_only_warns(self):
+        from types import SimpleNamespace
+
+        from ducta.setting.project.loader import load_context_quality_extensions
+
+        ctx = SimpleNamespace(global_config={"quality": {"extensions": ["my_checks"]}})
+        load_context_quality_extensions(ctx, allow_python_config=False)  # no raise

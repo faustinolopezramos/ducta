@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import json
 import os
 import re
+import time
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from pathlib import Path
@@ -86,24 +87,48 @@ def _write_json_atomic(path: Path, data: Any) -> None:
         raise
 
 
-def _append_json_history(path: Path, metric_entry: Any) -> None:
-    """Append *metric_entry* to the JSON history array at *path*, under an
-    exclusive file lock. Shared by ``FileStorageBackend.append_history`` and
-    ``ContextAwareStorageBackend.append_history``'s JSON branch, which
-    previously each carried an identical copy of this read-modify-write."""
+def _read_json_tolerant(path: Path) -> Optional[Any]:
+    """``_read_json_safe``, but an unreadable (torn or corrupt) file counts as absent.
+
+    History and baselines are rebuilt from the next run, so a file left half-written by a
+    killed process must not fail every later run until someone deletes it by hand.
+    """
     try:
-        if not path.exists():
-            path.write_text("[]", encoding="utf-8")
-        with open(path, "r+") as f:
-            with _exclusive_lock(f):
-                content = f.read()
-                history = json.loads(content) if content.strip() else []
-                history.append(metric_entry)
-                f.seek(0)
-                f.truncate()
-                json.dump(history, f, indent=2, default=str)
-    except Exception as e:
-        logger.error(f"Failed to append to history: {e}")
+        return _read_json_safe(path)
+    except ValueError as e:  # json.JSONDecodeError is a ValueError
+        logger.warning("Ignoring unreadable quality file {}: {}", path, e)
+        return None
+
+
+def _quarantine(path: Path) -> None:
+    """Move an unreadable file aside (kept for inspection) so the next write can start clean."""
+    aside = path.with_name(f"{path.name}.corrupt-{int(time.time())}")
+    try:
+        os.replace(path, aside)
+        logger.warning("Moved unreadable {} to {}", path, aside)
+    except OSError as e:
+        logger.warning("Could not move unreadable {} aside: {}", path, e)
+
+
+def _append_json_history(path: Path, metric_entry: Any) -> None:
+    """Append *metric_entry* to the JSON history array at *path*.
+
+    Serialised on a sidecar lock file, because the history itself is replaced atomically
+    (temp file + ``os.replace``): rewriting it in place left a truncated file if the
+    process died or the disk filled mid-write, and every later run then failed reading
+    it. A history that is already unreadable is moved aside, not extended. Errors
+    propagate, so the caller can report them in ``persistence_warnings``.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path.with_name(path.name + ".lock"), "a+") as lock_file:
+        with _exclusive_lock(lock_file):
+            history = _read_json_tolerant(path) if path.exists() else []
+            if history is None or not isinstance(history, list):
+                if path.exists():
+                    _quarantine(path)
+                history = []
+            history.append(metric_entry)
+            _write_json_atomic(path, history)
 
 
 def _read_json_safe(path: Path) -> Optional[Any]:
@@ -114,7 +139,7 @@ def _read_json_safe(path: Path) -> Optional[Any]:
     return json.loads(content) if content else None
 
 
-_SAFE_RUN_ID_RE = re.compile(r"^[\w\-]+$")
+_SAFE_RUN_ID_RE = re.compile(r"^[\w\-]+\Z")
 
 
 def _sanitize_run_id(run_id: str) -> str:
@@ -303,7 +328,9 @@ class FileStorageBackend(StorageBackend):
         )
 
     def load_baseline(self, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME):
-        return _read_json_safe(self._dataset_path(dataset_name, pipeline_name) / "baseline.json")
+        return _read_json_tolerant(
+            self._dataset_path(dataset_name, pipeline_name) / "baseline.json"
+        )
 
     def save_history(self, history, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME):
         _write_json_atomic(
@@ -311,7 +338,7 @@ class FileStorageBackend(StorageBackend):
         )
 
     def load_history(self, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME):
-        return _read_json_safe(self._dataset_path(dataset_name, pipeline_name) / "history.json")
+        return _read_json_tolerant(self._dataset_path(dataset_name, pipeline_name) / "history.json")
 
     def append_history(self, dataset_name, metric_entry, pipeline_name=DEFAULT_PIPELINE_NAME):
         _append_json_history(
@@ -412,6 +439,26 @@ class FileStorageBackend(StorageBackend):
 # ---------------------------------------------------------------------------
 
 
+class _CloudPath:
+    """A cloud URI (``s3://bucket/x``) that keeps its scheme when parts are joined.
+
+    ``pathlib.Path`` collapses ``s3://bucket/x`` to ``s3:/bucket/x``, which then no longer
+    looks like a cloud path and was created as a local directory.
+    """
+
+    def __init__(self, uri: str) -> None:
+        self._uri = uri.rstrip("/")
+
+    def __truediv__(self, part: Any) -> "_CloudPath":
+        return _CloudPath(f"{self._uri}/{str(part).strip('/')}")
+
+    def __str__(self) -> str:
+        return self._uri
+
+    def __repr__(self) -> str:
+        return f"_CloudPath({self._uri!r})"
+
+
 class ContextAwareStorageBackend(StorageBackend):
     def __init__(
         self,
@@ -429,13 +476,23 @@ class ContextAwareStorageBackend(StorageBackend):
         self._base_io = BaseIO(context)
         self._is_cloud_path = is_cloud_path
 
-        if base_path:
-            self._root = Path(base_path)
-        else:
-            output_path = self._base_io._ctx_get("output_path") or "."
-            self._root = Path(str(output_path)) / "quality"
+        if not base_path:
+            output_path = str(self._base_io._ctx_get("output_path") or ".")
+            base_path = f"{output_path.rstrip('/')}/quality"
 
-        if not self._is_cloud_path(str(self._root)):
+        self._root: Any
+        if self._is_cloud_path(str(base_path)):
+            if self.format == "json":
+                from ducta.check.core import QualityConfigError
+
+                raise QualityConfigError(
+                    f"Quality reports in JSON are local files and cannot be written to "
+                    f"'{base_path}'. Set quality.output.format to parquet, delta or csv for "
+                    "a cloud location, or point quality.output.base_path at a local folder."
+                )
+            self._root = _CloudPath(str(base_path))
+        else:
+            self._root = Path(base_path)
             self._base_io._prepare_local_directory(str(self._root))
 
     def _dataset_dir(self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME) -> Path:
@@ -581,7 +638,9 @@ class ContextAwareStorageBackend(StorageBackend):
 
     def load_baseline(self, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME):
         if self.format == "json":
-            return _read_json_safe(self._dataset_dir(dataset_name, pipeline_name) / "baseline.json")
+            return _read_json_tolerant(
+                self._dataset_dir(dataset_name, pipeline_name) / "baseline.json"
+            )
         else:
             records = self._read_with_io(
                 self._dataset_dir(dataset_name, pipeline_name) / f"baseline.{self.format}"
@@ -602,7 +661,9 @@ class ContextAwareStorageBackend(StorageBackend):
 
     def load_history(self, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME):
         if self.format == "json":
-            return _read_json_safe(self._dataset_dir(dataset_name, pipeline_name) / "history.json")
+            return _read_json_tolerant(
+                self._dataset_dir(dataset_name, pipeline_name) / "history.json"
+            )
         else:
             return self._read_with_io(
                 self._dataset_dir(dataset_name, pipeline_name) / f"history.{self.format}"
@@ -619,16 +680,34 @@ class ContextAwareStorageBackend(StorageBackend):
             # appends can each read the same old history and the later save wins,
             # silently dropping the other's entry. Locks on a sentinel file since
             # the writer/reader abstractions don't expose a raw file handle to
-            # flock directly (unlike the json branch above).
-            lock_path = self._dataset_dir(dataset_name, pipeline_name) / "history.lock"
-            try:
-                with open(lock_path, "a+") as lockf:
-                    with _exclusive_lock(lockf):
-                        history = self.load_history(dataset_name, pipeline_name) or []
-                        history.append(metric_entry)
-                        self.save_history(history, dataset_name, pipeline_name)
-            except Exception as e:
-                logger.error(f"Failed to append to history: {e}")
+            # flock directly (unlike the json branch above). A cloud location has
+            # no local file to lock on: there the append is unserialised.
+            history_file = self._dataset_dir(dataset_name, pipeline_name) / f"history.{self.format}"
+            if self._is_cloud_path(str(self._root)):
+                self._extend_history(history_file, metric_entry, dataset_name, pipeline_name)
+                return
+            with open(history_file.with_name("history.lock"), "a+") as lockf:
+                with _exclusive_lock(lockf):
+                    self._extend_history(history_file, metric_entry, dataset_name, pipeline_name)
+
+    def _extend_history(self, history_file, metric_entry, dataset_name, pipeline_name) -> None:
+        """Load, extend and save the non-JSON history. Errors propagate.
+
+        ``_read_with_io`` answers ``None`` for "no file" *and* for any read error, and
+        a ``None`` here used to become ``[]``: one transient failure replaced the whole
+        history with a single row. For a local file that exists, a failed read now aborts
+        the append instead.
+        """
+        history = self.load_history(dataset_name, pipeline_name)
+        if history is None:
+            if not self._is_cloud_path(str(self._root)) and history_file.exists():
+                raise RuntimeError(
+                    f"{history_file} exists but could not be read; the history is left "
+                    "untouched instead of being overwritten with one entry"
+                )
+            history = []
+        history.append(metric_entry)
+        self.save_history(history, dataset_name, pipeline_name)
 
     def save_gate_result(
         self, gate_result, run_id, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME

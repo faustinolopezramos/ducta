@@ -33,16 +33,13 @@ from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
 from ducta.api import __version__
-from ducta.api.config import get_settings
+from ducta.api.config import LOCAL_HOSTS, get_settings
 from ducta.api.execution.manager import get_execution_manager
 from ducta.api.middleware import register_middleware
 from ducta.api.routes import register_routes
 from ducta.api.utils.logging import configure_logging
 
 _UI_DIR = Path(__file__).resolve().parent.parent / "ui" / "dist"
-
-
-_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", ""})
 
 
 def warn_if_insecure_exposure(settings: "Settings") -> bool:
@@ -60,7 +57,7 @@ def warn_if_insecure_exposure(settings: "Settings") -> bool:
     this process's visibility; auth should still be enabled whenever a proxy
     sits in front of it, regardless of what this check reports.
     """
-    if not settings.auth_enabled and settings.host not in _LOCAL_HOSTS:
+    if not settings.auth_enabled and settings.host not in LOCAL_HOSTS:
         logger.warning(
             "SECURITY: authentication is DISABLED while binding to a non-local "
             "address (host={host}). Every endpoint — including pipeline execution "

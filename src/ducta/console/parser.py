@@ -35,6 +35,15 @@ HELP_CONFIG_FILE = (
 )
 
 
+#: ``ducta ui`` / ``ducta server start``: serving beyond this machine without authentication.
+ALLOW_UNAUTHENTICATED = {
+    "action": "store_true",
+    "help": (
+        "Serve on a non-local --host without authentication (AUTH_ENABLED). SECURITY: anyone "
+        "who can reach the address can run pipelines. Refused by default."
+    ),
+}
+
 _INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
 
 
@@ -781,11 +790,7 @@ class UnifiedArgumentParser:
             default=None,
             help="Path for the SQLite execution history database (default: ~/.ducta/executions.db)",
         )
-        ui_parser.add_argument(
-            "--enable-terminal",
-            action="store_true",
-            help="Enable the embedded web terminal (PTY). SECURITY: grants arbitrary shell execution to authenticated users. Off by default.",
-        )
+        ui_parser.add_argument("--allow-unauthenticated", **ALLOW_UNAUTHENTICATED)
 
     @staticmethod
     def _add_server_subcommand(subparsers):
@@ -821,6 +826,7 @@ class UnifiedArgumentParser:
             default=None,
             help="Path for the SQLite execution history database (default: ~/.ducta/executions.db)",
         )
+        start_parser.add_argument("--allow-unauthenticated", **ALLOW_UNAUTHENTICATED)
 
     @staticmethod
     def _add_quality_subcommand(subparsers):
@@ -845,6 +851,11 @@ class UnifiedArgumentParser:
             "--output",
             "-o",
             help="Write the proposed spec here (default: print it to stdout)",
+        )
+        profile_parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Replace --output if it already exists (default: refuse)",
         )
         profile_parser.add_argument(
             "--strictness",

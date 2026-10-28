@@ -5,6 +5,7 @@ import pytest
 
 from ducta.gate.exceptions import ConfigurationError
 from ducta.gate.output import _newest_mtime, _PathComponents, _PathManager, join_cloud_path
+from ducta.gate.validators import ConfigValidator
 
 
 class TestPathComponents:
@@ -116,3 +117,41 @@ class TestPathManager:
         }
         with pytest.raises(ConfigurationError, match="Invalid characters"):
             pm.resolve_output_path({"table_name": "../../etc"}, "sch.sub.tbl", "dev")
+
+
+@pytest.fixture
+def env_paths():
+    return _PathManager(
+        {"output_path": "/srv/ws/data/out", "execution_mode": "local"}, ConfigValidator()
+    )
+
+
+class TestConventionalOutputPath:
+    def test_the_environment_is_a_folder_under_the_output_path(self, env_paths):
+        assert (
+            env_paths.conventional_output_path({}, "silver.sales.orders", "dev")
+            == "/srv/ws/data/out/dev/silver/sales/orders"
+        )
+
+    def test_no_environment_adds_no_folder(self, env_paths):
+        assert (
+            env_paths.conventional_output_path({}, "silver.sales.orders", None)
+            == "/srv/ws/data/out/silver/sales/orders"
+        )
+
+    @pytest.mark.parametrize(
+        "env", ["../../../../tmp/evil", "/etc/cron.d", "a/../../b", "..", "dev\\..\\x", "C:x"]
+    )
+    def test_an_environment_that_would_leave_the_output_path_is_refused(self, env_paths, env):
+        with pytest.raises(ConfigurationError, match="Invalid environment"):
+            env_paths.conventional_output_path({}, "silver.sales.orders", env)
+
+    def test_resolve_output_path_goes_through_the_same_check(self, env_paths):
+        with pytest.raises(ConfigurationError, match="Invalid environment"):
+            env_paths.resolve_output_path({}, "silver.sales.orders", "../x")
+
+    def test_a_declared_filepath_is_still_used_as_written(self, env_paths):
+        assert (
+            env_paths.resolve_output_path({"filepath": "/data/x"}, "silver.sales.orders", "dev")
+            == "/data/x"
+        )

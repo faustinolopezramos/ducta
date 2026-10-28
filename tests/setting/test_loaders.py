@@ -10,7 +10,6 @@ from ducta.setting.loaders import (
     ConfigLoader,
     ConfigLoaderFactory,
     JsonConfigLoader,
-    PythonConfigLoader,
     TomlConfigLoader,
     YamlConfigLoader,
 )
@@ -125,32 +124,6 @@ class TestTomlConfigLoader:
             TomlConfigLoader().load(str(f))
 
 
-class TestPythonConfigLoader:
-    def test_load_valid_python(self, temp_dir):
-        f = temp_dir / "cfg.py"
-        f.write_text("config = {'a': 1, 'b': 'two'}\n")
-        result = PythonConfigLoader().load(str(f))
-        assert result == {"a": 1, "b": "two"}
-
-    def test_no_config_var(self, temp_dir):
-        f = temp_dir / "cfg.py"
-        f.write_text("x = 1\n")
-        with pytest.raises(ConfigLoadError, match="must define 'config'"):
-            PythonConfigLoader().load(str(f))
-
-    def test_config_not_dict(self, temp_dir):
-        f = temp_dir / "cfg.py"
-        f.write_text("config = 'not a dict'\n")
-        with pytest.raises(ConfigLoadError, match="must be a dict"):
-            PythonConfigLoader().load(str(f))
-
-    def test_load_module_error(self, temp_dir):
-        f = temp_dir / "cfg.py"
-        f.write_text("raise ValueError('bad')\n")
-        with pytest.raises(ConfigLoadError, match="Error executing module"):
-            PythonConfigLoader().load(str(f))
-
-
 class TestConfigLoaderFactory:
     def test_get_loader_yaml(self, temp_dir):
         factory = ConfigLoaderFactory()
@@ -169,12 +142,6 @@ class TestConfigLoaderFactory:
         path = temp_dir / "cfg.toml"
         loader = factory.get_loader(str(path))
         assert isinstance(loader, TomlConfigLoader)
-
-    def test_get_loader_python(self, temp_dir):
-        factory = ConfigLoaderFactory()
-        path = temp_dir / "cfg.py"
-        loader = factory.get_loader(str(path))
-        assert isinstance(loader, PythonConfigLoader)
 
     def test_get_loader_unsupported(self):
         factory = ConfigLoaderFactory()
@@ -228,32 +195,24 @@ class TestConfigLoaderFactory:
         assert factory._try_parse_inline_text("hello") is None
 
 
-class TestConfigLoaderFactoryAllowPython:
-    """Regression: `allow_python=False` must keep `PythonConfigLoader` out of
-    the resolver entirely, so a `.py` config hits the generic "No supported
-    loader" error instead of being executed. Needed on any path reachable from
-    workspace/repo content the caller didn't write (see api/workspace/manager.py
-    and api/workspace/loaders.py, which now construct the factory this way)."""
+class TestPythonConfigIsNeverExecuted:
+    """A `.py` config must hit the generic "No supported loader" error rather than
+    run. The factory reads workspace/repo content the caller didn't write (see
+    api/workspace/loaders.py and check/service.py)."""
 
-    def test_default_still_allows_python(self, temp_dir):
-        factory = ConfigLoaderFactory()
-        loader = factory.get_loader(str(temp_dir / "cfg.py"))
-        assert isinstance(loader, PythonConfigLoader)
-
-    def test_disallowed_python_file_has_no_loader(self, temp_dir):
-        factory = ConfigLoaderFactory(allow_python=False)
+    def test_python_file_has_no_loader(self, temp_dir):
         with pytest.raises(ConfigLoadError, match="No supported loader"):
-            factory.get_loader(str(temp_dir / "cfg.py"))
+            ConfigLoaderFactory().get_loader(str(temp_dir / "cfg.py"))
 
-    def test_disallowed_python_other_formats_still_work(self, temp_dir):
-        factory = ConfigLoaderFactory(allow_python=False)
+    def test_load_config_raises_instead_of_executing(self, temp_dir):
+        marker = temp_dir / "ran"
+        f = temp_dir / "evil.py"
+        f.write_text(f"open({str(marker)!r}, 'w').close()\nconfig = {{'pwned': True}}\n")
+        with pytest.raises(ConfigLoadError, match="No supported loader"):
+            ConfigLoaderFactory().load_config(str(f))
+        assert not marker.exists()
+
+    def test_other_formats_still_load(self, temp_dir):
         f = temp_dir / "cfg.yaml"
         f.write_text("key: val\n")
-        assert factory.load_config(str(f)) == {"key": "val"}
-
-    def test_disallowed_python_load_config_raises_instead_of_executing(self, temp_dir):
-        f = temp_dir / "evil.py"
-        f.write_text("import sys\nconfig = {'pwned': True}\n")
-        factory = ConfigLoaderFactory(allow_python=False)
-        with pytest.raises(ConfigLoadError, match="No supported loader"):
-            factory.load_config(str(f))
+        assert ConfigLoaderFactory().load_config(str(f)) == {"key": "val"}

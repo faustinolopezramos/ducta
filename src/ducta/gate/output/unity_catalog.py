@@ -34,6 +34,7 @@ from ducta.gate.constants import (
 from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 from ducta.gate.factories import WriterFactory
 from ducta.gate.sql import SqlSafetyMixin, UnityCatalogDDL
+from ducta.gate.writers import vetted_write_options
 
 
 @dataclass
@@ -56,6 +57,36 @@ class UnityCatalogConfig:
     def __post_init__(self):
         if self.uc_table_mode not in ["external", "managed"]:
             raise ConfigurationError(f"Invalid uc_table_mode: {self.uc_table_mode}")
+
+    @classmethod
+    def from_output_config(
+        cls, config: Dict[str, Any], parsed_key: Dict[str, str], env: str
+    ) -> "UnityCatalogConfig":
+        """Build it from an output's configuration; ``{environment}`` in names becomes ``env``.
+
+        ``parsed_key`` is the output key split into ``schema`` / ``table_name`` (what the
+        config falls back to when it does not name them).
+        """
+
+        # Only ``{environment}`` is replaced: ``str.format`` would also read attributes and
+        # items of whatever else a name holds in braces.
+        def named(value: str) -> str:
+            return str(value).replace("{environment}", str(env))
+
+        return cls(
+            catalog_name=named(config["catalog_name"]),
+            schema=named(config.get("schema", parsed_key["schema"])),
+            table_name=named(config.get("table_name", parsed_key["table_name"])),
+            uc_table_mode=config.get("uc_table_mode", "external"),
+            write_mode=config.get("write_mode", WriteMode.OVERWRITE.value),
+            overwrite_schema=config.get("overwrite_schema", True),
+            partition_col=config.get("partition_col"),
+            description=config.get("description"),
+            optimize=config.get("optimize", True),
+            vacuum=config.get("vacuum", False),
+            vacuum_retention_hours=config.get("vacuum_retention_hours"),
+            options=config.get("options", {}),
+        )
 
 
 class UnityCatalogManager(BaseIO, SqlSafetyMixin):
@@ -177,7 +208,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
             .option("overwriteSchema", str(config.overwrite_schema).lower())
         )
 
-        for option_key, option_value in config.options.items():
+        for option_key, option_value in vetted_write_options(config.options).items():
             writer = writer.option(option_key, option_value)
 
         writer.saveAsTable(quoted_name)
@@ -209,7 +240,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         if spark is None:
             raise WriteOperationError(
                 f"Spark session unavailable; cannot register external table {full_table_name}"
-            ) from None
+            )
         spark.sql(UnityCatalogDDL.create_external_table(full_table_name, location))
         logger.info("Created external table: {}", full_table_name)
 

@@ -1,4 +1,3 @@
-from pathlib import Path
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -10,8 +9,6 @@ from ducta.setting.contexts import (
 )
 from ducta.setting.exceptions import ConfigLoadError, ConfigValidationError
 from ducta.setting.interpolator import VariableInterpolator
-from ducta.setting.loaders import ConfigLoaderFactory
-from ducta.setting.utils import deep_merge_dicts as _deep_merge_dicts
 from ducta.setting.validators import ConfigValidator, FormatPolicy
 
 
@@ -24,18 +21,15 @@ def _make_bare_context(
     ml_info=None,
     spark_session=None,
     env=None,
-    allow_python_config=True,
 ):
     """Build a ``Context`` without running ``__init__``'s full load/validate/
     process pipeline — for tests that need a ``Context`` populated from
     already-final config dicts, to exercise one piece (e.g.
-    ``_apply_environment_overrides``) in isolation. This used to be a
+    ``_apply_environment``) in isolation. This used to be a
     production classmethod (``Context._from_processed``); it was removed as
     dead code (no production caller ever used the fast path), and this
     fixture-only helper took its place since only tests needed it."""
     obj = Context.__new__(Context)
-    obj.allow_python_config = allow_python_config
-    obj._config_loader = ConfigLoaderFactory(allow_python=allow_python_config)
     obj._validator = ConfigValidator()
     obj._interpolator = VariableInterpolator()
     obj._validate_with_pydantic = False
@@ -56,34 +50,6 @@ def _make_bare_context(
     obj._pipeline_manager = PipelineManager(obj.pipelines_config, obj.nodes_config)
     obj.quality_output_paths = []
     return obj
-
-
-class TestDeepMergeDicts:
-    def test_merge_simple(self):
-        result = _deep_merge_dicts({"a": 1}, {"b": 2})
-        assert result == {"a": 1, "b": 2}
-
-    def test_merge_override(self):
-        result = _deep_merge_dicts({"a": 1}, {"a": 2})
-        assert result == {"a": 2}
-
-    def test_merge_nested(self):
-        result = _deep_merge_dicts({"a": {"b": 1}}, {"a": {"c": 2}})
-        assert result == {"a": {"b": 1, "c": 2}}
-
-    def test_merge_nested_override(self):
-        result = _deep_merge_dicts({"a": {"b": 1}}, {"a": {"b": 2}})
-        assert result == {"a": {"b": 2}}
-
-    def test_original_not_mutated(self):
-        base = {"a": 1}
-        override = {"b": 2}
-        _deep_merge_dicts(base, override)
-        assert base == {"a": 1}
-
-    def test_non_dict_override_replaces(self):
-        result = _deep_merge_dicts({"a": {"b": 1}}, {"a": "string"})
-        assert result == {"a": "string"}
 
 
 class TestPipelineManager:
@@ -246,57 +212,13 @@ class TestMLConfigMixin:
         mock_load.assert_called_once_with("config/ml/hyperparams.yml", required=False)
 
 
-class TestContextInit:
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_from_json_config(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader = MagicMock()
-        mock_loader.load_config.side_effect = lambda x: x if isinstance(x, dict) else {}
-        mock_loader_cls.return_value = mock_loader
-
-        with patch.object(Context, "_validate_all_configs_with_pydantic"):
-            ctx = Context.from_json_config(
-                global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
-                pipelines_config={"p1": {"nodes": ["n1"]}},
-                nodes_config={"n1": {"function": "mymod.my_func"}},
-                input_config={"ds1": {"format": "parquet"}},
-                output_config={"out1": {"format": "delta"}},
-            )
-        assert ctx.global_config["input_path"] == "/in"
-        assert ctx.execution_mode == "local"
-        assert ctx.layer == ""
-
-    def test_prepare_sources(self):
-        result = Context._prepare_sources(
-            global_config={"a": 1},
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-        )
-        assert isinstance(result["global_config"], dict)
-        assert result["global_config"]["a"] == 1
-
-    def test_prepare_sources_string_to_path(self):
-        result = Context._prepare_sources(
-            global_config="/path/to/file.yaml",
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-        )
-        assert isinstance(result["global_config"], Path)
-
-
 class TestContextLazySpark:
     """`Context.spark` must not create a SparkSession until first real access —
     see the Phase 1 plan: constructing a Context (e.g. for `list-pipelines` or a
     quality-check-only pipeline) must not pay the Spark/JVM cost."""
 
-    def _make_context(self, mock_loader_cls, mock_get_session):
+    def _make_context(self, mock_get_session):
         mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
         return _make_bare_context(
             global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
             pipelines_config={"p1": {"nodes": ["n1"]}},
@@ -306,40 +228,34 @@ class TestContextLazySpark:
         )
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_construction_does_not_create_session(self, mock_loader_cls, mock_get_session):
-        self._make_context(mock_loader_cls, mock_get_session)
+    def test_construction_does_not_create_session(self, mock_get_session):
+        self._make_context(mock_get_session)
         mock_get_session.assert_not_called()
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_first_access_creates_session_once(self, mock_loader_cls, mock_get_session):
-        ctx = self._make_context(mock_loader_cls, mock_get_session)
+    def test_first_access_creates_session_once(self, mock_get_session):
+        ctx = self._make_context(mock_get_session)
         session = ctx.spark
         assert session is mock_get_session.return_value
         mock_get_session.assert_called_once()
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_repeated_access_is_cached(self, mock_loader_cls, mock_get_session):
-        ctx = self._make_context(mock_loader_cls, mock_get_session)
+    def test_repeated_access_is_cached(self, mock_get_session):
+        ctx = self._make_context(mock_get_session)
         first = ctx.spark
         second = ctx.spark
         assert first is second
         mock_get_session.assert_called_once()
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_has_spark_session_reflects_materialization(self, mock_loader_cls, mock_get_session):
-        ctx = self._make_context(mock_loader_cls, mock_get_session)
+    def test_has_spark_session_reflects_materialization(self, mock_get_session):
+        ctx = self._make_context(mock_get_session)
         assert ctx.has_spark_session() is False
         ctx.spark  # noqa: B018 — trigger lazy creation
         assert ctx.has_spark_session() is True
 
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_explicit_spark_session_override_skips_factory(self, mock_loader_cls, mock_get_session):
-        mock_loader_cls.return_value = MagicMock()
+    def test_explicit_spark_session_override_skips_factory(self, mock_get_session):
         injected = MagicMock(name="injected-session")
         ctx = _make_bare_context(
             global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
@@ -356,10 +272,8 @@ class TestContextLazySpark:
 
 class TestContextQualityOutput:
     @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_add_and_get_quality_outputs(self, mock_loader_cls, mock_get_session):
+    def test_add_and_get_quality_outputs(self, mock_get_session):
         mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
 
         ctx = _make_bare_context(
             global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
@@ -399,66 +313,131 @@ class TestContextQualityOutput:
         assert len(by_node["n1"]) == 2
 
 
-class TestContextEnvironmentOverrides:
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_apply_overrides(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
+def _documents(**global_overrides):
+    return dict(
+        global_config={
+            "input_path": "/in",
+            "output_path": "/out",
+            "mode": "local",
+            **global_overrides,
+        },
+        pipelines_config={"p1": {"nodes": ["n1"]}},
+        nodes_config={"n1": {"function": "mymod.my_func"}},
+        input_config={"ds1": {"format": "parquet"}},
+        output_config={"out1": {"format": "delta"}},
+    )
 
-        ctx = _make_bare_context(
-            global_config={
-                "input_path": "/in",
-                "output_path": "/out",
-                "mode": "local",
-                "environments": {"dev": {"mode": "distributed"}},
-            },
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-            env="dev",
-        )
-        ctx._apply_environment_overrides()
-        assert ctx.global_config.get("environment") == "dev"
-        assert "environments" not in ctx.global_config
 
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_no_override_without_env(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
-
-        ctx = _make_bare_context(
-            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-        )
-        ctx._apply_environment_overrides()
-
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    @patch("ducta.setting.contexts.ConfigLoaderFactory")
-    def test_merge_override_values(self, mock_loader_cls, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-        mock_loader_cls.return_value = MagicMock()
-
-        ctx = _make_bare_context(
-            global_config={
-                "input_path": "/in",
-                "output_path": "/out",
-                "mode": "local",
-                "environments": {"dev": {"mode": "distributed", "log_level": "DEBUG"}},
-            },
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-            env="dev",
-        )
-        ctx._apply_environment_overrides()
-        assert ctx.global_config["mode"] == "distributed"
-        assert ctx.global_config["log_level"] == "DEBUG"
+class TestContextInit:
+    def test_builds_from_the_five_documents(self):
+        ctx = Context(**_documents(), validate=False)
         assert ctx.global_config["input_path"] == "/in"
-        assert ctx.global_config.get("environment") == "dev"
+        assert ctx.execution_mode == "local"
+        assert ctx.list_pipeline_names() == ["p1"]
+        assert ctx.layer == ""
+        assert ctx.ml_info == {"hyperparams": {}}
+
+    def test_creating_it_does_not_start_spark(self):
+        with patch("ducta.setting.contexts.SparkSessionFactory.get_session") as get_session:
+            ctx = Context(**_documents(), validate=False)
+        get_session.assert_not_called()
+        assert ctx.has_spark_session() is False
+
+    @pytest.mark.parametrize(
+        "document",
+        ["global_config", "pipelines_config", "nodes_config", "input_config", "output_config"],
+    )
+    def test_each_document_must_be_a_mapping(self, document):
+        docs = _documents()
+        docs[document] = "path/to/file.yaml"
+        with pytest.raises(ConfigValidationError, match="must be of type dict"):
+            Context(**docs, validate=False)
+
+    def test_global_config_requires_paths_and_mode(self):
+        docs = _documents()
+        del docs["global_config"]["output_path"]
+        with pytest.raises(ConfigValidationError, match="output_path"):
+            Context(**docs, validate=False)
+
+    def test_ml_info_must_be_a_mapping(self):
+        with pytest.raises(ConfigValidationError, match="ml_info must be a mapping"):
+            Context(**_documents(), ml_info="ml.yaml", validate=False)
+
+    def test_inline_ml_info_is_used(self):
+        ctx = Context(**_documents(), ml_info={"model_name": "churn"}, validate=False)
+        assert ctx.ml_info["model_name"] == "churn"
+
+
+class TestContextEnvironment:
+    def test_env_argument_is_normalised_and_recorded(self):
+        ctx = Context(**_documents(), env="Production", validate=False)
+        assert ctx.global_config["environment"] == "prod"
+
+    def test_environment_named_in_the_config_is_kept(self):
+        ctx = Context(**_documents(environment="dev"), validate=False)
+        assert ctx.global_config["environment"] == "dev"
+
+    def test_env_argument_wins_over_the_config(self):
+        ctx = Context(**_documents(environment="dev"), env="staging", validate=False)
+        assert ctx.global_config["environment"] == "staging"
+
+    def test_no_environment_records_nothing(self):
+        ctx = Context(**_documents(), validate=False)
+        assert "environment" not in ctx.global_config
+
+
+class TestEnvironmentCannotLeaveTheOutputPath:
+    """``env`` names the folders a run writes to; ``../../x`` must not load."""
+
+    @pytest.mark.parametrize("env", ["../../../../escape", "/etc", "a/../b", ".."])
+    def test_a_hostile_env_is_refused_at_load(self, env):
+        with pytest.raises(ConfigValidationError, match="Invalid environment"):
+            Context(**_documents(), env=env, validate=False)
+
+    def test_a_hostile_environment_in_the_config_is_refused_too(self):
+        with pytest.raises(ConfigValidationError, match="Invalid environment"):
+            Context(**_documents(environment="../x"), validate=False)
+
+    @pytest.mark.parametrize("env", ["dev", "prod", "sandbox_ana", "dev.eu"])
+    def test_ordinary_names_still_load(self, env):
+        assert Context(**_documents(), env=env, validate=False).global_config["environment"] == env
+
+    def test_a_real_project_refuses_it_too(self, tmp_path):
+        import ducta
+
+        (tmp_path / "ducta.yaml").write_text(
+            "version: 2\nproject: demo\npaths: {input: d, output: d}\n"
+        )
+        (tmp_path / "catalog.yaml").write_text(
+            "silver.sales.orders: {format: parquet}\nraw: {format: csv, path: d/r}\n"
+        )
+        (tmp_path / "pipelines").mkdir()
+        (tmp_path / "pipelines" / "p.yaml").write_text(
+            "nodes:\n  n:\n    run: src.m:f\n    inputs: [raw]\n    outputs: [silver.sales.orders]\n"
+        )
+        with pytest.raises(Exception, match="Invalid environment"):
+            ducta.load_project(tmp_path, env="../../../../escape")
+        assert ducta.load_project(tmp_path, env="dev").global_config["environment"] == "dev"
+
+
+class TestMlInfo:
+    def test_one_refused_value_does_not_leave_the_rest_uninterpolated(self):
+        docs = _documents(environment="dev")
+        ml_info = {
+            "model_name": "churn_${environment}",
+            "registry": {"token": "${REGISTRY_TOKEN}", "uri": "s3://${environment}/models"},
+            "tags": ["${environment}", "${API_KEY}"],
+        }
+        ctx = Context(**docs, ml_info=ml_info, validate=False)
+        assert ctx.ml_info["model_name"] == "churn_dev"
+        assert ctx.ml_info["registry"]["uri"] == "s3://dev/models"
+        assert ctx.ml_info["registry"]["token"] == "${REGISTRY_TOKEN}"  # refused, left as written
+        assert ctx.ml_info["tags"] == ["dev", "${API_KEY}"]
+
+    def test_a_path_gets_a_migration_hint(self):
+        from ducta.setting.schemas import GlobalConfigSchema
+
+        with pytest.raises(ValueError, match="Move that file's content under settings.ml_info"):
+            GlobalConfigSchema.model_validate(
+                {"input_path": "/in", "output_path": "/out", "ml_info": "config/ml.yaml"}
+            )

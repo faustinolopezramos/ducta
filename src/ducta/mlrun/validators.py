@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import math
+import numbers
 import re
 import threading
 from pathlib import Path
@@ -34,7 +35,7 @@ from ducta.mlrun.exceptions import (
 )
 
 # Valid characters for model/experiment names
-VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+$")
+VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_\-\.]+\Z")
 MIN_NAME_LENGTH = 1
 MAX_NAME_LENGTH = 255
 
@@ -138,6 +139,17 @@ class NameValidator:
         return name
 
 
+def plain_number(value: Any) -> Any:
+    """A real number as a plain ``int``/``float``; anything else comes back unchanged.
+
+    ``np.float32`` and ``np.int64`` are not ``int``/``float`` subclasses, yet they are what
+    ``sklearn.metrics`` and ``DataFrame`` reductions routinely hand back.
+    """
+    if isinstance(value, (bool, int, float)) or not isinstance(value, numbers.Real):
+        return value
+    return int(value) if isinstance(value, numbers.Integral) else float(value)
+
+
 class MetricValidator:
     """Validator for metric values"""
 
@@ -146,6 +158,7 @@ class MetricValidator:
         """
         Validate a metric value.
         """
+        value = plain_number(value)
         if not isinstance(value, (int, float)):
             raise InvalidMetricError(
                 key, value, f"Metrics must be numeric (int or float), got {type(value).__name__}"
@@ -205,6 +218,7 @@ class ParameterValidator:
     """Validator for hyperparameters"""
 
     SUPPORTED_TYPES = {str, int, float, bool, type(None)}
+    MAX_DEPTH = 4
 
     @staticmethod
     def _validate_key(key: Any) -> str:
@@ -218,13 +232,28 @@ class ParameterValidator:
         return key
 
     @staticmethod
-    def _validate_value(key: str, value: Any) -> Any:
-        """Helper to validate a parameter value"""
+    def _validate_value(key: str, value: Any, depth: int = 0) -> Any:
+        """Helper to validate a parameter value.
+
+        Besides scalars, a list/tuple/dict of scalars is a legitimate hyperparameter
+        (``hidden_layer_sizes=(50, 20)``, ``class_weight={0: 1, 1: 5}``); it is stored as
+        JSON, so a tuple becomes a list and a dict key a string. numpy scalars are turned
+        into plain numbers.
+        """
+        value = plain_number(value)
+        if isinstance(value, (list, tuple)) and depth < ParameterValidator.MAX_DEPTH:
+            return [ParameterValidator._validate_value(key, v, depth + 1) for v in value]
+        if isinstance(value, dict) and depth < ParameterValidator.MAX_DEPTH:
+            return {
+                str(k): ParameterValidator._validate_value(key, v, depth + 1)
+                for k, v in value.items()
+            }
         if type(value) not in ParameterValidator.SUPPORTED_TYPES:
             raise InvalidParameterError(
                 key,
                 f"Parameter value type {type(value).__name__} not supported. "
-                f"Supported: {ParameterValidator.SUPPORTED_TYPES}",
+                f"Supported: scalars (str, int, float, bool, None) and lists/dicts of them "
+                f"up to {ParameterValidator.MAX_DEPTH} levels deep",
             )
         if isinstance(value, float):
             if math.isnan(value):
@@ -253,11 +282,10 @@ class ParameterValidator:
                 "parameters", f"Too many parameters ({len(parameters)} > {max_items})"
             )
 
-        for key, value in parameters.items():
-            ParameterValidator._validate_key(key)
-            ParameterValidator._validate_value(key, value)
-
-        return parameters
+        return {
+            ParameterValidator._validate_key(key): ParameterValidator._validate_value(key, value)
+            for key, value in parameters.items()
+        }
 
 
 class MetadataValidator:

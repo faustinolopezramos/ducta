@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from ducta.check import QUALITY_CHECKS_REGISTRY, DFAdapter
+from ducta.check.core import CheckSeverity
 
 
 def run_check(name: str, df: pd.DataFrame, **config):
@@ -97,10 +98,13 @@ class TestSchema:
 
 
 class TestSchemaDrift:
-    def test_no_baseline_passes_and_reports_first_run(self):
+    def test_no_baseline_compares_nothing_and_says_so(self):
+        # It used to pass with "storing as baseline" although nothing was ever stored.
         df = pd.DataFrame({"a": [1]})
         result = run_check("schema_drift", df)
-        assert result.passed
+        assert not result.passed
+        assert result.severity == CheckSeverity.WARNING
+        assert "nothing was compared" in result.message
 
     def test_missing_column_detected_by_default(self):
         df = pd.DataFrame({"a": [1]})

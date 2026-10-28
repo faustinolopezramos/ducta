@@ -1,67 +1,51 @@
-"""Unit tests for ducta.setting.utils.deep_merge_dicts.
-
-Regression: an empty dict `{}` override for a key was a no-op — merging
-`deep_merge_dicts(existing_dict, {})` just recurses and returns `existing`
-unchanged, so a child/env config had no way to say "clear this whole
-section" the base declared. `None` (delete key) and `{"__reset__": true}`
-(replace outright) sentinels now express that.
-"""
+"""Unit tests for ducta.setting.utils (deep_merge, leaves)."""
 
 from __future__ import annotations
 
-from ducta.setting.utils import deep_merge_dicts
+from ducta.setting.utils import deep_merge, leaves
 
 
-class TestDeepMergeDictsBasic:
+class TestDeepMerge:
     def test_merges_nested_dicts(self):
         base = {"a": {"x": 1, "y": 2}}
         override = {"a": {"y": 3}}
-        assert deep_merge_dicts(base, override) == {"a": {"x": 1, "y": 3}}
+        assert deep_merge(base, override) == {"a": {"x": 1, "y": 3}}
 
-    def test_non_dict_override_replaces(self):
-        base = {"a": {"x": 1}}
-        override = {"a": "scalar"}
-        assert deep_merge_dicts(base, override) == {"a": "scalar"}
+    def test_scalars_and_lists_replace(self):
+        assert deep_merge({"a": {"x": 1}}, {"a": "scalar"}) == {"a": "scalar"}
+        assert deep_merge({"a": [1, 2]}, {"a": [3]}) == {"a": [3]}
 
-    def test_neither_input_mutated(self):
-        base = {"a": {"x": 1}}
-        override = {"a": {"y": 2}}
-        result = deep_merge_dicts(base, override)
-        assert base == {"a": {"x": 1}}
-        assert override == {"a": {"y": 2}}
-        assert result == {"a": {"x": 1, "y": 2}}
+    def test_none_is_a_value_not_a_deletion(self):
+        assert deep_merge({"a": 1, "b": 2}, {"a": None}) == {"a": None, "b": 2}
 
-    def test_empty_dict_override_is_still_a_no_op_merge(self):
-        # Not a "clear this section" signal — {} merges as empty, keeping
-        # whatever base already had. Use None or __reset__ for that.
-        base = {"a": {"x": 1, "y": 2}}
-        override = {"a": {}}
-        assert deep_merge_dicts(base, override) == {"a": {"x": 1, "y": 2}}
+    def test_empty_dict_override_keeps_what_base_had(self):
+        assert deep_merge({"a": {"x": 1}}, {"a": {}}) == {"a": {"x": 1}}
 
+    def test_inputs_are_not_modified_and_override_is_copied(self):
+        base = {"a": {"x": [1]}}
+        override = {"b": {"y": [2]}}
+        result = deep_merge(base, override)
+        result["b"]["y"].append(9)
+        assert override == {"b": {"y": [2]}}
+        assert base == {"a": {"x": [1]}}
 
-class TestDeepMergeDictsNullDeletesKey:
-    def test_none_value_removes_the_key(self):
-        base = {"a": {"x": 1}, "b": 2}
-        override = {"a": None}
-        assert deep_merge_dicts(base, override) == {"b": 2}
-
-    def test_none_value_for_missing_key_is_a_no_op(self):
-        base = {"b": 2}
-        override = {"a": None}
-        assert deep_merge_dicts(base, override) == {"b": 2}
+    def test_non_mapping_base_is_replaced(self):
+        assert deep_merge(None, {"a": 1}) == {"a": 1}
 
 
-class TestDeepMergeDictsResetSentinel:
-    def test_reset_replaces_nested_dict_outright(self):
-        base = {"quality": {"checks": {"row_count": {"min": 10}}, "profile": "strict"}}
-        override = {"quality": {"__reset__": True, "checks": {}}}
-        result = deep_merge_dicts(base, override)
-        # Only what's in the reset dict survives — "profile" from base is gone.
-        assert result == {"quality": {"checks": {}}}
+class TestLeaves:
+    def test_flattens_nested_mappings_to_paths(self):
+        assert leaves({"a": {"b": 1, "c": {"d": 2}}, "e": 3}) == {
+            ("a", "b"): 1,
+            ("a", "c", "d"): 2,
+            ("e",): 3,
+        }
 
-    def test_reset_marker_itself_is_stripped(self):
-        base = {"a": {"old": 1}}
-        override = {"a": {"__reset__": True, "new": 2}}
-        result = deep_merge_dicts(base, override)
-        assert "__reset__" not in result["a"]
-        assert result == {"a": {"new": 2}}
+    def test_empty_mapping_is_a_leaf(self):
+        assert leaves({"a": {}}) == {("a",): {}}
+
+    def test_prefix_is_prepended(self):
+        assert leaves({"b": 1}, ("a",)) == {("a", "b"): 1}
+
+    def test_keys_are_strings(self):
+        assert leaves({1: {2: "x"}}) == {("1", "2"): "x"}

@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
 COMMENTS_DIR = Path(".ducta") / "comments"
-_ID = re.compile(r"^[0-9a-f]{32}$")
+_ID = re.compile(r"^[0-9a-f]{32}\Z")
 
 
 def _now() -> str:

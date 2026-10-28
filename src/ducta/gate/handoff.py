@@ -25,8 +25,7 @@ from loguru import logger  # type: ignore
 
 from ducta.gate.context_manager import ContextManager
 
-_ATTR = "_Ducta_df_handoff"
-_DICT_KEY = "__Ducta_df_handoff__"
+_STORE_KEY = "_ducta_df_handoff"  # a key on a dict context, an attribute on an object one
 _LOCK = threading.Lock()
 
 
@@ -65,6 +64,21 @@ class _HandoffStore:
         with self._lock:
             return self._frames.get(key)
 
+    def holds(self, dataframe: Any) -> bool:
+        """Whether ``dataframe`` is one of the cached frames themselves (not a copy)."""
+        with self._lock:
+            return any(frame is dataframe for frame in self._frames.values())
+
+    def drop(self, key: str) -> None:
+        """Forget the frame held for ``key`` (it no longer is what is on disk)."""
+        with self._lock:
+            dropped = self._frames.pop(key, None)
+        if dropped is not None and hasattr(dropped, "unpersist"):
+            try:
+                dropped.unpersist()
+            except Exception as error:
+                logger.warning("Failed to unpersist dropped handoff frame: {}", error)
+
     def clear(self) -> None:
         """Unpersist every cached frame and drop them. Safe to call repeatedly."""
         with self._lock:
@@ -80,26 +94,18 @@ class _HandoffStore:
 
 def get_store(context: Any) -> Optional[_HandoffStore]:
     """Get-or-create the per-context handoff store; None if it can't attach."""
-    if isinstance(context, dict):
-        store = context.get(_DICT_KEY)
-        if store is None:
-            with _LOCK:
-                store = context.get(_DICT_KEY)
-                if store is None:
-                    store = _HandoffStore()
-                    context[_DICT_KEY] = store
+    if context is None:
+        return None
+    manager = ContextManager(context)
+    store = manager.get(_STORE_KEY)
+    if isinstance(store, _HandoffStore):
         return store
-
-    store = getattr(context, _ATTR, None)
-    if store is None:
-        with _LOCK:
-            store = getattr(context, _ATTR, None)
-            if store is None:
-                store = _HandoffStore()
-                try:
-                    setattr(context, _ATTR, store)
-                except Exception:
-                    return None
+    with _LOCK:
+        store = manager.get(_STORE_KEY)
+        if not isinstance(store, _HandoffStore):
+            store = _HandoffStore()
+            if not manager.set(_STORE_KEY, store):
+                return None
     return store
 
 
@@ -124,11 +130,13 @@ def offer(context: Any, path: Any, dataframe: Any, write_mode: Optional[str]) ->
     if not is_enabled(context):
         return
     mode = (write_mode or "overwrite").lower()
-    if mode != "overwrite":
-        return
-
     store = get_store(context)
     if store is None:
+        return
+    if mode != "overwrite":
+        # An append or merge changed what is at `path`: a frame kept from an earlier
+        # overwrite would hand the next reader the data as it was before.
+        store.drop(normalize_key(path))
         return
 
     if _is_spark_dataframe(dataframe):
@@ -182,8 +190,19 @@ def take(context: Any, path: Any) -> Optional[Any]:
     return dataframe
 
 
+def is_shared(context: Any, dataframe: Any) -> bool:
+    """True if ``dataframe`` is a cached handoff frame that other nodes will be served too.
+
+    Whoever holds it must not unpersist it: ``clear`` does that at the end of the run.
+    """
+    store = ContextManager(context).get(_STORE_KEY) if context is not None else None
+    return isinstance(store, _HandoffStore) and store.holds(dataframe)
+
+
 def clear(context: Any) -> None:
     """Unpersist and drop all handoff frames for a context (call at run teardown)."""
-    store = context.get(_DICT_KEY) if isinstance(context, dict) else getattr(context, _ATTR, None)
+    if context is None:
+        return
+    store = ContextManager(context).get(_STORE_KEY)
     if isinstance(store, _HandoffStore):
         store.clear()

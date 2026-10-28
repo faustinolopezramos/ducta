@@ -25,6 +25,7 @@ from loguru import logger  # type: ignore
 from ducta.gate.base import BaseIO
 from ducta.gate.constants import DEFAULT_CSV_OPTIONS, WriteMode
 from ducta.gate.exceptions import ConfigurationError, WriteOperationError
+from ducta.gate.sql import checked_predicate, replace_where_clause, validate_predicate
 from ducta.gate.validators import ConfigValidator, DataValidator
 
 DESTINATION_EMPTY_ERROR = "Destination path cannot be empty"
@@ -54,11 +55,54 @@ def normalize_partition_config(config: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
-class SparkWriterMixin:
-    """Mixin for Spark-based writers with enhanced write mode and schema handling."""
+def vetted_write_options(options: Any) -> Dict[str, Any]:
+    """A writer's ``options`` with any ``replaceWhere`` checked to be a plain predicate.
+
+    Spark parses that option as SQL, and it reaches the writer after the predicate Ducta
+    built or validated, so it would replace it.
+    """
+    if not options:
+        return {}
+    if not isinstance(options, dict):
+        raise ConfigurationError(f"Writer options must be a mapping, got {type(options).__name__}")
+    vetted = dict(options)
+    for key, value in vetted.items():
+        if str(key).lower() == "replacewhere":
+            vetted[key] = checked_predicate(value, f"options.{key}")
+    return vetted
+
+
+class BaseSparkWriter(BaseIO):
+    """Base class for all Spark writers: a shared write template plus write-mode,
+    partition, ``overwriteSchema`` and ``replaceWhere`` handling."""
 
     FORMAT: str = ""  # Override in concrete writer subclasses
     MAX_RECOMMENDED_PARTITIONS: int = 5
+
+    def _prepare_write_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Hook for subclasses to customize config before writing."""
+        return config
+
+    def write(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
+        """Write data to destination using Spark."""
+        if not destination or not str(destination).strip():
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR)
+
+        config = self._prepare_write_config(config)
+
+        self._print_write_separator(destination)
+        logger.info("Writing {} data to: {}", self.FORMAT.upper(), destination)
+
+        try:
+            writer = self._configure_spark_writer(dataframe, config)
+            writer.save(destination)
+            logger.success("{} data written successfully to: {}", self.FORMAT.upper(), destination)
+        except WriteOperationError:
+            raise
+        except Exception as error:
+            raise WriteOperationError(
+                f"Failed to write {self.FORMAT.upper()} to {destination}: {error}"
+            ) from error
 
     def _configure_spark_writer(self, dataframe: Any, config: Dict[str, Any]) -> Any:
         """Configure Spark DataFrame writer with write mode and schema options."""
@@ -68,15 +112,17 @@ class SparkWriterMixin:
         _data_validator.validate_dataframe(
             dataframe, allow_empty=write_mode == WriteMode.OVERWRITE.value
         )
-        writer = dataframe.write.format(self._get_format()).mode(write_mode)
+        writer = dataframe.write.format(self.FORMAT).mode(write_mode)
         logger.debug("Writer configured with mode: {}", write_mode)
 
         writer = self._apply_partition(writer, dataframe, config)
         writer = self._apply_overwrite_and_replacewhere(writer, config, write_mode)
 
-        for option_key, option_value in config.get("options", {}).items():
+        for option_key, option_value in vetted_write_options(config.get("options", {})).items():
             writer = writer.option(option_key, option_value)
-            logger.debug("Extra option applied: {}={}", option_key, option_value)
+            # The name only: a writer option can carry a key or a token, and DEBUG goes to
+            # logs/ducta.log.
+            logger.debug("Extra option applied: {}", option_key)
 
         return writer
 
@@ -90,8 +136,7 @@ class SparkWriterMixin:
             # Reaching here means a non-Delta writer: DeltaWriter handles merge
             # itself and never configures a plain DataFrameWriter for it.
             raise ConfigurationError(
-                f"write_mode 'merge' is supported only for format 'delta', not "
-                f"'{self._get_format()}'"
+                f"write_mode 'merge' is supported only for format 'delta', not " f"'{self.FORMAT}'"
             )
         return write_mode
 
@@ -111,7 +156,7 @@ class SparkWriterMixin:
         elif not isinstance(partition_columns, list):
             raise ConfigurationError(
                 f"Partition columns must be str or list, not {type(partition_columns)}"
-            ) from None
+            )
 
         if len(partition_columns) > self.MAX_RECOMMENDED_PARTITIONS:
             logger.warning(
@@ -132,10 +177,8 @@ class SparkWriterMixin:
         self, writer: Any, config: Dict[str, Any], write_mode: str
     ) -> Any:
         """Apply overwriteSchema and replaceWhere when appropriate."""
-        overwrite_schema = bool(
-            config.get("overwrite_schema", self._get_default_overwrite_schema())
-        )
-        if overwrite_schema and self._supports_overwrite_schema():
+        overwrite_schema = bool(config.get("overwrite_schema", self.FORMAT == "delta"))
+        if overwrite_schema and self.FORMAT in ("delta", "parquet"):
             writer = writer.option("overwriteSchema", "true")
             logger.debug("overwriteSchema=true applied")
 
@@ -149,13 +192,12 @@ class SparkWriterMixin:
 
     def _apply_replace_where_strategy(self, writer: Any, config: Dict[str, Any]) -> Any:
         """Apply replaceWhere or replace_predicate for Delta format."""
-        if self._get_format() != "delta":
-            raise ConfigurationError(
-                "overwrite_strategy=replaceWhere is supported only for Delta"
-            ) from None
+        if self.FORMAT != "delta":
+            raise ConfigurationError("overwrite_strategy=replaceWhere is supported only for Delta")
 
         predicate = config.get("replace_predicate")
         if predicate:
+            predicate = checked_predicate(predicate, "replace_predicate")
             writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
             logger.debug("replaceWhere applied with custom predicate: {}", predicate)
             return writer
@@ -173,7 +215,7 @@ class SparkWriterMixin:
             if not value
         ]
         if missing:
-            raise ConfigurationError(f"replaceWhere requires: {', '.join(missing)}") from None
+            raise ConfigurationError(f"replaceWhere requires: {', '.join(missing)}")
 
         if not (
             ConfigValidator.validate_date_format(start_date)
@@ -181,67 +223,17 @@ class SparkWriterMixin:
         ):
             raise ConfigurationError(
                 f"Invalid date format: {start_date} - {end_date}. Expected: YYYY-MM-DD"
-            ) from None
+            )
 
-        predicate = f"{partition_col} BETWEEN '{start_date}' AND '{end_date}'"
+        predicate = replace_where_clause(partition_col, start_date, end_date)
         writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
         logger.debug("replaceWhere applied: {}", predicate)
         return writer
 
-    def _get_format(self) -> str:
-        """Get the writer format from the FORMAT class attribute."""
-        return self.FORMAT
-
-    def _supports_overwrite_schema(self) -> bool:
-        """Return whether the format supports overwriteSchema."""
-        return self._get_format() in ["delta", "parquet"]
-
-    def _get_default_overwrite_schema(self) -> bool:
-        """Default value for overwriteSchema option."""
-        return self._get_format() == "delta"
-
     def _print_write_separator(self, destination: str) -> None:
-        """Print data writing separator via progress_reporter if provided in context."""
-        reporter = self._ctx_get("progress_reporter", None)
-        if reporter and hasattr(reporter, "report_saving"):
-            try:
-                reporter.report_saving(destination)
-                return
-            except Exception:
-                pass
-        logger.debug("Saving output to: {}", destination)
-
-
-class BaseSparkWriter(BaseIO, SparkWriterMixin):
-    """Base class for all Spark writers with a shared write template."""
-
-    def __init__(self, context: Any):
-        super().__init__(context)
-
-    def _prepare_write_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Hook for subclasses to customize config before writing."""
-        return config
-
-    def write(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
-        """Write data to destination using Spark."""
-        if not destination or not str(destination).strip():
-            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
-
-        config = self._prepare_write_config(config)
-
-        self._print_write_separator(destination)
-        logger.info("Writing {} data to: {}", self.FORMAT.upper(), destination)
-
-        try:
-            writer = self._configure_spark_writer(dataframe, config)
-            writer.save(destination)
-            logger.success("{} data written successfully to: {}", self.FORMAT.upper(), destination)
-        except WriteOperationError:
-            raise
-        except Exception as error:
-            raise WriteOperationError(
-                f"Failed to write {self.FORMAT.upper()} to {destination}: {error}"
-            ) from error
+        """Tell the progress reporter (or the log) where the output is being saved."""
+        if not self._report_progress("report_saving", destination):
+            logger.debug("Saving output to: {}", destination)
 
 
 class DeltaWriter(BaseSparkWriter):
@@ -254,7 +246,7 @@ class DeltaWriter(BaseSparkWriter):
             super().write(dataframe, destination, config)
             return
         if not destination or not str(destination).strip():
-            raise ConfigurationError(DESTINATION_EMPTY_ERROR) from None
+            raise ConfigurationError(DESTINATION_EMPTY_ERROR)
         self._print_write_separator(destination)
         try:
             DeltaMerge(dataframe, destination, config).run(
@@ -310,7 +302,7 @@ class DeltaMerge:
 
         builder = target.alias("t").merge(
             self.df.alias("s"),
-            " AND ".join(f"t.`{k}` <=> s.`{k}`" for k in self.keys),
+            " AND ".join(f"t.{_quote(k)} <=> s.{_quote(k)}" for k in self.keys),
         )
         delete_when = self.spec.get("delete_when")
         if delete_when:
@@ -320,7 +312,9 @@ class DeltaMerge:
         if when_matched == "update_all":
             builder = builder.whenMatchedUpdateAll()
         elif isinstance(when_matched, dict):
-            builder = builder.whenMatchedUpdate(set={c: f"s.`{c}`" for c in when_matched["update"]})
+            builder = builder.whenMatchedUpdate(
+                set={_quote(c): f"s.{_quote(c)}" for c in when_matched["update"]}
+            )
 
         if self.spec.get("when_not_matched", "insert_all") == "insert_all":
             # A row flagged for deletion that is not in the target must not be
@@ -361,19 +355,28 @@ class DeltaMerge:
 
     def _check_keys_exist(self) -> None:
         missing = [k for k in self.keys if k not in self.df.columns]
+        when_matched = self.spec.get("when_matched", "update_all")
+        if isinstance(when_matched, dict):
+            missing += [c for c in when_matched["update"] if c not in self.df.columns]
         if missing:
             raise ConfigurationError(
-                f"MERGE into {self.destination}: key column(s) {missing} are not in the "
+                f"MERGE into {self.destination}: column(s) {missing} are not in the "
                 f"output (columns: {self.df.columns})"
             )
 
     def _check_no_duplicate_keys(self) -> None:
-        dupes = self.df.groupBy(*self.keys).count().where("count > 1")
+        from pyspark.sql import functions as F  # type: ignore
+
+        # An alias no column is called: a merge key named ``count`` would clash with the default.
+        times = "__ducta_key_count"
+        dupes = (
+            self.df.groupBy(*self.keys).agg(F.count(F.lit(1)).alias(times)).where(F.col(times) > 1)
+        )
         examples = dupes.limit(5).collect()
         if examples:
             total = dupes.count()
             shown = "; ".join(
-                ", ".join(f"{k}={row[k]!r}" for k in self.keys) + f" (x{row['count']})"
+                ", ".join(f"{k}={row[k]!r}" for k in self.keys) + f" (x{row[times]})"
                 for row in examples
             )
             raise WriteOperationError(
@@ -381,6 +384,11 @@ class DeltaMerge:
                 f"the incoming batch, so the merge is ambiguous — e.g. {shown}. "
                 "Deduplicate the node's output by its merge keys."
             )
+
+
+def _quote(column: str) -> str:
+    """A column name as a SQL identifier (a backtick in it is doubled)."""
+    return "`" + str(column).replace("`", "``") + "`"
 
 
 def validate_merge_spec(spec: Any) -> None:
@@ -399,10 +407,8 @@ def validate_merge_spec(spec: Any) -> None:
         raise ConfigurationError("merge.when_not_matched must be 'insert_all' or 'ignore'")
     delete_when = spec.get("delete_when")
     if delete_when is not None:
-        from ducta.check.checks.business import BusinessRulesCheck
-
         try:
-            BusinessRulesCheck._validate_sql_rule(str(delete_when))
+            validate_predicate(str(delete_when))
         except ValueError as e:
             raise ConfigurationError(f"merge.delete_when: {e}") from e
 

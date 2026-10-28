@@ -31,6 +31,13 @@ from rich.text import Text
 from rich.theme import Theme
 from rich.traceback import install as install_rich_traceback
 
+from ducta.console.ux.log_safety import (
+    file_format,
+    private_file_opener,
+    private_zip,
+    redacting_filter,
+)
+
 PRIMARY = "default"  # Main text: adaptive to terminal foreground
 BOLD_WHITE = "bold"
 PRIMARY_BOLD = BOLD_WHITE
@@ -235,12 +242,16 @@ class RichLoggerManager:
 
         logger.add(
             log_path,
-            format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}",
+            format=file_format(
+                "{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} | {message}"
+            ),
             rotation="10 MB",
             retention="7 days",
             level="DEBUG",
-            compression="zip",
+            compression=private_zip,
             enqueue=True,  # Thread-safe logging
+            filter=redacting_filter,
+            opener=private_file_opener,
         )
 
         logger.debug("Rich logger initialized (console_level={})", console_level)

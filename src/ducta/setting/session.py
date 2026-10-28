@@ -120,10 +120,18 @@ class SparkSessionManager:
 
     @classmethod
     def _check_session_timeout(cls, session_key: str) -> bool:
-        """Check if session has timed out."""
+        """Check if session has timed out.
+
+        Only idle sessions time out: ``last_accessed`` moves when a Context asks for the
+        session, not while a stream runs on it, so a session with a live query is
+        in use however long ago it was handed out.
+        """
         metadata = cls._session_metadata[session_key]
         elapsed = time.time() - metadata.get("last_accessed", 0)
         if elapsed > cls._session_timeout:
+            if cls._has_active_streams(cls._sessions.get(session_key)):
+                metadata["last_accessed"] = time.time()
+                return True
             logger.warning(
                 "Session {} timed out ({:.0f}s > {}s)",
                 session_key,
@@ -140,11 +148,56 @@ class SparkSessionManager:
             cls._session_metadata[session_key]["last_accessed"] = time.time()
 
     @classmethod
+    def _has_active_streams(cls, session: Any) -> bool:
+        """Whether a structured-streaming query is running on ``session`` (never raises)."""
+        if session is None:
+            return False
+        try:
+            streams = getattr(session, "streams", None)
+            active = getattr(streams, "active", []) if streams is not None else []
+            if not isinstance(active, (list, tuple, set)):
+                active = list(active)
+            for query in active:
+                is_active = getattr(query, "isActive", None)
+                if bool(is_active() if callable(is_active) else is_active):
+                    return True
+        except Exception:
+            return False
+        return False
+
+    @classmethod
+    def _shared_with_other_key(cls, session: Any, session_key: str) -> bool:
+        """Whether another cached key is backed by the same Spark session or context.
+
+        ``getOrCreate()`` hands different ``ml_config`` keys one JVM session, so
+        stopping it for one key would pull it from under the others.
+        """
+
+        def context_of(candidate: Any) -> Any:
+            try:
+                return getattr(candidate, "sparkContext", None)
+            except Exception:
+                return None
+
+        context = context_of(session)
+        for key, other in cls._sessions.items():
+            if key == session_key:
+                continue
+            if other is session or (context is not None and context_of(other) is context):
+                return True
+        return False
+
+    @classmethod
     def _cleanup_session(cls, session_key: str) -> None:
         """Cleanup a specific session."""
         if session_key in cls._sessions:
             session = cls._sessions.pop(session_key)
             cls._session_metadata.pop(session_key, None)
+            if cls._shared_with_other_key(session, session_key):
+                logger.debug(
+                    "Spark session of {} is shared with another key: not stopped", session_key
+                )
+                return
             try:
                 cls._stop_session_quietly(session)
                 logger.debug("Stopped Spark session: {}", session_key)
@@ -226,7 +279,7 @@ class SparkSessionManager:
                 metadata = cls._session_metadata.get(session_key, {})
                 last_accessed = metadata.get("last_accessed", 0)
                 age = current_time - last_accessed
-                if age > max_age:
+                if age > max_age and not cls._has_active_streams(cls._sessions.get(session_key)):
                     logger.info(
                         "Cleaning up stale session {} (age: {:.0f}s)",
                         session_key,
@@ -532,7 +585,8 @@ class SparkSessionFactory:
             try:
                 builder = builder.config(k, v)
             except Exception:
-                logger.debug("Failed to apply Spark config {}={}", k, v, exc_info=True)
+                # The name only: Spark settings carry keys and tokens (`fs.s3a.secret.key`…).
+                logger.debug("Failed to apply Spark config {}", k, exc_info=True)
         return builder
 
 

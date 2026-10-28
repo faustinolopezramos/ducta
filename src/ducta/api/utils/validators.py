@@ -53,8 +53,8 @@ def validate_identifier(name: str, field: str = "name") -> str:
     return name
 
 
-_PROJECT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}$")
-_ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+_PROJECT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_\-]{0,63}\Z")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]{1,64}\Z")
 
 
 def validate_project_name(name: str) -> str:

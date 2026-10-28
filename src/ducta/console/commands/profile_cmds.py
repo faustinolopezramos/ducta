@@ -63,18 +63,36 @@ class ProfileCommands:
         else:
             ProfileCommands._render(result["profile"])
 
-        return ProfileCommands._emit_spec(result, getattr(parsed_args, "output", None))
+        return ProfileCommands._emit_spec(
+            result,
+            getattr(parsed_args, "output", None),
+            as_json=getattr(parsed_args, "output_format", "rich") == "json",
+            force=getattr(parsed_args, "force", False),
+        )
 
     @staticmethod
-    def _emit_spec(result: Dict[str, Any], output: Any) -> int:
-        """Write the proposed spec to *output*, or print it when there is none."""
+    def _emit_spec(
+        result: Dict[str, Any], output: Any, as_json: bool = False, force: bool = False
+    ) -> int:
+        """Write the proposed spec to *output*, or print it when there is none.
+
+        With ``as_json`` stdout is the JSON document alone (it already holds the spec as
+        ``yaml``): printing the YAML after it made the output unparseable.
+        """
         spec_yaml = result["yaml"]
         if not output:
-            print()
-            print(spec_yaml)
+            if not as_json:
+                print()
+                print(spec_yaml)
             return ExitCode.SUCCESS.value
 
         destination = Path(output)
+        if destination.exists() and not force:
+            logger.error(
+                "'{}' already exists: pass --force to replace it, or choose another --output",
+                destination,
+            )
+            return ExitCode.VALIDATION_ERROR.value
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(spec_yaml, encoding="utf-8")

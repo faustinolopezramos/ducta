@@ -228,3 +228,79 @@ class TestDatabricksConnectShadowDiagnostic:
             )
             is None
         )
+
+
+class TestSparkConfigValuesAreNotLogged:
+    """A failed Spark setting is logged by name: its value can be a secret key or a token."""
+
+    def test_a_failing_config_logs_its_name_and_not_its_value(self):
+        from unittest.mock import MagicMock, patch
+
+        from ducta.setting.session import SparkSessionFactory
+
+        builder = MagicMock()
+        builder.config.side_effect = RuntimeError("rejected")
+        secret = "S3cr3t-Value-0123456789"
+        with patch("ducta.setting.session.logger") as log:
+            SparkSessionFactory._apply_ml_configs(
+                builder, {"spark.hadoop.fs.s3a.secret.key": secret}
+            )
+        logged = " ".join(str(a) for c in log.mock_calls for a in (*c.args, *c.kwargs.values()))
+        assert secret not in logged
+        assert "spark.hadoop.fs.s3a.secret.key" in logged
+
+
+class TestSessionLifecycle:
+    """The idle timeout must not stop a session that is in use."""
+
+    @staticmethod
+    def _manager(monkeypatch):
+        from ducta.setting.session import SparkSessionManager
+
+        monkeypatch.setattr(SparkSessionManager, "_sessions", {})
+        monkeypatch.setattr(SparkSessionManager, "_session_metadata", {})
+        return SparkSessionManager
+
+    @staticmethod
+    def _session(*, streaming: bool, context=None):
+        from unittest.mock import MagicMock
+
+        session = MagicMock()
+        query = MagicMock()
+        query.isActive = streaming
+        session.streams.active = [query] if streaming else []
+        session.sparkContext = context if context is not None else object()
+        return session
+
+    def test_a_session_with_a_live_stream_does_not_time_out(self, monkeypatch):
+        manager = self._manager(monkeypatch)
+        session = self._session(streaming=True)
+        manager._sessions["k"] = session
+        manager._session_metadata["k"] = {"last_accessed": 0}  # idle for decades
+
+        assert manager._check_session_timeout("k") is True
+        assert manager.cleanup_stale_sessions() == 0
+        session.stop.assert_not_called()
+
+    def test_an_idle_session_still_times_out(self, monkeypatch):
+        manager = self._manager(monkeypatch)
+        session = self._session(streaming=False)
+        manager._sessions["k"] = session
+        manager._session_metadata["k"] = {"last_accessed": 0}
+
+        assert manager._check_session_timeout("k") is False
+        assert manager.cleanup_stale_sessions() == 1
+        session.stop.assert_called_once()
+
+    def test_a_session_shared_by_two_keys_is_stopped_with_the_last(self, monkeypatch):
+        manager = self._manager(monkeypatch)
+        context = object()
+        first = self._session(streaming=False, context=context)
+        second = self._session(streaming=False, context=context)
+        manager._sessions.update({"a": first, "b": second})
+        manager._session_metadata.update({"a": {}, "b": {}})
+
+        manager._cleanup_session("a")
+        first.stop.assert_not_called()  # "b" still runs on the same context
+        manager._cleanup_session("b")
+        second.stop.assert_called_once()

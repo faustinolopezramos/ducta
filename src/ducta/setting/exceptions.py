@@ -41,15 +41,3 @@ class PipelineValidationError(ConfigurationError):
     """Exception raised when pipeline validation fails."""
 
     pass
-
-
-class ConfigRepositoryError(ConfigurationError):
-    """Exception raised when configuration repository operations fail."""
-
-    pass
-
-
-class ActiveConfigNotFound(ConfigurationError):
-    """Exception raised when active configuration version is not found."""
-
-    pass

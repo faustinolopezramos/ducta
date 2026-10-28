@@ -104,3 +104,19 @@ class TestIsCloudPath:
 
     def test_none_coercion(self):
         assert is_cloud_path(None) is False
+
+
+class TestEnumsMatchTheConfigurationSchema:
+    """``gate`` keeps its own enums (importing ``setting`` here would be a cycle), so the two
+    definitions must not drift: a mode the schema accepts but the writer rejects is a runtime
+    failure on a project that validated."""
+
+    def test_write_modes_are_the_schemas(self):
+        from ducta.setting.schemas import WriteMode as SchemaWriteMode
+
+        assert {m.value for m in WriteMode} == {m.value for m in SchemaWriteMode}
+
+    def test_execution_modes_are_the_schemas(self):
+        from ducta.setting.schemas import ExecutionMode as SchemaExecutionMode
+
+        assert {m.value for m in ExecutionMode} == {m.value for m in SchemaExecutionMode}

@@ -321,14 +321,21 @@ class _SqlglotMockSuite:
         expr_mod.Command = type("Command", (), {})
         mock.expressions = expr_mod
 
+        _SqlglotMockSuite._real = sys.modules.get("sqlglot")
         sys.modules["sqlglot"] = mock
 
     @staticmethod
     def uninstall():
         import sys
 
-        if "sqlglot" in sys.modules:
-            del sys.modules["sqlglot"]
+        # Put the real package back rather than dropping the entry: a fresh `import sqlglot`
+        # would get a new package object without the submodules (`sqlglot.dialects`) still
+        # cached in sys.modules, and every later test that parses SQL would fail.
+        real = getattr(_SqlglotMockSuite, "_real", None)
+        if real is not None:
+            sys.modules["sqlglot"] = real
+        else:
+            sys.modules.pop("sqlglot", None)
 
 
 @pytest.fixture
@@ -562,3 +569,208 @@ class TestVacuumRetention:
         # escaped literal, so it needs its own guard.
         with pytest.raises(ConfigurationError):
             UnityCatalogDDL.vacuum("`c`.`s`.`t`", "168 HOURS; DROP TABLE t")
+
+
+class TestValidatePredicate:
+    """The check on a business-rule / merge / quarantine predicate lives next to the
+    sanitizer whose internals it uses, so any layer can call it without importing `check`."""
+
+    def test_a_plain_predicate_passes(self):
+        from ducta.gate.sql import validate_predicate
+
+        validate_predicate("amount > 0 AND status = 'selected'")
+
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            "a = 1 UNION SELECT password FROM users",
+            "id IN (SELECT id FROM other)",
+            "1 = 1; DROP TABLE users",
+        ],
+    )
+    def test_more_than_a_predicate_is_refused(self, rule):
+        from ducta.gate.sql import validate_predicate
+
+        with pytest.raises(ValueError):
+            validate_predicate(rule)
+
+    def test_the_check_layer_still_answers_with_the_same_function(self):
+        from ducta.check.checks.business import BusinessRulesCheck
+
+        with pytest.raises(ValueError, match="not allowed|security validation"):
+            BusinessRulesCheck._validate_sql_rule("a IN (SELECT 1)")
+
+
+@pytest.fixture(params=["structural", "lexical"])
+def layer(request, monkeypatch):
+    """Run a case once with sqlglot's AST scan and once with only the lexical checks."""
+    if request.param == "lexical":
+        monkeypatch.setattr("ducta.gate.sql.SQLGLOT_AVAILABLE", False)
+    elif not SQLGLOT_AVAILABLE:
+        pytest.skip("requires the real sqlglot")
+    return request.param
+
+
+class TestFunctionsAndFileReadsAreRefused:
+    """A read-only SELECT may not call functions that reach the host or read files.
+
+    Verified against Spark 3.5.9 before the fix: ``java_method('java.lang.System','getenv',…)``
+    returned the process environment, and ``csv.`/path``` read a local file as a table — both
+    passed the sanitizer.
+    """
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT java_method('java.lang.System','getenv','JWT_SECRET_KEY')",
+            "SELECT reflect('java.lang.System','getProperty','user.name')",
+            "SELECT JAVA_METHOD('a','b','c')",
+            "SELECT try_reflect('a','b')",
+            "SELECT java_method /* x */ ('a','b','c')",
+            "SELECT 1 /*!50000 java_method('a','b','c') */",
+            "SELECT * FROM read_files('/etc')",
+            "SELECT lo_import('/etc/passwd')",
+            "SELECT * FROM dblink('host=evil','select 1') AS t(a int)",
+            "SELECT * FROM OPENROWSET('SQLNCLI','server=evil','select 1')",
+            "SELECT utl_http.request('http://evil') FROM dual",
+            "SELECT dbms_scheduler.create_job('x') FROM dual",
+            "SELECT id FROM t WHERE reflect('a','b') = 'x'",
+        ],
+    )
+    def test_dangerous_calls(self, layer, query):
+        with pytest.raises(ConfigurationError, match="not allowed in a read-only query"):
+            SQLSanitizer.sanitize_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT * FROM parquet.`/etc/passwd`",
+            "SELECT * FROM csv.`/home/user/.aws/credentials`",
+            "SELECT * FROM csv.`data.csv`",
+            "SELECT * FROM delta.`s3://bucket/table`",
+            "SELECT * FROM `/etc/passwd`",
+        ],
+    )
+    def test_files_read_as_tables(self, layer, query):
+        with pytest.raises(ConfigurationError, match="reads a file"):
+            SQLSanitizer.sanitize_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT id, name FROM sales.orders WHERE amount > 10",
+            "SELECT * FROM cat.sch.tbl",
+            "SELECT * FROM `my table`",
+            "SELECT current_user()",
+            "SELECT date_format(d, 'yyyy') FROM t",
+            "SELECT reflection FROM t",
+            "SELECT 'java_method(x)' AS note FROM t",
+            "SELECT * FROM delta.orders",
+        ],
+    )
+    def test_ordinary_queries_still_pass(self, layer, query):
+        assert SQLSanitizer.sanitize_query(query) == query
+
+
+class TestPredicatesAreHeldToTheSameRule:
+    @pytest.mark.parametrize(
+        "rule",
+        [
+            "java_method('java.lang.System','getenv','JWT_SECRET_KEY') LIKE 'a%'",
+            "reflect('java.lang.System','getProperty','user.name') = 'root'",
+        ],
+    )
+    def test_a_function_oracle_is_refused(self, rule):
+        from ducta.gate.sql import validate_predicate
+
+        with pytest.raises(ValueError, match="not allowed in a read-only query"):
+            validate_predicate(rule)
+
+    def test_an_ordinary_rule_passes(self):
+        from ducta.gate.sql import validate_predicate
+
+        validate_predicate("amount > 0 AND status = 'selected'")
+
+
+class TestScriptTransformAndIdentifierAreRefused:
+    """Both passed the sanitizer: a script transform runs a shell command on the
+    executors, and ``IDENTIFIER('...')`` hid a file read inside a string literal."""
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT TRANSFORM(a) USING 'cat /etc/passwd' AS (x) FROM t",
+            "SELECT TRANSFORM(a, b) ROW FORMAT DELIMITED USING 'sh' FROM t",
+            'SELECT MAP(a) USING "sh" FROM t',
+        ],
+    )
+    def test_script_transform(self, layer, query):
+        with pytest.raises(ConfigurationError, match="external script"):
+            SQLSanitizer.sanitize_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT * FROM IDENTIFIER('json.`/etc/x`')",
+            "SELECT * FROM identifier ('orders')",
+        ],
+    )
+    def test_identifier_clause(self, layer, query):
+        with pytest.raises(ConfigurationError, match="not allowed in a read-only query"):
+            SQLSanitizer.sanitize_query(query)
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT transform(arr, x -> x + 1) FROM t",
+            "SELECT * FROM a JOIN b USING (id)",
+            "SELECT identifier FROM t",
+        ],
+    )
+    def test_lookalikes_still_pass(self, layer, query):
+        assert SQLSanitizer.sanitize_query(query) == query
+
+
+class TestOrdinaryNamesAreNotMistakenForCallsOrFiles:
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT dbms_id, utl_rate FROM t",
+            "SELECT a AS `ratio/x` FROM t",
+            "SELECT * FROM t WHERE `price/unit` > 0",
+        ],
+    )
+    def test_passes(self, layer, query):
+        assert SQLSanitizer.sanitize_query(query) == query
+
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "SELECT * FROM text.`.env`",
+            "SELECT * FROM a, `/etc/passwd`",
+            "SELECT * FROM a JOIN custom.`/data/x` ON 1 = 1",
+        ],
+    )
+    def test_relative_and_qualified_paths_stay_refused(self, layer, query):
+        with pytest.raises(ConfigurationError, match="reads a file"):
+            SQLSanitizer.sanitize_query(query)
+
+    def test_predicate_on_a_column_with_a_slash(self):
+        from ducta.gate.sql import validate_predicate
+
+        validate_predicate("`price/unit` > 0")
+
+
+class TestDottedPartitionColumns:
+    def test_replace_where_quotes_each_part(self):
+        sql = UnityCatalogDDL.replace_where_clause("meta.event_date", "2024-01-01", "2024-01-31")
+        assert sql == "`meta`.`event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+
+    def test_optimize_where_quotes_each_part(self):
+        sql = UnityCatalogDDL.optimize_where("`c`.`s`.`t`", "meta.d", "2024-01-01", "2024-01-02")
+        assert "WHERE `meta`.`d` BETWEEN" in sql
+
+    @pytest.mark.parametrize("column", ["", "a..b", ".a"])
+    def test_an_empty_part_is_refused(self, column):
+        with pytest.raises(ConfigurationError, match="Invalid"):
+            UnityCatalogDDL.replace_where_clause(column, "2024-01-01", "2024-01-31")

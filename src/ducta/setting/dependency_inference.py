@@ -89,11 +89,30 @@ def get_node_dependencies(node_config: Dict[str, Any]) -> List[str]:
     return normalized_deps
 
 
-#: Keys that mark an ``input``/``output`` dict as an inline connector config
-#: (a streaming source, say) rather than a ``{param_name: dataset_key}`` map.
-#: ``NodeSchema.input`` accepts ``Dict[str, Any]`` for both, so the shapes have
-#: to be told apart by content.
+#: Keys an inline connector config (a streaming source, say) uses. A
+#: ``{param_name: dataset_key}`` map may reuse these names for its parameters
+#: (``inputs: {schema: silver.schema_df}``), so the keys alone prove nothing:
+#: ``_is_inline_connector_config`` also looks at the values.
 _INLINE_CONFIG_MARKERS = frozenset({"format", "options", "schema", "path"})
+
+
+def _is_inline_connector_config(keys: Dict[Any, Any]) -> bool:
+    """Tell an inline connector config from a ``{param: dataset_key}`` map.
+
+    ``NodeSchema.input`` accepts ``Dict[str, Any]`` for both. A config needs a
+    marker key *and* a value no dataset key could be: a non-string (``options``
+    is a mapping), a path or URI (dataset keys are dotted names, never contain
+    ``/``), or the canonical ``format`` + another marker pair.
+    """
+    markers = _INLINE_CONFIG_MARKERS & {str(k).lower() for k in keys}
+    if not markers:
+        return False
+    values = list(keys.values())
+    if any(not isinstance(v, str) for v in values):
+        return True
+    if any("/" in v for v in values):
+        return True
+    return "format" in markers and len(markers) > 1
 
 
 def extract_input_keys(node_config: Dict[str, Any], *, node: str = "?") -> List[str]:
@@ -117,7 +136,7 @@ def _normalize_dataset_keys(keys: Any, *, node: str = "?", field: str = "input")
     if isinstance(keys, dict):
         if not keys:
             return []
-        if _INLINE_CONFIG_MARKERS & {str(k).lower() for k in keys}:
+        if _is_inline_connector_config(keys):
             logger.debug(
                 "Node '{}': '{}' is an inline connector config, not dataset "
                 "references; no dependency edges inferred from it.",

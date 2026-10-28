@@ -42,8 +42,8 @@ from ducta.api.exceptions import (
 )
 from ducta.api.models.execution import ExecutionListResponse
 
-_NODE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\.]+$")
-_PY_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_NODE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-\.]+\Z")
+_PY_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def _validate_node_name(name: str, spec: Optional[Dict[str, Any]] = None) -> None:

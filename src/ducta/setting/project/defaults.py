@@ -42,7 +42,8 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
-from ducta.setting.project.files import with_a_suffix
+from ducta.setting.project.files import load, with_a_suffix
+from ducta.setting.utils import deep_merge
 
 #: How a template declares a required parameter where there is no null (TOML).
 REQUIRED = "<required>"
@@ -51,19 +52,6 @@ _PARAM = re.compile(r"\$\{params\.([A-Za-z_]\w*)\}")
 
 #: Keys that belong to the extending file, not to the pipeline it produces.
 _EXTENDS_KEYS = ("extends", "params")
-
-
-def _merge(base: Any, override: Any) -> Any:
-    """``override`` over ``base``: mappings merge, anything else replaces."""
-    if isinstance(base, dict) and isinstance(override, dict):
-        merged = dict(base)
-        for key, value in override.items():
-            merged[key] = _merge(base[key], value) if key in base else copy.deepcopy(value)
-        return merged
-    return copy.deepcopy(override)
-
-
-# ── pipeline templates ───────────────────────────────────────────────────────
 
 
 def _substitute_key(key: Any, params: Dict[str, Any]) -> Any:
@@ -192,7 +180,7 @@ def resolve_extends(
         except ValueError as e:
             problems.append(f"{at}: template '{ref}': {e}")
             continue
-        out[name] = _merge(expanded, own)
+        out[name] = deep_merge(expanded, own)
     return out, problems
 
 
@@ -218,8 +206,10 @@ def apply_defaults(
             base: Dict[str, Any] = {}
             for pattern, keys in patterns.items():
                 if isinstance(keys, dict) and fnmatch.fnmatchcase(str(name), str(pattern)):
-                    base = _merge(base, keys)
-            expanded[name] = _merge(base, entry or {}) if isinstance(entry or {}, dict) else entry
+                    base = deep_merge(base, keys)
+            expanded[name] = (
+                deep_merge(base, entry or {}) if isinstance(entry or {}, dict) else entry
+            )
         catalog = expanded
 
     result: Dict[str, Dict[str, Any]] = {}
@@ -232,8 +222,8 @@ def _pipeline_with_defaults(doc: Any, project_defaults: Dict[str, Any]) -> Any:
     if not isinstance(doc, dict) or not isinstance(doc.get("nodes"), dict):
         return doc
     own = _dict(doc.get("defaults"))
-    node_base = _merge(_dict(project_defaults.get("node")), _dict(own.get("node")))
-    stream_base = _merge(_dict(project_defaults.get("stream")), _dict(own.get("stream")))
+    node_base = deep_merge(_dict(project_defaults.get("node")), _dict(own.get("node")))
+    stream_base = deep_merge(_dict(project_defaults.get("stream")), _dict(own.get("stream")))
     if not node_base and not stream_base:
         return doc
     nodes: Dict[str, Any] = {}
@@ -244,9 +234,9 @@ def _pipeline_with_defaults(doc: Any, project_defaults: Dict[str, Any]) -> Any:
         base = dict(node_base)
         if "quality" not in node:
             base.pop("quality", None)  # a default gate does not create a quality block
-        merged = _merge(base, node)
+        merged = deep_merge(base, node)
         if node.get("kind") == "stream" and stream_base:
-            merged["stream"] = _merge(stream_base, _dict(node.get("stream")))
+            merged["stream"] = deep_merge(stream_base, _dict(node.get("stream")))
         nodes[nname] = merged
     return {**doc, "nodes": nodes}
 
@@ -280,6 +270,25 @@ def node_template_names(root: Path) -> List[str]:
     if not folder.is_dir():
         return []
     return sorted(p.stem for p in folder.iterdir() if p.suffix.lower() in (".yaml", ".yml"))
+
+
+def node_template_body(root: Path, instance: Any) -> Dict[str, Any]:
+    """The node a ``use:`` instance gets from its template, parameters filled.
+
+    ``{}`` when the node does not use a template or the template is unusable: the
+    loader reports that (see :func:`resolve_node_templates`); callers that only read
+    what a template contributes have nothing to add.
+    """
+    ref = instance.get("use") if isinstance(instance, dict) else None
+    if not isinstance(ref, str):
+        return {}
+    try:
+        template = load(with_a_suffix(root, f"{NODE_TEMPLATES_DIR}/{ref}"))
+        values = {**_param_values(template.get("params") or {}), **(instance.get("with") or {})}
+        body = _substitute(template.get("node") or {}, values)
+    except Exception:  # noqa: BLE001 — a broken template is the loader's to report
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def resolve_node_templates(
@@ -366,7 +375,7 @@ def resolve_node_templates(
                 problems.append(f"{at}: template '{ref}': {e}")
                 continue
             own = {k: v for k, v in node.items() if k not in _USE_KEYS}
-            new_nodes[nname] = _merge(body, own)
+            new_nodes[nname] = deep_merge(body, own)
         out[pname] = {**doc, "nodes": new_nodes}
     return out, problems
 

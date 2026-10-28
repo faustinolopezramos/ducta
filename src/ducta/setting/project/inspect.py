@@ -50,6 +50,7 @@ from ducta.setting.project.loader import (
     resolve_path,
     visible_in,
 )
+from ducta.setting.utils import leaves
 
 #: Marks "no such key", which is different from a key whose value is null.
 MISSING = object()
@@ -199,18 +200,9 @@ def _without_none(value: Any, key: str = "") -> Any:
 # ── diff ─────────────────────────────────────────────────────────────────────
 
 
-def _leaves(value: Any, prefix: Tuple[str, ...] = ()) -> Dict[Tuple[str, ...], Any]:
-    if isinstance(value, dict) and value:
-        out: Dict[Tuple[str, ...], Any] = {}
-        for key, child in value.items():
-            out.update(_leaves(child, (*prefix, str(key))))
-        return out
-    return {prefix: value}
-
-
 def diff_trees(a: Dict[str, Any], b: Dict[str, Any]) -> List[Tuple[str, Any, Any]]:
     """``(path, value in a, value in b)`` for every leaf that differs (``MISSING`` when absent)."""
-    left, right = _leaves(a), _leaves(b)
+    left, right = leaves(a), leaves(b)
     changes = []
     for path in sorted(set(left) | set(right)):
         before, after = left.get(path, MISSING), right.get(path, MISSING)

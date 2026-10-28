@@ -174,7 +174,7 @@ class Draft:
         return draft
 
 
-DRAFT_ID = re.compile(r"^[0-9A-Za-z-]{1,64}$")
+DRAFT_ID = re.compile(r"^[0-9A-Za-z-]{1,64}\Z")
 
 
 def drafts_dir(root: Path) -> Path:

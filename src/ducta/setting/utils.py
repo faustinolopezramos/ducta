@@ -1,19 +1,26 @@
-from typing import Any, Dict
+import copy
+from typing import Any, Dict, Tuple
 
 
-def deep_merge_dicts(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """Recursively merge ``override`` onto ``base``, returning a new dict."""
-    result = dict(base)
-    for key, value in override.items():
-        if value is None:
-            result.pop(key, None)
-            continue
-        if isinstance(value, dict) and value.get("__reset__") is True:
-            result[key] = {k: v for k, v in value.items() if k != "__reset__"}
-            continue
-        existing = result.get(key)
-        if isinstance(existing, dict) and isinstance(value, dict):
-            result[key] = deep_merge_dicts(existing, value)
-        else:
-            result[key] = value
-    return result
+def deep_merge(base: Any, override: Any) -> Any:
+    """``override`` over ``base``: mappings merge, scalars and lists replace.
+
+    What comes from ``override`` is copied; keys only ``base`` has are carried over as
+    they are. Neither input is modified.
+    """
+    if isinstance(base, dict) and isinstance(override, dict):
+        merged = dict(base)
+        for key, value in override.items():
+            merged[key] = deep_merge(base[key], value) if key in base else copy.deepcopy(value)
+        return merged
+    return copy.deepcopy(override)
+
+
+def leaves(value: Any, prefix: Tuple[str, ...] = ()) -> Dict[Tuple[str, ...], Any]:
+    """Every leaf of a nested mapping, keyed by its path. An empty mapping is a leaf."""
+    if isinstance(value, dict) and value:
+        out: Dict[Tuple[str, ...], Any] = {}
+        for key, child in value.items():
+            out.update(leaves(child, (*prefix, str(key))))
+        return out
+    return {prefix: value}

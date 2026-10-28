@@ -52,7 +52,6 @@ from ducta.gate.writers import (
     JSONWriter,
     ORCWriter,
     ParquetWriter,
-    SparkWriterMixin,
     normalize_partition_config,
 )
 
@@ -124,5 +123,4 @@ __all__ = [
     "normalize_partition_config",
     "ORCWriter",
     "ParquetWriter",
-    "SparkWriterMixin",
 ]

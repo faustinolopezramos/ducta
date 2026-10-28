@@ -114,7 +114,10 @@ CHECK_PARAMS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "topk_categories": _p({"type": "integer", "minimum": 1}, "Categories kept per column"),
     },
     "statistical": {
-        "test_type": _p({"type": "string"}, "The test to run (default shapiro)"),
+        "test_type": _p(
+            {"type": "string", "enum": ["shapiro", "ks", "chi_square"]},
+            "The test to run (default shapiro)",
+        ),
         "columns": _p(_STRINGS, "Columns to test"),
         "alpha": _p({"type": "number", "exclusiveMinimum": 0, "maximum": 1}, "Significance level"),
         "min_samples": _p({"type": "integer", "minimum": 1}, "Fewest rows to run the test"),

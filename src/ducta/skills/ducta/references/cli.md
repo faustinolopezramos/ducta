@@ -248,7 +248,7 @@ Launch the Ducta React frontend and FastAPI backend
 | `--no-browser` | Do not automatically open the browser |
 | `--source` | Workspace source path or Git URL to load automatically |
 | `--db` | Path for the SQLite execution history database (default: ~/.ducta/executions.db) |
-| `--enable-terminal` | Enable the embedded web terminal (PTY). SECURITY: grants arbitrary shell execution to authenticated users. Off by default. |
+| `--allow-unauthenticated` | Serve on a non-local --host without authentication (AUTH_ENABLED). SECURITY: anyone who can reach the address can run pipelines. Refused by default. |
 
 ## ducta server
 
@@ -265,6 +265,7 @@ Start the local Ducta server with the MLflow-style web dashboard
 | `--no-browser` | Do not automatically open the browser |
 | `--source` | Workspace source path or Git URL to load automatically |
 | `--db` | Path for the SQLite execution history database (default: ~/.ducta/executions.db) |
+| `--allow-unauthenticated` | Serve on a non-local --host without authentication (AUTH_ENABLED). SECURITY: anyone who can reach the address can run pipelines. Refused by default. |
 
 ## ducta profile
 
@@ -275,6 +276,7 @@ Measure a dataset and emit a reviewable spec derived from what is actually in it
 | `--input`, `-i` | Path to the data file — *(required)* |
 | `--format`, `-f` | Input file format (default: parquet) — one of `parquet`, `csv`, `json`; default `parquet` |
 | `--output`, `-o` | Write the proposed spec here (default: print it to stdout) |
+| `--force` | Replace --output if it already exists (default: refuse) |
 | `--strictness` | How close the proposed bounds sit to what was observed (default: balanced) — one of `strict`, `balanced`, `lax`; default `balanced` |
 | `--sample-rows` | Measure columns from a sample of at most N rows (row count stays exact) |
 | `--dataset-name` | Name for the dataset in the spec (default: the file stem) |

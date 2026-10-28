@@ -170,7 +170,7 @@ cases:
     expect:
       - checks the api extra
       - runs ducta ui --source with the project path
-    never: [enables --enable-terminal]
+    never: [passes --allow-unauthenticated]
 
   - id: ui-team
     area: server

@@ -396,6 +396,21 @@ class LocalStorageBackend(StorageBackend):
             logger.warning(f"Could not validate disk space: {e}")
             # Don't fail if we can't check disk space
 
+    def _resolve_existing(self, path: str, *extensions: str) -> Path:
+        """Full path of ``path``, or of the file a write to it created.
+
+        ``write_json``/``write_dataframe``/``append_lines`` append a default extension to a
+        suffix-less path, so ``write_json(x, "foo")`` makes ``foo.json``. Reads, ``exists``
+        and ``delete`` of ``"foo"`` must find that file, as the Databricks backend does.
+        """
+        full_path = self._get_full_path(path)
+        if not full_path.exists() and not full_path.suffix:
+            for extension in extensions:
+                candidate = full_path.with_suffix(extension)
+                if candidate.exists():
+                    return candidate
+        return full_path
+
     @with_instance_retry(operation_name="write_dataframe")
     def write_dataframe(
         self, df: pd.DataFrame, path: str, mode: str = "overwrite"
@@ -451,7 +466,7 @@ class LocalStorageBackend(StorageBackend):
         self._check_circuit_breaker()
 
         try:
-            full_path = self._get_full_path(path)
+            full_path = self._resolve_existing(path, PARQUET_EXT)
             if not full_path.exists():
                 raise FileNotFoundError(f"File {full_path} not found")
 
@@ -513,7 +528,7 @@ class LocalStorageBackend(StorageBackend):
         self._check_circuit_breaker()
 
         try:
-            full_path = self._get_full_path(path)
+            full_path = self._resolve_existing(path, JSON_EXT)
             if not full_path.exists():
                 raise FileNotFoundError(f"File {full_path} not found")
 
@@ -633,8 +648,7 @@ class LocalStorageBackend(StorageBackend):
     def exists(self, path: str) -> bool:
         """Check if path exists."""
         try:
-            full_path = self._get_full_path(path)
-            return full_path.exists()
+            return self._resolve_existing(path, JSON_EXT, PARQUET_EXT, ".jsonl").exists()
         except Exception:
             return False
 
@@ -661,7 +675,7 @@ class LocalStorageBackend(StorageBackend):
         self._check_circuit_breaker()
 
         try:
-            full_path = self._get_full_path(path)
+            full_path = self._resolve_existing(path, JSON_EXT, PARQUET_EXT, ".jsonl")
             if not full_path.exists():
                 raise FileNotFoundError(f"Path {full_path} not found")
 

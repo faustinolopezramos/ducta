@@ -170,3 +170,85 @@ class TestGateBlockedInWorker:
             self._executor(
                 {"status": "gate_blocked", "error": "worker said no"}
             )._run_node_in_subprocess("clean", {}, "", "", {})
+
+
+class TestWorkerSeesWhatTheParentRunChanged:
+    """A sample run redirects a Context after loading it; the worker rebuilds its own."""
+
+    PROJECT = {
+        "ducta.yaml": "version: 2\nproject: demo\npaths: {input: data, output: out}\n",
+        "catalog.yaml": (
+            "raw:\n  format: csv\n  path: ${paths.input}/raw.csv\n"
+            "gold.sales.totals:\n  format: parquet\n  path: ${paths.output}/${env}/gold/totals\n"
+        ),
+        "pipelines/etl.yaml": (
+            "nodes:\n  totals:\n    run: pipelines.etl:totals\n    inputs: [raw]\n"
+            "    outputs: [gold.sales.totals]\n    run_in_process: true\n"
+        ),
+    }
+
+    def _project(self, tmp_path):
+        for name, text in self.PROJECT.items():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        return tmp_path
+
+    def test_a_sample_run_worker_writes_to_the_scratch_and_reads_the_sample(
+        self, tmp_path, monkeypatch
+    ):
+        from ducta.api.execution.runner import redirect_to_scratch
+        from ducta.core.node_worker import build_node_payload
+        from ducta.core.worker_bootstrap import bootstrap_worker_context, capture_run_overrides
+        from ducta.setting.project.context import load_project_context
+
+        root = self._project(tmp_path)
+        monkeypatch.chdir(root)
+        _, parent = load_project_context(root, "dev")
+        scratch = redirect_to_scratch(parent, "dev", 25)
+
+        payload = build_node_payload(
+            "totals",
+            env="dev",
+            ml_info={},
+            base_path=str(root),
+            output_path=str(parent.output_path),
+            overrides=capture_run_overrides(parent),
+        )
+        payload = pickle.loads(pickle.dumps(payload))  # it crosses a process boundary
+        _, worker = bootstrap_worker_context(payload)
+
+        written = worker.output_config["gold.sales.totals"]["filepath"]
+        assert written == parent.output_config["gold.sales.totals"]["filepath"]
+        assert str(scratch) in written
+        assert worker.sample_rows == 25
+        assert worker.global_config["run_certificate_dir"] == str(scratch / ".ducta" / "runs")
+        assert worker.global_config["chain"]["state_dir"].startswith(str(scratch))
+
+    def test_without_overrides_the_worker_is_what_the_project_says(self, tmp_path, monkeypatch):
+        from ducta.core.node_worker import build_node_payload
+        from ducta.core.worker_bootstrap import bootstrap_worker_context
+
+        root = self._project(tmp_path)
+        monkeypatch.chdir(root)
+        payload = build_node_payload("totals", env="dev", ml_info={}, base_path=str(root))
+        _, worker = bootstrap_worker_context(payload)
+        assert worker.output_config["gold.sales.totals"]["filepath"] == "out/dev/gold/totals"
+        assert getattr(worker, "sample_rows", None) is None
+
+    def test_the_api_trust_boundary_travels_to_the_worker(self, tmp_path, monkeypatch):
+        from ducta.core.node_worker import build_node_payload
+        from ducta.core.worker_bootstrap import bootstrap_worker_context, capture_run_overrides
+        from ducta.setting.project.loader import load_project_v2
+
+        root = self._project(tmp_path)
+        monkeypatch.chdir(root)
+        parent = load_project_v2(root, "dev", allow_python_config=False)
+        overrides = capture_run_overrides(parent)
+        assert overrides["allow_python_config"] is False
+
+        payload = build_node_payload(
+            "totals", env="dev", ml_info={}, base_path=str(root), overrides=overrides
+        )
+        _, worker = bootstrap_worker_context(payload)
+        assert worker.allow_python_config is False

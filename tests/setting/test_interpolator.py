@@ -197,3 +197,15 @@ class TestSensitiveNameMatchingIsPerComponent:
         monkeypatch.setenv(var_name, "hunter2")
         with pytest.raises(ConfigLoadError):
             VariableInterpolator.interpolate(f"${{{var_name}}}", {})
+
+
+class TestContextNamesBeatTheProcessEnvironment:
+    @pytest.mark.parametrize("name", ["environment", "input_path", "output_path"])
+    def test_the_contexts_own_names_are_not_shadowed(self, name):
+        with patch.dict(os.environ, {name: "from-the-shell"}, clear=True):
+            result = VariableInterpolator.interpolate(f"${{{name}}}/x", {name: "from-context"})
+        assert result == "from-context/x"
+
+    def test_other_names_still_prefer_the_process_environment(self):
+        with patch.dict(os.environ, {"REGION": "eu"}, clear=True):
+            assert VariableInterpolator.interpolate("${REGION}", {"REGION": "us"}) == "eu"

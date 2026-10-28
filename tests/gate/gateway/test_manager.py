@@ -237,47 +237,6 @@ class TestPrefetchDrivers:
             ConnectionManager(cfg)
         mock_download.assert_not_called()
 
-    def test_no_sources_is_a_noop(self, temp_dir):
-        from ducta.gate.gateway.manager import ConnectionManager
-
-        cfg = temp_dir / "sources.yaml"
-        cfg.write_text("sources: {}\n")
-        cm = ConnectionManager(cfg)
-        cm.prefetch_drivers()  # must not raise
-
-    def test_best_effort_across_sources(self, temp_dir):
-        from ducta.gate.gateway.manager import ConnectionManager
-
-        cfg = temp_dir / "sources.yaml"
-        cfg.write_text(
-            "sources:\n"
-            "  good1:\n    type: postgresql\n    host: h\n    port: 5432\n    database: d\n"
-            "  bad:\n    type: mysql\n    host: h\n    port: 3306\n    database: d\n"
-            "  good2:\n    type: sqlserver\n    host: h\n    port: 1433\n    database: d\n"
-        )
-        cm = ConnectionManager(cfg)
-
-        def fake_download(self, lib_dir):
-            if self.source_type == "mysql":
-                raise RuntimeError("network down")
-            return lib_dir / "fake.jar"
-
-        with (
-            patch("ducta.gate.gateway.connector.JDBCConnector.download_driver", fake_download),
-            patch.object(ConnectionManager, "_add_jar_to_spark"),
-        ):
-            cm.prefetch_drivers(max_workers=3)
-
-    def test_prepare_driver_for_source_skips_missing_type(self, temp_dir):
-        from ducta.gate.gateway.manager import ConnectionManager
-
-        cfg = temp_dir / "sources.yaml"
-        cfg.write_text("sources:\n  db:\n    host: h\n")
-        cm = ConnectionManager(cfg)
-        with patch("ducta.gate.gateway.connector.JDBCConnector.download_driver") as mock_download:
-            cm._prepare_driver_for_source(("db", {"host": "h"}))
-        mock_download.assert_not_called()
-
 
 class TestConnectionMissingCredentials:
     def test_missing_env_vars(self, temp_dir):
@@ -341,3 +300,70 @@ class TestConnectionCredentialsKeyedByName:
 
         assert connector.username == "legacy-user"
         assert connector.password == "legacy-pass"
+
+
+class TestEnvFileOnlyYieldsCredentials:
+    """The gateway used to copy every entry of a `.env` into ``os.environ``. A file holding
+    ``JAVA_TOOL_OPTIONS`` or ``AUTH_ENABLED`` therefore set them for the JVM Spark starts next
+    and for anything else the process runs. It now copies nothing: the gateway reads the
+    connection's two credential keys out of the project's ``.env`` and hands them over."""
+
+    HOSTILE = (
+        "CRM_USER=alice\n"
+        "CRM_PASSWORD=secret\n"
+        "JAVA_TOOL_OPTIONS=-javaagent:/tmp/agent.jar\n"
+        "AUTH_ENABLED=false\n"
+        "PYTHONPATH=/tmp/evil\n"
+        "OTHER_USER=bob\n"
+        "OTHER_PASSWORD=bobpw\n"
+        "SUDO_USER=root\n"
+    )
+
+    @pytest.fixture
+    def project(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        home.mkdir()
+        proj = tmp_path / "proj" / "sub"
+        proj.mkdir(parents=True)
+        (proj / ".env").write_text(self.HOSTILE)
+        (proj / "sources.yaml").write_text(
+            "sources:\n  crm:\n    type: postgresql\n    host: h\n    port: 5432\n    database: d\n"
+        )
+        monkeypatch.chdir(proj)
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setattr("pathlib.Path.home", classmethod(lambda cls: home))
+        return proj
+
+    def _connect(self, project, env=None):
+        from ducta.gate.gateway.manager import ConnectionManager
+
+        with patch.dict("os.environ", env or {}, clear=True):
+            cm = ConnectionManager(project / "sources.yaml")
+            with patch("ducta.gate.gateway.connector.JDBCConnector.download_driver"):
+                connector = cm._create_connector("crm")
+            return connector, dict(os.environ)
+
+    def test_the_connection_gets_its_own_pair(self, project):
+        connector, _ = self._connect(project)
+        assert (connector.username, connector.password) == ("alice", "secret")
+
+    def test_nothing_of_the_file_reaches_the_environment(self, project):
+        _, env = self._connect(project)
+        assert env == {}
+
+    def test_another_sources_credentials_are_not_used(self, project):
+        (project / ".env").write_text("OTHER_USER=bob\nOTHER_PASSWORD=bobpw\nSUDO_USER=root\n")
+        with pytest.raises(ValueError, match="Missing credentials"):
+            self._connect(project)
+
+    def test_a_real_environment_variable_still_wins(self, project):
+        connector, _ = self._connect(project, {"CRM_PASSWORD": "from-the-environment"})
+        assert (connector.username, connector.password) == ("alice", "from-the-environment")
+
+    def test_an_env_file_outside_the_project_is_not_read(self, project, tmp_path):
+        """The parent folder's and the home folder's ``.env`` belong to something else."""
+        (project / ".env").unlink()
+        (project.parent / ".env").write_text("CRM_USER=parent\nCRM_PASSWORD=parentpw\n")
+        (tmp_path / "home" / ".env").write_text("CRM_USER=home\nCRM_PASSWORD=homepw\n")
+        with pytest.raises(ValueError, match="Missing credentials"):
+            self._connect(project)

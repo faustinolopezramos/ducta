@@ -261,3 +261,42 @@ class TestQueryReader:
         reader = QueryReader({"spark": spark_session})
         with pytest.raises(ReadOperationError, match="query failed"):
             reader.read("", {"query": "SELECT 1"})
+
+
+class TestSparkXmlAvailable:
+    def test_true_when_the_jvm_has_the_package(self):
+        from ducta.gate.readers import spark_xml_available
+
+        assert spark_xml_available(MagicMock()) is True
+
+    def test_false_when_the_jvm_lacks_it(self):
+        from ducta.gate.readers import spark_xml_available
+
+        spark = MagicMock()
+        type(spark._jvm.com.databricks.spark).xml = PropertyMock(side_effect=Exception("no class"))
+        assert spark_xml_available(spark) is False
+
+    def test_a_successful_xml_read_logs_no_warning(self):
+        spark = MagicMock()
+        reader = XMLReader({"spark": spark})
+        with patch("ducta.gate.readers.logger") as mock_logger:
+            reader.read("/data/x.xml", {"rowTag": "r"})
+        mock_logger.warning.assert_not_called()
+
+
+class TestPartitionFilterIsAPlainPredicate:
+    def test_a_filter_that_calls_the_jvm_never_reaches_spark(self):
+        spark = MagicMock()
+        reader = ParquetReader({"spark": spark})
+        bad = "reflect('java.lang.System', 'getenv', 'HOME') = 'x'"
+        with pytest.raises(ReadOperationError, match="partition_filter"):
+            reader.read("/data/x", {"partition_filter": bad})
+        spark.read.options.return_value.format.return_value.load.return_value.filter.assert_not_called()
+
+    def test_an_ordinary_filter_is_applied(self):
+        spark = MagicMock()
+        frame = spark.read.options.return_value.format.return_value.load.return_value
+        ParquetReader({"spark": spark}).read(
+            "/data/x", {"partition_filter": "year = 2024 AND month IN (1, 2)"}
+        )
+        frame.filter.assert_called_once_with("year = 2024 AND month IN (1, 2)")

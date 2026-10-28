@@ -83,3 +83,32 @@ class TestPipelineDependsOn:
         nodes = {"a": {"output": ["x"]}, "b": {"input": ["x"]}}
         merged = merge_pipeline_depends_on(pipelines, nodes)
         assert set(merged["p2"]) == {"p0", "p1"}
+
+
+class TestInputMapParameterNames:
+    """A ``{param: dataset}`` map may call its parameters like connector keys."""
+
+    def test_params_named_schema_and_path_still_give_edges(self):
+        cfgs = {
+            "a": {"output": ["x"]},
+            "b": {"input": {"schema": "x"}},
+            "c": {"input": {"schema": "x", "path": "y"}, "output": ["y"]},
+        }
+        resolved = resolve_node_dependencies(["a", "b", "c"], cfgs, warn=False)
+        assert resolved["b"] == ["a"]
+        assert resolved["c"] == ["a"]
+
+    def test_an_inline_connector_config_gives_none(self):
+        cfgs = {
+            "a": {"output": ["x"]},
+            "kafka": {"input": {"format": "kafka", "options": {"subscribe": "x"}}},
+            "files": {"input": {"format": "json", "path": "s3://bucket/x"}},
+            "bare": {"input": {"path": "/data/x"}},
+        }
+        resolved = resolve_node_dependencies(["a", "kafka", "files", "bare"], cfgs, warn=False)
+        assert resolved["kafka"] == resolved["files"] == resolved["bare"] == []
+
+    def test_pipeline_depends_on_sees_the_renamed_parameter_too(self):
+        pipelines = {"p1": {"nodes": ["a"]}, "p2": {"nodes": ["b"]}}
+        nodes = {"a": {"output": ["x"]}, "b": {"input": {"schema": "x"}}}
+        assert infer_pipeline_depends_on(pipelines, nodes)["p2"] == ["p1"]

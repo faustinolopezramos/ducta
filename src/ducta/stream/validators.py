@@ -496,10 +496,10 @@ class StreamingValidator:
                     f"Node '{node_name}' quarantine needs reject_when: '<SQL predicate>'",
                     field="quarantine.reject_when",
                 )
-            from ducta.check.checks.business import BusinessRulesCheck
+            from ducta.gate.sql import validate_predicate
 
             try:
-                BusinessRulesCheck._validate_sql_rule(quarantine["reject_when"])
+                validate_predicate(quarantine["reject_when"])
             except ValueError as e:
                 raise StreamingValidationError(
                     f"Node '{node_name}' quarantine.reject_when: {e}",

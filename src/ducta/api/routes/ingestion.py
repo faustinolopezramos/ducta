@@ -37,7 +37,7 @@ from ducta.api.models.ingestion import (
     ConnectionUsageResponse,
 )
 from ducta.api.workspace.manager import WorkspaceManager
-from ducta.gate.gateway import ConnectionSpec, IngestionService, IngestionServiceError
+from ducta.setting.connections import ConnectionSpec, IngestionService, IngestionServiceError
 
 router = APIRouter(prefix="/ingestion", tags=["Ingestion"])
 
@@ -145,24 +145,21 @@ async def get_connection(name: str, manager: ProjectManagerDep) -> ConnectionInf
 @router.get(
     "/connections/{name}/credentials",
     dependencies=[Depends(require_permission("ingestion.read"))],
-    summary="Whether a connection's credentials are set — never their values",
+    summary="Whether a connection's credentials are set, and where — never their values",
 )
 async def get_connection_credentials(name: str, manager: ProjectManagerDep) -> Dict[str, Any]:
     """`<NAME>_USER` / `<NAME>_PASSWORD`, each set or not — in the server's
     environment or the project's `.env` — the way the engine looks them up."""
     import os
 
+    from ducta.gate.gateway.credentials import read_dotenv
+
     service = _service(manager)
     try:
         service.get_connection(name)
     except IngestionServiceError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    in_file: set = set()
-    if service.env_path.is_file():
-        for line in service.env_path.read_text(encoding="utf-8").splitlines():
-            key, sep, value = line.strip().partition("=")
-            if sep and not key.startswith("#") and value.strip().strip("\"'"):
-                in_file.add(key.strip().removeprefix("export ").strip())
+    in_file = {k for k, v in read_dotenv(service.env_path).items() if v}
     out = []
     for var in (f"{name.upper()}_USER", f"{name.upper()}_PASSWORD"):
         where = "environment" if os.environ.get(var) else ".env" if var in in_file else None

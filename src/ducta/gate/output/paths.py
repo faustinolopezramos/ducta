@@ -51,7 +51,7 @@ class _PathComponents:
             ("schema", self.schema),
             ("sub_folder", self.sub_folder),
         ):
-            if value and not VALID_NAME_PATTERN.match(value):
+            if value and not VALID_NAME_PATTERN.fullmatch(value):
                 raise ConfigurationError(
                     f"Invalid characters in '{field_name}': '{value}'. "
                     "Use only alphanumeric, underscores, and hyphens."
@@ -84,6 +84,27 @@ def _newest_mtime(path: Path) -> Optional[float]:
         return path.stat().st_mtime
     mtimes = [f.stat().st_mtime for f in path.rglob("*") if f.is_file()]
     return max(mtimes) if mtimes else path.stat().st_mtime
+
+
+def path_has_data(path: str) -> bool:
+    """True if *path* holds a completed write (file, or non-empty dir)."""
+    p = Path(path)
+    if not p.exists():
+        return False
+    if p.is_file():
+        return p.stat().st_size > 0
+    if p.is_dir():
+        entries = list(p.iterdir())
+        if not entries:
+            return False
+        has_part_files = any(e.name.startswith("part-") for e in entries)
+        if has_part_files:
+            if (p / "_SUCCESS").exists():
+                return True
+            delta_log = p / "_delta_log"
+            return delta_log.is_dir() and any(delta_log.iterdir())
+        return True
+    return False
 
 
 class _PathManager(BaseIO):
@@ -131,7 +152,7 @@ class _PathManager(BaseIO):
 
         parts = []
         if should_include_env:
-            parts.append(env)
+            parts.append(self.config_validator.validate_path_segment(env, "environment"))
 
         parts.append(components.schema)
         if components.sub_folder:

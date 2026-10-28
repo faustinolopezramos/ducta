@@ -15,7 +15,6 @@ from ducta.setting.schemas import (
     OutputSchema,
     PipelineSchema,
     PipelineType,
-    ProjectSchema,
     QualityCheckEntrySchema,
     QualityGateSchema,
     QualityGlobalConfig,
@@ -25,24 +24,6 @@ from ducta.setting.schemas import (
     SplitConfig,
     WriteMode,
 )
-
-
-class TestProjectSchema:
-    def test_minimal(self):
-        s = ProjectSchema(name="my_project")
-        assert s.name == "my_project"
-
-    def test_full(self):
-        s = ProjectSchema(
-            name="my_project",
-            description="A project",
-            variables={"key": "val"},
-            metadata={"owner": "team"},
-            created_at="2024-01-01",
-            updated_at="2024-06-01",
-        )
-        assert s.name == "my_project"
-        assert s.description == "A project"
 
 
 class TestGlobalConfigSchema:

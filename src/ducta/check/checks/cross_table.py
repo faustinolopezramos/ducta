@@ -99,6 +99,10 @@ class CrossTableReferentialIntegrityCheck(_BaseReferentialIntegrityCheck):
         super().__init__("cross_table_referential", CheckSeverity.ERROR)
 
 
+def _is_null(value: Any) -> bool:
+    return value is None or (isinstance(value, float) and value != value)
+
+
 @register_check("dataset_completeness")
 class DatasetCompletenessCheck(BaseQualityCheck):
     """Validates coverage: all IDs from one dataset exist in another."""
@@ -145,8 +149,39 @@ class DatasetCompletenessCheck(BaseQualityCheck):
                 {},
             )
 
-        main_values = set(adapter.distinct_values(column, limit=distinct_limit))
-        ref_values = set(ref_adapter.distinct_values(reference_column, limit=distinct_limit))
+        if direction not in ("a->b", "b->a", "bidirectional"):
+            # No branch below ran for it, so "Datasets are complete" was a pass
+            # for `direction: a-b` without comparing anything.
+            return self._create_result(
+                False,
+                f"Unknown direction {direction!r}: nothing was compared. "
+                "Use 'a->b', 'b->a' or 'bidirectional'.",
+                {"direction": direction},
+                severity=CheckSeverity.ERROR,
+            )
+
+        # One value past the limit tells whether a side was cut short. Two cut sets are
+        # arbitrary, different subsets of their tables, so diffing them reports gaps
+        # that do not exist (two identical tables failed).
+        fetch = distinct_limit + 1 if distinct_limit is not None else None
+        main_raw = adapter.distinct_values(column, limit=fetch)
+        ref_raw = ref_adapter.distinct_values(reference_column, limit=fetch)
+        if distinct_limit is not None and (
+            len(main_raw) > distinct_limit or len(ref_raw) > distinct_limit
+        ):
+            return self._create_result(
+                False,
+                f"Completeness is inconclusive: a side has more than distinct_limit="
+                f"{distinct_limit} distinct values, so the sets cannot be compared. "
+                "Raise distinct_limit (or remove it).",
+                {"distinct_limit": distinct_limit},
+                severity=CheckSeverity.WARNING,
+            )
+
+        # Nulls are not identifiers, and NaN != NaN would make a pandas NaN "missing"
+        # from a side that has one.
+        main_values = {v for v in main_raw if not _is_null(v)}
+        ref_values = {v for v in ref_raw if not _is_null(v)}
 
         a_to_b_missing = main_values - ref_values
         b_to_a_missing = ref_values - main_values

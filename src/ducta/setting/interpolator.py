@@ -25,6 +25,8 @@ from typing import Any, Dict, FrozenSet, Optional
 from ducta.setting.exceptions import ConfigLoadError
 
 _DEFAULT_PATH_KEYS: FrozenSet[str] = frozenset({"filepath"})
+#: Placeholders the Context itself defines; the process environment cannot shadow them.
+_CONTEXT_OWNED_NAMES: FrozenSet[str] = frozenset({"environment", "input_path", "output_path"})
 _SENSITIVE_NAME_PARTS = frozenset(
     {
         "KEY",
@@ -140,11 +142,16 @@ class VariableInterpolator:
 
         VariableInterpolator._check_max_depth(_depth)
 
-        result = VariableInterpolator._replace_env_placeholders(string)
+        # The Context's own names go first: a process variable that happens to be called
+        # ``environment`` or ``output_path`` (lower-case ones are common in CI and k8s)
+        # must not rewrite the active environment or paths. Every other ${VAR} still
+        # prefers the process environment, so a config value can be overridden from it.
+        owned = {k: v for k, v in (variables or {}).items() if k in _CONTEXT_OWNED_NAMES}
+        result = VariableInterpolator._replace_variables(string, owned, _depth)
 
-        result = VariableInterpolator._replace_variables(result, variables, _depth)
+        result = VariableInterpolator._replace_env_placeholders(result)
 
-        return result
+        return VariableInterpolator._replace_variables(result, variables, _depth)
 
     @staticmethod
     def interpolate_config_paths(

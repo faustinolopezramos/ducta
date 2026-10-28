@@ -211,6 +211,31 @@ class ModelRegistry:
         with file_lock(lock_path, timeout=timeout, base_path=base_path):
             yield
 
+    _COUNTERS_FILENAME = "version_counters.json"
+
+    def _counters_path(self) -> str:
+        return str(Path(self.registry_path) / "models" / self._COUNTERS_FILENAME)
+
+    def _load_counters(self) -> Dict[str, Dict[str, Any]]:
+        """``{name: {"model_id": ..., "last_version": n}}`` — the highest version ever issued.
+
+        The index only knows the versions that still exist. Numbering from it alone hands a
+        deleted version's number to the next model, so a pipeline pinned to ``version: 3``,
+        an audit entry or a certificate naming v3 would silently point at a different
+        artifact. Callers hold the registry lock.
+        """
+        try:
+            data = self.storage.read_json(self._counters_path())
+        except FileNotFoundError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _save_counter(self, name: str, model_id: str, last_version: int) -> None:
+        counters = self._load_counters()
+        previous = int(counters.get(name, {}).get("last_version", 0))
+        counters[name] = {"model_id": model_id, "last_version": max(previous, last_version)}
+        self.storage.write_json(counters, self._counters_path(), mode="overwrite")
+
     def _ensure_registry_structure(self) -> None:
         """
         Ensure registry directory structure exists (lazy initialization).
@@ -346,10 +371,17 @@ class ModelRegistry:
                 except Exception:
                     models_df = pd.DataFrame(columns=["model_id", "name", "version", "created_at"])
 
+                counter = self._load_counters().get(name, {})
+                last_issued = int(counter.get("last_version", 0))
                 if "name" in models_df.columns and name in models_df["name"].values:
                     model_rows = models_df[models_df["name"] == name]
-                    version = int(model_rows["version"].max()) + 1
+                    last_issued = max(last_issued, int(model_rows["version"].max()))
                     model_id = model_rows["model_id"].iloc[-1]
+                elif counter.get("model_id"):
+                    # every version was deleted: the name keeps its id and its numbering
+                    model_id = str(counter["model_id"])
+                version = last_issued + 1
+                if version > 1:
                     logger.debug(f"Model '{name}' exists, registering version {version}")
                 else:
                     logger.debug(f"Registering new model '{name}' as version 1")
@@ -397,6 +429,7 @@ class ModelRegistry:
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
                 self._update_models_index(model_version, skip_lock=True)
+                self._save_counter(name, model_id, version)
 
                 logger.info(
                     f"Registered model '{name}' version {version} "
@@ -855,6 +888,16 @@ class ModelRegistry:
 
             if model_version.metadata.stage == ModelStage.PRODUCTION and not force:
                 raise ProtectedVersionError(name, version, stage=ModelStage.PRODUCTION.value)
+
+            # Remember the numbering first (registries written before the counter existed
+            # learn it here): the number of a deleted version is never issued again.
+            index = self._load_models_index()
+            issued = index[index["name"] == name]["version"] if not index.empty else []
+            self._save_counter(
+                name,
+                model_version.model_id,
+                max([int(v) for v in issued] + [int(version)]),
+            )
 
             # Delete artifact
             try:

@@ -473,6 +473,22 @@ def verify_certificate_data(
                     "certificate was issued under evidence_level=signed but carries " "no signature"
                 ),
             )
+        if signing_key is not None:
+            # A genuinely unsigned certificate stays valid (a project may adopt a key
+            # later), but a key was given and there is nothing to check it against: say so
+            # instead of the generic line, since a signed certificate rewritten as unsigned
+            # (hash recomputed) looks exactly like this. `evidence_level: signed` is what
+            # makes a missing signature a failure.
+            return VerifyResult(
+                ok=True,
+                run_id=run_id,
+                reason=(
+                    "integrity OK — but this certificate is unsigned and a signing key was "
+                    "provided: authorship is NOT attested (nothing to check the key against). "
+                    "If this run should have been signed, treat it as tampered with"
+                ),
+                level=LEVEL_INTEGRITY,
+            )
         return VerifyResult(
             ok=True,
             run_id=run_id,

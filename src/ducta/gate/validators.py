@@ -27,8 +27,25 @@ from loguru import logger  # type: ignore
 from ducta.gate.exceptions import ConfigurationError, DataValidationError
 
 DATAFRAME_EMPTY = "DataFrame is empty"
-VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
-DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+# Matched with ``fullmatch`` (``$`` alone also accepts a trailing newline).
+VALID_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_-]+")
+DATE_PATTERN = r"\d{4}-\d{2}-\d{2}"
+
+
+def is_safe_path_segment(value: Any) -> bool:
+    """True if ``value`` can be one folder name under a base path and stay under it.
+
+    A name that carries a separator, a drive (``:``), ``..`` or a control character would
+    let it step out of the base (``../../x``) or replace it (``/etc``). Dots and spaces
+    inside a name are fine (``dev.eu``).
+    """
+    if not isinstance(value, str) or not value.strip():
+        return False
+    if value.strip() in (".", ".."):
+        return False
+    if any(ch in value for ch in "/\\:") or ".." in value:
+        return False
+    return not any(ord(ch) < 32 or ord(ch) == 127 for ch in value)
 
 
 class ConfigValidator:
@@ -43,10 +60,21 @@ class ConfigValidator:
         """
         if not value or not isinstance(value, str) or not value.strip():
             raise ConfigurationError(f"Empty component in '{field_name}'")
-        if not VALID_NAME_PATTERN.match(value):
+        if not VALID_NAME_PATTERN.fullmatch(value):
             raise ConfigurationError(
                 f"Invalid characters in '{field_name}': '{value}'. "
                 "Use only alphanumeric, underscores, and hyphens."
+            )
+        return value
+
+    @staticmethod
+    def validate_path_segment(value: str, field_name: str = "component") -> str:
+        """Refuse a value that cannot be used as a single folder name (see
+        :func:`is_safe_path_segment`); return it unchanged otherwise."""
+        if not is_safe_path_segment(value):
+            raise ConfigurationError(
+                f"Invalid {field_name} {value!r}: it is used as a folder name, so it cannot be "
+                "empty, contain a path separator, ':' or '..', or hold control characters."
             )
         return value
 
@@ -80,7 +108,7 @@ class ConfigValidator:
         if not date_str or not isinstance(date_str, str):
             return False
 
-        if not re.match(DATE_PATTERN, date_str):
+        if not re.fullmatch(DATE_PATTERN, date_str):
             return False
 
         try:

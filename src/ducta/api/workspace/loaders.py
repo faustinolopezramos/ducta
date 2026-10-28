@@ -125,12 +125,11 @@ def load_config_file(path: Path) -> Dict[str, Any]:
         else:
             # Try with ConfigLoaderFactory as fallback. This path is reachable
             # for config files discovered from a workspace/repo (content the
-            # API didn't write), so Python config files must never execute
-            # here — allow_python=False turns a `.py` into the ordinary
-            # "No supported loader" error instead of running it.
+            # API didn't write); the factory only reads YAML, JSON and TOML,
+            # so a `.py` is the ordinary "No supported loader" error and never runs.
             from ducta.setting.loaders import ConfigLoaderFactory
 
-            factory = ConfigLoaderFactory(allow_python=False)
+            factory = ConfigLoaderFactory()
             data = factory.load_config(path)
             return data if isinstance(data, dict) else {}
 

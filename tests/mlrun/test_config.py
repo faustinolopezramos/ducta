@@ -109,6 +109,23 @@ class TestResolveMLOpsPath:
         ctx = self._ctx(global_config={"mlops_path": ""}, output_path="/out", env="dev")
         assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev"
 
+    def test_mlops_path_placeholders_are_expanded(self):
+        # Used as written, `${output_path}/${environment}/models` created a directory
+        # literally named `${output_path}`, and every environment shared it.
+        ctx = self._ctx(
+            global_config={"mlops_path": "${output_path}/${environment}/models"},
+            output_path="/out",
+            env="dev",
+        )
+        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev/models"
+
+    def test_mlops_path_without_env_uses_base(self):
+        ctx = self._ctx(
+            global_config={"mlops_path": "${output_path}/${environment}/models"},
+            output_path="/out",
+        )
+        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/base/models"
+
 
 class TestEnvBoolAcceptsCommonSpellings:
     """_env_bool used to only recognize the literal "true"; a plausible

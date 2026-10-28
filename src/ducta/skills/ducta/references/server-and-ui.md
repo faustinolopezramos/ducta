@@ -8,9 +8,12 @@ ducta server start --port 8000 --no-browser
 ```
 
 Options for both: `--port` (8000), `--host` (127.0.0.1), `--source PATH_OR_GIT_URL`,
-`--no-browser`, `--db PATH` (execution history, default `~/.ducta/executions.db`).
-`ducta ui --enable-terminal` adds a web shell — it grants arbitrary command execution to
-logged-in users; never enable it unless the user insists and understands that.
+`--no-browser`, `--db PATH` (execution history, default `~/.ducta/executions.db`),
+`--allow-unauthenticated`.
+The server can run pipelines, so on a `--host` other than this machine it refuses to start
+unless `AUTH_ENABLED=true` (with a strong `JWT_SECRET_KEY`); `--allow-unauthenticated` overrides
+that. Never pass it unless the user insists and understands that anyone who can reach the address
+can run pipelines.
 
 - Swagger: `http://localhost:8000/docs`; OpenAPI: `/openapi.json`.
 - Routes live under `/api` (no version segment); health probes at `/health`.

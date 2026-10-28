@@ -174,3 +174,16 @@ class TestBaseIORecordFingerprint:
             "ds1": {"key": "ds1"},
             "ds2": {"key": "ds2"},
         }
+
+
+class TestFingerprintGapReachesTheLedger:
+    def test_a_failed_fingerprint_is_recorded_through_the_public_ledger_api(self):
+        from ducta.core.ledger import ledger_for
+
+        context = {"spark": MagicMock()}
+        BaseIO(context)._note_fingerprint_gap("input fingerprint for 'raw'", RuntimeError("boom"))
+        ledger = ledger_for(context)
+        assert ledger.evidence_complete is False
+        assert any(
+            "input fingerprint for 'raw'" in gap and "boom" in gap for gap in ledger.record_failures
+        )

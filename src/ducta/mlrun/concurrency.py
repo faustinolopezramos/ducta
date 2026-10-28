@@ -281,34 +281,43 @@ class FileLock:
     def _check_stale_lock(self) -> bool:
         """Check if existing lock file is stale and clean it up.
 
-        Staleness is decided by age (``STALE_LOCK_THRESHOLD``); a lock recorded
-        as held by a still-alive process on this same host is never stolen just
-        because it has been held a long time — only age *and* a dead/undeterminable
-        owner steal the lock. For a lock held by a process on a different host,
-        liveness cannot be checked, so age alone is used (documented heuristic).
+        A lock recorded as held by a process on this host that no longer exists is stale at
+        once: waiting out ``STALE_LOCK_THRESHOLD`` after a ``SIGKILL`` made every
+        ``end_run``/``register_model`` time out for five minutes. A live owner on this host
+        is never robbed, however long it holds the lock. For a lock whose owner's liveness
+        cannot be checked (another host, unreadable metadata) age alone decides
+        (documented heuristic).
         """
         if not self.lock_file.exists():
             return False
 
         try:
-            mtime = self.lock_file.stat().st_mtime
-            age = time.time() - mtime
-
-            if age <= STALE_LOCK_THRESHOLD:
-                return False
-
+            age = time.time() - self.lock_file.stat().st_mtime
             metadata = self._read_lock_metadata()
-            if _lock_owner_is_alive(metadata) is True:
-                logger.debug(
-                    "Lock {} is old ({:.1f}s) but its owner (pid {}) is still alive "
-                    "on this host; not stealing it",
-                    self.lock_file,
-                    age,
-                    metadata.get("pid") if metadata else None,
-                )
+            alive = _lock_owner_is_alive(metadata)
+
+            if alive is True:
+                if age > STALE_LOCK_THRESHOLD:
+                    logger.debug(
+                        "Lock {} is old ({:.1f}s) but its owner (pid {}) is still alive "
+                        "on this host; not stealing it",
+                        self.lock_file,
+                        age,
+                        metadata.get("pid") if metadata else None,
+                    )
+                return False
+            if alive is None and age <= STALE_LOCK_THRESHOLD:
                 return False
 
-            logger.warning(f"Detected stale lock {self.lock_file} (age: {age:.1f}s)")
+            # Another waiter may have stolen it and a new owner taken it meanwhile.
+            now = self._read_lock_metadata()
+            if (now or {}).get("token") != (metadata or {}).get("token"):
+                return False
+
+            logger.warning(
+                f"Detected stale lock {self.lock_file} (age: {age:.1f}s"
+                f"{', owner process is gone' if alive is False else ''})"
+            )
             self.lock_file.unlink(missing_ok=True)
             self._manager.stats.record_stale_cleanup()
             return True

@@ -77,7 +77,7 @@ class ConfigManager:
         """Run from the project root: relative data paths and module imports resolve there."""
         if self.project_root and self.project_root != self.original_cwd:
             try:
-                os.chdir(SecurityValidator.validate_path(self.project_root, self.project_root))
+                os.chdir(SecurityValidator.validate_project_root(self.project_root))
             except SecurityError as e:
                 raise ConfigurationError(f"Failed to change directory: {e}")
 

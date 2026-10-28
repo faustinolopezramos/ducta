@@ -18,31 +18,38 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import yaml
 from loguru import logger
 
-from ducta.gate.concurrency import run_parallel
-
 from .circuit_breaker import CircuitBreaker
 from .connector import JDBCConnector
+from .credentials import project_root_for, resolve_credentials
 from .exceptions import JDBCCircuitOpenError
 
 
 class ConnectionManager:
     """Manages JDBC connections from declarative configuration."""
 
-    def __init__(self, config_path: Path):
-        """Initialize ConnectionManager with config file."""
+    def __init__(self, config_path: Path, project_root: Optional[Path] = None):
+        """Initialize ConnectionManager with config file.
+
+        ``project_root`` is the project whose ``.env`` holds the credentials; by default the
+        one :func:`project_root_for` finds for the sources file.
+        """
         self.config_path = Path(config_path)
+        self.project_root = Path(project_root) if project_root is not None else None
         if not self.config_path.exists():
             raise FileNotFoundError(f"Config file not found: {self.config_path}")
 
         self.config = self._load_config()
-        self.sources = self.config.get("sources", {})
+        if not isinstance(self.config, dict):
+            raise ValueError(f"{self.config_path} must hold a mapping with a 'sources' key")
+        self.sources = self.config.get("sources") or {}
+        if not isinstance(self.sources, dict):
+            raise ValueError(f"'sources' in {self.config_path} must be a mapping")
         self._connectors: Dict[str, JDBCConnector] = {}
         self._lib_dir = Path.cwd() / "lib" / "jdbc"
         self._ivy_dir = Path.home() / ".ivy2" / "jars"
@@ -133,40 +140,6 @@ class ConnectionManager:
         driver = source_config.get("driver")
         return driver if isinstance(driver, dict) else None
 
-    def prefetch_drivers(self, max_workers: Optional[int] = None) -> None:
-        """Download and register in Spark the JDBC drivers for every configured source."""
-        items = list(self.sources.items())
-        if not items:
-            return
-
-        outcome = run_parallel(
-            items,
-            self._prepare_driver_for_source,
-            max_workers=max_workers or min(len(items), 4),
-            fail_fast=False,
-        )
-        for idx, error in outcome.errors:
-            source_name = items[idx][0]
-            logger.warning(f"Failed to prepare driver for {source_name}: {error}")
-
-    def _prepare_driver_for_source(self, item: Tuple[str, Dict[str, Any]]) -> None:
-        """Download and register a single source's JDBC driver (used by prefetch_drivers)."""
-        source_name, source_config = item
-        source_type = source_config.get("type")
-        if not source_type:
-            return
-        connector = JDBCConnector(
-            source_type=source_type,
-            host="localhost",
-            port=source_config.get("port") or 1,
-            database="dummy",
-            username="dummy",
-            password="dummy",
-            driver=self._driver_overrides(source_config),
-        )
-        jar_path = connector.download_driver(self._lib_dir)
-        self._add_jar_to_spark(jar_path)
-
     def _load_driver_class(self, connector: JDBCConnector) -> None:
         """Load a connector's JDBC driver class explicitly in the Spark JVM."""
         try:
@@ -248,39 +221,21 @@ class ConnectionManager:
                 f"Source '{source_name}' is missing required field(s): {', '.join(missing)}"
             )
 
-        # Load credentials from environment or .env file
-        self._load_env_file()
-
         name_prefix = source_name.upper()
-        username = os.getenv(f"{name_prefix}_USER")
-        password = os.getenv(f"{name_prefix}_PASSWORD")
 
-        env_prefix = name_prefix
-        if not username or not password:
-            type_prefix = source_type.upper()
-            type_username = os.getenv(f"{type_prefix}_USER")
-            type_password = os.getenv(f"{type_prefix}_PASSWORD")
-            if type_username and type_password:
-                logger.warning(
-                    "Source '{}' has no '{}_USER'/'{}_PASSWORD' in .env; falling back to "
-                    "the deprecated type-based '{}_USER'/'{}_PASSWORD'. Re-run "
-                    "'ducta init ingestion setup' to migrate this connection's credentials.",
-                    source_name,
-                    name_prefix,
-                    name_prefix,
-                    type_prefix,
-                    type_prefix,
-                )
-                username, password = type_username, type_password
-                env_prefix = type_prefix
+        # The environment, then the ``.env`` of the project the sources file belongs to
+        # (wherever the process was started), then the deprecated type-wide pair.
+        project_root = self.project_root or project_root_for(self.config_path.parent)
+        credentials = resolve_credentials(source_name, source_type, project_root)
+        username, password = credentials.username, credentials.password
 
         if not username or not password:
             raise ValueError(
                 f"Missing credentials for {source_name}. "
-                f"Set environment variables: {env_prefix}_USER, {env_prefix}_PASSWORD\n"
+                f"Set environment variables: {name_prefix}_USER, {name_prefix}_PASSWORD\n"
                 f"Or create .env file with:\n"
-                f"  {env_prefix}_USER=your_username\n"
-                f"  {env_prefix}_PASSWORD=your_password"
+                f"  {name_prefix}_USER=your_username\n"
+                f"  {name_prefix}_PASSWORD=your_password"
             )
 
         url_params = source_config.get("url_params")
@@ -304,36 +259,6 @@ class ConnectionManager:
             logger.warning(f"Could not download driver for {source_name}: {e}")
 
         return connector
-
-    def _load_env_file(self) -> None:
-        """Load .env file from current directory or project root."""
-        env_paths = [
-            Path(".env"),
-            Path.cwd() / ".env",
-            Path.cwd().parent / ".env",
-            Path.home() / ".env",
-        ]
-
-        for env_path in env_paths:
-            if env_path.exists():
-                try:
-                    with open(env_path) as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith("#"):
-                                if "=" in line:
-                                    key, value = line.split("=", 1)
-                                    key = key.strip()
-                                    # Real environment variables take precedence
-                                    # over .env values (don't clobber injected secrets).
-                                    os.environ.setdefault(key, value.strip().strip("\"'"))
-                    logger.debug(f"Loaded credentials from {env_path}")
-                    return
-                except Exception as e:
-                    logger.warning(f"Failed to load {env_path}: {e}")
-
-        # If no .env found, log a hint
-        logger.debug("No .env file found - using environment variables only")
 
     def list_sources(self) -> List[str]:
         """List all configured sources."""

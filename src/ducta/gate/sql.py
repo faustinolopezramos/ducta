@@ -34,6 +34,9 @@ except ImportError:
     sqlglot = None
 
 
+_LEXICAL_PATTERN_CACHE: Dict[Any, Dict[str, "re.Pattern[str]"]] = {}
+
+
 class SQLSanitizer:
     """Specialized class for secure SQL query sanitization."""
 
@@ -57,6 +60,50 @@ class SQLSanitizer:
         "information_schema",
         "sys.",
         "pg_",
+    }
+
+    #: Functions a read-only query may not call. They do more than read the rows of a table:
+    #: Spark's ``reflect``/``java_method`` call any static JVM method (``System.getenv``
+    #: returns the server's secrets), ``read_files``/``read_kafka``/``http_request`` reach
+    #: outside the declared datasets, and the rest read files or open connections from the
+    #: database server (Postgres ``lo_*``/``dblink``, SQL Server ``OPENROWSET``).
+    #: ``IDENTIFIER('...')`` builds a table name from a string, which hides a file read
+    #: (``IDENTIFIER('json.`/etc/x`')``) from every check below; name the table directly.
+    DANGEROUS_FUNCTIONS: ClassVar[Set[str]] = {
+        "identifier",
+        "reflect",
+        "try_reflect",
+        "java_method",
+        "read_files",
+        "read_kafka",
+        "http_request",
+        "lo_import",
+        "lo_export",
+        "lo_get",
+        "dblink",
+        "dblink_exec",
+        "dblink_connect",
+        "openrowset",
+        "opendatasource",
+        "openquery",
+        "sys_exec",
+        "sys_eval",
+    }
+
+    #: Vendor packages whose functions are refused whole (Oracle ``UTL_HTTP``, ``DBMS_SCHEDULER``…).
+    DANGEROUS_FUNCTION_PREFIXES: ClassVar[Tuple[str, ...]] = ("utl_", "dbms_")
+
+    #: Data-source names Spark accepts in front of a path: ``FROM csv.`data.csv```.
+    FILE_SOURCE_FORMATS: ClassVar[Set[str]] = {
+        "parquet",
+        "csv",
+        "json",
+        "orc",
+        "avro",
+        "text",
+        "delta",
+        "binaryfile",
+        "xml",
     }
 
     COMMENT_PATTERNS: ClassVar[List[str]] = [
@@ -87,13 +134,13 @@ class SQLSanitizer:
     def sanitize_query(cls, query: str) -> str:
         """Validate a read-only SQL query through three independent layers."""
         if not query or not isinstance(query, str):
-            raise ConfigurationError("Query must be a non-empty string") from None
+            raise ConfigurationError("Query must be a non-empty string")
 
         original_query = query
         query = query.strip()
 
         if not query:
-            raise ConfigurationError("Query cannot be empty after stripping whitespace") from None
+            raise ConfigurationError("Query cannot be empty after stripping whitespace")
 
         normalized_query = re.sub(r"\s+", " ", query)
         masked_for_checks = cls._mask_string_literals(normalized_query)
@@ -101,6 +148,17 @@ class SQLSanitizer:
         cls._check_comment_safety(normalized_query)
         cls._check_multiple_statements(normalized_query)
         cls._check_suspicious_patterns(masked_for_checks)
+        # Scanned twice, because a comment can both split a call and hide one: with block
+        # comments removed (``java_method /**/ (`` becomes a call), and with only their
+        # delimiters blanked (``/*!50000 java_method(..) */`` runs on MySQL). Line comments
+        # are left alone: ``--`` would swallow the rest of the normalized, one-line query.
+        for scanned in (
+            re.sub(r"/\*[\s\S]*?\*/", " ", masked_for_checks),
+            re.sub(r"/\*|\*/", " ", masked_for_checks),
+        ):
+            cls._check_dangerous_functions(scanned)
+            cls._check_file_reads(scanned)
+            cls._check_script_transform(scanned)
 
         # Layer 2 — structural.
         if SQLGLOT_AVAILABLE:
@@ -112,7 +170,7 @@ class SQLSanitizer:
                 raise ConfigurationError(
                     "Only SELECT and WITH queries are allowed. "
                     "Query must start with SELECT or WITH."
-                ) from None
+                )
 
         cls._check_dangerous_keywords(masked_for_checks)
 
@@ -204,6 +262,8 @@ class SQLSanitizer:
                 missing=", ".join(missing),
             )
 
+        cls._check_ast_for_functions_and_files(parsed, expressions)
+
         for name, operation_class in resolved:
             try:
                 found = parsed.find(operation_class)
@@ -213,6 +273,114 @@ class SQLSanitizer:
                 ) from error
             if found:
                 raise ConfigurationError(f"Query contains forbidden operation: {name}")
+
+    @classmethod
+    def _is_dangerous_function(cls, name: str) -> bool:
+        lowered = name.lower()
+        return lowered in cls.DANGEROUS_FUNCTIONS or lowered.startswith(
+            cls.DANGEROUS_FUNCTION_PREFIXES
+        )
+
+    @classmethod
+    def _lexical_patterns(cls) -> Dict[str, "re.Pattern[str]"]:
+        """The lexical patterns, compiled once per set of denylists.
+
+        Keyed on the denylists themselves, so a subclass or a test that changes one gets
+        patterns that match it.
+        """
+        key = (
+            frozenset(cls.DANGEROUS_FUNCTIONS),
+            cls.DANGEROUS_FUNCTION_PREFIXES,
+            frozenset(cls.FILE_SOURCE_FORMATS),
+        )
+        cached = _LEXICAL_PATTERN_CACHE.get(key)
+        if cached is None:
+            names = "|".join(re.escape(n) for n in sorted(cls.DANGEROUS_FUNCTIONS))
+            prefixes = "|".join(re.escape(p) for p in cls.DANGEROUS_FUNCTION_PREFIXES)
+            formats = "|".join(re.escape(f) for f in sorted(cls.FILE_SOURCE_FORMATS))
+            cached = {
+                "function": re.compile(r"\b(" + names + r")\s*\("),
+                # A call only (``utl_http.request(``): ``dbms_id`` or ``utl_rate`` are
+                # ordinary column names.
+                "prefix": re.compile(r"\b((?:" + prefixes + r")\w*)(?:\s*\.\s*\w+)*\s*\("),
+                # ``<qualifier>.`a/path``` (a data source in front of a path) or a path in
+                # table position (``FROM `/etc/passwd```). A quoted alias or column
+                # (``AS `ratio/x```, ```price/unit` > 0``) is neither.
+                "path": re.compile(r"(?:[\w`]\s*\.|\b(?:from|join)|,)\s*`[^`]*[/\\][^`]*`"),
+                # ``text.`orders``` reads the *file* ``orders`` when no table resolves, and a
+                # relative path needs no '/' (``text.`.env```), so any quoted name behind a
+                # format is refused.
+                "format": re.compile(r"\b(?:" + formats + r")\s*\.\s*`"),
+                # Hive script transform — ``TRANSFORM|MAP|REDUCE (...) USING 'cmd'`` runs
+                # ``cmd`` on the executors. ``JOIN ... USING (col)`` is followed by '('.
+                "script": re.compile(r"\busing\s*['\"]"),
+            }
+            _LEXICAL_PATTERN_CACHE[key] = cached
+        return cached
+
+    @classmethod
+    def _check_dangerous_functions(cls, query: str) -> None:
+        """Lexical check: a call to a function in :attr:`DANGEROUS_FUNCTIONS`."""
+        lowered = query.lower()
+        patterns = cls._lexical_patterns()
+        match = patterns["function"].search(lowered) or patterns["prefix"].search(lowered)
+        if match:
+            raise ConfigurationError(
+                f"Query calls '{match.group(1)}', which is not allowed in a read-only query."
+            )
+
+    @classmethod
+    def _check_file_reads(cls, query: str) -> None:
+        """Lexical check: ``FROM format.`path``` and any qualified quoted name that is a path."""
+        lowered = query.lower()
+        patterns = cls._lexical_patterns()
+        if patterns["path"].search(lowered):
+            raise ConfigurationError(
+                "Query reads a file by path (a quoted name containing '/'); "
+                "read data through a declared dataset."
+            )
+        if patterns["format"].search(lowered):
+            raise ConfigurationError(
+                "Query reads a file directly (FROM <format>.`path`); "
+                "read data through a declared dataset."
+            )
+
+    @classmethod
+    def _check_script_transform(cls, query: str) -> None:
+        """Lexical check: a script transform (``TRANSFORM (...) USING 'cmd'``)."""
+        if cls._lexical_patterns()["script"].search(query.lower()):
+            raise ConfigurationError(
+                "Query runs an external script (TRANSFORM ... USING), "
+                "which is not allowed in a read-only query."
+            )
+
+    @classmethod
+    def _check_ast_for_functions_and_files(cls, parsed: Any, expressions: Any) -> None:
+        """Structural counterpart of the lexical checks above."""
+        query_transform = getattr(expressions, "QueryTransform", None)
+        for _ in parsed.find_all(query_transform) if query_transform is not None else ():
+            raise ConfigurationError(
+                "Query runs an external script (TRANSFORM ... USING), "
+                "which is not allowed in a read-only query."
+            )
+        for func in parsed.find_all(expressions.Func):
+            name = getattr(func, "name", "") or ""
+            if isinstance(func, expressions.Anonymous) and cls._is_dangerous_function(name):
+                raise ConfigurationError(
+                    f"Query calls '{name.lower()}', which is not allowed in a read-only query."
+                )
+        for table in parsed.find_all(expressions.Table):
+            name = table.name or ""
+            if "/" in name or "\\" in name:
+                raise ConfigurationError(
+                    "Query reads a file by path; read data through a declared dataset."
+                )
+            quoted = bool(table.this is not None and table.this.args.get("quoted"))
+            if quoted and str(table.args.get("db") or "").lower() in cls.FILE_SOURCE_FORMATS:
+                raise ConfigurationError(
+                    "Query reads a file directly (FROM <format>.`path`); "
+                    "read data through a declared dataset."
+                )
 
     @classmethod
     def _remove_comments(cls, query: str) -> str:
@@ -270,7 +438,7 @@ class SQLSanitizer:
             if re.search(pattern, query_lower):
                 raise ConfigurationError(
                     f"Query contains dangerous keyword: '{keyword}'. Only SELECT queries are allowed."
-                ) from None
+                )
 
     @classmethod
     def _check_suspicious_patterns(cls, query: str) -> None:
@@ -281,7 +449,7 @@ class SQLSanitizer:
                 if re.search(pattern, query_lower, re.IGNORECASE):
                     raise ConfigurationError(
                         "Query contains suspicious pattern that may indicate SQL injection attempt"
-                    ) from None
+                    )
             except re.error:
                 continue
 
@@ -309,12 +477,12 @@ class SQLSanitizer:
             if dangerous_keyword:
                 raise ConfigurationError(
                     f"Comments contain dangerous keyword '{dangerous_keyword}' which is not allowed"
-                ) from None
+                )
 
             if cls._comment_contains_suspicious_pattern(content_lower):
                 raise ConfigurationError(
                     "Comments contain suspicious pattern that may indicate SQL injection attempt"
-                ) from None
+                )
 
     @classmethod
     def _normalize_comment_content(cls, comment: str) -> str:
@@ -334,7 +502,7 @@ class SQLSanitizer:
         if ";" in content_lower:
             raise ConfigurationError(
                 "Comments in query contain semicolon which could indicate multiple statements"
-            ) from None
+            )
 
     @classmethod
     def _find_dangerous_keyword_in_comment(cls, content_lower: str):
@@ -395,7 +563,7 @@ class SQLSanitizer:
         if semicolon_count > 1 or (semicolon_count == 1 and not clean_query.rstrip().endswith(";")):
             raise ConfigurationError(
                 "Multiple SQL statements are not allowed. Only single SELECT queries are permitted."
-            ) from None
+            )
 
 
 class SqlSafetyMixin:
@@ -408,6 +576,15 @@ class SqlSafetyMixin:
             raise ConfigurationError("Invalid identifier")
         return f"`{name.replace('`', '``')}`"
 
+    @classmethod
+    def quote_column_path(cls, name: str) -> str:
+        """Quote a column reference part by part: ``meta.event_date`` is the nested field
+        ``event_date`` of ``meta``, not one column whose name contains a dot."""
+        parts = [part.strip() for part in str(name or "").split(".")]
+        if not all(parts):
+            raise ConfigurationError(f"Invalid column reference: {name!r}")
+        return ".".join(cls.quote_identifier(part) for part in parts)
+
     @staticmethod
     def escape_string(value: str) -> str:
         """Escape SQL string literal (backslashes first, then single quotes)."""
@@ -419,6 +596,62 @@ class SqlSafetyMixin:
         if len(parts) != 3:
             raise ConfigurationError(f"Expected 3 parts in table name: {full_name}")
         return ".".join(self.quote_identifier(part) for part in parts)
+
+
+def validate_predicate(rule: str) -> None:
+    """Reject a SQL WHERE-clause rule containing anything beyond a plain
+    predicate — subqueries to other tables, stacked statements, comments,
+    dangerous keywords — before it's interpolated into a spark.sql() call.
+
+    `rule` is only a WHERE-clause fragment, not a full statement, so it
+    can't be handed to SQLSanitizer.sanitize_query() directly (that
+    requires a SELECT/WITH at the root) — wrapping it in a throwaway
+    `SELECT 1 WHERE ...` lets it reuse that sanitizer's lexical, AST and
+    keyword-denylist layers unchanged.
+    """
+    try:
+        SQLSanitizer.sanitize_query(f"SELECT 1 WHERE {rule}")
+    except ConfigurationError as e:
+        raise ValueError(f"SQL rule '{rule}' failed security validation: {e}") from e
+
+    # SQLSanitizer allows subqueries (ALLOWED_AST_TYPES includes
+    # Subquery/Union) because it's meant for general read-only queries —
+    # but a business rule is only supposed to be a predicate over the
+    # current row, so a nested SELECT here means reading from some other
+    # table in the catalog, exactly the "read data outside this check's
+    # scope" risk this validation exists to close. Masking string
+    # literals first avoids false positives on legitimate data values
+    # like `status = 'selected'`.
+    masked_rule = SQLSanitizer._mask_string_literals(rule)
+    if re.search(r"\bselect\b", masked_rule, re.IGNORECASE) or re.search(
+        r"\bunion\b", masked_rule, re.IGNORECASE
+    ):
+        raise ValueError(
+            f"SQL rule '{rule}' is not allowed: subqueries/SELECT are not "
+            "permitted inside a business rule predicate"
+        )
+
+
+def checked_predicate(rule: Any, what: str) -> str:
+    """``rule`` as text if it is a plain predicate, else ``ConfigurationError`` naming ``what``.
+
+    For an expression a config hands to Spark as it is (a partition filter, a ``replaceWhere``):
+    Spark's SQL parser would run ``reflect`` / ``java_method`` in it just as in a query.
+    """
+    text = str(rule)
+    try:
+        validate_predicate(text)
+    except ValueError as error:
+        raise ConfigurationError(f"{what}: {error}") from error
+    return text
+
+
+def replace_where_clause(column: str, start_date: str, end_date: str) -> str:
+    """``replaceWhere`` predicate for a date window, with the column and dates escaped."""
+    quoted_col = SqlSafetyMixin.quote_column_path(column)
+    start = SqlSafetyMixin.escape_string(start_date)
+    end = SqlSafetyMixin.escape_string(end_date)
+    return f"{quoted_col} BETWEEN '{start}' AND '{end}'"
 
 
 class UnityCatalogDDL:
@@ -472,7 +705,7 @@ class UnityCatalogDDL:
     def optimize_where(
         cls, quoted_table_name: str, column: str, start_date: str, end_date: str
     ) -> str:
-        quoted_col = cls._safety.quote_identifier(column)
+        quoted_col = cls._safety.quote_column_path(column)
         start = cls._safety.escape_string(start_date)
         end = cls._safety.escape_string(end_date)
         return f"OPTIMIZE {quoted_table_name} WHERE {quoted_col} BETWEEN '{start}' AND '{end}'"
@@ -489,7 +722,4 @@ class UnityCatalogDDL:
 
     @classmethod
     def replace_where_clause(cls, column: str, start_date: str, end_date: str) -> str:
-        quoted_col = cls._safety.quote_identifier(column)
-        start = cls._safety.escape_string(start_date)
-        end = cls._safety.escape_string(end_date)
-        return f"{quoted_col} BETWEEN '{start}' AND '{end}'"
+        return replace_where_clause(column, start_date, end_date)

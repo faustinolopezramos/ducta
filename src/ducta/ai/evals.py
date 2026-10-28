@@ -465,7 +465,7 @@ def reports_dir() -> Path:
     return ducta_home() / "ai" / "evals"
 
 
-REPORT_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-z0-9._-]{1,80}$")
+REPORT_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-z0-9._-]{1,80}\Z")
 
 
 def _report_id(report: EvalReport) -> str:

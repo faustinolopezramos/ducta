@@ -18,21 +18,19 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import cached_property
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
 from ducta.check import QualityOutputPath
+from ducta.gate.validators import is_safe_path_segment
 from ducta.mlrun.hyperparams import HyperparamConfig, load_hyperparams_config
+from ducta.setting.environments import normalize_environment
 from ducta.setting.exceptions import ConfigLoadError, ConfigValidationError
 from ducta.setting.interpolator import VariableInterpolator
-from ducta.setting.loaders import ConfigLoaderFactory
 from ducta.setting.schemas import ConfigSchema
 from ducta.setting.session import SparkSessionFactory
-from ducta.setting.utils import deep_merge_dicts as _deep_merge_dicts
 from ducta.setting.validators import (
     ConfigValidator,
     FormatPolicy,
@@ -99,32 +97,42 @@ class MLConfigMixin:
     nodes_config: Dict[str, Any]
     ml_info: Dict[str, Any]
     layer: str
-    _config_loader: Any
 
-    def _load_ml_info(self, ml_info_source: Optional[Union[str, Dict[str, Any], Path]]) -> None:
+    def _load_ml_info(self, ml_info_source: Optional[Dict[str, Any]]) -> None:
         source = ml_info_source if ml_info_source is not None else self.global_config.get("ml_info")
 
-        if isinstance(source, dict):
-            data = source
-        elif isinstance(source, (str, Path)):
-            data = self._config_loader.load_config(Path(source))
-            if not isinstance(data, dict):
-                raise ConfigValidationError(
-                    f"ml_info must be a dict (or path to a dict), got {type(data).__name__}"
-                )
-        else:
-            data = {}
+        if source is not None and not isinstance(source, dict):
+            raise ConfigValidationError(f"ml_info must be a mapping, got {type(source).__name__}")
+        data: Dict[str, Any] = source or {}
 
         self._process_ml_info(data)
         self.ml_info: Dict[str, Any] = data
 
+    @staticmethod
+    def _interpolate_ml_info(node: Any, variables: Dict[str, Any], where: str) -> None:
+        """Interpolate each string of ``node`` on its own, in place.
+
+        One value the interpolator refuses (a ``${..._TOKEN}`` reference, say) leaves
+        only that value as written; the rest of ml_info still resolves.
+        """
+        if isinstance(node, dict):
+            items: Any = list(node.items())
+        elif isinstance(node, list):
+            items = list(enumerate(node))
+        else:
+            return
+        for key, item in items:
+            here = f"{where}.{key}"
+            if isinstance(item, str):
+                try:
+                    node[key] = VariableInterpolator.interpolate(item, variables)
+                except ConfigLoadError as exc:
+                    logger.warning("{} left uninterpolated: {}", here, exc)
+            else:
+                MLConfigMixin._interpolate_ml_info(item, variables, here)
+
     def _process_ml_info(self, ml_info_data: Dict[str, Any]) -> None:
-        try:
-            VariableInterpolator.interpolate_structure(ml_info_data, self.global_config)
-        except ConfigLoadError as exc:
-            # Expected for e.g. sensitive-looking variable names the
-            # interpolator refuses to resolve — not a bug, safe to skip.
-            logger.debug("ML info interpolation skipped: {}", exc)
+        self._interpolate_ml_info(ml_info_data, self.global_config, "ml_info")
 
         ml_info_data["hyperparams"] = {
             **self.default_hyperparams,
@@ -246,45 +254,42 @@ class MLConfigMixin:
 
 
 class Context(MLConfigMixin):
-    """Context for managing configuration-based pipelines with ML/Streaming support."""
+    """Context for managing configuration-based pipelines with ML/Streaming support.
+
+    The five documents are plain mappings, as ``compile_project`` produces them.
+    """
 
     REQUIRED_GLOBAL_CONFIG = ["input_path", "output_path", "mode"]
 
     def __init__(
         self,
-        global_config: Union[str, Dict, Path],
-        pipelines_config: Union[str, Dict, Path],
-        nodes_config: Union[str, Dict, Path],
-        input_config: Union[str, Dict, Path],
-        output_config: Union[str, Dict, Path],
+        global_config: Dict[str, Any],
+        pipelines_config: Dict[str, Any],
+        nodes_config: Dict[str, Any],
+        input_config: Dict[str, Any],
+        output_config: Dict[str, Any],
         *,
-        ml_info: Optional[Union[str, Dict[str, Any], Path]] = None,
+        ml_info: Optional[Dict[str, Any]] = None,
         spark_session: Optional[Any] = None,
         validate: bool = True,
         env: Optional[str] = None,
-        allow_python_config: bool = True,
     ):
-        """Initialize the context with configuration sources."""
-        self.allow_python_config = allow_python_config
-        self._config_loader = ConfigLoaderFactory(allow_python=allow_python_config)
+        """Initialize the context with its configuration documents."""
         self._validator = ConfigValidator()
         self._interpolator = VariableInterpolator()
         self._validate_with_pydantic = validate
         self.env: Optional[str] = env
 
-        logger.debug("Normalizing configuration sources")
-        prepared_sources = self._prepare_sources(
+        self._load_configurations(
             global_config=global_config,
             pipelines_config=pipelines_config,
             nodes_config=nodes_config,
             input_config=input_config,
             output_config=output_config,
         )
-
-        self._load_configurations(**prepared_sources)
         logger.debug("Configurations loaded successfully")
 
-        self._apply_environment_overrides()
+        self._apply_environment()
 
         self._load_ml_info(ml_info)
         self._process_configurations()
@@ -308,80 +313,35 @@ class Context(MLConfigMixin):
         """True if `.spark` has already been materialized for this context."""
         return "spark" in vars(self)
 
-    @staticmethod
-    def _prepare_sources(
-        global_config: Union[str, Dict, Path],
-        pipelines_config: Union[str, Dict, Path],
-        nodes_config: Union[str, Dict, Path],
-        input_config: Union[str, Dict, Path],
-        output_config: Union[str, Dict, Path],
-    ) -> Dict[str, Union[str, Dict, Path]]:
-        """Normalize all configuration sources to Path or dict."""
-
-        def _norm(s: Union[str, Dict, Path]) -> Union[str, Dict, Path]:
-            return Path(s) if isinstance(s, str) and not s.strip().startswith("{") else s
-
-        return {
-            "global_config": _norm(global_config),
-            "pipelines_config": _norm(pipelines_config),
-            "nodes_config": _norm(nodes_config),
-            "input_config": _norm(input_config),
-            "output_config": _norm(output_config),
-        }
-
     def _load_configurations(
         self,
-        global_config: Union[str, Dict, Path],
-        pipelines_config: Union[str, Dict, Path],
-        nodes_config: Union[str, Dict, Path],
-        input_config: Union[str, Dict, Path],
-        output_config: Union[str, Dict, Path],
+        global_config: Dict[str, Any],
+        pipelines_config: Dict[str, Any],
+        nodes_config: Dict[str, Any],
+        input_config: Dict[str, Any],
+        output_config: Dict[str, Any],
     ) -> None:
-        """Load all configuration sources and validate global config."""
-        named_sources: Dict[str, Tuple[Union[str, Dict, Path], str]] = {
-            "global_config": (global_config, "global config"),
-            "pipelines_config": (pipelines_config, "pipelines config"),
-            "nodes_config": (nodes_config, "nodes config"),
-            "input_config": (input_config, "input config"),
-            "output_config": (output_config, "output config"),
-        }
+        """Check the five documents are mappings and validate the global config."""
+        for document, label in (
+            (global_config, "global config"),
+            (pipelines_config, "pipelines config"),
+            (nodes_config, "nodes config"),
+            (input_config, "input config"),
+            (output_config, "output config"),
+        ):
+            self._validator.validate_type(document, dict, label)
 
-        file_keys = [k for k, (src, _) in named_sources.items() if isinstance(src, (str, Path))]
-
-        if file_keys:
-            loaded: Dict[str, Any] = {}
-            with ThreadPoolExecutor(max_workers=len(file_keys)) as executor:
-                futures = {
-                    executor.submit(
-                        self._load_and_validate_config,
-                        named_sources[k][0],
-                        named_sources[k][1],
-                    ): k
-                    for k in file_keys
-                }
-                for future in as_completed(futures):
-                    key = futures[future]
-                    loaded[key] = future.result()
-            resolved: Dict[str, Any] = {
-                k: loaded[k] if k in loaded else named_sources[k][0] for k in named_sources
-            }
-        else:
-            resolved = {
-                k: self._load_and_validate_config(src, label)
-                for k, (src, label) in named_sources.items()
-            }
-
-        self.global_config = resolved["global_config"]
+        self.global_config = global_config
         self._validator.validate_required_keys(
             self.global_config, self.REQUIRED_GLOBAL_CONFIG, "global config"
         )
         self.execution_mode = self.global_config.get("mode", "local")
         self.input_path = self.global_config.get("input_path")
         self.output_path = self.global_config.get("output_path")
-        self.pipelines_config = resolved["pipelines_config"]
-        self.nodes_config = resolved["nodes_config"]
-        self.input_config = resolved["input_config"]
-        self.output_config = resolved["output_config"]
+        self.pipelines_config = pipelines_config
+        self.nodes_config = nodes_config
+        self.input_config = input_config
+        self.output_config = output_config
 
         if self._validate_with_pydantic:
             self._validate_all_configs_with_pydantic()
@@ -414,52 +374,18 @@ class Context(MLConfigMixin):
         except Exception as e:
             raise ConfigValidationError(f"Configuration validation failed: {str(e)}") from e
 
-    def _apply_environment_overrides(self) -> None:
-        """Deep-merge inline per-environment overrides from ``global_config``."""
-        from ducta.setting.environments import get_base_environment, normalize_environment
-
+    def _apply_environment(self) -> None:
+        """Record the active environment (``env``, or the one the config names)."""
         raw_active = self.env or self.global_config.get("environment")
         active = normalize_environment(raw_active) if raw_active else raw_active
-        env_overrides = self.global_config.pop("environments", None)
-
-        if isinstance(env_overrides, dict) and active:
-            candidates = [active]
-            base_env = get_base_environment(active)
-            if base_env != active:
-                candidates.append(base_env)
-            overrides = next(
-                (env_overrides[c] for c in candidates if isinstance(env_overrides.get(c), dict)),
-                None,
-            )
-            if overrides:
-                self.global_config = _deep_merge_dicts(self.global_config, overrides)
-                logger.info(
-                    "Applied '{}' environment overrides ({} key(s))", active, len(overrides)
-                )
-            elif env_overrides and active != "base":
-                logger.warning(
-                    "No '{}' override found in the environments: block (declared: {}). "
-                    "Running with base settings only — check for a typo in --env or "
-                    "in the environments: keys.",
-                    active,
-                    ", ".join(sorted(env_overrides.keys())),
-                )
-
         if active:
+            if not is_safe_path_segment(active):
+                raise ConfigValidationError(
+                    f"Invalid environment {active!r}: it names the folders a run writes to, so "
+                    "it cannot be empty, contain a path separator, ':' or '..', or hold control "
+                    "characters."
+                )
             self.global_config["environment"] = active
-
-    def _load_and_validate_config(
-        self, source: Union[str, Dict, Path], config_name: str
-    ) -> Dict[str, Any]:
-        """Load configuration from source with validation."""
-        try:
-            config = self._config_loader.load_config(source)
-            self._validator.validate_type(config, dict, config_name)
-            return cast(Dict[str, Any], config)
-        except (ConfigLoadError, ConfigValidationError):
-            raise
-        except Exception as e:
-            raise ConfigLoadError(f"Unexpected error loading {config_name}: {str(e)}") from e
 
     def _process_configurations(self) -> None:
         """Process and prepare configurations after loading."""
@@ -545,21 +471,3 @@ class Context(MLConfigMixin):
         for path in self.quality_output_paths:
             outputs.setdefault(path.node_name, []).append(path)
         return outputs
-
-    @classmethod
-    def from_json_config(
-        cls,
-        global_config: Dict[str, Any],
-        pipelines_config: Dict[str, Any],
-        nodes_config: Dict[str, Any],
-        input_config: Dict[str, Any],
-        output_config: Dict[str, Any],
-    ) -> "Context":
-        """Create Context instance directly from JSON/dictionary configurations."""
-        return cls(
-            global_config=global_config,
-            pipelines_config=pipelines_config,
-            nodes_config=nodes_config,
-            input_config=input_config,
-            output_config=output_config,
-        )

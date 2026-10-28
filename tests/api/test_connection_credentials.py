@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from ducta.api.dependencies import get_current_user
 from ducta.api.main import create_app
 from ducta.api.models.auth import User
-from ducta.gate.gateway.service import IngestionService
+from ducta.setting.connections import IngestionService
 
 
 @pytest.fixture

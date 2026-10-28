@@ -27,7 +27,13 @@ sources:
 `type`, `host`, `port` and `database` are required. Ducta downloads the JDBC driver for
 the type into `lib/jdbc/` (under the directory Ducta runs from) the first time; a `driver:` block can pin it (for
 example a `sha256`). `url_params` adds JDBC URL parameters (SQL Server is encrypted by
-default and accepts self-signed certificates unless overridden).
+default and its certificate is verified; for a self-signed one set
+`trustServerCertificate: "true"`. PostgreSQL, MySQL and MariaDB get the same check, with
+`sslmode: verify-full` / `sslMode: VERIFY_IDENTITY`, whenever the host is not `localhost`; a server
+without a certificate needs `sslmode: require` / `sslMode: REQUIRED`, or `disable` / `DISABLED` to
+turn TLS off). `host` is a host name or address only and `database` uses
+letters, digits and `_ $ . -`: a port, a `?`, `;` or `&` in either is refused, because it would add
+parameters to the connection URL.
 
 ## 3. Credentials: environment variables or `.env`
 
@@ -38,8 +44,8 @@ SHOP_DB_USER=reader
 SHOP_DB_PASSWORD=…
 ```
 
-from the process environment or the project's `.env` (never commit it). The older
-type-based names (`POSTGRESQL_USER`) still work with a deprecation warning.
+from the process environment first and then the project's `.env` (never commit it). The
+older type-based names (`POSTGRESQL_USER`) still work with a deprecation warning.
 
 **As an assistant:** never write the password into a file yourself and never ask the
 user to paste it into the chat. Tell the user which two variable names to set, and
@@ -87,6 +93,7 @@ Declare `bronze.shop.orders` in the catalog. An ingest node accepts only its own
 |---|---|
 | Credentials missing for a source (no user/password) | Set both variables (name = source name upper-cased), or add them to `.env`. |
 | Driver download fails | No internet from that machine: put the driver JAR in `lib/jdbc/` yourself, or pin it under `driver:`. |
-| SQL Server TLS / certificate errors | Set `url_params: {encrypt: "true", trustServerCertificate: "false"}` with a proper certificate, or the reverse for a local dev server. |
+| TLS / certificate errors (SQL Server; PostgreSQL, MySQL, MariaDB on a non-local host) | The server's certificate is verified by default. Install one the JVM trusts, or for a dev server set `url_params` to `trustServerCertificate: "true"` (SQL Server), `sslmode: require` (PostgreSQL) or `sslMode: REQUIRED` (MySQL, MariaDB). Ducta warns: the connection is then encrypted but not authenticated. |
+| `Invalid host` / `Invalid database` | `host` is the name or IP only (no `:port`, no path); `database` has no `?`, `;`, `&`, `=` or spaces. Put the port in `port` and driver options in `url_params`. |
 | `${DB_PASSWORD}` refused in YAML | By design: secret-looking variables cannot be interpolated into configuration. Use the `<SOURCE>_PASSWORD` convention. |
 | Connection refused / timeout | `ducta init ingestion test --source NAME`; check host, port, firewall, VPN. |

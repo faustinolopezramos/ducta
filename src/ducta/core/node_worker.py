@@ -113,8 +113,13 @@ def build_node_payload(
     end_date: Optional[str] = None,
     base_path: Optional[str] = None,
     output_path: Optional[str] = None,
+    overrides: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Build the picklable payload for one node run."""
+    """Build the picklable payload for one node run.
+
+    ``overrides`` is :func:`ducta.core.worker_bootstrap.capture_run_overrides` of the
+    parent's Context: what the run changed after loading it.
+    """
     safe_ml_info = {
         key: value
         for key, value in (ml_info or {}).items()
@@ -144,6 +149,7 @@ def build_node_payload(
         "end_date": end_date,
         "base_path": base_path,
         "output_path": output_path,
+        "overrides": overrides or {},
         "quiet": True,
     }
 

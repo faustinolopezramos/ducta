@@ -376,6 +376,11 @@ class Settings(BaseSettings):
         return self.environment == "development"
 
 
+#: Bind addresses that only this machine can reach. Not "": uvicorn binds an empty host
+#: to every interface.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Return cached Settings instance."""

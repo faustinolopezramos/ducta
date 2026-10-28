@@ -176,3 +176,43 @@ class TestTheParserWiring:
         validator, handler = UnifiedCLI()._build_dispatch_table()["profile"]
 
         assert validator is not None and handler is not None
+
+
+class TestJsonOutputIsOnlyJson:
+    def test_stdout_parses_as_one_json_document_holding_the_spec(self, csv_file, capsys):
+        import json
+
+        ProfileCommands.handle(_args(input=str(csv_file), output_format="json"))
+
+        payload = json.loads(capsys.readouterr().out)  # no YAML after it
+        assert payload["profile"]["row_count"] == 50
+        assert "checks" in payload["yaml"]
+
+    def test_with_an_output_file_stdout_is_still_only_the_json(self, csv_file, tmp_path, capsys):
+        import json
+
+        out = tmp_path / "spec.yaml"
+        ProfileCommands.handle(_args(input=str(csv_file), output_format="json", output=str(out)))
+
+        json.loads(capsys.readouterr().out)
+        assert out.exists()
+
+
+class TestOutputIsNotOverwrittenSilently:
+    def test_an_existing_file_is_refused_and_left_alone(self, csv_file, tmp_path):
+        out = tmp_path / "spec.yaml"
+        out.write_text("mine: true\n")
+
+        code = ProfileCommands.handle(_args(input=str(csv_file), output=str(out)))
+
+        assert code == ExitCode.VALIDATION_ERROR.value
+        assert out.read_text() == "mine: true\n"
+
+    def test_force_replaces_it(self, csv_file, tmp_path):
+        out = tmp_path / "spec.yaml"
+        out.write_text("mine: true\n")
+
+        code = ProfileCommands.handle(_args(input=str(csv_file), output=str(out), force=True))
+
+        assert code == ExitCode.SUCCESS.value
+        assert "checks" in out.read_text()

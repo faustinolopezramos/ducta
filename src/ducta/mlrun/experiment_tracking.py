@@ -48,6 +48,7 @@ from ducta.mlrun.exceptions import (
 )
 from ducta.mlrun.storage import StorageBackend
 from ducta.mlrun.validators import (
+    plain_number,
     validate_description,
     validate_experiment_name,
     validate_run_name,
@@ -643,6 +644,7 @@ class ExperimentTracker:
         """
         Log metric for run with memory protection and rolling window limits.
         """
+        value = plain_number(value)
         # Validate metric value type
         if not isinstance(value, (int, float)):
             raise InvalidMetricError(
@@ -751,7 +753,8 @@ class ExperimentTracker:
         with self._runs_lock:
             self._get_active_run(run_id)  # Verify run is active before writing
             if not destination:
-                destination = f"artifacts/{run_id}"
+                # one file per artifact: every artifact of a run used to share one path
+                destination = f"artifacts/{run_id}/{artifact_file.name}"
 
         full_destination = f"{self.tracking_path}/{destination}"
 
@@ -858,12 +861,40 @@ class ExperimentTracker:
                 df = df[df["run_id"] != run_id]
                 index_path = f"{self.tracking_path}/runs/index.parquet"
                 self.storage.write_dataframe(df, index_path, mode="overwrite")
+            self._drop_run_metrics(run)
 
         with self._runs_lock:
             self._active_runs.pop(run_id, None)
             self._forget_run(run_id)
 
         logger.info(f"Deleted run {run_id}")
+
+    def _drop_run_metrics(self, run: Run) -> None:
+        """Remove a deleted run from the metrics index and delete its metric files.
+
+        ``search_runs`` with a metric filter reads the metrics index alone, so a row left
+        there kept returning a run whose record was gone (``get_run`` then raised).
+        """
+        index_path = f"{self.tracking_path}/metrics/index.parquet"
+        try:
+            metrics_df = self.storage.read_dataframe(index_path)
+            if "run_id" in metrics_df.columns:
+                kept = metrics_df[metrics_df["run_id"] != run.run_id]
+                if len(kept) != len(metrics_df):
+                    self.storage.write_dataframe(kept, index_path, mode="overwrite")
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logger.warning(f"Could not drop run {run.run_id} from the metrics index: {e}")
+
+        stem = f"{self.tracking_path}/metrics/{run.experiment_id}/{run.run_id}_metrics"
+        for suffix in (".json", ".jsonl"):
+            try:
+                self.storage.delete(stem + suffix)
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                logger.warning(f"Could not delete {stem + suffix}: {e}")
 
     def get_run(self, run_id: str) -> Run:
         """

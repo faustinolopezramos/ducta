@@ -28,6 +28,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ducta.setting.project.defaults import node_template_body
 from ducta.setting.project.loader import apply_environment, read_project
 from ducta.setting.project.schema import TransformNode
 
@@ -49,27 +50,6 @@ def _defaults_node(doc: Any) -> Dict[str, Any]:
     return node if isinstance(node, dict) else {}
 
 
-def _template_body(root: Path, ndoc: Any) -> Dict[str, Any]:
-    """The node a ``use:`` instance gets from its template, parameters filled; {} if none."""
-    from ducta.setting.project.defaults import (
-        NODE_TEMPLATES_DIR,
-        _param_values,
-        _substitute,
-    )
-    from ducta.setting.project.files import load, with_a_suffix
-
-    ref = ndoc.get("use") if isinstance(ndoc, dict) else None
-    if not isinstance(ref, str):
-        return {}
-    try:
-        template = load(with_a_suffix(root, f"{NODE_TEMPLATES_DIR}/{ref}"))
-        values = {**_param_values(template.get("params") or {}), **(ndoc.get("with") or {})}
-        body = _substitute(template.get("node") or {}, values)
-    except Exception:  # noqa: BLE001 — the loader reports a broken template; here it adds nothing
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
 def _resolve(
     tree: Dict[str, Any], pipeline: str, node: str, key: str, root: Path = Path(".")
 ) -> Tuple[Any, str]:
@@ -77,7 +57,7 @@ def _resolve(
     ndoc = (pdoc.get("nodes") or {}).get(node) or {}
     if isinstance(ndoc, dict) and ndoc.get(key) is not None:
         return ndoc[key], "node"
-    from_template = _template_body(root, ndoc)
+    from_template = node_template_body(root, ndoc)
     if from_template.get(key) is not None:
         return from_template[key], f"template {ndoc.get('use')}"
     if _defaults_node(pdoc).get(key) is not None:

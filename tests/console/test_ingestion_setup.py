@@ -61,7 +61,7 @@ class TestIngestionSetupWarnsBeforeOverwrite:
 
     def test_no_existing_connection_skips_the_prompt(self):
         mock_service = MagicMock()
-        from ducta.gate.gateway import IngestionServiceError
+        from ducta.setting.connections import IngestionServiceError
 
         mock_service.get_connection.side_effect = IngestionServiceError("not found")
         mock_service.test_spec.return_value = True
@@ -98,7 +98,7 @@ class TestIngestionSetupNextStepsMessage:
 
     def test_does_not_ask_the_user_to_manually_add_the_password(self, capsys):
         mock_service = MagicMock()
-        from ducta.gate.gateway import IngestionServiceError
+        from ducta.setting.connections import IngestionServiceError
 
         mock_service.get_connection.side_effect = IngestionServiceError("not found")
         mock_service.test_spec.return_value = True
@@ -143,7 +143,7 @@ class TestConnectionTestIsHonest:
         assert self._test(True) == ExitCode.SUCCESS.value
 
     def test_setup_asks_before_saving_a_connection_that_failed(self):
-        from ducta.gate.gateway import IngestionServiceError
+        from ducta.setting.connections import IngestionServiceError
 
         service = MagicMock()
         service.get_connection.side_effect = IngestionServiceError("not found")
@@ -159,7 +159,7 @@ class TestConnectionTestIsHonest:
         service.create_connection.assert_not_called()
 
     def test_setup_saves_an_untested_connection_without_claiming_it_works(self, capsys):
-        from ducta.gate.gateway import IngestionServiceError
+        from ducta.setting.connections import IngestionServiceError
 
         service = MagicMock()
         service.get_connection.side_effect = IngestionServiceError("not found")
@@ -180,3 +180,23 @@ class TestConnectionTestIsHonest:
         assert "successful" not in text.lower()
         assert "nodes.yml" not in text  # format-1 layout, no longer read
         assert "kind: ingest" in text
+
+
+class TestSetupAsksForAValidNameAtOnce:
+    def test_a_bad_name_is_asked_again_before_anything_else_is_typed(self, capsys):
+        mock_service = MagicMock()
+        mock_service.get_connection.return_value = {"type": "postgresql", "host": "h"}
+        # type 2, a bad name, a name with a trailing space inside, then a good one that
+        # exists, then decline the overwrite.
+        inputs = iter(["2", "bad name!", "db-1", "existing_db", "n"])
+
+        with patch(
+            "ducta.console.commands.ingestion_setup.IngestionService",
+            return_value=mock_service,
+        ):
+            with patch("builtins.input", side_effect=lambda *_: next(inputs)):
+                result = IngestionSetupCommands._setup(Namespace())
+
+        assert result == ExitCode.SUCCESS.value
+        assert capsys.readouterr().out.count("Connection name must be") == 2
+        mock_service.get_connection.assert_called_once_with("existing_db")

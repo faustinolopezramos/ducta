@@ -95,3 +95,27 @@ class TestCheckHiddenParts:
         result = SecurityValidator.validate_path(base, target)
 
         assert result == target.resolve()
+
+
+class TestProjectRootValidation:
+    """`validate_path(root, root)` could not fail the traversal check and refused shared volumes."""
+
+    def test_a_world_writable_project_folder_is_accepted(self, tmp_path):
+        import os
+
+        project = tmp_path / "shared"
+        project.mkdir()
+        os.chmod(project, 0o777)  # a Docker bind mount, a team volume
+        assert SecurityValidator.validate_project_root(project) == project.resolve()
+
+    def test_a_system_folder_is_still_refused(self):
+        from pathlib import Path
+
+        import pytest
+
+        from ducta.console.core import SecurityError
+
+        if not Path("/etc").exists():
+            pytest.skip("no /etc here")
+        with pytest.raises(SecurityError, match="sensitive directory"):
+            SecurityValidator.validate_project_root(Path("/etc"))

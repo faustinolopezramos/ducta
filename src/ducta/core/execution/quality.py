@@ -250,7 +250,7 @@ class QualityCheckExecutor:
         # to warn_only. Failing it now would overrule the gate's own decision —
         # `warn_only` in particular means "log this and carry on", and this line
         # turned it into a hard node failure.
-        gate_decided = bool(sanity_config.get("sanity_gate"))
+        gate_decided = bool(getattr(report, "gate_decided", False))
         if not gate_decided and not report.passed and sanity_config.get("fail_fast", True):
             raise SanityCheckFailedError(node_name, report.errors_count)
 

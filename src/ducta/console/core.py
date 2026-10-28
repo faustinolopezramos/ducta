@@ -30,22 +30,9 @@ from typing import List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta.console.ux.log_safety import file_format, private_file_opener, redacting_filter
 from ducta.core.errors import DuctaError as EngineError
 from ducta.core.errors import ExecutionError as EngineExecutionError
-from ducta.setting.environments import (
-    DEFAULT_ENVIRONMENTS,  # noqa: F401
-    ENV_ALIASES,  # noqa: F401
-    FALLBACK_CHAINS,  # noqa: F401
-    CanonicalEnvironment,  # noqa: F401
-    allowed_environments,  # noqa: F401
-    get_base_environment,  # noqa: F401
-    get_fallback_chain,  # noqa: F401
-    get_sandbox_developer,  # noqa: F401
-    is_allowed_environment,  # noqa: F401
-    is_sandbox_environment,  # noqa: F401
-    is_valid_environment,  # noqa: F401
-    normalize_environment,  # noqa: F401
-)
 
 try:
     from ducta.console.ux.rich_logger import RichLoggerManager
@@ -167,7 +154,7 @@ class CLIConfig:
     rerun_all: bool = False
 
 
-VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+VALID_NAME_RE = re.compile(r"^[A-Za-z0-9_-]+\Z")
 
 
 class SecurityValidator:
@@ -219,6 +206,23 @@ class SecurityValidator:
             raise SecurityError(f"Path validation failed: {e}") from e
 
     @staticmethod
+    def validate_project_root(root: Path) -> Path:
+        """The resolved ``root``, once it is known not to be a system folder.
+
+        What ``validate_path(root, root)`` was used for: with the base and the target the
+        same, its traversal check could not fail, while its ownership and world-writable
+        checks refused any project on a bind mount or a shared volume (``0777``) — even
+        with ``DUCTA_PERMISSIVE_PATH_VALIDATION``. A project root is where the user is
+        working, so only the system folders are refused.
+        """
+        try:
+            resolved = root.resolve()
+        except OSError as e:
+            raise SecurityError(f"Path validation failed: {e}") from e
+        SecurityValidator._check_sensitive_dirs(resolved)
+        return resolved
+
+    @staticmethod
     def _check_relative_to_base(resolved_base: Path, resolved_target: Path) -> None:
         """Check if target is within base path."""
         try:
@@ -229,11 +233,14 @@ class SecurityValidator:
     @staticmethod
     def _check_sensitive_dirs(resolved_target: Path) -> None:
         for sensitive_dir in SecurityValidator.SENSITIVE_DIRS:
-            try:
-                resolved_target.relative_to(sensitive_dir)
+            # The target is resolved, so the folder must be too: `/etc` is `/private/etc`
+            # on macOS, and the unresolved name never matched.
+            for candidate in {sensitive_dir, sensitive_dir.resolve()}:
+                try:
+                    resolved_target.relative_to(candidate)
+                except ValueError:
+                    continue
                 raise SecurityError(f"Access to sensitive directory '{sensitive_dir}' denied")
-            except ValueError:
-                pass
 
     @staticmethod
     def _check_hidden_parts(resolved_base: Path, resolved_target: Path) -> None:
@@ -314,10 +321,12 @@ class LoggerManager:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             logger.add(
                 log_path,
-                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
+                format=file_format("{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}"),
                 rotation="10 MB",
                 retention="7 days",
                 level="DEBUG",
+                filter=redacting_filter,
+                opener=private_file_opener,
             )
 
 

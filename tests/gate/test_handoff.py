@@ -171,7 +171,7 @@ class TestGetStore:
         ctx = _make_context_dict()
         store = get_store(ctx)
         assert isinstance(store, _HandoffStore)
-        assert ctx["__Ducta_df_handoff__"] is store
+        assert ctx["_ducta_df_handoff"] is store
 
     def test_dict_context_reuses_store(self):
         ctx = _make_context_dict()
@@ -183,13 +183,17 @@ class TestGetStore:
         ctx = _ObjContext()
         store = get_store(ctx)
         assert isinstance(store, _HandoffStore)
-        assert hasattr(ctx, "_Ducta_df_handoff")
+        assert hasattr(ctx, "_ducta_df_handoff")
 
     def test_object_context_reuses_store(self):
         ctx = _ObjContext()
         s1 = get_store(ctx)
         s2 = get_store(ctx)
         assert s1 is s2
+
+    def test_none_context_has_no_store(self):
+        assert get_store(None) is None
+        clear(None)  # must not raise
 
     def test_object_context_rejects_attribute(self):
         class SlotsObj:
@@ -279,3 +283,45 @@ class TestClear:
     def test_clear_no_store_does_nothing(self):
         clear({})
         clear(object())
+
+
+class TestHandoffIsDroppedWhenThePathChanges:
+    def test_an_append_forgets_the_frame_kept_from_an_earlier_overwrite(self):
+        context = {"global_config": {"in_memory_handoff": True}}
+        frame = MagicMock()
+        offer(context, "/out/t", frame, "overwrite")
+        assert take(context, "/out/t") is frame
+
+        offer(context, "/out/t", MagicMock(), "append")
+
+        assert take(context, "/out/t") is None  # read from disk, which has both writes
+        frame.unpersist.assert_called()
+
+
+class TestSharedFrames:
+    def test_only_the_cached_frame_itself_is_shared(self):
+        from ducta.gate.handoff import is_shared
+
+        context = {"global_config": {"in_memory_handoff": True}}
+        frame = MagicMock()
+        assert is_shared(context, frame) is False  # nothing cached yet
+        offer(context, "/out/t", frame, "overwrite")
+        assert is_shared(context, frame) is True
+        assert is_shared(context, MagicMock()) is False
+        assert is_shared(None, frame) is False
+
+    def test_a_node_does_not_release_the_output_it_handed_off(self):
+        # The producer caches its output and releases it when it ends; the write had
+        # offered that same frame to the handoff, so the next node got it unpersisted.
+        from types import SimpleNamespace
+
+        from ducta.core.execution.runner import NodeExecutor
+
+        context = {"global_config": {"in_memory_handoff": True}}
+        handed, own = MagicMock(), MagicMock()
+        offer(context, "/out/t", handed, "overwrite")
+        node = SimpleNamespace(context=context)
+        NodeExecutor._release_unless_handed_off(node, handed)
+        NodeExecutor._release_unless_handed_off(node, own)
+        handed.unpersist.assert_not_called()
+        own.unpersist.assert_called_once()

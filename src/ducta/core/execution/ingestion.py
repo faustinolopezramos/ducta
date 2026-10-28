@@ -32,6 +32,7 @@ from ducta.core.execution.output import OutputWriter
 from ducta.core.execution.quality import QualityCheckExecutor
 from ducta.core.settings import CoreSettings
 from ducta.gate.exceptions import ConfigurationError as GateConfigurationError
+from ducta.gate.gateway.connector import reserved_read_options
 from ducta.gate.sql import SQLSanitizer
 
 
@@ -83,7 +84,7 @@ class IngestionExecutor:
         return cache[key]
 
     #: A bare SQL identifier, optionally schema- or catalog-qualified.
-    _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+    _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
     @classmethod
     def _build_dbtable(cls, node_name: str, table: str, columns, where) -> str:
@@ -96,7 +97,7 @@ class IngestionExecutor:
         which left the ingestion node as the one SQL path in the project with no
         sanitization at all.
         """
-        if not cls._IDENTIFIER_RE.match(str(table or "")):
+        if not cls._IDENTIFIER_RE.fullmatch(str(table or "")):
             raise ValueError(
                 f"Ingestion node '{node_name}': 'table' must be a plain identifier "
                 f"(optionally schema-qualified), got {table!r}. Use 'query' for anything else."
@@ -112,7 +113,7 @@ class IngestionExecutor:
                 raise ValueError(
                     f"Ingestion node '{node_name}': 'columns' must be a list of column names."
                 )
-            invalid = [c for c in columns if not cls._IDENTIFIER_RE.match(c)]
+            invalid = [c for c in columns if not cls._IDENTIFIER_RE.fullmatch(c)]
             if invalid:
                 raise ValueError(
                     f"Ingestion node '{node_name}': 'columns' must be plain column names; "
@@ -172,6 +173,13 @@ class IngestionExecutor:
                 f"Ingestion node '{node_name}': 'options' must be a mapping of Spark "
                 "JDBC read options."
             )
+        reserved = reserved_read_options(options)
+        if reserved:
+            raise ValueError(
+                f"Ingestion node '{node_name}': 'options' cannot set {', '.join(reserved)} — the "
+                "connection comes from 'source' and the statement from 'table'/'query', which are "
+                "checked before they run."
+            )
 
         spark = getattr(self.context, "spark", None)
         if spark is None:
@@ -204,7 +212,13 @@ class IngestionExecutor:
         else:
             opts["dbtable"] = self._build_dbtable(node_name, table, columns, where)
 
-        opts.update({k: str(v) for k, v in options.items()})
+        # The reserved names were refused above, so what is left (fetchsize, numPartitions,
+        # user, password…) may add to or replace the connection's own. Spark reads names
+        # without regard to case, so an option replaces the same name written differently.
+        for name, value in options.items():
+            for existing in [k for k in opts if k.lower() == str(name).lower()]:
+                del opts[existing]
+            opts[str(name)] = str(value)
 
         logger.info(
             "Ingestion node '{}': reading {} from source '{}'",
@@ -213,7 +227,13 @@ class IngestionExecutor:
             source,
         )
 
-        result_df = spark.read.format("jdbc").options(**opts).load()
+        try:
+            result_df = spark.read.format("jdbc").options(**opts).load()
+        except Exception as error:
+            hint = conn.connector.tls_hint(error)
+            if hint:
+                logger.error("Ingestion node '{}': {}", node_name, hint)
+            raise
 
         # Sanity checks (e.g. empty_dataset) on the freshly read data.
         sanity_report = self._quality_executor.run_sanity_checks(

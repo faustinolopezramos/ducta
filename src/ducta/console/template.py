@@ -2477,13 +2477,20 @@ class TemplateCommand:
                 return ExitCode.VALIDATION_ERROR.value
 
             self.generator = TemplateGenerator(output_dir, ConfigFormat(config_format), layout)
-            self.generator.generate_project(
-                template_enum,
-                project_name,
-                create_sample_code,
-                sandbox_developers,
-                evidence_level=evidence_level,
-            )
+            # Missing or empty up to here (checked above): whatever is inside afterwards is
+            # what this run wrote.
+            existed = output_dir.exists()
+            try:
+                self.generator.generate_project(
+                    template_enum,
+                    project_name,
+                    create_sample_code,
+                    sandbox_developers,
+                    evidence_level=evidence_level,
+                )
+            except BaseException:
+                self._discard_partial_project(output_dir, keep_folder=existed)
+                raise
 
             self._show_success_message(project_name, output_dir, self.generator.template)
 
@@ -2492,6 +2499,29 @@ class TemplateCommand:
         except Exception as e:
             logger.error("Template generation failed: {}", e)
             return ExitCode.GENERAL_ERROR.value
+
+    @staticmethod
+    def _discard_partial_project(output_dir: Path, keep_folder: bool) -> None:
+        """Remove what a failed generation wrote, so the same command can be run again.
+
+        Left behind, the half-written folder made the retry answer "already exists and is
+        not empty".
+        """
+        import shutil
+
+        try:
+            if not keep_folder:
+                shutil.rmtree(output_dir, ignore_errors=True)
+                return
+            for child in output_dir.iterdir():
+                if child.is_dir() and not child.is_symlink():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("Could not clean up the partial project in {}: {}", output_dir, e)
+        else:
+            logger.info("Removed the partial project in {}", output_dir)
 
     def _show_success_message(
         self, project_name: str, output_dir: Path, template: "BaseTemplate"

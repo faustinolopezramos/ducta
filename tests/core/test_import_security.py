@@ -108,3 +108,21 @@ class TestGetFunctionFromModule:
         self.imp.import_module("json")
         info = self.imp.get_cache_info()
         assert info["cached_modules"] >= 1
+
+
+class TestPrefixesAndTrailingNewline:
+    def test_a_prefix_without_a_dot_names_a_package_not_a_string_start(self):
+        imp = SecureModuleImporter(allowed_prefixes=["nodes"], strict_mode=True)
+        assert imp.validate_module_path("nodes") is True
+        assert imp.validate_module_path("nodes.clean") is True
+        with pytest.raises(ModuleImportError, match="whitelist"):
+            imp.validate_module_path("nodes_evil.x")
+
+    @pytest.mark.parametrize("path", ["nodes.clean\n", "nodes.clean\n\n"])
+    def test_a_trailing_newline_is_not_a_valid_module_path(self, path):
+        with pytest.raises(ModuleImportError, match="invalid characters"):
+            SecureModuleImporter().validate_module_path(path)
+
+    def test_a_trailing_newline_is_not_a_valid_function_name(self):
+        with pytest.raises(ModuleImportError, match="Invalid function name"):
+            SecureModuleImporter().get_function_from_module("json", "dumps\n")

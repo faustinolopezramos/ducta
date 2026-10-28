@@ -53,8 +53,12 @@ def load_project_context(
     env: str = "base",
     *,
     chdir: bool = False,
+    allow_python_config: bool = True,
 ) -> Tuple[Path, "Context"]:
     """``(project_root, context)`` for the project at or above *base_path* (default: cwd).
+
+    ``allow_python_config`` is the trust boundary of :func:`load_project_v2` (the API
+    server passes False).
 
     With ``chdir`` the process moves to the project root first, as a CLI run
     does: relative data paths and ``run: module:function`` imports resolve there.
@@ -67,4 +71,4 @@ def load_project_context(
         )
     if chdir:
         os.chdir(root)
-    return root, load_project_v2(root, env)
+    return root, load_project_v2(root, env, allow_python_config)

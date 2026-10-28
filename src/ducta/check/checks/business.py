@@ -21,7 +21,6 @@ Business rule quality checks.
 """
 
 import ast
-import re
 from typing import Any, ClassVar, Dict, FrozenSet, Optional
 
 from loguru import logger
@@ -67,6 +66,16 @@ class BusinessRulesCheck(BaseQualityCheck):
         if not rules:
             return self._create_result(True, "No rules configured", {})
 
+        if rule_type not in ("sql", "python"):
+            # `continue`-ing past every rule reported "All business rules passed (0
+            # violations)" for `rule_type: pyhton`: nothing had been checked.
+            return self._create_result(
+                False,
+                f"Unknown rule_type {rule_type!r}: no rule was checked. Use 'sql' or 'python'.",
+                {"rule_type": rule_type, "rules_unchecked": len(rules)},
+                severity=CheckSeverity.ERROR,
+            )
+
         violations_by_rule = {}
         rule_errors = {}
         total_violations = 0
@@ -75,11 +84,8 @@ class BusinessRulesCheck(BaseQualityCheck):
             try:
                 if rule_type == "sql":
                     violations = self._execute_sql_rule(adapter, rule)
-                elif rule_type == "python":
-                    violations = self._execute_python_rule(adapter, rule)
                 else:
-                    logger.warning(f"Unknown rule type: {rule_type}")
-                    continue
+                    violations = self._execute_python_rule(adapter, rule)
 
                 violations_by_rule[rule] = violations
                 total_violations += int(violations)
@@ -137,7 +143,12 @@ class BusinessRulesCheck(BaseQualityCheck):
 
     @staticmethod
     def _execute_sql_rule(adapter: DFAdapter, rule: str) -> int:
-        """Execute a SQL WHERE rule and count violations (NOT rule)."""
+        """Execute a SQL WHERE rule and count violations.
+
+        A row violates the rule unless the rule is TRUE for it. ``NOT (rule)`` alone drops
+        the rows where the rule is NULL (``amount > 0`` with a null amount), so a null
+        passed here while the Python rule type counts it as a violation.
+        """
         if adapter.engine != "spark":
             raise ValueError(
                 f"SQL rules only supported for Spark engine, got '{adapter.engine}'. "
@@ -147,47 +158,17 @@ class BusinessRulesCheck(BaseQualityCheck):
         BusinessRulesCheck._validate_sql_rule(rule)
 
         try:
-            violations = adapter.filter_where(f"NOT ({rule})")
+            violations = adapter.filter_where(f"NOT COALESCE(({rule}), FALSE)")
             return violations
         except Exception as e:
             raise ValueError(f"SQL rule execution failed for rule '{rule}': {e}")
 
     @staticmethod
     def _validate_sql_rule(rule: str) -> None:
-        """Reject a SQL WHERE-clause rule containing anything beyond a plain
-        predicate — subqueries to other tables, stacked statements, comments,
-        dangerous keywords — before it's interpolated into a spark.sql() call.
+        """Reject a rule that is more than a plain predicate (see :func:`ducta.gate.sql.validate_predicate`)."""
+        from ducta.gate.sql import validate_predicate
 
-        `rule` is only a WHERE-clause fragment, not a full statement, so it
-        can't be handed to SQLSanitizer.sanitize_query() directly (that
-        requires a SELECT/WITH at the root) — wrapping it in a throwaway
-        `SELECT 1 WHERE ...` lets it reuse that sanitizer's lexical, AST and
-        keyword-denylist layers unchanged.
-        """
-        from ducta.gate.exceptions import ConfigurationError
-        from ducta.gate.sql import SQLSanitizer
-
-        try:
-            SQLSanitizer.sanitize_query(f"SELECT 1 WHERE {rule}")
-        except ConfigurationError as e:
-            raise ValueError(f"SQL rule '{rule}' failed security validation: {e}") from e
-
-        # SQLSanitizer allows subqueries (ALLOWED_AST_TYPES includes
-        # Subquery/Union) because it's meant for general read-only queries —
-        # but a business rule is only supposed to be a predicate over the
-        # current row, so a nested SELECT here means reading from some other
-        # table in the catalog, exactly the "read data outside this check's
-        # scope" risk this validation exists to close. Masking string
-        # literals first avoids false positives on legitimate data values
-        # like `status = 'selected'`.
-        masked_rule = SQLSanitizer._mask_string_literals(rule)
-        if re.search(r"\bselect\b", masked_rule, re.IGNORECASE) or re.search(
-            r"\bunion\b", masked_rule, re.IGNORECASE
-        ):
-            raise ValueError(
-                f"SQL rule '{rule}' is not allowed: subqueries/SELECT are not "
-                "permitted inside a business rule predicate"
-            )
+        validate_predicate(rule)
 
     _SAFE_BUILTINS: Dict[str, Any] = {
         name: getattr(__import__("builtins"), name)

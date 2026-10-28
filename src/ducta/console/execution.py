@@ -182,6 +182,8 @@ _OTHER_PROCESS_HINT = (
 
 #: How often a foreground stream checks whether its queries are still running.
 _FOREGROUND_POLL_SECONDS = 5.0
+#: Polls in a row without an answer before the foreground gives the pipeline up as lost.
+_FOREGROUND_MAX_UNANSWERED = 3
 
 
 def _print_closing_summary(executor: PipelineExecutor, execution_id: str) -> None:
@@ -193,6 +195,33 @@ def _print_closing_summary(executor: PipelineExecutor, execution_id: str) -> Non
             print(text)
     except Exception as e:  # noqa: BLE001
         logger.debug("Could not print the closing summary: {}", e)
+
+
+def _stop_after_interrupt(executor: PipelineExecutor, pipeline: str) -> int:
+    """Ctrl+C while ``--mode sync`` waits inside the engine: stop what this process runs.
+
+    Without it the interrupt reached the top of the CLI: "Interrupted", exit 1, the
+    queries never stopped gracefully and no summary was printed.
+    """
+    logger.info("Stopping streaming pipeline '{}'...", pipeline)
+    execution_ids = executor.get_running_execution_ids()
+    if not execution_ids:
+        # Interrupted before any query registered (or after they all ended): nothing was
+        # stopped, so this is not reported as a clean stop.
+        logger.warning(
+            "Streaming pipeline '{}' was interrupted before any query was running; "
+            "nothing to stop.",
+            pipeline,
+        )
+        return ExitCode.EXECUTION_ERROR.value
+    stopped = [executor.stop_streaming_pipeline(i, graceful=True) for i in execution_ids]
+    if not all(stopped):
+        logger.error("Streaming pipeline '{}' did not stop cleanly.", pipeline)
+        return ExitCode.EXECUTION_ERROR.value
+    logger.info("Streaming pipeline '{}' stopped.", pipeline)
+    for execution_id in execution_ids:
+        _print_closing_summary(executor, execution_id)
+    return ExitCode.SUCCESS.value
 
 
 def _stay_in_foreground(
@@ -211,17 +240,34 @@ def _stay_in_foreground(
     # as it was, this is added to it.
     reporter = stream_view.LiveReporter()
     first = executor.get_streaming_pipeline_status(execution_id)
-    if isinstance(first, dict):
+    if isinstance(first, dict) and first:
         print(stream_view.render_start_summary(first, pipeline, env))
     else:
         print(
             f"Streaming pipeline '{pipeline}' is running (execution ID: {execution_id}). "
             "Press Ctrl+C to stop it."
         )
+    unanswered = 0
     try:
         while True:
             status = executor.get_streaming_pipeline_status(execution_id)
-            if not isinstance(status, dict) or int(status.get("active_queries") or 0) == 0:
+            if not isinstance(status, dict) or not status:
+                # Not "done": the engine did not answer (the facade turns a failed lookup
+                # into {}). Leaving here ends the process and with it the queries, and
+                # would report success.
+                unanswered += 1
+                if unanswered >= _FOREGROUND_MAX_UNANSWERED:
+                    logger.error(
+                        "Lost track of streaming pipeline '{}': its status was not available "
+                        "{} times in a row.",
+                        pipeline,
+                        unanswered,
+                    )
+                    return ExitCode.EXECUTION_ERROR.value
+                time.sleep(_FOREGROUND_POLL_SECONDS)
+                continue
+            unanswered = 0
+            if int(status.get("active_queries") or 0) == 0:
                 break
             table = reporter.tick(status)
             if table:
@@ -273,12 +319,16 @@ def run_streaming_pipeline_cli(
         if transforms_modules:
             executor.register_streaming_transforms(transforms_modules)
         parsed = json.loads(hyperparams) if hyperparams else None
-        execution_id = executor.run_streaming_pipeline(
-            pipeline_name=pipeline,
-            mode=mode,
-            model_version=model_version,
-            hyperparams=parsed,
-        )
+        try:
+            execution_id = executor.run_streaming_pipeline(
+                pipeline_name=pipeline,
+                mode=mode,
+                model_version=model_version,
+                hyperparams=parsed,
+            )
+        except KeyboardInterrupt:
+            # --mode sync waits inside the engine, before the execution id is back.
+            return _stop_after_interrupt(executor, pipeline)
 
         # `run_streaming_pipeline` returns once the startup work is queued, not
         # once anything is running. Reporting success on that id alone meant a

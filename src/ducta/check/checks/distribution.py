@@ -21,7 +21,7 @@ Distribution quality checks.
 """
 
 from functools import lru_cache
-from typing import Any, ClassVar, Dict, FrozenSet, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -48,6 +48,22 @@ def _scipy_available() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _baseline_keys(counts: Dict[Any, int]) -> Dict[str, int]:
+    """Category counts keyed the way the stored baseline keys them.
+
+    The baseline is built from ``value_counts`` of the non-null values with every key
+    passed through ``str`` (JSON has no dates). The live counts carry the raw keys
+    (``Timestamp``, ``date``, ``None``), which shared no key with the baseline, so a
+    stable date or nullable column scored a Jensen-Shannon of ~0.83 and read as drift.
+    """
+    keyed: Dict[str, int] = {}
+    for key, count in counts.items():
+        if key is None or (isinstance(key, float) and key != key):
+            continue
+        keyed[str(key)] = keyed.get(str(key), 0) + int(count)
+    return keyed
 
 
 @register_check("drift_detection")
@@ -124,7 +140,7 @@ class DriftDetectionCheck(BaseQualityCheck):
 
         for column in columns:
             try:
-                current_counts = adapter.value_counts(column, topk=fetch_topk)
+                current_counts = _baseline_keys(adapter.value_counts(column, topk=fetch_topk))
                 if len(current_counts) < min_categories:
                     logger.debug(
                         f"Skipping drift check for column '{column}': only "
@@ -231,21 +247,23 @@ class DriftDetectionCheck(BaseQualityCheck):
 
     @staticmethod
     def _compute_chi_square_distance(current: Dict[Any, int], baseline: Dict[Any, int]) -> float:
-        """Compute normalised chi-square distance between distributions."""
-        chi_square = 0.0
-        all_keys = set(current.keys()) | set(baseline.keys())
+        """Chi-square distance between the two *distributions*.
+
+        Both sides are turned into shares first: dividing only by the baseline total made
+        a 1M-row batch against a baseline sampled from 100k rows "drift" hugely even when
+        the distributions were identical.
+        """
+        current_total = sum(current.values()) or 1
         baseline_total = sum(baseline.values()) or 1
-
-        for key in all_keys:
-            curr_val = current.get(key, 0)
-            base_val = baseline.get(key, 0)
-
-            if base_val == 0:
-                chi_square += curr_val / baseline_total
+        distance = 0.0
+        for key in set(current) | set(baseline):
+            p_current = current.get(key, 0) / current_total
+            p_baseline = baseline.get(key, 0) / baseline_total
+            if p_baseline == 0:
+                distance += p_current
             else:
-                chi_square += ((curr_val - base_val) ** 2) / base_val
-
-        return chi_square / baseline_total
+                distance += ((p_current - p_baseline) ** 2) / p_baseline
+        return distance
 
 
 @register_check("statistical")
@@ -255,6 +273,7 @@ class StatisticalCheck(BaseQualityCheck):
     CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
         {"alpha", "columns", "max_rows", "min_samples", "test_type"}
     )
+    TESTS: ClassVar[Tuple[str, ...]] = ("shapiro", "ks", "chi_square")
 
     def __init__(self) -> None:
         super().__init__("statistical", CheckSeverity.WARNING)
@@ -274,6 +293,17 @@ class StatisticalCheck(BaseQualityCheck):
         columns = config.columns if hasattr(config, "columns") else []
         alpha = config.alpha if hasattr(config, "alpha") else 0.05
         min_samples = config.min_samples if hasattr(config, "min_samples") else 30
+
+        if test_type not in self.TESTS:
+            # No branch ran for an unknown test, yet the column still counted as
+            # evaluated: `test_type: shapiro_wilk` reported "All statistical tests passed".
+            return self._create_result(
+                False,
+                f"Unknown test_type {test_type!r}: no test was run. "
+                f"Use one of {', '.join(self.TESTS)}.",
+                {"test_type": test_type},
+                severity=CheckSeverity.ERROR,
+            )
 
         if not columns:
             return self._create_result(True, "No columns configured for statistical test", {})

@@ -8,7 +8,7 @@ scheduled a node before whatever feeds it.
 from __future__ import annotations
 
 from contextlib import contextmanager
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from loguru import logger
@@ -256,3 +256,36 @@ class TestCodeFingerprintHashesContent:
         state = {"config_fingerprint": "cfg-1", "code_fingerprint": "mtime:1700000000.000000"}
 
         assert executor._provenance_still_matches("bronze", state) is False
+
+
+class TestCancelledDuringBackoff:
+    def test_a_node_cancelled_while_waiting_to_retry_reports_the_cancellation(self):
+        from types import SimpleNamespace
+
+        from ducta.core.errors import NodeCancelledError
+        from ducta.core.execution.cancellation import cancel_node
+
+        context = SimpleNamespace()
+        attempts = []
+
+        def flaky():
+            attempts.append(1)
+            cancel_node(context, "n")  # cancelled (timed out) right after the failure
+            raise ConnectionError("Connection refused")
+
+        node = SimpleNamespace(context=context)
+        with pytest.raises(NodeCancelledError) as caught:
+            NodeExecutor._execute_with_retries(node, SimpleNamespace(execute=flaky), "n", 3)
+        assert isinstance(caught.value.__cause__, ConnectionError)
+        assert attempts == [1]  # no retry after the cancellation
+
+    def test_a_transient_error_without_cancellation_is_raised_as_it_was(self):
+        from types import SimpleNamespace
+
+        node = SimpleNamespace(context=SimpleNamespace())
+
+        def broken():
+            raise ValueError("bad input")
+
+        with pytest.raises(ValueError), patch("time.sleep"):
+            NodeExecutor._execute_with_retries(node, SimpleNamespace(execute=broken), "n", 1)

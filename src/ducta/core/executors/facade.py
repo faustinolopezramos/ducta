@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import gc
 import json
+import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -176,9 +177,15 @@ class PipelineExecutor:
         # itself must not start. Raises PipelineLockedError — nothing ran, so
         # no ledger and no certificate.
         run_lock = self._acquire_run_lock(pipeline, pipeline_name, node_name, run_id)
-        ledger = RunLedger.start(self.context, run_id)
-        started_at = datetime.now(timezone.utc)
-        result = PipelineRunResult(pipeline=pipeline_name, run_id=run_id)
+        try:
+            ledger = RunLedger.start(self.context, run_id)
+            started_at = datetime.now(timezone.utc)
+            result = PipelineRunResult(pipeline=pipeline_name, run_id=run_id)
+        except BaseException:
+            # The lock is held until released: a failure before the run starts must not
+            # leave these outputs locked for every later run of this process.
+            run_lock.release()
+            raise
         try:
             if pipeline_type in (PipelineType.BATCH.value, PipelineType.ML.value):
                 self.batch_executor.node_subset = list(node_names) if node_names else None
@@ -211,6 +218,12 @@ class PipelineExecutor:
                 e.run_result = result  # type: ignore[attr-defined]
             except Exception:  # noqa: BLE001 — some exception types refuse attributes
                 pass
+            raise
+        except BaseException as interrupt:
+            # Ctrl+C, SystemExit (a SIGTERM handler): not an `Exception`, but the run did
+            # not finish. Left alone the result keeps its initial SUCCESS, and the
+            # certificate and the chain state below would say the pipeline completed.
+            result.add_error(f"run interrupted ({type(interrupt).__name__})")
             raise
         finally:
             try:
@@ -483,10 +496,20 @@ class PipelineExecutor:
         except Exception:
             return default
 
+    def _streaming_manager_for(self, execution_id: str) -> Any:
+        """The streaming manager that owns ``execution_id``: the hybrid executor's when it
+        started it (the streaming phase of a hybrid run), else the streaming executor's."""
+        hybrid_manager = getattr(self._hybrid_executor, "streaming_manager", None)
+        if hybrid_manager is not None and self._safe_streaming(
+            lambda: hybrid_manager.has_execution(execution_id), False
+        ):
+            return hybrid_manager
+        return self.streaming_executor.streaming_manager
+
     def get_streaming_pipeline_status(self, execution_id: str) -> Dict[str, Any]:
         """Return status info for a streaming pipeline execution."""
         return self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.get_pipeline_status(execution_id)
+            lambda: self._streaming_manager_for(execution_id).get_pipeline_status(execution_id)
             or {},
             {},
         )
@@ -514,7 +537,7 @@ class PipelineExecutor:
     ) -> bool:
         """Stop a running streaming pipeline, waiting up to *timeout_seconds* per query."""
         return self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.stop_pipeline(
+            lambda: self._streaming_manager_for(execution_id).stop_pipeline(
                 execution_id, graceful, timeout_seconds
             ),
             False,
@@ -537,7 +560,7 @@ class PipelineExecutor:
     def get_streaming_pipeline_metrics(self, execution_id: str) -> Dict[str, Any]:
         """Get metrics for a streaming pipeline."""
         return self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.get_pipeline_metrics(execution_id)
+            lambda: self._streaming_manager_for(execution_id).get_pipeline_metrics(execution_id)
             or {},
             {},
         )
@@ -591,11 +614,18 @@ class PipelineExecutor:
                 ) from e
 
     def get_running_execution_ids(self) -> List[str]:
-        """Get list of running execution IDs from streaming manager."""
-        pipelines = self._safe_streaming(
-            lambda: self.streaming_executor.streaming_manager.list_running_pipelines(), []
-        )
-        return [p.get("execution_id") for p in pipelines if p.get("execution_id")]
+        """Running execution IDs of the streaming executor and the hybrid one (the
+        streaming phase of a hybrid run); neither is created just to be asked."""
+        ids: List[str] = []
+        for executor in (self._streaming_executor, self._hybrid_executor):
+            manager = getattr(executor, "streaming_manager", None)
+            if manager is None:
+                continue
+            for pipeline in self._safe_streaming(manager.list_running_pipelines, []):
+                execution_id = pipeline.get("execution_id")
+                if execution_id and execution_id not in ids:
+                    ids.append(execution_id)
+        return ids
 
     def run_pipeline_chain(
         self,
@@ -1002,7 +1032,9 @@ class PipelineExecutor:
             eff_start, eff_end = self._effective_dates(start_date, end_date)
             path = self._chain_state_path(pipeline_name)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
+            # Whole or not at all: a half-written marker would be read as "no marker".
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            tmp.write_text(
                 json.dumps(
                     {
                         "pipeline": pipeline_name,
@@ -1018,6 +1050,7 @@ class PipelineExecutor:
                 ),
                 encoding="utf-8",
             )
+            os.replace(tmp, path)
         except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
             logger.debug("Could not record chain state for '{}': {}", pipeline_name, e)
 

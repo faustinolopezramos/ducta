@@ -458,10 +458,14 @@ class SchemaDriftCheck(BaseQualityCheck):
 
         baseline_schema = getattr(config, "baseline_schema", None) or {}
         if not baseline_schema:
+            # It said "storing as baseline" and passed, but nothing is stored anywhere:
+            # without baseline_schema this check compared nothing, on every run.
             return self._create_result(
-                True,
-                "No baseline schema defined (first run?); storing as baseline",
+                False,
+                "No baseline_schema configured: nothing was compared. Declare "
+                "baseline_schema ({column: type}) for schema_drift to check against.",
                 {"current_columns": sorted(current_schema.keys())},
+                severity=CheckSeverity.WARNING,
             )
 
         current_cols = set(current_schema.keys())

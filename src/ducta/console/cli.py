@@ -504,7 +504,7 @@ class UnifiedCLI:
                 open_browser=not getattr(parsed_args, "no_browser", False),
                 source=getattr(parsed_args, "source", None),
                 db_path=getattr(parsed_args, "db_path", None),
-                enable_terminal=getattr(parsed_args, "enable_terminal", False),
+                allow_unauthenticated=getattr(parsed_args, "allow_unauthenticated", False),
             )
         except ImportError as e:
             logger.error('The web UI needs the api extra: pip install "ducta[api]" ({})', e)

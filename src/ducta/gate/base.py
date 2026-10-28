@@ -36,7 +36,7 @@ class BaseIO:
     def __init__(self, context: Any):
         """Initialize BaseIO with application context (dict or object)."""
         if context is None:
-            raise ConfigurationError("Context cannot be None") from None
+            raise ConfigurationError("Context cannot be None")
         self.config_validator = ConfigValidator()
         self._context = context
         self.context_manager = ContextManager(context)
@@ -51,7 +51,7 @@ class BaseIO:
     def context(self, value: Any) -> None:
         """Set context and keep the internal ContextManager in sync."""
         if value is None:
-            raise ConfigurationError("Context cannot be None") from None
+            raise ConfigurationError("Context cannot be None")
         self._context = value
         self.context_manager = ContextManager(value)
 
@@ -74,6 +74,17 @@ class BaseIO:
     def _spark_available(self) -> bool:
         """Check if Spark context is available."""
         return self.context_manager.is_spark_available()
+
+    def _report_progress(self, event: str, argument: Any) -> bool:
+        """Tell the context's ``progress_reporter`` about ``event``; False if it did not take it."""
+        reporter = self._ctx_get("progress_reporter", None)
+        if reporter and hasattr(reporter, event):
+            try:
+                getattr(reporter, event)(argument)
+                return True
+            except Exception:  # noqa: BLE001 — a reporter must never break an I/O call
+                pass
+        return False
 
     def _prepare_local_directory(self, path: str) -> None:
         """Create local directories if necessary for local filesystem paths."""
@@ -148,11 +159,19 @@ class BaseIO:
             store[key] = fingerprint.to_dict()
         return fingerprint
 
-    def _note_fingerprint_gap(self, what: str, error: Exception) -> None:
-        """Record a fingerprinting failure as a gap in the run's evidence."""
+    def _note_evidence_gap(self, reason: str) -> None:
+        """Record on the run ledger that the evidence of this run is incomplete. Best-effort.
+
+        For anything Ducta carried on after a failure (``fail_on_error: false``,
+        ``fill_none_on_error``): the certificate must not read as if all of it happened.
+        """
         try:
             from ducta.core.ledger import ledger_for
 
-            ledger_for(self._context)._note_failure(what, error)
-        except Exception:  # noqa: BLE001 — reporting a gap must not create one
-            logger.warning("Could not record {}: {}", what, error)
+            ledger_for(self._context).note_gap(reason)
+        except Exception as error:  # noqa: BLE001 — reporting a gap must not create one
+            logger.warning("Could not record evidence gap '{}': {}", reason, error)
+
+    def _note_fingerprint_gap(self, what: str, error: Exception) -> None:
+        """Record a fingerprinting failure as a gap in the run's evidence."""
+        self._note_evidence_gap(f"{what}: {error}")

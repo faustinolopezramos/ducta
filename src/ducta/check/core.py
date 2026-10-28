@@ -420,6 +420,9 @@ class QualityReport:
     # check failure (the data quality result itself is still valid), but a
     # real operational problem (e.g. a full disk) that was easy to miss.
     persistence_warnings: List[str] = field(default_factory=list)
+    # True once a quality gate actually evaluated this report (not merely declared): the
+    # gate, not the individual ERRORs, then decides whether the node fails.
+    gate_decided: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         normalized = []

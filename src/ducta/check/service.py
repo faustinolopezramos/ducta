@@ -121,7 +121,7 @@ class QualityService:
         df = _pandas_loader_for(format)(input_path)
 
         # A standalone checks file (YAML, JSON or TOML), not a project file.
-        raw_config = ConfigLoaderFactory(allow_python=False).load_config(config_path) or {}
+        raw_config = ConfigLoaderFactory().load_config(config_path) or {}
         checks_config = raw_config.get("checks", raw_config)
 
         dataset_name = Path(input_path).stem
@@ -292,7 +292,7 @@ class QualityService:
                     "latest_score": (latest or {}).get("score"),
                     "passed": (latest or {}).get("passed"),
                     "created_at": (latest or {}).get("created_at"),
-                    "trend": [s.get("score") for s in trend if isinstance(s, dict)],
+                    "trend": [s for s in trend if isinstance(s, (int, float))],
                 }
             )
         return summary
@@ -357,16 +357,26 @@ class QualityService:
             for check_name, check_cfg in (section.get("checks") or {}).items():
                 if isinstance(check_cfg, dict) and not check_cfg.get("enabled", True):
                     continue
-                if check_name in QUALITY_CHECKS_REGISTRY:
+                # The engine instantiates `type:` when there is one and uses the entry
+                # name only as a display name (`orders_nulls: {type: null_rate}`).
+                kind = (
+                    check_cfg.get("type") if isinstance(check_cfg, dict) else None
+                ) or check_name
+                if kind in QUALITY_CHECKS_REGISTRY:
                     continue
+                label = (
+                    f"Check '{check_name}'"
+                    if kind == check_name
+                    else f"Check '{check_name}' (type '{kind}')"
+                )
                 if extensions and not load_extensions:
                     warnings.append(
-                        f"Check '{check_name}' ({origin}) is not built in; it may come from "
+                        f"{label} ({origin}) is not built in; it may come from "
                         f"the project's quality.extensions, which were not imported here"
                     )
                 else:
                     errors.append(
-                        f"Unknown check '{check_name}' in node '{node_name}' ({origin}). "
+                        f"Unknown {label[0].lower()}{label[1:]} in node '{node_name}' ({origin}). "
                         f"Available: {sorted(QUALITY_CHECKS_REGISTRY)}"
                     )
 

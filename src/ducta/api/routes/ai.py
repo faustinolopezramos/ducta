@@ -366,7 +366,7 @@ async def get_ai_settings() -> AISettingsResponse:
 #: Key variables the server may be told to read from the UI: a provider's own,
 #: or one named for Ducta. Any other name could be a secret the host keeps for
 #: something else (a database password), and the key is sent to the endpoint.
-_KEY_ENV = re.compile(r"^DUCTA_AI_[A-Z0-9_]+$")
+_KEY_ENV = re.compile(r"^DUCTA_AI_[A-Z0-9_]+\Z")
 
 
 def _check_update(body: AISettingsUpdate) -> None:
@@ -659,7 +659,7 @@ async def get_explanation(
 
 # ── jobs ────────────────────────────────────────────────────────────────────
 
-_JOB_ID = re.compile(r"^[0-9a-f]{12}$")
+_JOB_ID = re.compile(r"^[0-9a-f]{12}\Z")
 
 
 def _jobs_dir(root: Path) -> Path:

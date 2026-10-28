@@ -20,7 +20,10 @@ SPDX-License-Identifier: Apache-2.0
 
 from typing import Any, Dict, Optional
 
+from loguru import logger  # type: ignore
+
 from ducta.gate.context_manager import ContextManager
+from ducta.gate.exceptions import ReadOperationError
 
 
 def compute_fingerprint(
@@ -151,3 +154,55 @@ def diff_schema_columns(
     if retyped:
         parts.append(f"type_changed={retyped}")
     return "; ".join(parts)
+
+
+def check_fingerprint_policy(
+    policy: str, previous: Dict[str, Any], data_fingerprint: Any, input_key: str
+) -> None:
+    """Compare an input's fingerprint with the previous successful run's.
+
+    ``policy`` is ``warn`` (log it) or ``fail`` (raise ``ReadOperationError``); ``previous``
+    is that input's recorded fingerprint (``{}`` when there is none). A fingerprint made by
+    another engine or algorithm is not comparable and becomes the new baseline, silently.
+    Anything unexpected while comparing skips the check: it never blocks a read by itself.
+    """
+    message = None
+    try:
+        previous_hash = previous.get("fingerprint")
+        if not previous_hash or previous_hash == data_fingerprint.fingerprint:
+            return
+
+        from ducta.mlrun.fingerprint import comparable
+
+        can_compare, why = comparable(previous, data_fingerprint.to_dict())
+        if not can_compare:
+            logger.info(
+                "Skipping fingerprint_policy for '{}': the recorded fingerprint is "
+                "not comparable to this run's ({}). This run's fingerprint becomes "
+                "the new baseline.",
+                input_key,
+                why,
+            )
+            return
+
+        message = (
+            f"Input '{input_key}' changed since the previous successful run: "
+            f"fingerprint {previous_hash[:12]}… → {data_fingerprint.fingerprint[:12]}… "
+            f"(rows {previous.get('row_count')} → {data_fingerprint.row_count}, "
+            f"mtime {previous.get('file_mtime')} → {data_fingerprint.file_mtime})"
+        )
+        column_diff = diff_schema_columns(
+            previous.get("columns"), getattr(data_fingerprint, "columns", None)
+        )
+        if column_diff:
+            message += f" | schema drift: {column_diff}"
+    except Exception as error:  # noqa: BLE001 — see the docstring
+        logger.debug("Fingerprint policy check skipped for '{}': {}", input_key, error)
+        return
+
+    if policy == "fail":
+        raise ReadOperationError(
+            f"{message}. Aborting because fingerprint_policy=fail. "
+            "Re-run with fingerprint_policy=warn (or record) to accept the new data."
+        )
+    logger.warning("{}. Results may not be comparable to the previous run.", message)

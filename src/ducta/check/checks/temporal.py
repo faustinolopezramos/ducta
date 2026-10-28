@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 Temporal quality checks.
 """
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
 
 from loguru import logger
@@ -332,7 +332,7 @@ class FreshnessCheck(BaseQualityCheck):
     def _count_business_days(
         start_date: "datetime.date",
         end_date: "datetime.date",
-        holidays: List[str],
+        holidays: List[Any],
         include_weekends: bool,
     ) -> int:
         """Count business days between two dates (excluding weekends/holidays)."""
@@ -341,10 +341,20 @@ class FreshnessCheck(BaseQualityCheck):
         # Parse holidays
         holiday_dates = set()
         for h in holidays:
-            try:
-                holiday_dates.add(datetime.fromisoformat(h).date())
-            except (ValueError, TypeError):
-                pass
+            # YAML and TOML load an unquoted `2024-12-25` as a date, not a string; an
+            # entry that cannot be read used to be skipped, so the holiday counted as a
+            # business day and a fresh dataset failed after every long weekend.
+            if isinstance(h, datetime):
+                holiday_dates.add(h.date())
+            elif isinstance(h, date):
+                holiday_dates.add(h)
+            else:
+                try:
+                    holiday_dates.add(datetime.fromisoformat(str(h)).date())
+                except ValueError:
+                    raise ValueError(
+                        f"Invalid holiday {h!r}: use an ISO date such as 2024-12-25"
+                    ) from None
 
         count = 0
         current = start_date
@@ -378,6 +388,10 @@ class FreshnessCheck(BaseQualityCheck):
                 return max_val.to_pydatetime()
             # Already a datetime
             if isinstance(max_val, datetime):
+                if adapter.engine == "spark" and max_val.tzinfo is None:
+                    # collect() gives a naive datetime in the driver's local time zone;
+                    # calling it UTC shifted the age by the zone's offset.
+                    return max_val.astimezone(timezone.utc)
                 return max_val
             # Spark / Polars may return a date object — promote to datetime
             if hasattr(max_val, "year") and not isinstance(max_val, datetime):

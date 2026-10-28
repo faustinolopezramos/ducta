@@ -19,6 +19,6 @@ def _block_real_driver_downloads(monkeypatch, request):
         )
 
     monkeypatch.setattr(
-        "ducta.gate.gateway.connector.urllib.request.urlretrieve", _blocked, raising=True
+        "ducta.gate.gateway.connector.urllib.request.urlopen", _blocked, raising=True
     )
     yield

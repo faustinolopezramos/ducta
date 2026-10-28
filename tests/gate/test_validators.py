@@ -179,3 +179,55 @@ class TestDataValidatorValidateColumnsExist:
         df.schema.names = ["x", "y"]
         result = dv._get_columns(df)
         assert result == ["x", "y"]
+
+
+class TestPathSegment:
+    """An environment (or any name) joined onto a base path must stay a single folder name."""
+
+    @pytest.mark.parametrize(
+        "name", ["dev", "prod", "base", "sandbox_ana", "dev.eu", "release-2", "UPPER", "a b"]
+    )
+    def test_ordinary_names_are_fine(self, name):
+        from ducta.gate.validators import is_safe_path_segment
+
+        assert is_safe_path_segment(name) is True
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "../../../../tmp/evil",
+            "..",
+            ".",
+            "a/../../b",
+            "/etc/cron.d",
+            "a\\b",
+            "C:evil",
+            "dev..eu",
+            "",
+            "   ",
+            "dev\x00",
+            "dev\nprod",
+            None,
+            5,
+        ],
+    )
+    def test_names_that_could_leave_the_base_are_not(self, name):
+        from ducta.gate.validators import is_safe_path_segment
+
+        assert is_safe_path_segment(name) is False
+
+    def test_the_validator_returns_the_value_or_refuses_it(self):
+        assert ConfigValidator.validate_path_segment("dev", "environment") == "dev"
+        with pytest.raises(ConfigurationError, match="Invalid environment"):
+            ConfigValidator.validate_path_segment("../x", "environment")
+
+
+class TestNamesWithATrailingNewline:
+    @pytest.mark.parametrize("value", ["table\n", "a\nb"])
+    def test_name_component_refuses_it(self, value):
+        with pytest.raises(ConfigurationError, match="Invalid characters"):
+            ConfigValidator.validate_name_component(value, "table")
+
+    def test_date_refuses_it(self):
+        assert ConfigValidator.validate_date_format("2024-01-31") is True
+        assert ConfigValidator.validate_date_format("2024-01-31\n") is False

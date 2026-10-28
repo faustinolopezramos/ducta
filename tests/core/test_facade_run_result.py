@@ -136,3 +136,46 @@ class TestLedgerIdentity:
 
         RunLedger.start(context, "run-2")
         assert ledger_for(context).node_details == []
+
+
+class TestAnInterruptedRunIsNotCertifiedAsDone:
+    """Ctrl+C is a BaseException: it used to reach the `finally` with the result still SUCCESS."""
+
+    def test_the_certificate_says_failed_and_no_chain_state_is_written(self, tmp_path):
+        nodes, pipelines = _one_node_pipeline("ok", fakes.passthrough("ok"))
+        engine, _ = _engine(nodes, pipelines, run_certificate_dir=str(tmp_path / "certs"))
+
+        def ctrl_c(*_args, **_kwargs):
+            raise KeyboardInterrupt()
+
+        engine.batch_executor.execute = ctrl_c
+        chain, sealed = [], {}
+        engine._record_chain_state = lambda *a, **k: chain.append(a)
+        emit = engine._emit_run_certificate
+
+        def spy(**kwargs):
+            sealed.update(kwargs)
+            return emit(**kwargs)
+
+        engine._emit_run_certificate = spy
+
+        with pytest.raises(KeyboardInterrupt):
+            engine.run_pipeline("p")
+
+        assert sealed["status"] == "failed"
+        assert "interrupted" in sealed["error"] and "KeyboardInterrupt" in sealed["error"]
+        assert chain == []
+
+    def test_the_run_lock_is_released_when_the_run_cannot_start(self):
+        from unittest.mock import MagicMock, patch
+
+        nodes, pipelines = _one_node_pipeline("ok", fakes.passthrough("ok"))
+        engine, _ = _engine(nodes, pipelines)
+        lock = MagicMock(lost=False)
+        engine._acquire_run_lock = lambda *a, **k: lock
+
+        with patch("ducta.core.executors.facade.RunLedger.start", side_effect=OSError("disk")):
+            with pytest.raises(OSError, match="disk"):
+                engine.run_pipeline("p")
+
+        lock.release.assert_called_once()

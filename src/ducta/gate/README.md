@@ -8,7 +8,7 @@
 |---|---|
 | **Purpose** | Unified, secure DataFrame read/write across formats and engines, plus a JDBC gateway |
 | **Layer** | Physical I/O engine |
-| **Depends on** | `setting` (schemas / `Context`), `mlrun` (data fingerprinting) |
+| **Depends on** | `mlrun` (data fingerprinting); `core.ledger` (best-effort, to record evidence gaps) — `gate` imports nothing from `setting` |
 | **Used by** | `core` (node input loading and output persistence) |
 | **Key entry points** | `InputLoader`, `DataOutputManager`, `ConnectionManager`, `handoff` |
 | **Install** | `pip install "ducta[spark]"` (add `database` for JDBC sources) |

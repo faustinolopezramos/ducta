@@ -19,51 +19,11 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from loguru import logger  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-
-class ProjectSchema(BaseModel):
-    """
-    Schema for project_settings.yaml — the file that marks a directory as a
-    Ducta project and stores project-level metadata.
-    """
-
-    name: str = Field(..., description="Project identifier (slug)", min_length=1, max_length=64)
-    description: Optional[str] = Field(
-        default=None,
-        description="Human-readable description of the project's purpose",
-        max_length=500,
-    )
-    variables: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Shared key/value variables available to all pipelines in this project. "
-            "These are merged with (and may override) workspace-level globals."
-        ),
-    )
-    metadata: Dict[str, Any] = Field(
-        default_factory=dict,
-        description=(
-            "Arbitrary metadata for documentation/governance (e.g. team, cost_center, owner, sla)."
-        ),
-    )
-    created_at: Optional[str] = Field(
-        default=None,
-        description="ISO-8601 UTC timestamp of project creation",
-    )
-    updated_at: Optional[str] = Field(
-        default=None,
-        description="ISO-8601 UTC timestamp of last settings update",
-    )
-
-    model_config = ConfigDict(
-        validate_assignment=True,
-        str_strip_whitespace=True,
-        extra="allow",
-    )
 
 
 class ExecutionMode(str, Enum):
@@ -277,10 +237,21 @@ class GlobalConfigSchema(BaseModel):
         _warn_unknown_keys(self, "global_config")
         return self
 
-    ml_info: Optional[Union[str, Dict[str, Any]]] = Field(
+    ml_info: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="ML info configuration: inline dict or path to a YAML/JSON/TOML file",
+        description="ML info configuration: an inline mapping",
     )
+
+    @field_validator("ml_info", mode="before")
+    @classmethod
+    def _ml_info_is_not_a_path(cls, value: Any) -> Any:
+        if isinstance(value, (str, Path)):
+            raise ValueError(
+                f"ml_info is an inline mapping; the path form ('{value}') is no longer read. "
+                "Move that file's content under settings.ml_info."
+            )
+        return value
+
     streaming_transform_modules: Optional[List[str]] = Field(
         default=None,
         description=(

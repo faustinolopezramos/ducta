@@ -52,10 +52,11 @@ import socket
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from loguru import logger
 
@@ -126,16 +127,27 @@ class _LeaseStore:
         raise NotImplementedError
 
 
+class LeaseGuardBusy(OSError):
+    """The guard of a lease stayed taken for too long: nothing was compared or changed."""
+
+
 class _FileLeaseStore(_LeaseStore):
     """Leases as files. Creation relies on ``O_CREAT | O_EXCL`` being atomic.
 
-    Replace is a rename-based compare-and-swap: move the current file aside,
-    check it is the version we expected, then create the new one exclusively.
-    If it was not ours, it is put back. The file is briefly absent during a
-    replace; a competing ``create`` in that instant wins, and the replacer sees
-    its own ``create`` fail and reports the lease as lost — which is the safe
-    outcome.
+    Replace and delete are a compare-and-swap done under a short-lived guard file
+    (``<lease>.guard``, itself created exclusively): read the lease, check it is the
+    version the caller expected, then ``os.replace`` it (or unlink it). The lease file
+    is therefore never absent while it is being renewed, so a run starting at that
+    instant cannot create its own and end up holding the same output. A guard left by
+    a process that died is taken over after ``GUARD_STALE_SECONDS``.
+
+    The expiry of a lease is read off the clock of each host: ``ttl_seconds`` must be
+    well above the clock skew between the hosts sharing the directory, or a live
+    lease can look expired to another host.
     """
+
+    GUARD_WAIT_SECONDS = 2.0
+    GUARD_STALE_SECONDS = 10.0
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
@@ -143,6 +155,67 @@ class _FileLeaseStore(_LeaseStore):
 
     def _path(self, name: str) -> Path:
         return self.directory / name
+
+    @contextmanager
+    def _guard(self, name: str) -> Iterator[None]:
+        guard = self._path(f"{name}.guard")
+        token = uuid.uuid4().hex.encode()
+        deadline = time.monotonic() + self.GUARD_WAIT_SECONDS
+        while True:
+            try:
+                fd = os.open(str(guard), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                if self._take_over_if_stale(guard):
+                    continue
+                if time.monotonic() >= deadline:
+                    raise LeaseGuardBusy(f"lease guard {guard.name} is busy")
+                time.sleep(0.02)
+                continue
+            try:
+                os.write(fd, token)
+            finally:
+                os.close(fd)
+            break
+        try:
+            yield
+        finally:
+            # Only our own guard: one held past GUARD_STALE_SECONDS may have been taken over.
+            try:
+                if guard.read_bytes() == token:
+                    guard.unlink(missing_ok=True)
+            except FileNotFoundError:
+                pass
+
+    def _take_over_if_stale(self, guard: Path) -> bool:
+        """Clear ``guard`` if a dead process left it. True when the caller may retry now.
+
+        The stale guard is renamed aside, not unlinked: two waiters can both judge it
+        stale, and the slower one's unlink would delete the guard the faster one had just
+        created. A rename moves one file atomically; whoever finds it moved a fresh guard
+        puts that guard back.
+        """
+        try:
+            if time.time() - guard.stat().st_mtime <= self.GUARD_STALE_SECONDS:
+                return False
+        except FileNotFoundError:
+            return True
+        aside = guard.with_name(f"{guard.name}.{uuid.uuid4().hex}.stale")
+        try:
+            os.rename(guard, aside)
+        except FileNotFoundError:
+            return True  # another waiter moved it first
+        try:
+            if time.time() - aside.stat().st_mtime > self.GUARD_STALE_SECONDS:
+                return True
+            # Another waiter cleared the stale guard and created its own before our
+            # rename: that live guard is what moved. Put it back (link fails if taken).
+            try:
+                os.link(aside, guard)
+            except OSError as exc:
+                logger.warning("run_lock: could not restore lease guard {}: {}", guard.name, exc)
+            return False
+        finally:
+            aside.unlink(missing_ok=True)
 
     def create(self, name: str, body: bytes) -> Optional[Any]:
         try:
@@ -165,39 +238,34 @@ class _FileLeaseStore(_LeaseStore):
 
     def replace(self, name: str, body: bytes, token: Any) -> Optional[Any]:
         path = self._path(name)
-        aside = path.with_name(f"{path.name}.{uuid.uuid4().hex}.cas")
-        try:
-            os.rename(path, aside)
-        except FileNotFoundError:
-            return None
-        if aside.read_bytes() != token:
-            # Someone else's lease: put it back untouched.
+        with self._guard(name):
             try:
-                os.link(aside, path)
-            except FileExistsError:
-                pass
-            except OSError:
-                self.create(name, aside.read_bytes())
-            aside.unlink(missing_ok=True)
-            return None
-        aside.unlink(missing_ok=True)
-        return self.create(name, body)
+                if path.read_bytes() != token:
+                    return None  # someone else's lease: untouched
+            except FileNotFoundError:
+                return None
+            tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+            try:
+                with open(tmp, "wb") as handle:
+                    handle.write(body)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, path)
+            finally:
+                tmp.unlink(missing_ok=True)
+            return body
 
     def delete(self, name: str, token: Any) -> None:
         path = self._path(name)
-        aside = path.with_name(f"{path.name}.{uuid.uuid4().hex}.cas")
         try:
-            os.rename(path, aside)
-        except FileNotFoundError:
-            return
-        if aside.read_bytes() != token:
-            try:
-                os.link(aside, path)
-            except FileExistsError:
-                pass
-            except OSError:
-                self.create(name, aside.read_bytes())
-        aside.unlink(missing_ok=True)
+            with self._guard(name):
+                try:
+                    if path.read_bytes() == token:
+                        path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    return
+        except LeaseGuardBusy:
+            logger.debug("run_lock: could not delete lease {}: guard busy", name)
 
 
 class _S3LeaseStore(_LeaseStore):
@@ -346,7 +414,10 @@ class _LeaseKeyLock(_KeyLock):
         holder = _parse(body)
         expires_at = holder.get("expires_at") if holder else None
         if isinstance(expires_at, (int, float)) and expires_at < _now():
-            new_token = self.store.replace(self.name, self._body(), token)
+            try:
+                new_token = self.store.replace(self.name, self._body(), token)
+            except LeaseGuardBusy:
+                return False, holder  # someone is renewing or taking it right now: poll again
             if new_token is not None:
                 logger.warning(
                     "run_lock: took over expired lease on '{}' from run {} (host {}, "
@@ -468,7 +539,13 @@ class RunLock:
     def _try_all(self) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
         """Acquire every key in order, or none of them."""
         for lock in self._locks:
-            acquired, holder = lock.try_acquire()
+            try:
+                acquired, holder = lock.try_acquire()
+            except BaseException:
+                # A store error on a later key must not leave the earlier ones held:
+                # the caller never gets a lock object to release.
+                self._release_held()
+                raise
             if not acquired:
                 self._release_held()
                 return lock.key, holder
