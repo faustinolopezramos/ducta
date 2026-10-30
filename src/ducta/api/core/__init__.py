@@ -18,12 +18,10 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from ducta.api.core.file_watcher import ConfigFileWatcher
 from ducta.api.core.git_sync import GitSyncManager
 from ducta.api.core.locks import ConfigLockManager
 
 __all__ = [
-    "ConfigFileWatcher",
     "GitSyncManager",
     "ConfigLockManager",
 ]

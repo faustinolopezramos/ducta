@@ -37,6 +37,7 @@ from ducta.api.exceptions import DuctaAPIError
 from ducta.api.models.responses import ErrorCode
 from ducta.core.errors import DuctaError as EngineError
 from ducta.mlrun import exceptions as mlops_exc
+from ducta.mlrun.validators import ValidationError as MLOpsValidationError
 
 # MLOps errors → HTTP status. Anything not listed is a server fault (500) and
 # its message is not echoed back to the client.
@@ -68,6 +69,7 @@ _MLOPS_STATUS: Tuple[Tuple[Tuple[Type[Exception], ...], int], ...] = (
             mlops_exc.SchemaValidationError,
             mlops_exc.RunLimitExceededError,
             mlops_exc.ConfigurationError,
+            MLOpsValidationError,
         ),
         400,
     ),

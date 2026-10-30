@@ -206,15 +206,6 @@ class StreamingProgressSink:
                 return None
             return sum(window) / len(window)
 
-    def snapshot_for_prefix(self, name_prefix: str) -> Dict[str, Dict[str, Any]]:
-        """Return latest progress for every query whose name starts with *name_prefix*."""
-        with self._lock:
-            return {
-                name: dict(value)
-                for name, value in self._latest.items()
-                if name.startswith(name_prefix)
-            }
-
     def forget(self, query_name: str) -> None:
         with self._lock:
             self._latest.pop(query_name, None)

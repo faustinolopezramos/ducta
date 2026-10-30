@@ -28,12 +28,11 @@ import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
 from ducta.core.context_utils import get_context_value as _ctx_get
-from ducta.setting.environments import sanitize_env_for_path
 
 # 1.6: an ML node that scored with a registered model records it under ``ml.model``
 # (source, name, the version the run pinned, artifact hash).
@@ -42,8 +41,6 @@ from ducta.setting.environments import sanitize_env_for_path
 # written and quarantined, gate verdicts), and an asynchronous streaming run is
 # certified when it ends.
 SCHEMA_VERSION = "1.8"
-DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
-LEGACY_FINGERPRINT_ALGORITHM = "legacy/v1"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
 _SIGNING_KEY_ENV = "DUCTA_CERTIFICATE_KEY"
@@ -329,31 +326,70 @@ def certificate_dir(context: Any, run_id: str) -> Path:
     return Path(settings.run_certificate_dir) / run_id
 
 
-def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[Optional[str], str, Path]]:
-    """Yield ``(env, run_id, run_dir)`` for every certificate under ``base_dir``."""
+def iter_certificate_dirs(base_dir: Path) -> Iterator[Tuple[str, Path]]:
+    """Yield ``(run_id, run_dir)`` for every certificate under ``base_dir``."""
     if not base_dir.is_dir():
         return
     for entry in sorted(base_dir.iterdir()):
-        if not entry.is_dir():
-            continue
-        if (entry / "certificate.json").is_file():
-            yield None, entry.name, entry
-            continue
-        for sub in sorted(entry.iterdir()):
-            if sub.is_dir() and (sub / "certificate.json").is_file():
-                yield entry.name, sub.name, sub
+        if entry.is_dir() and (entry / "certificate.json").is_file():
+            yield entry.name, entry
 
 
-def find_certificate_dir(base_dir: Path, run_id: str, env: Optional[str] = None) -> Optional[Path]:
+def find_certificate_dir(base_dir: Path, run_id: str) -> Optional[Path]:
     """Resolve a single run's certificate directory under ``base_dir``."""
-    if env:
-        candidate = base_dir / sanitize_env_for_path(env) / run_id
-        if (candidate / "certificate.json").is_file():
-            return candidate
-    for found_env, found_run_id, run_dir in iter_certificate_dirs(base_dir):
-        if found_run_id == run_id and (env is None or found_env == env):
-            return run_dir
-    return None
+    candidate = base_dir / run_id
+    return candidate if (candidate / "certificate.json").is_file() else None
+
+
+def search_environments(project_dir: Optional[Path]) -> List[str]:
+    """The canonical environments plus the ones the project declares.
+
+    Searching only the canonical ones missed every certificate of a declared
+    environment such as ``qa`` or ``sandbox_alice``.
+    """
+    from ducta.setting.environments import DEFAULT_ENVIRONMENTS
+
+    envs = list(DEFAULT_ENVIRONMENTS)
+    if project_dir is not None:
+        try:
+            from ducta.setting.project.loader import validate_project
+
+            declared = list(validate_project(project_dir).project.environments)
+        except Exception:  # noqa: BLE001 — a broken project still has the canonical ones
+            declared = []
+        envs += [e for e in declared if e not in envs]
+    return envs
+
+
+def candidate_runs_dirs(
+    project_dir: Path,
+    envs: Iterable[str],
+    runs_dir_for: Callable[[str], Optional[Path]],
+) -> List[Tuple[Optional[str], Path]]:
+    """``[(env, runs_dir), ...]`` to search for a project's run certificates.
+
+    ``runs_dir_for(env)`` is the environment's configured ``run_certificate_dir``
+    (None when it can't be resolved). A relative one is looked for under the
+    project root, where ``ducta start`` runs, and under ``<project>/<env>``,
+    where the API server runs a project whose relative paths only exist there
+    (``ducta.api.execution.runner.select_execution_cwd``). The CLI and the web
+    UI used to search one each, so neither saw the other's runs.
+    """
+    dirs: List[Tuple[Optional[str], Path]] = []
+    seen: set = set()
+    for env in envs:
+        runs_dir = runs_dir_for(env)
+        if runs_dir is None:
+            continue
+        if runs_dir.is_absolute():
+            bases = [runs_dir]
+        else:
+            bases = [project_dir / runs_dir, project_dir / env / runs_dir]
+        for candidate in bases:
+            if candidate.is_dir() and candidate not in seen:
+                seen.add(candidate)
+                dirs.append((env, candidate))
+    return dirs
 
 
 def is_enabled(context: Any) -> bool:
@@ -539,7 +575,7 @@ def verify_certificate_data(
 def logical_fingerprint(fp: Dict[str, Any]) -> tuple:
     """The reproducibility-relevant identity of a dataset."""
     return (
-        fp.get("algorithm") or LEGACY_FINGERPRINT_ALGORITHM,
+        fp.get("algorithm"),
         fp.get("schema_hash"),
         fp.get("row_count"),
         fp.get("content_hash") or fp.get("sample_hash"),

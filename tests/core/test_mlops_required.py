@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from ducta.core.errors import ExecutionError
 from ducta.core.execution.runner import NodeExecutor
 from ducta.core.executors.base import BaseExecutor
 from ducta.core.executors.batch import BatchExecutor
@@ -43,7 +44,7 @@ class TestStartMlopsIntegrationRequired:
             "ducta.core.executors.base.MLOpsExecutorIntegration",
             side_effect=RuntimeError("boom"),
         ):
-            with pytest.raises(RuntimeError, match="mlops_required=true"):
+            with pytest.raises(ExecutionError, match="mlops_required=true"):
                 executor._start_mlops_integration({}, "pipeline1", {})
 
     def test_required_true_raises_when_not_available(self):
@@ -53,7 +54,7 @@ class TestStartMlopsIntegrationRequired:
         with patch(
             "ducta.core.executors.base.MLOpsExecutorIntegration", return_value=fake_integration
         ):
-            with pytest.raises(RuntimeError, match="mlops_required=true"):
+            with pytest.raises(ExecutionError, match="mlops_required=true"):
                 executor._start_mlops_integration({}, "pipeline1", {})
 
     def test_required_false_returns_none_when_not_available(self):

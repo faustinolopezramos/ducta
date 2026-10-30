@@ -18,7 +18,7 @@ def _client() -> TestClient:
 
 
 def test_it_serves_the_format_2_schema(tmp_path, monkeypatch):
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"
@@ -30,7 +30,7 @@ def test_it_serves_the_format_2_schema(tmp_path, monkeypatch):
 
 
 def test_an_unknown_project_is_a_404(tmp_path, monkeypatch):
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"

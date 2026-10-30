@@ -17,7 +17,7 @@ under the License.
 
 SPDX-License-Identifier: Apache-2.0
 
-Initial schema — executions, execution_logs, users.
+The schema — executions, execution_logs, users.
 
 Revision ID: 0001
 Revises:
@@ -58,6 +58,10 @@ def upgrade() -> None:
         sa.Column("exit_code", sa.Integer(), nullable=True),
         sa.Column("duration_secs", sa.Float(), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
+        sa.Column("user_id", sa.Text(), nullable=True),
+        sa.Column("model_version", sa.Text(), nullable=True),
+        sa.Column("sweep_id", sa.Text(), nullable=True),
+        sa.Column("sweep_index", sa.Integer(), nullable=True),
         sa.PrimaryKeyConstraint("id", name="pk_executions"),
     )
     op.create_index("ix_executions_status", "executions", ["status"])
@@ -67,6 +71,8 @@ def upgrade() -> None:
         "executions",
         ["pipeline_name", "env"],
     )
+    op.create_index("ix_executions_user_id", "executions", ["user_id"])
+    op.create_index("ix_executions_sweep_id", "executions", ["sweep_id"])
 
     # ------------------------------------------------------------------
     # execution_logs
@@ -111,7 +117,7 @@ def upgrade() -> None:
         "users",
         sa.Column("id", sa.Text(), nullable=False),
         sa.Column("username", sa.Text(), nullable=False),
-        sa.Column("email", sa.Text(), nullable=True),
+        sa.Column("email", sa.Text(), nullable=False),
         sa.Column("password_hash", sa.Text(), nullable=False),
         sa.Column("roles", sa.Text(), nullable=False, server_default='["viewer"]'),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),

@@ -134,25 +134,25 @@ backend options of the MLOps module are read from environment variables by
    * - Variable
      - Default
      - Meaning
-   * - ``Ducta_MLOPS_BACKEND``
+   * - ``DUCTA_MLOPS_BACKEND``
      - ``local``
      - ``local``, ``databricks`` or ``distributed``.
-   * - ``Ducta_MLOPS_PATH``
+   * - ``DUCTA_MLOPS_PATH``
      - ``./mlops_data``
      - Root of experiments, registry and artifacts for ``ducta experiment`` and ``ducta model``.
-   * - ``Ducta_MLOPS_MODEL_RETENTION_DAYS``
+   * - ``DUCTA_MLOPS_MODEL_RETENTION_DAYS``
      - ``90``
      - Days to keep archived model versions before GC.
-   * - ``Ducta_MLOPS_MAX_VERSIONS``
+   * - ``DUCTA_MLOPS_MAX_VERSIONS``
      - ``100``
      - Versions kept per model.
-   * - ``Ducta_MLOPS_METRIC_BUFFER_SIZE``
+   * - ``DUCTA_MLOPS_METRIC_BUFFER_SIZE``
      - ``100``
      - Metrics buffered in memory before flushing to disk.
-   * - ``Ducta_MLOPS_AUTO_FLUSH``
+   * - ``DUCTA_MLOPS_AUTO_FLUSH``
      - ``true``
      - Flush metric buffers at the end of a run.
-   * - ``Ducta_MLOPS_CIRCUIT_BREAKER``
+   * - ``DUCTA_MLOPS_CIRCUIT_BREAKER``
      - ``false``
      - Protect the system during backend outages.
    * - ``DATABRICKS_CATALOG`` / ``DATABRICKS_SCHEMA`` / ``DATABRICKS_VOLUME``

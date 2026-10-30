@@ -29,40 +29,26 @@ from loguru import logger  # type: ignore
 from ducta.core.execution.cancellation import ensure_not_cancelled
 from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.settings import CoreSettings
+from ducta.reporting import get_reporter
 
 
 def _compact_view() -> bool:
     """Whether the CLI's compact view is on (never, outside the CLI)."""
     try:
-        from ducta.console.ux import view
-
-        return view.is_compact()
+        return get_reporter().is_compact()
     except Exception:  # noqa: BLE001 — presentation must never break a run
         return False
 
 
 def report_node_failure(error: Exception, node_name: str) -> None:
-    """Show a rich, developer-facing error breakdown for a failed node,
-    falling back to a plain log line if the console formatter is unavailable.
+    """Show a failed node's error the reporter's way (a rich, developer-facing
+    breakdown on the terminal), falling back to a plain log line.
 
     Shared by ``NodeExecutor`` and ``ParallelCoordinator``, which previously
     each carried an identical try/import/format/except-fallback copy of this.
     """
     try:
-        from ducta.console.ux import view
-
-        if view.is_compact():
-            # One line now; the full error once, when the command ends. Both
-            # the node runner and the coordinator report a failure, and the
-            # classic breakdown below printed it twice.
-            view.node_failed(node_name, error)
-            return
-
-        from ducta.console.ux.error_analyzer import format_error_for_developer
-        from ducta.console.ux.rich_logger import RichLoggerManager
-
-        console = RichLoggerManager.get_console()
-        format_error_for_developer(error, node_name, console)
+        get_reporter().node_failed(node_name, error)
     except Exception:
         logger.error("Node '{}' failed: {}", node_name, error)
 
@@ -100,32 +86,10 @@ class OutputWriter:
             return  # the compact view shows rows per output; --verbose shows schemas
 
         node_display_name = node_name.replace(".", " › ")
-        console = None
         try:
-            from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
-
-            console = RichLoggerManager.get_console()
-            console.print()
-            print_process_separator("schema", "DATA SCHEMA", node_display_name, console)
-            console.print()
-        except Exception as e:
-            logger.debug("Could not print schema separator: {}", e)
-
-        try:
-            if is_spark:
-                schema_output = ""
-                try:
-                    schema_output = result_df._jdf.schema().treeString()
-                except Exception as e:
-                    logger.debug("Could not extract schema tree string: {}", e)
-
-                from ducta.console.ux.schema_formatter import print_spark_schema
-
-                print_spark_schema(schema_output, title=node_display_name, console=console)
-            else:
-                from ducta.console.ux.schema_formatter import print_pandas_schema
-
-                print_pandas_schema(result_df, title=node_display_name, console=console)
+            reporter = get_reporter()
+            reporter.section("schema", "DATA SCHEMA", node_display_name)
+            reporter.schema(node_display_name, result_df, is_spark)
         except Exception as e:
             logger.warning("Could not format schema as table: {}", e)
 
@@ -134,8 +98,8 @@ class OutputWriter:
         result_df: Any,
         node_config: Dict[str, Any],
         node_name: str,
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Enhanced validation and output saving with ML metadata."""
@@ -180,18 +144,7 @@ class OutputWriter:
 
         self.output_manager.save_output(env, **output_params)
 
-        if _compact_view():
-            return  # the node's own line says where it wrote
         try:
-            from rich.text import Text  # type: ignore
-
-            from ducta.console.ux.rich_logger import RichLoggerManager
-
-            console = RichLoggerManager.get_console()
-            line = Text("  ")
-            line.append("✓ ", style="bright_green")
-            line.append(f"Output saved for node '{node_name}'")
-            console.print(line)
-            console.print()
+            get_reporter().output_saved(node_name)
         except Exception:
             logger.info("Output saved successfully for node '{}'", node_name)

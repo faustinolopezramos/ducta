@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Unified, secure DataFrame read/write across formats and engines, plus a JDBC gateway |
 | **Layer** | Physical I/O engine |
-| **Depends on** | `mlrun` (data fingerprinting); `core.ledger` (best-effort, to record evidence gaps) — `gate` imports nothing from `setting` |
-| **Used by** | `core` (node input loading and output persistence) |
+| **Depends on** | `mlrun` (data fingerprinting); `core.ledger` (best-effort, to record evidence gaps); `setting` only lazily (`find_nearest_project`, for a sources file's `.env`) — it cannot import `setting` when it loads (see `constants.py`) |
+| **Used by** | `core` (node input loading and output persistence), `check` (reading datasets), `setting` (connections), `stream` (MERGE, predicates), `api` (`.env` reading) |
 | **Key entry points** | `InputLoader`, `DataOutputManager`, `ConnectionManager`, `handoff` |
 | **Install** | `pip install "ducta[spark]"` (add `database` for JDBC sources) |
 
@@ -165,9 +165,9 @@ Define database credentials and query SQL databases securely:
 import os
 from ducta.gate.gateway import ConnectionManager
 
-# Set environmental credentials (required by Gateway)
-os.environ["POSTGRESQL_USER"] = "admin"
-os.environ["POSTGRESQL_PASSWORD"] = "secret"
+# The source's credentials: <SOURCE NAME>_USER / _PASSWORD (environment or the project's .env)
+os.environ["ANALYTICS_DB_USER"] = "admin"
+os.environ["ANALYTICS_DB_PASSWORD"] = "secret"
 
 # Initialize using sources config (downloads driver JAR dynamically)
 manager = ConnectionManager(config_path=Path("sources.yaml"))

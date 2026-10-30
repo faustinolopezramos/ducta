@@ -351,16 +351,6 @@ class UnifiedPipelineState:
         with self._lock:
             self._streaming_stopper = stopper
 
-    def get_batch_output_path(self, node_name: str) -> Optional[str]:
-        """Get the output path of a batch node."""
-        with self._lock:
-            return self._batch_outputs.get(node_name)
-
-    def is_node_ready(self, node_name: str) -> bool:
-        """Check if a node is ready to execute."""
-        with self._lock:
-            return self._are_dependencies_ready(node_name)
-
     def get_node_status(self, node_name: str) -> Optional[NodeStatus]:
         """Get the status of a node."""
         with self._lock:
@@ -380,19 +370,10 @@ class UnifiedPipelineState:
                 if node_type is None or info.node_type == node_type
             ]
 
-    def get_ready_nodes(self) -> List[str]:
-        """Get list of nodes ready for execution."""
-        with self._lock:
-            ready_nodes = []
-            for node_name, node in self._nodes.items():
-                if node.status == NodeStatus.PENDING and self._are_dependencies_ready(node_name):
-                    ready_nodes.append(node_name)
-            return ready_nodes
-
     def get_pipeline_summary(self) -> Dict[str, Any]:
         """Get summary of the pipeline state."""
         with self._lock:
-            summary = {
+            summary: Dict[str, Any] = {
                 "total_nodes": len(self._nodes),
                 "batch_nodes": len(
                     [n for n in self._nodes.values() if n.node_type == NodeType.BATCH]
@@ -405,9 +386,6 @@ class UnifiedPipelineState:
                 "pipeline_status": self._pipeline_status,
                 "circuit_breaker_state": self._circuit_breaker.get_state().value,
                 "circuit_breaker_failure_count": self._circuit_breaker.get_failure_count(),
-                # Legacy field for backward compatibility
-                "circuit_breaker_open": self._circuit_breaker.get_state()
-                == CircuitBreakerState.OPEN,
             }
 
             for status in NodeStatus:
@@ -415,27 +393,6 @@ class UnifiedPipelineState:
                 summary["status_breakdown"][status.value] = count
 
             return summary
-
-    def validate_cross_dependencies(self) -> List[str]:
-        """Validate cross-dependencies between batch and streaming nodes."""
-        warnings = []
-
-        with self._lock:
-            for streaming_node, batch_deps in self._cross_dependencies.items():
-                for batch_dep in batch_deps:
-                    batch_node = self._nodes.get(batch_dep)
-                    if not batch_node:
-                        warnings.append(
-                            f"Streaming node '{streaming_node}' depends on "
-                            f"non-existent batch node '{batch_dep}'"
-                        )
-                    elif batch_node.node_type != NodeType.BATCH:
-                        warnings.append(
-                            f"Cross-dependency error: '{streaming_node}' -> '{batch_dep}' "
-                            f"but '{batch_dep}' is not a batch node"
-                        )
-
-        return warnings
 
     @staticmethod
     def _stop_streaming_query(query_or_id: Any, stopper: Optional[Callable[[str], Any]]) -> bool:

@@ -111,10 +111,6 @@ class TestJDBCConnectorDriver:
         )
         assert c.get_driver_download_url() == "https://custom.url/driver.jar"
 
-    def test_get_default_port(self):
-        c = JDBCConnector("postgresql", "h", 1, "d", "u", "p")
-        assert c.get_default_port() == 5432
-
     # Golden values captured before deduplicating `jar`/`maven` into templates —
     # `get_driver_jar()`/`get_driver_download_url()` without overrides must keep
     # producing exactly these strings for every supported driver.
@@ -154,9 +150,6 @@ class TestJDBCConnectorDriver:
 
 
 class TestJDBCConnectorRegisterDriver:
-    def teardown_method(self):
-        JDBCConnector.DRIVERS.pop("fakedb", None)
-
     def test_register_driver_new_type_success(self):
         JDBCConnector.register_driver(
             "fakedb",
@@ -173,7 +166,9 @@ class TestJDBCConnectorRegisterDriver:
         c = JDBCConnector("fakedb", "h", 9999, "d", "u", "p")
         assert c.get_driver_class() == "com.fake.Driver"
         assert c.get_driver_jar() == "fakedb-1.0.0.jar"
-        assert c.get_default_port() == 9999
+
+    def teardown_method(self):
+        JDBCConnector.DRIVERS.pop("fakedb", None)
 
     def test_register_driver_missing_required_key_raises(self):
         with pytest.raises(ValueError, match="missing required key"):

@@ -163,12 +163,6 @@ class TestJSONAndCSVStreamingWriters:
 
 
 class TestStreamingWriterFactory:
-    def test_lists_builtin_formats(self, dict_context):
-        factory = StreamingWriterFactory(dict_context)
-        formats = factory.list_supported_formats()
-        for fmt in ("console", "delta", "parquet", "kafka", "json", "csv"):
-            assert fmt in formats
-
     def test_get_writer_known_format(self, dict_context):
         factory = StreamingWriterFactory(dict_context)
         assert isinstance(factory.get_writer("delta"), DeltaStreamingWriter)
@@ -192,37 +186,3 @@ class TestStreamingWriterFactory:
         factory = StreamingWriterFactory(dict_context)
         with pytest.raises(StreamingError, match="non-empty string"):
             factory.get_writer("")
-
-    def test_register_custom_writer_new_format(self, dict_context):
-        class CustomWriter(BaseStreamingWriter):
-            def write_stream(self, write_stream, config):
-                return "custom"
-
-        factory = StreamingWriterFactory(dict_context)
-        factory.register_custom_writer("custom", CustomWriter)
-        assert isinstance(factory.get_writer("custom"), CustomWriter)
-
-    def test_register_custom_writer_rejects_non_subclass(self, dict_context):
-        class NotAWriter:
-            pass
-
-        factory = StreamingWriterFactory(dict_context)
-        with pytest.raises(StreamingError, match="must inherit"):
-            factory.register_custom_writer("bad", NotAWriter)
-
-    def test_register_custom_writer_invalidates_cache(self, dict_context):
-        class WriterA(BaseStreamingWriter):
-            def write_stream(self, write_stream, config):
-                return "a"
-
-        class WriterB(BaseStreamingWriter):
-            def write_stream(self, write_stream, config):
-                return "b"
-
-        factory = StreamingWriterFactory(dict_context)
-        factory.register_custom_writer("custom", WriterA)
-        first = factory.get_writer("custom")
-        factory.register_custom_writer("custom", WriterB)
-        second = factory.get_writer("custom")
-        assert isinstance(first, WriterA)
-        assert isinstance(second, WriterB)

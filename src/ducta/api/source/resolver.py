@@ -32,6 +32,7 @@ from typing import ClassVar, Dict, List, Optional
 
 from loguru import logger
 
+from ducta import state
 from ducta.api.source.models import ResolvedSource, SourceInfo
 from ducta.api.utils.git_utils import sanitize_git_remote_url
 from ducta.api.utils.validators import URLValidationError, validate_git_url
@@ -112,7 +113,7 @@ _NO_REDIRECT_GIT_ENV: Dict[str, str] = {
 class SourceResolver:
     """Resolve a user-provided source (local path or Git URL) to a local directory."""
 
-    CLONES_DIR = Path.home() / ".ducta" / "clones"
+    CLONES_DIR = state.user_dir("clones")
 
     @classmethod
     def resolve(cls, source: str) -> ResolvedSource:

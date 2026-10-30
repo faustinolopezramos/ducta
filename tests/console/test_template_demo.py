@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 
 from ducta.check.core import DFAdapter
-from ducta.console.template import MedallionBasicTemplate, TemplateGenerator, TemplateType
+from ducta.console.templates import MedallionBasicTemplate, TemplateGenerator, TemplateType
 from ducta.setting.project.loader import compile_project, validate_project
 
 
@@ -117,7 +117,7 @@ class TestGeneratedCodeCallsRealAPIs:
         # The scaffolded check is the documented extension point. When it called
         # a non-existent method, its own `except` reported the AttributeError as
         # a data-quality failure.
-        from ducta.console.template import TemplateGenerator
+        from ducta.console.templates import TemplateGenerator
 
         generator = TemplateGenerator(tmp_path)
         generator._generate_etl_sample_code()
@@ -128,7 +128,7 @@ class TestGeneratedCodeCallsRealAPIs:
         assert hasattr(DFAdapter, "filter_where")
 
     def test_activation_instructions_match_the_generated_format(self, tmp_path):
-        from ducta.console.template import TemplateGenerator
+        from ducta.console.templates import TemplateGenerator
 
         generator = TemplateGenerator(tmp_path)
         generator._generate_etl_sample_code()

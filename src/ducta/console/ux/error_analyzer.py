@@ -269,7 +269,7 @@ def _classify_quality_outcome(
 
 
 def classify_error(error_msg: str, exception: Optional[Exception] = None) -> Dict[str, Any]:
-    result = {
+    result: Dict[str, Any] = {
         "error_type": "Unknown Error",
         "emoji": "❌",
         "color": "bright_red",
@@ -433,13 +433,6 @@ def print_error_report(
         for i, s in enumerate(suggestions[:5], 1):
             console.print(f"    {i}. {s}", style="bright_green")
     console.print()
-
-
-class SparkErrorAnalyzer:
-    analyze_error = staticmethod(classify_error)
-    print_error_report = staticmethod(print_error_report)
-    extract_python_traceback = staticmethod(extract_python_traceback)
-    extract_error_message = staticmethod(extract_error_message)
 
 
 def format_error_for_developer(

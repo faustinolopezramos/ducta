@@ -237,8 +237,12 @@ class UnifiedCLI:
     _set_spark_quiet = False
 
     def run(self, args: Optional[List[str]] = None) -> int:
+        from ducta.console.ux.reporter import ConsoleReporter
+        from ducta.reporting import set_reporter
+
         parsed_args: Optional[argparse.Namespace] = None
         original_cwd = Path.cwd()
+        previous_reporter = set_reporter(ConsoleReporter())
         try:
             parsed_args = self._parse_and_setup_logging(args)
             return self._dispatch_subcommand(parsed_args)
@@ -284,6 +288,7 @@ class UnifiedCLI:
             from ducta.console.ux import view
 
             view.set_mode(compact=False)
+            set_reporter(previous_reporter)
             if self._set_spark_quiet:
                 os.environ.pop("DUCTA_SPARK_QUIET", None)
 
@@ -361,7 +366,7 @@ class UnifiedCLI:
         try:
             if validator is not None:
                 validator(parsed_args)
-            return handler(parsed_args)
+            return int(handler(parsed_args))
         except ValidationError as e:
             from ducta.console.ux import view
 
@@ -498,13 +503,15 @@ class UnifiedCLI:
         try:
             from ducta.console.ui import launch_ui
 
-            return launch_ui(
-                host=getattr(parsed_args, "host", "127.0.0.1"),
-                port=getattr(parsed_args, "port", 8000),
-                open_browser=not getattr(parsed_args, "no_browser", False),
-                source=getattr(parsed_args, "source", None),
-                db_path=getattr(parsed_args, "db_path", None),
-                allow_unauthenticated=getattr(parsed_args, "allow_unauthenticated", False),
+            return int(
+                launch_ui(
+                    host=getattr(parsed_args, "host", "127.0.0.1"),
+                    port=getattr(parsed_args, "port", 8000),
+                    open_browser=not getattr(parsed_args, "no_browser", False),
+                    source=getattr(parsed_args, "source", None),
+                    db_path=getattr(parsed_args, "db_path", None),
+                    allow_unauthenticated=getattr(parsed_args, "allow_unauthenticated", False),
+                )
             )
         except ImportError as e:
             logger.error('The web UI needs the api extra: pip install "ducta[api]" ({})', e)

@@ -6,8 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from ducta.console.template import ConfigFormat, TemplateError, TemplateGenerator, TemplateType
+from ducta.console.core import ConfigFormat
 from ducta.console.template_layout import extract_profiles, layer_of, split_catalog
+from ducta.console.templates import TemplateError, TemplateGenerator, TemplateType
 from ducta.setting.project.loader import compile_project, validate_project
 
 _KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "hybrid_basic"]

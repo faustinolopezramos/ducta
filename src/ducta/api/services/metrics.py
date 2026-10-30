@@ -28,7 +28,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timedelta, timezone
 from statistics import median
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple, cast
 
 _TREND = 20
 
@@ -115,7 +115,7 @@ def project_metrics(
                 "runs": len(history),
                 "success_rate": round(ok / len(history), 3) if history else None,
                 "p50_seconds": round(median(durations), 3) if durations else None,
-                "p95_seconds": round(_p95(durations), 3) if durations else None,
+                "p95_seconds": round(cast(float, _p95(durations)), 3) if durations else None,
                 "last_status": history[-1][1].get("status") if history else None,
                 "last_run_at": history[-1][0].isoformat() if history else None,
                 "last_success_at": last_ok[pipeline].isoformat() if pipeline in last_ok else None,
@@ -161,7 +161,7 @@ def project_metrics(
                 **entry,
                 "runs": len(d),
                 "p50_seconds": round(median(d), 3) if d else None,
-                "p95_seconds": round(_p95(d), 3) if d else None,
+                "p95_seconds": round(cast(float, _p95(d)), 3) if d else None,
                 "trend": entry["trend"][-_TREND:],
             }
         )

@@ -35,7 +35,7 @@ class Credentials:
     #: Out of ``repr`` so a log line, a traceback or a debugger never prints them.
     username: Optional[str] = field(repr=False)
     password: Optional[str] = field(repr=False)
-    #: The variable prefix they came from: ``<SOURCE>`` or, deprecated, ``<TYPE>``.
+    #: The variable prefix they came from: ``<SOURCE>``.
     prefix: str
     #: ``environment``, ``.env`` or ``None`` when they are not set.
     where: Optional[str]
@@ -88,14 +88,11 @@ def read_dotenv(path: Path) -> Dict[str, str]:
     return values
 
 
-def resolve_credentials(
-    source_name: str, source_type: Optional[str], project_root: Path
-) -> Credentials:
-    """The source's ``<SOURCE>_USER`` / ``<SOURCE>_PASSWORD``, else the deprecated type-wide pair.
+def resolve_credentials(source_name: str, project_root: Path) -> Credentials:
+    """The source's ``<SOURCE>_USER`` / ``<SOURCE>_PASSWORD``.
 
     Each variable is looked up in the process environment first and then in
-    ``<project_root>/.env``. The two values always come from the same prefix, so a source's
-    own username is never paired with another source's password.
+    ``<project_root>/.env``.
     """
     dotenv = read_dotenv(Path(project_root) / ".env")
 
@@ -106,25 +103,10 @@ def resolve_credentials(
             return dotenv[var], ".env"
         return None, None
 
-    prefixes = [source_name.upper()]
-    if source_type and source_type.upper() != prefixes[0]:
-        prefixes.append(source_type.upper())
-
-    for index, prefix in enumerate(prefixes):
-        username, user_where = lookup(f"{prefix}_USER")
-        password, password_where = lookup(f"{prefix}_PASSWORD")
-        if username and password:
-            if index:
-                logger.warning(
-                    "Source '{}' has no '{}_USER'/'{}_PASSWORD'; falling back to the deprecated "
-                    "type-based '{}_USER'/'{}_PASSWORD'. Re-run 'ducta init ingestion setup' to "
-                    "migrate this connection's credentials.",
-                    source_name,
-                    prefixes[0],
-                    prefixes[0],
-                    prefix,
-                    prefix,
-                )
-            where = "environment" if "environment" in (user_where, password_where) else ".env"
-            return Credentials(username, password, prefix, where)
-    return Credentials(None, None, prefixes[0], None)
+    prefix = source_name.upper()
+    username, user_where = lookup(f"{prefix}_USER")
+    password, password_where = lookup(f"{prefix}_PASSWORD")
+    if username and password:
+        where = "environment" if "environment" in (user_where, password_where) else ".env"
+        return Credentials(username, password, prefix, where)
+    return Credentials(None, None, prefix, None)

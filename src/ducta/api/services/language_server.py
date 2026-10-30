@@ -131,6 +131,7 @@ class LocalLanguageServerPool:
                 stderr=asyncio.subprocess.DEVNULL,
             )
             assert proc.stdin and proc.stdout
+            stdin, stdout = proc.stdin, proc.stdout
 
             async def to_server() -> None:
                 while True:
@@ -138,12 +139,12 @@ class LocalLanguageServerPool:
                     if text is None:
                         return
                     json.loads(text)  # only well-formed JSON reaches the process
-                    proc.stdin.write(frame(text.encode("utf-8")))
-                    await proc.stdin.drain()
+                    stdin.write(frame(text.encode("utf-8")))
+                    await stdin.drain()
 
             async def to_browser() -> None:
                 while True:
-                    body = await read_message(proc.stdout)
+                    body = await read_message(stdout)
                     if body is None:
                         return
                     await send(body.decode("utf-8"))

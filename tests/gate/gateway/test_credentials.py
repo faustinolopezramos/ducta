@@ -31,40 +31,28 @@ class TestResolveCredentials:
     def test_the_environment_beats_the_env_file(self, tmp_path, monkeypatch):
         (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=from-file\n")
         monkeypatch.setenv("CRM_PASSWORD", "from-env")
-        creds = resolve_credentials("crm", "postgresql", tmp_path)
+        creds = resolve_credentials("crm", tmp_path)
         assert (creds.username, creds.password, creds.prefix) == ("alice", "from-env", "CRM")
         assert creds.where == "environment"
 
     def test_the_env_file_alone(self, tmp_path):
         (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=pw\n")
-        creds = resolve_credentials("crm", "postgresql", tmp_path)
+        creds = resolve_credentials("crm", tmp_path)
         assert (creds.username, creds.password, creds.where) == ("alice", "pw", ".env")
 
-    def test_the_deprecated_type_pair_is_the_last_resort(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("POSTGRESQL_USER", "legacy")
-        monkeypatch.setenv("POSTGRESQL_PASSWORD", "legacypw")
-        creds = resolve_credentials("crm", "postgresql", tmp_path)
-        assert (creds.username, creds.password, creds.prefix) == (
-            "legacy",
-            "legacypw",
-            "POSTGRESQL",
-        )
-
-    def test_a_pair_is_never_mixed_across_prefixes(self, tmp_path, monkeypatch):
-        """The source's own username with the type-wide password would sign in as nobody."""
-        monkeypatch.setenv("CRM_USER", "alice")
-        monkeypatch.setenv("POSTGRESQL_USER", "legacy")
-        monkeypatch.setenv("POSTGRESQL_PASSWORD", "legacypw")
-        creds = resolve_credentials("crm", "postgresql", tmp_path)
-        assert (creds.username, creds.password) == ("legacy", "legacypw")
+    def test_a_type_wide_pair_is_not_a_source_credential(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("POSTGRESQL_USER", "someone")
+        monkeypatch.setenv("POSTGRESQL_PASSWORD", "pw")
+        creds = resolve_credentials("crm", tmp_path)
+        assert (creds.username, creds.password) == (None, None)
 
     def test_nothing_set(self, tmp_path):
-        creds = resolve_credentials("crm", "postgresql", tmp_path)
+        creds = resolve_credentials("crm", tmp_path)
         assert (creds.username, creds.password, creds.where) == (None, None, None)
 
     def test_the_values_stay_out_of_repr(self, tmp_path):
         (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=hunter2\n")
-        assert "hunter2" not in repr(resolve_credentials("crm", None, tmp_path))
+        assert "hunter2" not in repr(resolve_credentials("crm", tmp_path))
 
 
 class TestProjectRootFor:

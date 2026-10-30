@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Orchestrate pipeline execution: DAG resolution, parallel node runs, gates, certificates |
 | **Layer** | Orchestration / Execution engine |
-| **Depends on** | `setting`, `gate`, `stream`, `check`, `mlrun` |
-| **Used by** | `console`, `api` |
+| **Depends on** | `setting` (`Context`, settings), `gate` (reads and writes), `check` (quality phases), `mlrun` (ML runs, preflight), `stream` (streaming and hybrid executors); prints progress through `ducta.reporting` |
+| **Used by** | `console`, `api`; lazily `gate` (`core.ledger`), `mlrun` (`core.certificate`), `setting` (`core.ml_contract`), `stream` (`core.ml_context`), `ai` (`DuctaError`) |
 | **Key entry points** | `PipelineExecutor`, `BatchExecutor` / `StreamingExecutor` / `HybridExecutor`, `NodeExecutor` |
 | **Install** | Bundled with the core engine (`pip install ducta`) |
 
@@ -43,7 +43,7 @@ Once your pipeline is configured, something has to actually *run* it — in the 
 Ducta Core is the orchestration layer, implementing:
 *   **Specialized executors**: `BatchExecutor`, `StreamingExecutor`, `HybridExecutor`, and the `PipelineExecutor` orchestrator that delegates by pipeline `type` and manages chain-reuse, preflight, and certificates (`executors/`).
 *   **Parallel node execution**: `NodeExecutor` + `ParallelCoordinator` drive a DAG-aware thread pool with a thread-safe execution state, per-node timeouts, quality-gate skip cascades, and structured per-node tracing (`execution/`).
-*   **Dependency resolution**: explicit `dependencies` merged with dataset-inferred edges, cycle detection, and topological sorting (`dependency_resolver.py`, `dependency_inference.py`, `pipeline_dependency_resolver.py`).
+*   **Dependency resolution**: explicit `dependencies` merged with dataset-inferred edges, cycle detection, and topological sorting (`dependency_resolver.py`; the dataset-inferred edges come from `setting/dependency_inference.py`).
 *   **Validation & preflight**: DAG/schema validation and a configuration preflight that fails fast with clear errors before any node runs (`pipeline_validator.py`, `split_validator.py`, `preflight.py`).
 *   **MLOps integration**: auto-detection of ML workloads, MLflow tracking, and experiment/run lifecycle wiring (`mlops_integration.py`, `mlops_auto_config.py`, `mlflow_node_executor.py`, `ml_context.py`).
 *   **Security & integrity**: `SecureModuleImporter` (whitelist prefixes, path-traversal guards, bounded cache) and HMAC-signed, hash-verified `RunCertificate`s (`import_security.py`, `certificate.py`).
@@ -75,12 +75,12 @@ Every directory Ducta itself writes to — as opposed to a node's own data outpu
 
 | What                          | Setting                | Default                                          | Visible? |
 |--------------------------------|-------------------------|---------------------------------------------------|----------|
-| Quality reports/baselines/history | `settings.quality.output.base_path` | `${output_path}/${environment}/quality` (an existing legacy `.quality` there is kept, so its history carries over) | yes — a project may want to browse or ship these |
+| Quality reports/baselines/history | `settings.quality.output.base_path` | `${output_path}/${environment}/quality` | yes — a project may want to browse or ship these |
 | Run certificates               | `run_certificate_dir`   | `${output_path}/${environment}/.ducta/runs`        | no — hidden, framework bookkeeping |
 | Chain-state markers            | `chain.state_dir`       | `${output_path}/${environment}/.ducta/chain_state` | no — hidden, framework bookkeeping |
 | Run-lock files / leases       | `run_lock.dir`          | `${output_path}/${environment}/.ducta/locks`       | no — hidden, framework bookkeeping |
 
-A value that doesn't itself reference `${environment}` (a fixed custom or legacy path) is still scoped per environment automatically — the resolved environment is appended as a path segment — so two environments can never collide in the same directory even with a non-default setting. See `CoreSettings._resolve_scoped_dir` for the resolution logic, and `PipelineExecutor._load_chain_state`/`certificate_dir` for the backward-compatible fallbacks that still read markers/certificates written under Ducta's pre-convention defaults (`.ducta/runs`, `.ducta/chain_state`, relative to the project root).
+A value that doesn't itself reference `${environment}` (a fixed custom path) is still scoped per environment automatically — the resolved environment is appended as a path segment — so two environments can never collide in the same directory even with a non-default setting. The defaults themselves live in one place, `ducta/state.py`; see `CoreSettings._resolve_scoped_dir` for the resolution logic.
 
 ### Run lock — one writer per output
 

@@ -42,10 +42,11 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta import state
 from ducta.stream.checkpoints import CheckpointManager
 from ducta.stream.context_utils import get_active_env, get_context_value
 
-JOURNAL_DIR_TEMPLATE = "${output_path}/${environment}/.ducta/streams"
+JOURNAL_DIR_TEMPLATE = state.STREAMS_DIR
 
 #: batches.jsonl is rotated to batches.1.jsonl past this size (one older file kept).
 MAX_BATCHES_BYTES = 20 * 1024 * 1024

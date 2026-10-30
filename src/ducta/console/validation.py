@@ -20,7 +20,6 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 import re
-from datetime import datetime
 from typing import Any, List, Optional, Tuple
 
 from loguru import logger
@@ -84,48 +83,3 @@ def validate_project_name(project_name: str) -> None:
         raise CoreValidationError(
             "Project name must contain only alphanumeric characters, underscores, or hyphens"
         )
-
-
-def validate_date_iso(date_str: Optional[str], field_name: str = "Date") -> Optional[datetime]:
-    if not date_str:
-        return None
-    try:
-        return datetime.fromisoformat(date_str)
-    except ValueError as e:
-        raise CoreValidationError(f"Invalid {field_name} format (expected YYYY-MM-DD): {e}")
-
-
-def validate_conflicting_options(
-    *args: Tuple[bool, str],
-    message: str = "Conflicting options specified",
-    raise_error: bool = False,
-) -> bool:
-    enabled_options = [name for flag, name in args if flag]
-    if len(enabled_options) > 1:
-        if raise_error:
-            raise CoreValidationError(f"{message}: {', '.join(enabled_options)}")
-        logger.warning("{}: {}", message, ", ".join(enabled_options))
-        return False
-    return True
-
-
-def _validate_choice(
-    value: Optional[str],
-    allowed: List[str],
-    field_name: str,
-    normalize,
-    raise_error: bool,
-) -> bool:
-    if value is None:
-        return True
-    if normalize(str(value)) not in allowed:
-        if raise_error:
-            raise CoreValidationError(
-                f"Invalid {field_name} '{value}'. Allowed: {', '.join(allowed)}"
-            )
-        return False
-    return True
-
-
-def validate_log_level(value: Optional[str], raise_error: bool = True) -> bool:
-    return _validate_choice(value, ALLOWED_LOG_LEVELS, "log level", str.upper, raise_error)

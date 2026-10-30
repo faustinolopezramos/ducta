@@ -85,11 +85,11 @@ def _resolve_storage_path(
     mlops_cfg = gs.get("mlops") or {}
     heuristic = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
     if heuristic:
-        return heuristic
+        return str(heuristic)
 
     from ducta.mlrun.config import MLOpsConfig
 
-    env_path = MLOpsConfig._env("Ducta_MLOPS_PATH")
+    env_path = MLOpsConfig._env("DUCTA_MLOPS_PATH")
     return env_path or DEFAULT_STORAGE_PATH
 
 

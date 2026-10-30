@@ -284,7 +284,7 @@ class TestCertificates:
             ducta_version="1.0.0",
         )
         cert.certificate_hash = cert.compute_hash()
-        path = write_certificate(cert, directory / "dev" / run_id)
+        path = write_certificate(cert, directory / run_id)
         if tamper:
             data = json.loads(path.read_text())
             data["status"] = "failed"

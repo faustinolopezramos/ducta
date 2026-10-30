@@ -25,7 +25,7 @@ import time
 import uuid
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Deque, Dict, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, Optional, Tuple, cast
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
@@ -333,7 +333,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         """Check rate limit and process request."""
 
         if not self.enabled:
-            return await call_next(request)
+            return cast(Response, await call_next(request))
 
         # Identify the client by IP (per-process, in-memory limiter).
         key = self._get_client_key(request)
@@ -373,7 +373,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(self.window_seconds)},
             )
 
-        return await call_next(request)
+        return cast(Response, await call_next(request))
 
     @staticmethod
     def _get_client_key(request: Request) -> str:

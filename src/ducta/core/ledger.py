@@ -42,7 +42,7 @@ migrate. Core code should use the ledger; the attributes remain the wire format.
 from __future__ import annotations
 
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -138,7 +138,7 @@ class RunLedger:
 
     @property
     def run_id(self) -> Optional[str]:
-        return self._get(RUN_ID_ATTR, None)
+        return cast(Optional[str], self._get(RUN_ID_ATTR, None))
 
     @run_id.setter
     def run_id(self, value: str) -> None:

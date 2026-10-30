@@ -24,6 +24,7 @@ from typing import Any, Optional
 
 from loguru import logger
 
+from ducta import state
 from ducta.console import execution
 from ducta.console.config import ConfigManager
 from ducta.console.core import CLIConfig, ConfigurationError, ExitCode
@@ -83,7 +84,7 @@ def _handle_list_pipelines(parsed_args, config_manager: ConfigManager) -> int:
         context = context_init.initialize(env)
         from ducta.core import PipelineExecutor
 
-        exec_obj = PipelineExecutor(context, config_manager.get_config_directory())
+        exec_obj = PipelineExecutor(context)
         pipeline_names = exec_obj.list_pipelines()
         if filter_pattern:
             pipeline_names = [p for p in pipeline_names if filter_pattern.lower() in p.lower()]
@@ -171,7 +172,8 @@ def _validation_document(env: str, reports: dict, error: Optional[BaseException]
     if error is not None:
         # A ProjectConfigError (one located string per problem) usually arrives
         # wrapped in a ConfigurationError: walk the cause chain to find it.
-        found, seen = error, set()
+        found: Optional[BaseException] = error
+        seen: set = set()
         while found is not None and not getattr(found, "problems", None) and id(found) not in seen:
             seen.add(id(found))
             found = found.__cause__ or found.__context__
@@ -253,7 +255,7 @@ def _handle_pipeline_info(parsed_args, config_manager: ConfigManager) -> int:
         context = context_init.initialize(env)
         from ducta.core import PipelineExecutor
 
-        exec_obj = PipelineExecutor(context, config_manager.get_config_directory())
+        exec_obj = PipelineExecutor(context)
         info = exec_obj.get_pipeline_info(parsed_args.pipeline)
         if not info.get("exists"):
             # Exit 0 with "Exists: False" read as success to any script.
@@ -287,7 +289,7 @@ def _handle_schema(parsed_args) -> int:
     out = getattr(parsed_args, "out", None)
     if out:
         write_schemas(Path(out))
-        logger.success("JSON Schemas written under {}", Path(out).resolve() / ".ducta/schema")
+        logger.success("JSON Schemas written under {}", Path(out).resolve() / state.SCHEMA_DIR)
     else:
         print(json.dumps(json_schema(), indent=2))
     return ExitCode.SUCCESS.value

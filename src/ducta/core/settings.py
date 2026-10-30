@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
+from ducta import state
 from ducta.core.context_utils import get_context_value as _get
 from ducta.setting.environments import sanitize_env_for_path
 from ducta.setting.interpolator import VariableInterpolator
@@ -38,9 +39,9 @@ DEFAULT_EXECUTION_TIMEOUT_SECONDS = 3_600
 DEFAULT_NODE_TIMEOUT_SECONDS = 1_800
 DEFAULT_MAX_PARALLEL_NODES = 4
 DEFAULT_MAX_STREAMING_PIPELINES = 5
-DEFAULT_CERTIFICATE_DIR = "${output_path}/${environment}/.ducta/runs"
-DEFAULT_CHAIN_STATE_DIR = "${output_path}/${environment}/.ducta/chain_state"
-DEFAULT_RUN_LOCK_DIR = "${output_path}/${environment}/.ducta/locks"
+DEFAULT_CERTIFICATE_DIR = state.RUNS_DIR
+DEFAULT_CHAIN_STATE_DIR = state.CHAIN_STATE_DIR
+DEFAULT_RUN_LOCK_DIR = state.LOCKS_DIR
 
 CHAIN_ON_GATE_BLOCKED_STOP = "stop"
 CHAIN_ON_GATE_BLOCKED_CONTINUE = "continue"
@@ -392,10 +393,9 @@ class CoreSettings:
         """Resolve MLflow enablement from the environment, then configuration."""
         import os
 
-        for name in ("DUCTA_MLFLOW_ENABLED", "Ducta_MLFLOW_ENABLED"):
-            raw = os.getenv(name)
-            if raw is not None and raw.strip():
-                return coerce_bool(name, raw, default=False)
+        raw = os.getenv("DUCTA_MLFLOW_ENABLED")
+        if raw is not None and raw.strip():
+            return coerce_bool("DUCTA_MLFLOW_ENABLED", raw, default=False)
         return coerce_bool("mlflow.enabled", mlflow_section.get("enabled"), default=False)
 
     @staticmethod

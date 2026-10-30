@@ -81,13 +81,8 @@ class DuctaError(Exception):
 # ── Configuration ────────────────────────────────────────────────────────────
 
 
-class ConfigurationError(DuctaError, ValueError):
-    """The project's configuration is wrong. Nothing ran, and nothing will.
-
-    Also a ``ValueError``, which is what these raised before this taxonomy
-    existed — so every ``except ValueError`` already written against the core
-    keeps working. Same idiom as ``ducta.mlrun.validators.ValidationError``.
-    """
+class ConfigurationError(DuctaError):
+    """The project's configuration is wrong. Nothing ran, and nothing will."""
 
     exit_code = 2  # ExitCode.CONFIGURATION_ERROR
     http_status = 400
@@ -148,13 +143,8 @@ class PreflightError(ConfigurationError):
 # ── Execution ────────────────────────────────────────────────────────────────
 
 
-class ExecutionError(DuctaError, RuntimeError):
-    """A pipeline started but did not complete its work.
-
-    Also a ``RuntimeError`` for backward compatibility with existing
-    ``except RuntimeError`` call sites, which is what the core raised for these
-    before the taxonomy existed.
-    """
+class ExecutionError(DuctaError):
+    """A pipeline started but did not complete its work."""
 
     exit_code = 4  # ExitCode.EXECUTION_ERROR
     http_status = 500
@@ -333,13 +323,8 @@ class MLOpsRequiredError(ExecutionError):
 # ── Data ─────────────────────────────────────────────────────────────────────
 
 
-class DataError(DuctaError, RuntimeError):
-    """The pipeline ran but the data did not meet expectations.
-
-    Also a ``RuntimeError``: the sanity-check path used to raise a bare
-    ``Exception``, and callers that broadened to ``except RuntimeError`` should
-    not start missing it.
-    """
+class DataError(DuctaError):
+    """The pipeline ran but the data did not meet expectations."""
 
     exit_code = 4
     http_status = 422

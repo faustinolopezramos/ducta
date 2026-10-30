@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple
 
-from ducta.ai.config import ANTHROPIC, AIConfig
+from ducta.ai.config import ANTHROPIC, AIConfig, config_path
 from ducta.ai.errors import AIEnvironmentError, AIError
 from ducta.ai.secrets import require_key
 
@@ -179,7 +179,7 @@ class OpenAICompatibleProvider:
         except httpx.TimeoutException as e:
             raise AIError(
                 f"{where} did not answer within {self.config.timeout_seconds:.0f}s "
-                "(raise timeout_seconds in ~/.ducta/ai.toml for a slow local model)",
+                f"(raise timeout_seconds in {config_path()} for a slow local model)",
                 cause=e,
             ) from e
         except (httpx.RequestError, httpx.InvalidURL) as e:
@@ -290,7 +290,7 @@ class OllamaProvider(OpenAICompatibleProvider):
         if prompt >= self.config.context_tokens:
             raise AIError(
                 f"The request ({prompt} tokens) fills Ollama's context window "
-                f"({self.config.context_tokens}); raise context_tokens in ~/.ducta/ai.toml"
+                f"({self.config.context_tokens}); raise context_tokens in {config_path()}"
             )
         return Completion(
             text=text,
@@ -421,7 +421,7 @@ class AnthropicProvider:
         except anthropic.APITimeoutError as e:  # a kind of APIConnectionError: before it
             raise AIError(
                 f"{self.config.endpoint} did not answer within "
-                f"{self.config.timeout_seconds:.0f}s (raise timeout_seconds in ~/.ducta/ai.toml)",
+                f"{self.config.timeout_seconds:.0f}s (raise timeout_seconds in {config_path()})",
                 cause=e,
             ) from e
         except anthropic.APIConnectionError as e:

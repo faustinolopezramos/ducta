@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
+from ducta import state
 from ducta.ai.builder import find_pipeline_file
 from ducta.ai.context import find_secrets, redact_code, redact_config
 from ducta.ai.errors import AINotFoundError
@@ -926,7 +927,7 @@ def _path(root: Path, pipeline: str, node: str) -> Path:
     def safe(s: str) -> str:
         return "".join(c for c in s if c.isalnum() or c in "-_.")
 
-    return Path(root) / ".ducta" / "ai" / "reviews" / f"{safe(pipeline)}__{safe(node)}.json"
+    return state.ai_dir(root, "reviews", f"{safe(pipeline)}__{safe(node)}.json")
 
 
 def save_review(root: Path, review: Review) -> Path:

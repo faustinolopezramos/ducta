@@ -31,6 +31,7 @@ from loguru import logger
 
 from ducta.gate.gateway.connector import JDBCConnector, check_jdbc_database, check_jdbc_host
 from ducta.gate.gateway.manager import ConnectionManager
+from ducta.setting.project.files import load_yaml
 
 # Sourced from JDBCConnector.DRIVERS so this module never drifts out of sync
 # with the driver registry (e.g. a type added via JDBCConnector.register_driver()).
@@ -262,7 +263,7 @@ class IngestionService:
         config: Any = {}
         if self.config_path.exists():
             with open(self.config_path, "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f) or {}
+                config = load_yaml(f) or {}
         if not isinstance(config, dict):
             raise IngestionServiceError(
                 f"{self.config_path} must be a mapping with a 'sources' key"

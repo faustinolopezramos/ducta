@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, Optional, cast
 
 from fastapi import Depends, HTTPException, Query, Request, WebSocket  # type: ignore
 from fastapi.security import OAuth2PasswordBearer  # type: ignore
@@ -163,7 +163,7 @@ WorkspaceManagerDep = Annotated[WorkspaceManager, Depends(get_workspace_manager)
 
 def get_execution_manager(request: Request) -> ExecutionManager:
     """Return the application-wide singleton ExecutionManager instance."""
-    return request.app.state.execution_manager
+    return cast(ExecutionManager, request.app.state.execution_manager)
 
 
 ExecutionManagerDep = Annotated[ExecutionManager, Depends(get_execution_manager)]

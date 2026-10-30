@@ -65,11 +65,6 @@ class TestFromConfig:
         gate = QualityGateEvaluator.from_config(report, {"max_errors": 5, "min_pass_rate": 0.9})
         assert gate.action == GateAction.BLOCK
 
-    def test_behavior_alias_block_maps_to_stop_all(self):
-        report = _report([CheckResult("a", passed=True)])
-        gate = QualityGateEvaluator.from_config(report, {"behavior": "block"})
-        assert gate.behavior == GateBehavior.STOP_ALL
-
     def test_default_behavior_skip_downstream(self):
         report = _report([CheckResult("a", passed=True)])
         gate = QualityGateEvaluator.from_config(report, {"max_errors": 0})
@@ -141,40 +136,24 @@ class TestDefaultsAreIndependent:
         assert not gate.passed
 
 
-class TestLegacyThresholdCoercion:
-    """`block_threshold`/`warn_threshold` are coerced with every other key.
+class TestGateKeysAreStrict:
+    """A gate key Ducta does not read is refused, never silently ignored: an ignored key
+    is a gate that does not do what its author wrote (`on_fail` once was, globally)."""
 
-    They used to be read raw and handed to `float()` at the use site, outside
-    the try/except that turns a bad value into a QualityConfigError — so a
-    malformed one raised a bare TypeError from inside the evaluation instead.
-    """
+    @pytest.mark.parametrize("key", ["block_threshold", "mandatory_checks", "behaviour"])
+    def test_an_unknown_key_is_refused(self, key):
+        from pydantic import ValidationError
 
-    def test_a_malformed_block_threshold_is_reported_as_a_config_error(self):
-        report = _report([CheckResult("a", passed=True)])
+        from ducta.setting.schemas import QualityGateSchema
 
-        with pytest.raises(QualityConfigError):
-            QualityGateEvaluator.from_config(
-                report, {"enabled": True, "block_threshold": "not-a-number"}
-            )
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            QualityGateSchema(**{key: 0.9})
 
-    def test_a_null_warn_threshold_is_reported_as_a_config_error(self):
-        report = _report([CheckResult("a", passed=True)])
+    def test_only_the_three_behaviors_are_valid(self):
+        from pydantic import ValidationError
 
-        with pytest.raises(QualityConfigError):
-            QualityGateEvaluator.from_config(report, {"enabled": True, "warn_threshold": []})
+        from ducta.setting.schemas import QualityGateSchema
 
-    def test_an_absent_threshold_is_simply_inactive(self):
-        report = _report([CheckResult("a", passed=True)])
-
-        gate = QualityGateEvaluator.from_config(report, {"enabled": True})
-
-        assert gate is not None
-        assert gate.passed
-
-    def test_a_configured_block_threshold_still_applies(self):
-        report = _report([CheckResult("a", passed=False, severity=CheckSeverity.WARNING)])
-
-        gate = QualityGateEvaluator.from_config(report, {"enabled": True, "block_threshold": 0.9})
-
-        assert gate is not None
-        assert not gate.passed
+        with pytest.raises(ValidationError):
+            QualityGateSchema(behavior="block")
+        assert QualityGateSchema(behavior="stop_all").behavior == "stop_all"

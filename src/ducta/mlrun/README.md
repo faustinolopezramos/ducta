@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Track experiments, version models, fingerprint data, and reproduce ML runs |
 | **Layer** | MLOps |
-| **Depends on** | Self-contained (optional MLflow / Databricks integrations) |
-| **Used by** | `core` (ML/hybrid runs), `gate` (fingerprinting), `setting` (hyperparams) |
+| **Depends on** | `setting` (`Context`, interpolation, `ModelRef`); lazily `core.certificate` (in `summary`); optional MLflow / Databricks integrations |
+| **Used by** | `core` (ML/hybrid runs), `gate` (fingerprinting), `stream` (scoring), `setting` (hyperparams, lazily), `console` and `api` (registry, tracking) |
 | **Key entry points** | `MLOpsContext`, `ExperimentTracker`, `ModelRegistry`, `DataFingerprint`, `split_dataframe` |
 | **Install** | `pip install "ducta[mlops]"` |
 
@@ -44,9 +44,9 @@ Ducta Mlrun is the ML lifecycle layer, implementing:
 *   **Experiment tracking**: `ExperimentTracker` with `Experiment`/`Run`/`Metric` models, buffered metrics, active-run limits, and stale-run cleanup (`experiment_tracking.py`).
 *   **Model registry**: `ModelRegistry` with `ModelVersion`, `ModelStage`, and `PromotionPolicy` for governed promotions (`model_registry.py`).
 *   **Pluggable storage**: `StorageBackend` registry with `LocalStorageBackend` and `DatabricksStorageBackend`, chosen automatically from the execution mode (`storage.py`, `config.py`).
-*   **Concurrency & resilience**: a portable `FileLock` (atomic `O_CREAT|O_EXCL`, stale-lock detection) with a `LockManager`, plus `RetryConfig`/`CircuitBreaker`/`ResourceLimits` (`concurrency.py`, `resilience.py`).
+*   **Concurrency & resilience**: a portable `FileLock` (atomic `O_CREAT|O_EXCL`, stale-lock detection) with a `LockManager`, plus `RetryConfig`/`CircuitBreaker` (`concurrency.py`, `resilience.py`).
 *   **MLflow bridge**: optional `MLflowPipelineTracker` / `MLflowNodeContext` that mirror runs to an MLflow tracking server when enabled (`mlflow.py`).
-*   **Reproducibility**: `DataFingerprint` (fast/full lineage hashing), `split_dataframe` (random/stratified/temporal/group), `HyperparamConfig` search specs, and baseline/drift comparison (`fingerprint.py`, `split.py`, `hyperparams.py`, `baseline.py`).
+*   **Reproducibility**: `DataFingerprint` (exact/sample/schema lineage hashing), `split_dataframe` (random/stratified/temporal/group), `HyperparamConfig` search specs, and baseline/drift comparison (`fingerprint.py`, `split.py`, `hyperparams.py`, `baseline.py`).
 *   **GC**: keep-newest-N / retention-days artifact garbage collection (`gc.py`).
 
 ---
@@ -65,7 +65,7 @@ Mlrun is driven by `MLOpsConfig` (constructed directly, `from_env`, or `from_con
 From a pipeline `Context`, storage location is resolved with a 4-tier fallback (`base_path` → the `mlops_path` setting → `output_path/<env>/<pipeline>` → `output_path/<env>`); if none resolve safely, MLOps stays uninitialized rather than writing to the wrong place.
 
 ### Relevant environment variables
-`Ducta_MLOPS_BACKEND`, `Ducta_MLOPS_PATH`, `DATABRICKS_CATALOG`, `DATABRICKS_SCHEMA`, `DATABRICKS_VOLUME`, `Ducta_MLOPS_MAX_ACTIVE_RUNS`, `Ducta_MLFLOW_ENABLED`, and the rest of the `Ducta_MLOPS_*` family.
+`DUCTA_MLOPS_BACKEND`, `DUCTA_MLOPS_PATH`, `DATABRICKS_CATALOG`, `DATABRICKS_SCHEMA`, `DATABRICKS_VOLUME`, `DUCTA_MLOPS_MAX_ACTIVE_RUNS`, `DUCTA_MLFLOW_ENABLED`, and the rest of the `DUCTA_MLOPS_*` family.
 
 ---
 
@@ -101,10 +101,10 @@ nodes:
 
 ```bash
 # Point tracking at a local dir or a cloud backend
-export Ducta_MLOPS_BACKEND=local
-export Ducta_MLOPS_PATH=./mlops_data
+export DUCTA_MLOPS_BACKEND=local
+export DUCTA_MLOPS_PATH=./mlops_data
 # Or mirror to MLflow:
-export Ducta_MLFLOW_ENABLED=true
+export DUCTA_MLFLOW_ENABLED=true
 ```
 
 ---

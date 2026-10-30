@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from typing import cast
 
 from fastapi import FastAPI, Request, Response  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
@@ -116,7 +117,7 @@ def register_middleware(app: FastAPI) -> None:
         response.headers["X-Frame-Options"] = _frame_options
         if is_production:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
+        return cast(Response, response)
 
     # Request ID + structured logging
     @app.middleware("http")

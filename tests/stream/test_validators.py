@@ -19,7 +19,7 @@ class TestValidateStreamingOutputConfig:
         validator.validate_streaming_node_config(
             {
                 "name": "n1",
-                "input": {"format": "file_stream", "path": "/tmp/in"},
+                "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                 "output": {"format": "console"},
             }
         )
@@ -34,7 +34,7 @@ class TestValidateStreamingOutputConfig:
             validator.validate_streaming_node_config(
                 {
                     "name": "n1",
-                    "input": {"format": "file_stream", "path": "/tmp/in"},
+                    "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                     "output": {"format": "console", "trigger": {"once": True}},
                 }
             )
@@ -44,7 +44,7 @@ class TestValidateStreamingOutputConfig:
             validator.validate_streaming_node_config(
                 {
                     "name": "n1",
-                    "input": {"format": "file_stream", "path": "/tmp/in"},
+                    "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                     "output": {"format": "console", "queryName": "my_query"},
                 }
             )
@@ -55,7 +55,7 @@ class TestValidateStreamingConfig:
         validator.validate_streaming_node_config(
             {
                 "name": "n1",
-                "input": {"format": "file_stream", "path": "/tmp/in"},
+                "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                 "output": {"format": "console"},
                 "streaming": {"watermark": {"column": "event_time", "delay": "10 seconds"}},
             }
@@ -64,29 +64,14 @@ class TestValidateStreamingConfig:
     def test_streaming_watermark_missing_column_rejected(self, validator):
         # Regression: docs/streaming.rst documents watermark under
         # streaming.watermark; it must be validated there too, not just under
-        # the legacy input.watermark location.
+        # input.watermark.
         with pytest.raises(StreamingValidationError, match="streaming.watermark.column"):
             validator.validate_streaming_node_config(
                 {
                     "name": "n1",
-                    "input": {"format": "file_stream", "path": "/tmp/in"},
+                    "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                     "output": {"format": "console"},
                     "streaming": {"watermark": {"delay": "10 seconds"}},
-                }
-            )
-
-    def test_input_watermark_still_validated(self, validator):
-        # Legacy location keeps working and keeps its own field prefix.
-        with pytest.raises(StreamingValidationError, match="input.watermark.column"):
-            validator.validate_streaming_node_config(
-                {
-                    "name": "n1",
-                    "input": {
-                        "format": "file_stream",
-                        "path": "/tmp/in",
-                        "watermark": {"delay": "10 seconds"},
-                    },
-                    "output": {"format": "console"},
                 }
             )
 
@@ -97,7 +82,7 @@ class TestValidateStreamingConfig:
         validator.validate_streaming_node_config(
             {
                 "name": "n1",
-                "input": {"format": "file_stream", "path": "/tmp/in"},
+                "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                 "output": {"format": "console"},
                 "streaming": {"trigger": {"interval": "30 seconds"}},
             }
@@ -111,7 +96,7 @@ class TestValidateStreamingConfig:
             validator.validate_streaming_node_config(
                 {
                     "name": "n1",
-                    "input": {"format": "file_stream", "path": "/tmp/in"},
+                    "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
                     "output": {"format": "console"},
                     "streaming": {"trigger": {"unrelated": True}},
                 }

@@ -348,7 +348,7 @@ class JDBCConnector:
     def get_jdbc_url(self) -> str:
         """Returns formatted JDBC URL for the configured database."""
         config = self.DRIVERS[self.source_type]
-        url = config["url"].format(host=self.host, port=self.port, database=self.database)
+        url: str = config["url"].format(host=self.host, port=self.port, database=self.database)
 
         params = self.effective_url_params()
         if params:
@@ -403,10 +403,6 @@ class JDBCConnector:
                 "(not file://, ftp:// or plain http://)."
             )
         return url
-
-    def get_default_port(self) -> int:
-        """Returns default port for the database type."""
-        return self.DRIVERS[self.source_type]["default_port"]
 
     #: Seconds a driver download may wait on the network before it counts as failed.
     DOWNLOAD_TIMEOUT_SECONDS = 60
@@ -567,4 +563,4 @@ class JDBCConnector:
 
     def _get_test_query(self) -> str:
         """Returns a simple SELECT query to test connection."""
-        return self.DRIVERS[self.source_type]["test_query"]
+        return str(self.DRIVERS[self.source_type]["test_query"])

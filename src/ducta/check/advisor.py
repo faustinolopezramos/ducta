@@ -29,7 +29,7 @@ def _percentile(values: list, pct: float) -> float:
     """Nearest-rank percentile of *values* (0.0 <= pct <= 1.0). Assumes non-empty."""
     ordered = sorted(values)
     idx = min(len(ordered) - 1, max(0, round(pct * (len(ordered) - 1))))
-    return ordered[idx]
+    return float(ordered[idx])
 
 
 class ThresholdAdvisor:
@@ -72,19 +72,13 @@ class ThresholdAdvisor:
             avg_score = sum(passing_scores) / len(passing_scores)
             p10_score = _percentile(passing_scores, 0.10)
 
-            # Propose block_threshold as p10 - 5% (buffer)
-            proposed_block = max(0.0, p10_score * 0.95)
-            # Propose warn_threshold as avg_score * 0.98
-            proposed_warn = max(proposed_block + 0.01, avg_score * 0.98)
+            # Propose score_threshold as p10 - 5% (buffer)
+            proposed_score = max(0.0, p10_score * 0.95)
 
-            result = {
+            result: Dict[str, Any] = {
                 "ready": True,
                 "runs_analyzed": len(history),
-                "proposed_thresholds": {
-                    "block_threshold": round(proposed_block, 4),
-                    "warn_threshold": round(proposed_warn, 4),
-                    "score_threshold": round(proposed_block, 4),  # Alias for block_threshold
-                },
+                "proposed_thresholds": {"score_threshold": round(proposed_score, 4)},
                 "stats": {
                     "avg_score": round(avg_score, 4),
                     "min_score": round(min(passing_scores), 4),
@@ -96,11 +90,10 @@ class ThresholdAdvisor:
             }
 
             logger.info(
-                "Advisor: Proposed thresholds for '{}' based on {} runs: block={}, warn={}",
+                "Advisor: Proposed score_threshold for '{}' based on {} runs: {}",
                 dataset_name,
                 len(history),
-                result["proposed_thresholds"]["block_threshold"],
-                result["proposed_thresholds"]["warn_threshold"],
+                result["proposed_thresholds"]["score_threshold"],
             )
 
             return result

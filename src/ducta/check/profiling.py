@@ -400,7 +400,7 @@ def _ceil_to(value: float, digits: int) -> float:
     import math
 
     factor = 10**digits
-    return math.ceil(value * factor) / factor
+    return float(math.ceil(value * factor) / factor)
 
 
 def _round(value: Optional[float]) -> Optional[float]:
@@ -483,10 +483,10 @@ def _provenance_note(
         columns = ", ".join(config.get("columns", []))
         return f"unique and non-null across all {profile.row_count} rows: {columns}"
     if name.startswith("null_rate"):
-        columns = config.get("columns") or []
+        null_columns = config.get("columns") or []
         if config.get("threshold") == 0.0:
-            return f"no nulls observed in {len(columns)} column(s)"
-        column = by_column.get(columns[0]) if columns else None
+            return f"no nulls observed in {len(null_columns)} column(s)"
+        column = by_column.get(null_columns[0]) if null_columns else None
         if column is not None:
             return (
                 f"{column.null_count}/{profile.row_count} nulls observed "

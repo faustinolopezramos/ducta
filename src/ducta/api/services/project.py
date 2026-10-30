@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -223,6 +223,8 @@ class ProjectService:
                 from git import Repo  # type: ignore
 
                 git_repo = Repo(str(self._workspace_path), search_parent_directories=True)
+                if git_repo.working_tree_dir is None:
+                    raise ValueError("the workspace repository has no working tree")
                 git_repo.index.remove(
                     [str(pdir.relative_to(Path(git_repo.working_tree_dir)))],
                     r=True,
@@ -295,7 +297,7 @@ class ProjectService:
                 f"Pipeline '{pipeline_name}' not found in project '{project_id}'",
                 detail={"project_id": project_id, "pipeline": pipeline_name},
             )
-        return pipelines[pipeline_name]
+        return cast(Dict[str, Any], pipelines[pipeline_name])
 
     def get_pipelines_commit_sha(self, project_id: str) -> Optional[str]:
         """Current version token of this project's pipelines, for OCC."""

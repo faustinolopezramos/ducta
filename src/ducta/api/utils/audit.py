@@ -28,6 +28,8 @@ from typing import Optional
 
 from loguru import logger
 
+from ducta import state
+
 _WRITE_LOCK = threading.Lock()
 
 
@@ -73,4 +75,4 @@ def write_audit_entry(
 
 
 def _default_audit_log_path() -> Path:
-    return Path.cwd().resolve() / ".ducta" / "audit.log"
+    return Path.cwd().resolve() / state.AUDIT_LOG

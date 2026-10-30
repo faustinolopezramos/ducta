@@ -271,7 +271,8 @@ def _parse_junit(report: Path, root: Path) -> List[Dict[str, Any]]:
                 break
         # xunit1 reports the test's own file and (0-based) line.
         file = case.get("file")
-        line = int(case.get("line")) + 1 if case.get("line") else None
+        raw_line = case.get("line")
+        line = int(raw_line) + 1 if raw_line else None
         if detail:  # the deepest frame in the project's own code: where it failed
             frames = [m for m in _FRAME.finditer(detail) if _inside(root, m["file"])]
             if frames:

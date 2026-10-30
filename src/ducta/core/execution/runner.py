@@ -24,7 +24,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, cast
 
 from loguru import logger  # type: ignore
 
@@ -136,8 +136,8 @@ class NodeExecutor:
     def execute_single_node(
         self,
         node_name: str,
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Execute a single node with enhanced ML support and error handling."""
@@ -499,8 +499,8 @@ class NodeExecutor:
         self,
         node_name: str,
         node_config: Dict[str, Any],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Run one node in a worker process; re-raise its failure here."""
@@ -594,7 +594,7 @@ class NodeExecutor:
                 "status": "failed",
                 "error": f"worker process exited with code {proc.exitcode} and no result",
             }
-        return outcome
+        return cast(Dict[str, Any], outcome)
 
     def _record_node_trace(
         self,
@@ -623,8 +623,8 @@ class NodeExecutor:
         execution_order: List[str],
         node_configs: Dict[str, Dict[str, Any]],
         dag: Dict[str, Set[str]],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """
@@ -705,7 +705,7 @@ class NodeExecutor:
         node = self.context.nodes_config.get(node_name)
         if not node:
             raise NodeNotFoundError(node_name, list(self.context.nodes_config.keys()))
-        return node
+        return cast(Dict[str, Any], node)
 
 
 def _stop_process(proc: Any) -> None:

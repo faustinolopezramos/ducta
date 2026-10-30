@@ -33,7 +33,6 @@ ALGO_SPARK_SAMPLE = "spark-minhash/v3"
 ALGO_PANDAS_EXACT = "pandas-sha256/v2"
 ALGO_PANDAS_SAMPLE = "pandas-systematic/v2"
 ALGO_SCHEMA_ONLY = "schema-only/v2"
-ALGO_LEGACY = "legacy/v1"
 #: A Delta table's identity at a commit: (table id, version). Reads only the
 #: transaction log — no data scanned — and pins the content exactly, since a
 #: Delta version is immutable and can be read back with ``versionAsOf``.
@@ -42,22 +41,11 @@ VALID_MODES = ("auto", "exact", "exact_crypto", "sample", "schema")
 #: ``auto`` hashes every row of a dataset up to this size, samples above it.
 DEFAULT_EXACT_MAX_BYTES = 10 * 1024**3
 _FULL_SCAN_MODES = frozenset({"exact", "exact_crypto"})
-_LEGACY_MODES = {"fast": "sample", "full": "exact", "exact-crypto": "exact_crypto"}
 
 
 def normalize_mode(mode: Optional[str]) -> str:
     """Coerce a configured ``fingerprint_mode`` to one of :data:`VALID_MODES`."""
     raw = (mode or "exact").strip().lower()
-    if raw in _LEGACY_MODES:
-        new = _LEGACY_MODES[raw]
-        logger.warning(
-            "fingerprint_mode='{old}' is deprecated; use '{new}'. Note that "
-            "'full' measured only the schema on Spark — '{new}' is stronger, not "
-            "equivalent.",
-            old=raw,
-            new=new,
-        )
-        return new
     if raw not in VALID_MODES:
         logger.warning(
             "Unknown fingerprint_mode '{mode}'; falling back to 'exact'. Valid: {valid}",
@@ -82,10 +70,6 @@ def detect_engine(df: Any) -> str:
     return "unknown"
 
 
-class FingerprintError(RuntimeError):
-    """Raised when a fingerprint could not be computed as requested."""
-
-
 @dataclass
 class DataFingerprint:
     """Fingerprint of a dataset for lineage tracking."""
@@ -100,7 +84,7 @@ class DataFingerprint:
     sample_hash: Optional[str] = None
     raw_file_hash: Optional[str] = None
     engine: str = "unknown"
-    algorithm: str = ALGO_LEGACY
+    algorithm: str = ""
     mode: str = "exact"
     content_hash: Optional[str] = None
     degraded_reason: Optional[str] = None
@@ -444,8 +428,10 @@ class DataFingerprint:
 
 def comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     """Whether two serialized fingerprints may be compared, and why not."""
-    algo_a = a.get("algorithm") or ALGO_LEGACY
-    algo_b = b.get("algorithm") or ALGO_LEGACY
+    algo_a = a.get("algorithm")
+    algo_b = b.get("algorithm")
+    if not algo_a or not algo_b:
+        return False, "no fingerprint algorithm recorded"
     if algo_a != algo_b:
         return False, f"algorithm differs: {algo_a} vs {algo_b}"
 

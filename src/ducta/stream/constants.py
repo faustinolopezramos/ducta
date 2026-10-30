@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from enum import Enum
-from typing import Any, Dict, Optional, TypedDict
+from typing import Any, Dict, List, Optional, TypedDict
 
 
 class PipelineType(Enum):
@@ -133,8 +133,15 @@ STREAMING_BACKPRESSURE_DEFAULTS: Dict[str, Dict[str, Any]] = {
 # available yet. Overridable via global_config.streaming_adaptive_base_interval.
 DEFAULT_ADAPTIVE_BASE_INTERVAL = "5 seconds"
 
+
 # Format-specific validations
-STREAMING_VALIDATIONS = {
+class _StreamingValidations(TypedDict):
+    min_trigger_interval_seconds: float
+    max_watermark_delay_minutes: float
+    mutually_exclusive_kafka_options: List[List[str]]
+
+
+STREAMING_VALIDATIONS: _StreamingValidations = {
     "min_trigger_interval_seconds": 1,
     "max_watermark_delay_minutes": 60,
     "mutually_exclusive_kafka_options": [["subscribe", "subscribePattern", "assign"]],

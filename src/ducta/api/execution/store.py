@@ -91,23 +91,6 @@ class ExecutionStore:
                 reverse=True,
             )
 
-    def list_paginated(self, skip: int = 0, limit: int = 50) -> tuple[List[ExecutionResponse], int]:
-        """Return paginated records (most-recent first) and total count.
-
-        Returns:
-            Tuple of (paginated_records, total_count)
-        """
-        _epoch = datetime.min.replace(tzinfo=timezone.utc)
-        with self._lock:
-            all_records = sorted(
-                self._executions.values(),
-                key=lambda e: e.started_at or _epoch,
-                reverse=True,
-            )
-            total = len(all_records)
-            paginated = all_records[skip : skip + limit] if limit > 0 else all_records[skip:]
-            return paginated, total
-
     # -- Maintenance -----------------------------------------------------------
 
     def prune_stale(self, retention_seconds: float) -> List[str]:

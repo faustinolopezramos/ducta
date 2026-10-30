@@ -23,7 +23,7 @@ Sanity and data-quality phases around a node's execution.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -41,7 +41,7 @@ from ducta.core.settings import CoreSettings
 class QualityCheckExecutor:
     """Runs pre- and post-execution quality checks for a node."""
 
-    DEFAULT_ML_SANITY_CONFIG = {
+    DEFAULT_ML_SANITY_CONFIG: Dict[str, Any] = {
         "enabled": True,
         "fail_fast": True,
         "checks": {"empty_dataset": {}},
@@ -207,7 +207,7 @@ class QualityCheckExecutor:
                 self.context._ducta_contract_results = store
             except (AttributeError, TypeError):
                 pass
-        return store["results"]
+        return cast(Dict[str, Any], store["results"])
 
     def _run_single_sanity(
         self,
@@ -228,7 +228,7 @@ class QualityCheckExecutor:
                 "sanity_checks.enabled=false on the node or "
                 "global_config.ml_default_sanity_checks=false.",
                 node_name,
-                ", ".join(sanity_config["checks"]),
+                ", ".join(str(check) for check in sanity_config["checks"]),
             )
         if not sanity_config or not sanity_config.get("enabled", True):
             return None

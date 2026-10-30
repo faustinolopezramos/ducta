@@ -731,10 +731,7 @@ Each run writes its reports next to the environment's data:
          baseline.json                # statistics drift_detection compares against
 
 Reports are scoped per pipeline, so two pipelines with a node of the same name
-never mix. ``settings.quality.output.base_path`` moves them elsewhere. A project
-that already keeps its reports in the older hidden ``<paths.output>/<env>/.quality/``
-goes on using it, so its baselines and history carry over; rename the directory to
-``quality`` to adopt the current default.
+never mix. ``settings.quality.output.base_path`` moves them elsewhere.
 
 ``ducta quality run`` on a bare file is not part of a pipeline run: it writes to
 ``<workspace>/.quality/_adhoc/`` (``--workspace``, default the current directory). Read them with ``ducta quality report``, ``trend`` and ``score``, or

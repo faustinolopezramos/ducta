@@ -87,7 +87,7 @@ def _set_token_cookie(
         max_age=token_response.expires_in,
         httponly=True,
         secure=_is_tls_request(request),
-        samesite="Lax",
+        samesite="lax",
         path="/api",
     )
 

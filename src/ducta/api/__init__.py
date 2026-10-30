@@ -54,7 +54,6 @@ _PUBLIC_API: dict[str, str] = {
     "Settings": "ducta.api.config",
     "get_settings": "ducta.api.config",
     # Core background services
-    "ConfigFileWatcher": "ducta.api.core",
     "ConfigLockManager": "ducta.api.core",
     "GitSyncManager": "ducta.api.core",
     # Database
@@ -111,20 +110,14 @@ _PUBLIC_API: dict[str, str] = {
     "CommitInfo": "ducta.api.models",
     "ConfigFileResponse": "ducta.api.models",
     "ConfigValidationResponse": "ducta.api.models",
-    "ConnectRequest": "ducta.api.models",
     "DiffResponse": "ducta.api.models",
     "ExecutionResponse": "ducta.api.models",
     "ExecutionStatus": "ducta.api.models",
-    "GitCommitInfo": "ducta.api.models",
     "GitCommitRequest": "ducta.api.models",
     "GitCommitResponse": "ducta.api.models",
-    "GitExternalChangesResponse": "ducta.api.models",
-    "GitHistoryResponse": "ducta.api.models",
     "GitStageRequest": "ducta.api.models",
     "GitStageResponse": "ducta.api.models",
-    "GitStatusResponse": "ducta.api.models",
     "LoginRequest": "ducta.api.models",
-    "StructureInfo": "ducta.api.models",
     "TokenResponse": "ducta.api.models",
     "User": "ducta.api.models",
     # Repositories
@@ -150,7 +143,7 @@ _PUBLIC_API: dict[str, str] = {
 if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
     from ducta.api.auth import AuthService, UserStore, get_user_store
     from ducta.api.config import Settings, get_settings
-    from ducta.api.core import ConfigFileWatcher, ConfigLockManager, GitSyncManager
+    from ducta.api.core import ConfigLockManager, GitSyncManager
     from ducta.api.db import get_db_session, get_engine, is_db_enabled
     from ducta.api.dependencies import (
         WebSocketAuthError,
@@ -192,20 +185,14 @@ if TYPE_CHECKING:  # pragma: no cover - for type checkers and IDE completion
         CommitInfo,
         ConfigFileResponse,
         ConfigValidationResponse,
-        ConnectRequest,
         DiffResponse,
         ExecutionResponse,
         ExecutionStatus,
-        GitCommitInfo,
         GitCommitRequest,
         GitCommitResponse,
-        GitExternalChangesResponse,
-        GitHistoryResponse,
         GitStageRequest,
         GitStageResponse,
-        GitStatusResponse,
         LoginRequest,
-        StructureInfo,
         TokenResponse,
         User,
     )
@@ -253,7 +240,6 @@ __all__ = [
     "get_user_store",
     "Settings",
     "get_settings",
-    "ConfigFileWatcher",
     "ConfigLockManager",
     "GitSyncManager",
     "get_db_session",
@@ -296,20 +282,14 @@ __all__ = [
     "CommitInfo",
     "ConfigFileResponse",
     "ConfigValidationResponse",
-    "ConnectRequest",
     "DiffResponse",
     "ExecutionResponse",
     "ExecutionStatus",
-    "GitCommitInfo",
     "GitCommitRequest",
     "GitCommitResponse",
-    "GitExternalChangesResponse",
-    "GitHistoryResponse",
     "GitStageRequest",
     "GitStageResponse",
-    "GitStatusResponse",
     "LoginRequest",
-    "StructureInfo",
     "TokenResponse",
     "User",
     "ConfigRepository",

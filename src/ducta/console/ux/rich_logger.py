@@ -21,9 +21,12 @@ SPDX-License-Identifier: Apache-2.0
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from loguru import Record
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.rule import Rule
@@ -78,7 +81,6 @@ DUCTA_THEME = Theme(
         "accent": ACCENT,
     }
 )
-Ducta_THEME = DUCTA_THEME
 
 ICONS = {
     "success": "✓",
@@ -111,7 +113,7 @@ class RichLoggerManager:
     # Rich decides colour: a terminal gets it; a pipe, a file or a CI log gets
     # plain text (FORCE_COLOR=1 brings it back). force_terminal=True wrote
     # escape codes into every redirected log.
-    console = Console(theme=Ducta_THEME, stderr=True)
+    console = Console(theme=DUCTA_THEME, stderr=True)
     _lock = threading.RLock()  # Reentrant lock for thread-safety
 
     @classmethod
@@ -125,7 +127,7 @@ class RichLoggerManager:
             return level.upper()
 
     @staticmethod
-    def _formatter(record: Dict[str, Any]) -> str:
+    def _formatter(record: "Record") -> str:
         """
         Custom formatter for Ducta CLI to provide an elegant signature.
         """
@@ -271,7 +273,7 @@ class RichLoggerManager:
 _WARNING_NO = 30
 
 
-def _compact_filter(record: Dict[str, Any]) -> bool:
+def _compact_filter(record: "Record") -> bool:
     """What the compact terminal shows (the log file is not filtered)."""
     extra = record["extra"]
     if extra.get("console") is False or extra.get("node_error"):
@@ -282,7 +284,7 @@ def _compact_filter(record: Dict[str, Any]) -> bool:
     if name.startswith("ducta.console"):
         return True  # the CLI's own messages are written for this terminal
     if name == "ducta" or name.startswith("ducta."):
-        return record["level"].no >= _WARNING_NO
+        return bool(record["level"].no >= _WARNING_NO)
     return True  # the user's node code: what it logs is about their data
 
 
@@ -346,12 +348,12 @@ def print_execution_header(
     if start_date or end_date:
         start = (
             start_date.strftime("%Y-%m-%d")
-            if hasattr(start_date, "strftime")
+            if start_date is not None and hasattr(start_date, "strftime")
             else str(start_date or "...")
         )
         end = (
             end_date.strftime("%Y-%m-%d")
-            if hasattr(end_date, "strftime")
+            if end_date is not None and hasattr(end_date, "strftime")
             else str(end_date or "...")
         )
         _print_row("period", f"{start} ➔ {end}")

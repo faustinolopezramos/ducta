@@ -489,7 +489,7 @@ class SchemaDriftCheck(BaseQualityCheck):
                 }
 
         issues = []
-        details = {
+        details: Dict[str, Any] = {
             "baseline_columns": sorted(baseline_cols),
             "current_columns": sorted(current_cols),
         }

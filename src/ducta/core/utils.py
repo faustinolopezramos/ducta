@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import functools
-from typing import Callable
+from typing import Any, Callable, Optional, cast
 from weakref import WeakKeyDictionary, WeakSet
 
 from loguru import logger  # type: ignore
@@ -47,7 +47,7 @@ __all__ = [
 ]
 
 
-def jit(func: Callable = None, **kwargs):
+def jit(func: Optional[Callable] = None, **kwargs):
     """
     Decorator to enable JIT compilation for Ducta transformation functions.
     Uses Numba to compile Python code to machine code for extreme performance.
@@ -124,4 +124,4 @@ def compile_function(func: Callable) -> Callable:
             _jit_compile_cache[func] = compiled
     except TypeError:  # pragma: no cover - not weak-referenceable
         pass
-    return compiled
+    return cast(Callable[..., Any], compiled)

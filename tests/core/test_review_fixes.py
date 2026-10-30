@@ -132,7 +132,7 @@ class TestMalformedDatasetDeclarationsAreNotSilent:
 
     def test_an_inline_connector_config_is_not_read_as_dataset_keys(self):
         """`{format: csv, path: ...}` values are a format and a path, not datasets."""
-        cfg = {"input": {"format": "file_stream", "path": "/data/in"}}
+        cfg = {"input": {"format": "file_stream", "options": {"path": "/data/in"}}}
         with captured_warnings() as warnings:
             assert extract_input_keys(cfg, node="streamer") == []
         assert warnings == []  # a known shape, not a mistake to warn about

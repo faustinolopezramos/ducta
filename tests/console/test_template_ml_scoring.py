@@ -7,7 +7,7 @@ import io
 from pathlib import Path
 
 from ducta.check.core import QUALITY_CHECKS_REGISTRY
-from ducta.console.template import (
+from ducta.console.templates import (
     MLScoringTemplate,
     TemplateFactory,
     TemplateGenerator,

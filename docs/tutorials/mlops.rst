@@ -127,7 +127,7 @@ that makes training reproducible:
          }
 
 Retention, buffering and backend options are environment variables
-(``Ducta_MLOPS_*``); the table is in :doc:`../mlops`.
+(``DUCTA_MLOPS_*``); the table is in :doc:`../mlops`.
 
 Ducta seeds ``random``, ``numpy`` and ``torch`` globally from ``random_seed``
 and gives each node a deterministic seed of its own.

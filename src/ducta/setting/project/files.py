@@ -80,17 +80,61 @@ def with_a_suffix(root: Path, reference: str) -> Path:
 # ── parsing ──────────────────────────────────────────────────────────────────
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """``SafeLoader`` that refuses a key written twice in one mapping.
+
+    PyYAML keeps the last value, so a second ``quality:`` under ``settings`` silently
+    replaced the first one. (TOML already refuses it; JSON is checked below.)
+    """
+
+    def construct_mapping(self, node: Any, deep: bool = False) -> Any:
+        if isinstance(node, yaml.MappingNode):
+            seen: Dict[Any, int] = {}
+            for key_node, _ in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue  # `<<:` merges are meant to be overridden
+                key = self.construct_object(key_node, deep=deep)
+                try:
+                    hash(key)
+                except TypeError:
+                    break  # SafeLoader reports the unhashable key itself, below
+                line = key_node.start_mark.line + 1
+                if key in seen:
+                    raise yaml.constructor.ConstructorError(
+                        None,
+                        None,
+                        f"duplicate key '{key}' (line {line}; first written on line {seen[key]})",
+                        key_node.start_mark,
+                    )
+                seen[key] = line
+        return super().construct_mapping(node, deep=deep)
+
+
+def load_yaml(stream: Any) -> Any:
+    """YAML text (or an open file) as Python data, refusing a key written twice."""
+    return yaml.load(stream, Loader=_UniqueKeyLoader)  # noqa: S506 — a SafeLoader
+
+
+def _unique_json_object(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in out:
+            raise ValueError(f"duplicate key '{key}'")
+        out[key] = value
+    return out
+
+
 def parse(path: Path, text: str) -> Any:
     """The document in ``text``; ``ValueError`` (with the position) when it is not valid."""
     kind = format_of(path)
     try:
         if kind == "YAML":
-            data = yaml.safe_load(text)
+            data = load_yaml(text)
         elif kind == "TOML":
             data = tomllib.loads(text)
         else:
-            data = json.loads(text) if text.strip() else None
-    except (yaml.YAMLError, tomllib.TOMLDecodeError, json.JSONDecodeError) as e:
+            data = json.loads(text, object_pairs_hook=_unique_json_object) if text.strip() else None
+    except (yaml.YAMLError, ValueError) as e:  # TOML/JSON decode errors are ValueErrors
         raise ValueError(f"not valid {kind} — {e}") from e
     if isinstance(data, dict):
         data.pop("$schema", None)  # JSON has no comments: this is how it names its schema

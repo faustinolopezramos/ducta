@@ -138,7 +138,7 @@ class PipelineValidator:
         """Validate hybrid pipeline and return detailed analysis."""
         policy = format_policy or FormatPolicy()
 
-        validation_result = {
+        validation_result: Dict[str, Any] = {
             "is_valid": True,
             "errors": [],
             "warnings": [],

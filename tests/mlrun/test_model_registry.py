@@ -253,19 +253,6 @@ class TestListModelVersionsLite:
             assert lite[version]["created_at"] == full[version]["created_at"]
             assert lite[version]["size_bytes"] == len(b"v1")  # "v1"/"v2" are both 2 bytes
 
-    def test_falls_back_to_full_read_for_legacy_index_without_size_bytes(self, registry, tmp_path):
-        _register(registry, tmp_path, content=b"v1")
-
-        # Simulate a legacy on-disk index predating the size_bytes column.
-        index_path = "model_registry/models/index.parquet"
-        df = registry.storage.read_dataframe(index_path)
-        df = df.drop(columns=["size_bytes"])
-        registry.storage.write_dataframe(df, index_path, mode="overwrite")
-
-        lite = registry.list_model_versions_lite("my-model")
-        assert len(lite) == 1
-        assert lite[0]["size_bytes"] == len(b"v1")
-
     def test_unknown_model_raises(self, registry):
         from ducta.mlrun.exceptions import ModelNotFoundError
 

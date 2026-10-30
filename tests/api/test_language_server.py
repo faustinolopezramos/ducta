@@ -53,7 +53,7 @@ FAKE_SERVER = textwrap.dedent(
 
 @pytest.fixture
 def project(tmp_path, monkeypatch):
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"

@@ -29,6 +29,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ducta import state
 from ducta.api.execution.runner import normalize_execution_context_paths, select_execution_cwd
 from ducta.api.workspace.manager import WorkspaceManager
 
@@ -72,7 +73,7 @@ def dataset_location(
             rel = Path(path).relative_to(Path(output))
         except ValueError:
             rel = Path(*name.split("."))  # as redirect_to_scratch places it
-        path = str(Path(output) / env / ".ducta" / "scratch" / rel)
+        path = str(state.scratch_dir(output, env) / rel)
     return path, _fmt(entry.get("format"))
 
 

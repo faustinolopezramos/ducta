@@ -11,7 +11,7 @@ import subprocess
 
 import pytest
 
-from ducta.console.template import TemplateGenerator, TemplateType
+from ducta.console.templates import TemplateGenerator, TemplateType
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
 

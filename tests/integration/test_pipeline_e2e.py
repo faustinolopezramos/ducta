@@ -111,7 +111,7 @@ class TestPipelineRun:
         runs = list(iter_certificate_dirs(scaffolded / "data" / "dev" / ".ducta" / "runs"))
         assert runs, "no run certificate directory was created"
 
-        _env, run_id, run_dir = runs[-1]
+        run_id, run_dir = runs[-1]
         certificate = json.loads((run_dir / "certificate.json").read_text())
         assert certificate["status"] == "success"
         assert certificate["certificate_hash"]

@@ -56,10 +56,8 @@ try:
     from ducta.mlrun.mlflow import MLflowPipelineTracker
 
     MLFLOW_INTEGRATION_AVAILABLE = True
-except ImportError:
+except ImportError:  # the mlops extra is not installed: used only behind this flag
     MLFLOW_INTEGRATION_AVAILABLE = False
-    MLflowNodeExecutor = None
-    MLflowPipelineTracker = None
 
 
 class _MLOpsRequiredError(Exception):

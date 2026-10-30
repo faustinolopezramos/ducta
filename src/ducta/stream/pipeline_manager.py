@@ -85,7 +85,7 @@ class QueryHealthMonitor:
         # batchId (no new batch runs) but Spark still reports progress every few
         # seconds, so a moving timestamp is proof of life that batchId alone is not.
         self.last_progress_stamp: Optional[str] = None
-        self.error_message = None
+        self.error_message: Optional[str] = None
         self._lock = Lock()
 
     def _is_query_active(self) -> bool:
@@ -187,7 +187,7 @@ class StreamingPipelineManager:
         policy = get_context_value(context, "format_policy", None)
         self.validator = validator or StreamingValidator(policy)
         self.progress_sink = StreamingProgressSink()
-        self._progress_listener = None
+        self._progress_listener: Optional[Any] = None
         self.query_manager = StreamingQueryManager(
             context, validator=self.validator, progress_sink=self.progress_sink
         )
@@ -1614,7 +1614,7 @@ class StreamingPipelineManager:
                 published = pipeline_info is not None and not self._stop_requested_locked(
                     execution_id
                 )
-                if published:
+                if published and pipeline_info is not None:
                     pipeline_info["queries"][node_name] = query
                     self._own_query_locked(execution_id, node_name, query)
                     failed_nodes = pipeline_info.get("failed_nodes") or {}
@@ -1849,60 +1849,6 @@ class StreamingPipelineManager:
             logger.error(f"Error listing running pipelines: {str(e)}")
             return []
 
-    def get_pipeline_metrics(self, execution_id: str) -> Optional[Dict[str, Any]]:
-        try:
-            pipeline_info = self.get_pipeline_status(execution_id)
-            if not pipeline_info:
-                return None
-
-            metrics = {
-                "execution_id": execution_id,
-                "pipeline_name": pipeline_info["pipeline_name"],
-                "uptime_seconds": pipeline_info.get("uptime_seconds", 0),
-                "status": pipeline_info["status"],
-                "total_queries": pipeline_info.get("total_queries", 0),
-                "active_queries": pipeline_info.get("active_queries", 0),
-                "failed_queries": pipeline_info.get("failed_queries", 0),
-                "query_metrics": {},
-                "performance_metrics": {},
-            }
-
-            for query_name, query_status in pipeline_info.get("query_statuses", {}).items():
-                if query_status.get("isActive") and query_status.get("lastProgress"):
-                    progress = query_status["lastProgress"]
-                    metrics["query_metrics"][query_name] = {
-                        "batchId": progress.get("batchId"),
-                        "inputRowsPerSecond": progress.get("inputRowsPerSecond"),
-                        "processedRowsPerSecond": progress.get("processedRowsPerSecond"),
-                        "timestamp": progress.get("timestamp"),
-                        "durationMs": progress.get("durationMs", {}),
-                        "eventTime": progress.get("eventTime", {}),
-                        "stateOperators": progress.get("stateOperators", []),
-                    }
-
-            total_input_rate = sum(
-                float(qm.get("inputRowsPerSecond", 0) or 0)
-                for qm in metrics["query_metrics"].values()
-            )
-            total_processing_rate = sum(
-                float(qm.get("processedRowsPerSecond", 0) or 0)
-                for qm in metrics["query_metrics"].values()
-            )
-
-            metrics["performance_metrics"] = {
-                "total_input_rate": total_input_rate,
-                "total_processing_rate": total_processing_rate,
-                "processing_efficiency": (
-                    (total_processing_rate / total_input_rate * 100) if total_input_rate > 0 else 0
-                ),
-                "health_score": self._calculate_health_score(pipeline_info),
-            }
-
-            return metrics
-        except Exception as e:
-            logger.error(f"Error getting pipeline metrics for '{execution_id}': {str(e)}")
-            return None
-
     def _calculate_health_score(self, pipeline_info: Dict[str, Any]) -> float:
         try:
             total_queries = pipeline_info.get("total_queries", 0)
@@ -1910,7 +1856,7 @@ class StreamingPipelineManager:
             if total_queries == 0:
                 return 100.0
             healthy_queries = max(0, total_queries - failed_queries)
-            return round(max(0.0, min(100.0, (healthy_queries / total_queries) * 100.0)), 2)
+            return float(round(max(0.0, min(100.0, (healthy_queries / total_queries) * 100.0)), 2))
         except Exception:
             return 0.0
 

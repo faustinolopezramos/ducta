@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -330,12 +330,4 @@ class StreamingWriterFactory(StreamingHandlerFactory):
 
     def get_writer(self, format_name: str) -> BaseStreamingWriter:
         """Get streaming writer for specified format."""
-        return self.get(format_name)
-
-    def register_custom_writer(self, format_name: str, writer_class, *args, **kwargs):
-        """Register a custom streaming writer.
-
-        ``*args`` and ``**kwargs`` are stored and forwarded to the writer
-        constructor on its first use, alongside the mandatory ``context`` arg.
-        """
-        self.register_custom(format_name, writer_class, *args, **kwargs)
+        return cast(BaseStreamingWriter, self.get(format_name))

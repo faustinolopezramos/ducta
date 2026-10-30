@@ -62,7 +62,7 @@ def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
 
             from ducta.core import PipelineExecutor
 
-            project_root, context = bootstrap_worker_context(payload, ensure_output_dir=True)
+            _project_root, context = bootstrap_worker_context(payload, ensure_output_dir=True)
 
             read_fallback_paths = payload.get("read_fallback_paths") or []
             if read_fallback_paths:
@@ -71,7 +71,7 @@ def run_trial_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
                 if isinstance(settings, dict):
                     settings["_read_fallback_paths"] = read_fallback_paths
 
-            exec_obj = PipelineExecutor(context, str(project_root))
+            exec_obj = PipelineExecutor(context)
             run = exec_obj.run_pipeline(
                 pipeline_name=payload["pipeline"],
                 node_name=payload.get("node"),

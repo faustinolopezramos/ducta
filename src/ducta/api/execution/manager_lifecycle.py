@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 
@@ -35,8 +35,13 @@ from ducta.api.execution.queue import ExecutionQueue
 from ducta.api.execution.store import ExecutionStore
 from ducta.api.execution.timeout import get_timeout_manager
 
+if TYPE_CHECKING:
+    from ducta.api.execution.manager_state import _ManagerState as _Base
+else:
+    _Base = object
 
-class _LifecycleMixin:
+
+class _LifecycleMixin(_Base):
     """ExecutionManager construction, startup/shutdown, and the maintenance loop."""
 
     def __init__(self) -> None:
@@ -78,11 +83,12 @@ class _LifecycleMixin:
         try:
             from ducta.api.db.engine import get_engine, is_db_enabled
 
-            if is_db_enabled():
+            engine = get_engine() if is_db_enabled() else None
+            if engine is not None:
                 from ducta.api.db.stores.execution_store import DatabaseExecutionStore
 
                 return DatabaseExecutionStore(
-                    engine=get_engine(),  # pyrefly: ignore [bad-argument-type]
+                    engine=engine,
                     max_size=settings.max_executions_in_memory,
                     log_batch_size=settings.execution_log_db_batch_size,
                 )

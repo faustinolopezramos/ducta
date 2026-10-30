@@ -19,7 +19,6 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import atexit
-import bisect
 import json
 import math
 import operator
@@ -30,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Generator, List, Optional, Set
+from typing import Any, Dict, Generator, List, Optional, Set, cast
 from uuid import uuid4
 
 import pandas as pd  # type: ignore
@@ -127,54 +126,14 @@ class MetricIndex:
         """Initialize empty indexes with an optional per-key capacity limit."""
         self.max_size = max_size
         self.by_key: Dict[str, deque] = {}
-        self.by_step: Dict[str, Dict[int, "Metric"]] = {}
-        self._sorted_steps: Dict[str, List[int]] = {}
         self._lock = threading.RLock()
 
     def index_metric(self, metric: "Metric") -> None:
-        """
-        Add metric to indexes.
-        """
+        """Add metric to the index (the oldest drops out past ``max_size``)."""
         with self._lock:
-            key = metric.key
-            if key not in self.by_key:
-                self.by_key[key] = deque(maxlen=self.max_size)
-                self.by_step[key] = {}
-                self._sorted_steps[key] = []
-
-            if len(self.by_key[key]) == self.max_size:
-                evicted = self.by_key[key][0]
-                if self.by_step[key].get(evicted.step) is evicted:
-                    del self.by_step[key][evicted.step]
-                    idx = bisect.bisect_left(self._sorted_steps[key], evicted.step)
-                    if (
-                        idx < len(self._sorted_steps[key])
-                        and self._sorted_steps[key][idx] == evicted.step
-                    ):
-                        self._sorted_steps[key].pop(idx)
-
-            self.by_key[key].append(metric)
-
-            step_is_new = metric.step not in self.by_step[key]
-            self.by_step[key][metric.step] = metric
-            if step_is_new:
-                bisect.insort(self._sorted_steps[key], metric.step)
-
-    def get_by_key(self, key: str) -> List["Metric"]:
-        """Get all metrics for a key (O(1) lookup + deque copy)."""
-        with self._lock:
-            return list(self.by_key.get(key, []))
-
-    def get_by_step_range(self, key: str, start_step: int, end_step: int) -> List["Metric"]:
-        """Get metrics within step range. O(log n + k) — no per-call sort."""
-        with self._lock:
-            step_index = self.by_step.get(key)
-            sorted_steps = self._sorted_steps.get(key)
-            if not step_index or not sorted_steps:
-                return []
-            left = bisect.bisect_left(sorted_steps, start_step)
-            right = bisect.bisect_right(sorted_steps, end_step)
-            return [step_index[s] for s in sorted_steps[left:right]]
+            if metric.key not in self.by_key:
+                self.by_key[metric.key] = deque(maxlen=self.max_size)
+            self.by_key[metric.key].append(metric)
 
     def get_latest(self, key: str) -> Optional["Metric"]:
         """Get latest metric for a key (O(1) access to deque tail)."""
@@ -196,8 +155,6 @@ class MetricIndex:
         """Clear all indexes."""
         with self._lock:
             self.by_key.clear()
-            self.by_step.clear()
-            self._sorted_steps.clear()
 
 
 class RunStatus(str, Enum):
@@ -237,7 +194,7 @@ class Run:
     end_time: Optional[str] = None
     duration_seconds: Optional[float] = None
     parameters: Dict[str, Any] = field(default_factory=dict)
-    metrics: Dict[str, List[Metric]] = field(default_factory=dict)
+    metrics: Dict[str, "MetricRollingWindow"] = field(default_factory=dict)
     artifacts: List[str] = field(default_factory=list)
     tags: Dict[str, str] = field(default_factory=dict)
     parent_run_id: Optional[str] = None
@@ -261,15 +218,9 @@ class Run:
             else:
                 d[f.name] = val
         d["status"] = self.status.value
-        # v2.1+: Handle MetricRollingWindow serialization
-        d["metrics"] = {}
-        for key, metrics_container in self.metrics.items():
-            if isinstance(metrics_container, MetricRollingWindow):
-                d["metrics"][key] = [m.to_dict() for m in metrics_container.get_all()]
-            else:
-                d["metrics"][key] = [
-                    m.to_dict() if isinstance(m, Metric) else m for m in metrics_container
-                ]
+        d["metrics"] = {
+            key: [m.to_dict() for m in window.get_all()] for key, window in self.metrics.items()
+        }
         return d
 
     @classmethod
@@ -293,10 +244,9 @@ class Run:
             data["metrics"] = cls._deserialize_metrics(data["metrics"])
         run = cls(**data)
 
-        for _, metrics_container in run.metrics.items():
-            if isinstance(metrics_container, MetricRollingWindow):
-                for metric in metrics_container.get_all():
-                    run.metric_index.index_metric(metric)
+        for window in run.metrics.values():
+            for metric in window.get_all():
+                run.metric_index.index_metric(metric)
         return run
 
 
@@ -450,7 +400,7 @@ class ExperimentTracker:
         self._ensure_tracking_structure()
 
         name = validate_experiment_name(name)
-        description = validate_description(description)
+        description = validate_description(description) or ""
         tags = validate_tags(tags)
 
         experiment_id = str(uuid4())
@@ -780,13 +730,6 @@ class ExperimentTracker:
             run.tags[key] = value
         logger.debug(f"Run {run_id}: Set tag {key}={value}")
 
-    def set_note(self, run_id: str, note: str) -> None:
-        """Add note to run."""
-        with self._runs_lock:
-            run = self._get_active_run(run_id)
-            run.notes = note
-        logger.debug(f"Run {run_id}: Set note")
-
     def end_run(self, run_id: str, status: RunStatus = RunStatus.COMPLETED) -> Run:
         """
         End run and persist to storage.
@@ -1002,7 +945,7 @@ class ExperimentTracker:
 
     def _compare(self, value: float, op: str, threshold: float) -> bool:
         try:
-            return _METRIC_OPS[op](value, threshold)
+            return bool(_METRIC_OPS[op](value, threshold))
         except KeyError:
             raise ValueError(f"Unsupported operator: {op}")
 
@@ -1053,7 +996,7 @@ class ExperimentTracker:
                 raise ValueError(f"Unsupported operator: {op}")
             metrics_df = metrics_df[_METRIC_OPS[op](metrics_df[col_name], threshold)]
 
-        return metrics_df["run_id"].tolist()
+        return cast(List[str], metrics_df["run_id"].tolist())
 
     def _search_runs_full_scan(
         self, experiment_id: str, metric_filter: Dict[str, tuple]
@@ -1196,7 +1139,7 @@ class ExperimentTracker:
             return []
         if "created_at" in df.columns:
             df = df.sort_values("created_at", ascending=False)
-        return df.to_dict(orient="records")
+        return cast(List[Dict[str, Any]], df.to_dict(orient="records"))
 
     def _load_experiments_index(self) -> pd.DataFrame:
         """Load experiments index."""
@@ -1280,7 +1223,7 @@ class ExperimentTracker:
 
             metrics_df = metrics_df[metrics_df["run_id"] != run.run_id]
 
-            row_data = {
+            row_data: Dict[str, Any] = {
                 "run_id": run.run_id,
                 "experiment_id": run.experiment_id,
             }
@@ -1360,68 +1303,6 @@ class ExperimentTracker:
 
             return cleaned_count
 
-    def get_active_runs_count(self) -> int:
-        """
-        Get the number of currently active runs.
-        """
-        with self._runs_lock:
-            return len(self._active_runs)
-
-    def list_active_runs(self) -> List[Dict[str, Any]]:
-        """
-        List all currently active runs with their metadata.
-        """
-        with self._runs_lock:
-            result = []
-            now = datetime.now(timezone.utc)
-
-            for run_id, run in self._active_runs.items():
-                age_seconds = None
-                if run.start_time:
-                    try:
-                        start_time = datetime.fromisoformat(run.start_time)
-                        if start_time.tzinfo is None:
-                            start_time = start_time.replace(tzinfo=timezone.utc)
-                        age_seconds = (now - start_time).total_seconds()
-                    except (ValueError, TypeError):
-                        pass
-
-                result.append(
-                    {
-                        "run_id": run_id,
-                        "name": run.name,
-                        "experiment_id": run.experiment_id,
-                        "start_time": run.start_time,
-                        "age_seconds": age_seconds,
-                        "metrics_count": sum(len(m) for m in run.metrics.values()),
-                        "parameters_count": len(run.parameters),
-                    }
-                )
-
-            return result
-
-    def search_metrics_by_key(self, run_id: str, key: str) -> List[Metric]:
-        """
-        Search metrics by key (O(1) lookup using index).
-        """
-        with self._runs_lock:
-            run = self._get_active_run(run_id)
-            return run.metric_index.get_by_key(key)
-
-    def search_metrics_by_step_range(
-        self,
-        run_id: str,
-        key: str,
-        start_step: int,
-        end_step: int,
-    ) -> List[Metric]:
-        """
-        Search metrics within step range (O(n) where n = range size).
-        """
-        with self._runs_lock:
-            run = self._get_active_run(run_id)
-            return run.metric_index.get_by_step_range(key, start_step, end_step)
-
     def get_latest_metric(
         self,
         run_id: str,
@@ -1433,21 +1314,6 @@ class ExperimentTracker:
         with self._runs_lock:
             run = self._get_active_run(run_id)
             return run.metric_index.get_latest(key)
-
-    def get_stats(self) -> Dict[str, Any]:
-        """
-        Get tracker statistics.
-        """
-        with self._runs_lock:
-            return {
-                "active_runs": len(self._active_runs),
-                "max_active_runs": self.max_active_runs,
-                "total_runs_started": self._total_runs_started,
-                "total_runs_completed": self._total_runs_completed,
-                "total_runs_failed": self._total_runs_failed,
-                "cleanup_count": self._cleanup_count,
-                "tracking_path": self.tracking_path,
-            }
 
     @contextmanager
     def run_context(

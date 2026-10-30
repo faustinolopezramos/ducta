@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import ast
 import re
-from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 
 from ducta.api.exceptions import SyntaxValidationError
@@ -133,20 +132,3 @@ def validate_git_url(url: str, allow_file: bool = False) -> ParseResult:
         raise URLValidationError("File URLs must not contain '..' path traversals")
 
     return parsed
-
-
-def validate_local_path(path: str) -> str:
-    """Validate that *path* is a safe workspace-relative path."""
-    if not path or not isinstance(path, str):
-        raise ValueError("Path must be a non-empty string")
-
-    if path.startswith("/") or path.startswith("\\") or path.startswith("~"):
-        raise ValueError(f"Absolute paths are not allowed for workspace files: {path}")
-
-    expanded = Path(path)
-    if ".." in expanded.parts:
-        raise ValueError("Path contains '..' which enables traversal attacks")
-    if expanded.is_absolute():
-        raise ValueError(f"Absolute paths are not allowed for workspace files: {path}")
-
-    return str(expanded)

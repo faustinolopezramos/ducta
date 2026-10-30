@@ -380,7 +380,7 @@ def apply_op(doc: Any, op: Dict[str, Any]) -> Dict[str, Any]:
     if kind == "disconnect":
         dataset = op.get("dataset")
         inputs = node.get("inputs")
-        alias: Optional[str] = None
+        alias = None
         if isinstance(inputs, dict):
             keys = [k for k, v in inputs.items() if v == dataset]
             if not keys:
@@ -416,18 +416,20 @@ def apply_op(doc: Any, op: Dict[str, Any]) -> Dict[str, Any]:
         return {"op": "add_output", "node": name, "dataset": dataset}
 
     if kind == "set":
-        key = op.get("key")
-        if key not in SETTABLE:
-            raise OpError(f"'{key}' cannot be set this way (one of: {', '.join(sorted(SETTABLE))})")
-        old = _plain(node.get(key)) if key in node else None
+        field = op.get("key")
+        if field not in SETTABLE:
+            raise OpError(
+                f"'{field}' cannot be set this way (one of: {', '.join(sorted(SETTABLE))})"
+            )
+        old = _plain(node.get(field)) if field in node else None
         value = op.get("value")
         if value is None:
-            node.pop(key, None)
-        elif key in node:
-            node[key] = copy.deepcopy(value)
+            node.pop(field, None)
+        elif field in node:
+            node[field] = copy.deepcopy(value)
         else:
-            node.insert(_quiet_position(node), key, copy.deepcopy(value))
-        return {"op": "set", "node": name, "key": key, "value": old}
+            node.insert(_quiet_position(node), field, copy.deepcopy(value))
+        return {"op": "set", "node": name, "key": field, "value": old}
 
     raise OpError(f"unknown operation '{kind}'")
 

@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Validate data before/after each node and gate the pipeline on the results |
 | **Layer** | Data quality |
-| **Depends on** | `setting` (node/quality schemas) |
-| **Used by** | `core` (node quality phases), `console`, `api` (quality endpoints) |
+| **Depends on** | `setting` (project loader, interpolation), `gate` (readers and writers, SQL predicate vetting); shows reports through `ducta.reporting` |
+| **Used by** | `core` (node quality phases), `setting` (check registry, for validation), `stream` (micro-batch quality), `console`, `api` (quality endpoints), `ai` (profiling) |
 | **Key entry points** | `SanityPhaseRunner`, `ValidationPhaseRunner`, `QualityGateEvaluator`, `register_check`, `DFAdapter` |
 | **Install** | Bundled with the core engine (`pip install ducta`) |
 

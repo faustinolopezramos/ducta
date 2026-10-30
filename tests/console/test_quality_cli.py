@@ -128,7 +128,7 @@ def test_validate_config_outside_a_project_fails_cleanly(tmp_path, monkeypatch, 
 
 
 def _template(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     root: Path = tmp_path / "proj"
     TemplateGenerator(root).generate_project(TemplateType.MEDALLION_BASIC, "proj")

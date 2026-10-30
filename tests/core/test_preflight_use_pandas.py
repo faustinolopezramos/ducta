@@ -36,6 +36,9 @@ def test_a_stream_node_input_spec_is_not_a_dataset():
     # A stream node's `input` is a source spec (a mapping): looking it up in the
     # catalog crashed `ducta config validate` with "unhashable type: 'dict'".
     report = PreflightReport(pipeline_name="p")
-    stream = {"streaming": {"trigger": "5s"}, "input": {"format": "file_stream", "path": "x"}}
+    stream = {
+        "streaming": {"trigger": "5s"},
+        "input": {"format": "file_stream", "options": {"path": "x"}},
+    }
     _check_use_pandas(report, "ingest", stream, {})
     assert report.warnings == []

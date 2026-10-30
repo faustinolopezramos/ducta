@@ -43,7 +43,7 @@ router = APIRouter(prefix="/templates", tags=["Templates"])
     summary="List available project templates",
 )
 async def list_templates() -> List[TemplateInfo]:
-    from ducta.console.template import TemplateFactory
+    from ducta.console.templates import TemplateFactory
 
     return [TemplateInfo(**t) for t in TemplateFactory.list_available_templates()]
 
@@ -58,7 +58,7 @@ async def list_templates() -> List[TemplateInfo]:
 async def generate_from_template(
     body: GenerateFromTemplateRequest, manager: WorkspaceManagerDep
 ) -> GenerateFromTemplateResponse:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     with http_error_on(422):
         validate_project_name(body.project_name)

@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from ducta.console.template import ConfigFormat, TemplateError, TemplateGenerator, TemplateType
+from ducta.console.core import ConfigFormat
+from ducta.console.templates import TemplateError, TemplateGenerator, TemplateType
 from ducta.setting.project.loader import compile_project, find_project_root, validate_project
 
 

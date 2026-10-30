@@ -161,15 +161,6 @@ class TimeoutManager:
             return True
         return False
 
-    def cleanup_timed_out(self) -> list[str]:
-        """Return list of execution IDs that have timed out."""
-        timed_out = []
-        with self._lock:
-            for exec_id, handler in self._handlers.items():
-                if handler.has_timed_out:
-                    timed_out.append(exec_id)
-        return timed_out
-
     def cleanup_all(self) -> None:
         """Cancel all active timeout handlers (on shutdown)."""
         with self._lock:

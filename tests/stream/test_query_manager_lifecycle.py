@@ -91,7 +91,7 @@ class TestCreateAndStartQuery:
     def _node_config(self, name="n1"):
         return {
             "name": name,
-            "input": {"format": "file_stream", "path": "/tmp/in"},
+            "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
             "output": {"format": "console"},
         }
 
@@ -120,7 +120,7 @@ class TestCreateAndStartQuery:
         qm, _ = self._make_manager(obj_context, tmp_path, streaming_dataframe, mock_streaming_query)
         with pytest.raises(StreamingError):
             qm.create_and_start_query(
-                {"name": "n1", "input": {"format": "file_stream", "path": "/tmp/in"}},
+                {"name": "n1", "input": {"format": "file_stream", "options": {"path": "/tmp/in"}}},
                 "exec1",
                 "pipe1",
             )
@@ -193,29 +193,13 @@ class TestWatermarkResolution:
         qm.writer_factory.get_writer.return_value.write_stream.return_value = query_instance
         return qm
 
-    def test_legacy_input_watermark_still_applied(
-        self, obj_context, tmp_path, streaming_dataframe, mock_streaming_query
-    ):
-        qm = self._make_manager(obj_context, tmp_path, streaming_dataframe, mock_streaming_query)
-        node_config = {
-            "name": "n1",
-            "input": {
-                "format": "file_stream",
-                "path": "/tmp/in",
-                "watermark": {"column": "event_time", "delay": "10 seconds"},
-            },
-            "output": {"format": "console"},
-        }
-        qm.create_and_start_query(node_config, "exec1", "pipe1")
-        streaming_dataframe.withWatermark.assert_called_once_with("event_time", "10 seconds")
-
     def test_streaming_watermark_applied_when_input_watermark_absent(
         self, obj_context, tmp_path, streaming_dataframe, mock_streaming_query
     ):
         qm = self._make_manager(obj_context, tmp_path, streaming_dataframe, mock_streaming_query)
         node_config = {
             "name": "n1",
-            "input": {"format": "file_stream", "path": "/tmp/in"},
+            "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
             "output": {"format": "console"},
             "streaming": {"watermark": {"column": "event_time", "delay": "5 minutes"}},
         }
@@ -290,7 +274,7 @@ class TestStopQuery:
 
         node_config = {
             "name": "n1",
-            "input": {"format": "file_stream", "path": "/tmp/in"},
+            "input": {"format": "file_stream", "options": {"path": "/tmp/in"}},
             "output": {"format": "console"},
         }
         qm.create_and_start_query(node_config, "exec1", "pipe1")
@@ -327,35 +311,3 @@ class TestTransformationRegistryIsolation:
         r = TransformationRegistry()
         with pytest.raises(ValueError, match="not registered"):
             r.get("missing")
-
-
-class TestTransformationRegistryGlobalFallback:
-    """_get_registered_transformation's docstring promises falling back to the
-    process-wide (class-level) registry when a key isn't found locally — this
-    verifies that fallback actually happens."""
-
-    def test_falls_back_to_class_registry(self, obj_context):
-        key = "global_only_fn_for_test"
-        TransformationRegistry.class_register(key, lambda df: df)
-        try:
-            qm = StreamingQueryManager(obj_context)
-            # Not registered on this instance's local registry...
-            assert key not in qm.transformation_registry.list_transformations()
-            # ...but still resolves via the global fallback.
-            resolved = qm._get_registered_transformation(key)
-            assert callable(resolved)
-        finally:
-            TransformationRegistry.class_unregister(key)
-
-    def test_missing_everywhere_lists_both_registries_in_error(self, obj_context):
-        qm = StreamingQueryManager(obj_context)
-        qm.transformation_registry.register("local_fn", lambda df: df)
-        TransformationRegistry.class_register("global_fn", lambda df: df)
-        try:
-            with pytest.raises(StreamingConfigurationError) as exc_info:
-                qm._get_registered_transformation("missing_everywhere")
-            message = str(exc_info.value)
-            assert "local_fn" in message
-            assert "global_fn" in message
-        finally:
-            TransformationRegistry.class_unregister("global_fn")

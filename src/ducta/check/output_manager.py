@@ -25,8 +25,9 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
+from ducta import state
 from ducta.check.core import QualityReport
-from ducta.check.serialization import GateResultSerializer, QualityReportSerializer
+from ducta.check.serialization import QualityReportSerializer
 from ducta.check.storage import DEFAULT_PIPELINE_NAME, _sanitize_dataset_name, _sanitize_run_id
 from ducta.gate.factories import WriterFactory
 
@@ -104,23 +105,6 @@ class QualityOutputManager:
             pipeline_name,
         )
 
-    def persist_gate_result(
-        self,
-        gate_result: Any,
-        node_name: str,
-        run_id: str,
-        config: QualityOutputConfig,
-        pipeline_name: str = DEFAULT_PIPELINE_NAME,
-    ) -> Optional[QualityOutputPath]:
-        return self._persist(
-            GateResultSerializer.to_spark_dataframe(gate_result, self.context),
-            node_name,
-            run_id,
-            config,
-            "gate",
-            pipeline_name,
-        )
-
     def _persist(
         self,
         spark_df: Any,
@@ -185,7 +169,8 @@ class QualityOutputManager:
     ) -> str:
         if not base_path:
             base_path = str(
-                Path(getattr(self.context, "workspace_path", ".ducta/quality")) / "quality"
+                Path(getattr(self.context, "workspace_path", state.under(".", "quality")))
+                / "quality"
             )
         if "${" in base_path:
             global_config = getattr(self.context, "global_config", {}) or {}
@@ -205,33 +190,3 @@ class QualityOutputManager:
         return str(
             Path(base_path) / safe_report_type / safe_pipeline_name / safe_node_name / safe_run_id
         )
-
-    def get_persisted_reports(
-        self,
-        node_name: str,
-        run_id: str,
-        report_type: str = "dq",
-        base_path: Optional[str] = None,
-        format: str = "parquet",
-        pipeline_name: str = DEFAULT_PIPELINE_NAME,
-    ) -> Optional[Any]:
-        """Read back a report previously written by ``persist_quality_report``.
-
-        ``format`` must match the ``QualityOutputConfig.format`` used for the
-        write — the output path never carries a file extension (see
-        ``_resolve_output_path``), so it can't be inferred from the path.
-        """
-        try:
-            output_path = self._resolve_output_path(
-                base_path, node_name, run_id, report_type, pipeline_name
-            )
-            ws = getattr(self.context, "workspace_path", None)
-            if ws and not Path(output_path).exists():
-                logger.warning(f"Persisted report not found at {output_path}")
-                return None
-            from ducta.gate.factories import ReaderFactory
-
-            return ReaderFactory(self.context).get_handler(format.lower()).read(output_path, {})
-        except Exception as e:
-            logger.error(f"Failed to load persisted report: {e}")
-            return None

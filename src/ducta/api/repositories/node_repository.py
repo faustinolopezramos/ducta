@@ -94,10 +94,6 @@ class NodeRepository:
             raise NodeNotFoundError(f"Node '{name}' not found", detail={"name": name})
         return nodes[name]
 
-    def get_file_path(self) -> Optional[Path]:
-        stores = self._stores()
-        return stores[0].pipelines_dir if len(stores) == 1 else None
-
     def get_commit_sha(self) -> str:
         """Latest commit touching the nodes — the project's pipelines/ directory
         (or the whole projects/ tree for a multi-project workspace)."""

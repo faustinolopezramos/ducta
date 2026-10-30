@@ -23,16 +23,11 @@ from ducta.api.models.config import ConfigFileResponse, ConfigValidationResponse
 from ducta.api.models.execution import ExecutionResponse, ExecutionStatus
 from ducta.api.models.git import BlameLine, CommitInfo, DiffResponse
 from ducta.api.models.git_sync import (
-    GitCommitInfo,
     GitCommitRequest,
     GitCommitResponse,
-    GitExternalChangesResponse,
-    GitHistoryResponse,
     GitStageRequest,
     GitStageResponse,
-    GitStatusResponse,
 )
-from ducta.api.models.workspace import ConnectRequest, StructureInfo
 
 __all__ = [
     "LoginRequest",
@@ -45,14 +40,8 @@ __all__ = [
     "BlameLine",
     "CommitInfo",
     "DiffResponse",
-    "GitCommitInfo",
     "GitCommitRequest",
     "GitCommitResponse",
-    "GitExternalChangesResponse",
-    "GitHistoryResponse",
     "GitStageRequest",
     "GitStageResponse",
-    "GitStatusResponse",
-    "ConnectRequest",
-    "StructureInfo",
 ]

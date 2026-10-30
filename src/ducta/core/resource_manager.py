@@ -19,9 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import atexit
-import os
 import shutil
-import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -214,10 +212,6 @@ class ResourceManager:
         finally:
             self.cleanup_context(context_id)
 
-    def node_context(self, node_id: str):
-        """Context manager scoped to a single node lifecycle. Alias for resource_context."""
-        return self.resource_context(node_id)
-
     def register_resource(
         self,
         node_id: str,
@@ -304,56 +298,6 @@ class ResourceManager:
                 logger.error(f"Error during cleanup of global {managed.resource_type}: {e}")
 
         logger.info("All resources cleaned up")
-
-    def create_temp_file(
-        self,
-        context_id: Optional[str] = None,
-        suffix: str = "",
-        prefix: str = "Ducta_",
-        dir: Optional[str] = None,
-    ) -> Path:
-        """
-        Create a managed temporary file.
-        """
-        fd, path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=dir)
-        os.close(fd)
-
-        temp_path = Path(path)
-        self.register(
-            temp_path,
-            ResourceType.TEMP_FILE,
-            context_id,
-            metadata={"path": str(temp_path)},
-        )
-
-        logger.debug(f"Created managed temporary file: {temp_path}")
-        return temp_path
-
-    def create_temp_dir(
-        self,
-        context_id: Optional[str] = None,
-        suffix: str = "",
-        prefix: str = "Ducta_",
-        dir: Optional[str] = None,
-    ) -> Path:
-        """
-        Create a managed temporary directory.
-        """
-        path = tempfile.mkdtemp(suffix=suffix, prefix=prefix, dir=dir)
-        temp_path = Path(path)
-
-        self.register(
-            temp_path,
-            ResourceType.TEMP_DIR,
-            context_id,
-            metadata={"path": str(temp_path)},
-        )
-
-        with self._lock:
-            self._temp_dirs.add(temp_path)
-
-        logger.debug(f"Created managed temporary directory: {temp_path}")
-        return temp_path
 
     def detect_resource_type(self, resource: Any) -> str:
         """Detect the type of resource for proper cleanup."""

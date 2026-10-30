@@ -59,7 +59,7 @@ def validate_date_range(start_date: str, end_date: str) -> tuple[datetime, datet
 class DataOutputManager(BaseIO):
     """Simplified output manager with unified interface."""
 
-    def __init__(self, context: Dict[str, Any]):
+    def __init__(self, context: Any):
         super().__init__(context)
         self.df_manager = _DataFrameManager(context)
         self.path_manager = _PathManager(context, self.config_validator)
@@ -233,6 +233,8 @@ class DataOutputManager(BaseIO):
             if not (start_date and end_date):
                 raise ConfigurationError("replaceWhere requires start_date and end_date")
             validate_date_range(start_date, end_date)
+            if not uc_config.partition_col:
+                raise ConfigurationError("replaceWhere requires partition_col (the date column)")
             uc_config.options["replaceWhere"] = UnityCatalogDDL.replace_where_clause(
                 uc_config.partition_col, start_date, end_date
             )
@@ -255,7 +257,7 @@ class DataOutputManager(BaseIO):
                 table_location = join_cloud_path(
                     base_location,
                     self.config_validator.validate_path_segment(env, "environment"),
-                    parsed.get("schema"),
+                    parsed["schema"],
                     parsed.get("sub_folder", ""),
                     uc_config.table_name,
                 )

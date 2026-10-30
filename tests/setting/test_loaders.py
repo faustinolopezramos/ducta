@@ -198,7 +198,7 @@ class TestConfigLoaderFactory:
 class TestPythonConfigIsNeverExecuted:
     """A `.py` config must hit the generic "No supported loader" error rather than
     run. The factory reads workspace/repo content the caller didn't write (see
-    api/workspace/loaders.py and check/service.py)."""
+    check/service.py)."""
 
     def test_python_file_has_no_loader(self, temp_dir):
         with pytest.raises(ConfigLoadError, match="No supported loader"):

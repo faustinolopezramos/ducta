@@ -31,6 +31,7 @@ from uuid import uuid4
 from loguru import logger
 from pydantic import BaseModel, Field
 
+from ducta import state
 from ducta.api.utils.fsio import atomic_write_json
 
 if TYPE_CHECKING:
@@ -221,7 +222,7 @@ class AsyncCronScheduler:
     """Background service managing automated scheduled pipeline executions."""
 
     def __init__(self, storage_dir: Optional[Path] = None) -> None:
-        self._storage_dir = storage_dir or (Path.home() / ".ducta")
+        self._storage_dir = storage_dir or state.user_dir()
         self._file_path = self._storage_dir / "schedules.json"
         self._schedules: Dict[str, PipelineSchedule] = {}
         self._loop_task: Optional[asyncio.Task[None]] = None

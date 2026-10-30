@@ -10,7 +10,7 @@
 |---|---|
 | **Purpose** | Draft new pipelines, and fixes for broken ones, with an LLM — validated, reviewable, opt-in |
 | **Layer** | Authoring assistance (sits beside `setting`; never on the execution path) |
-| **Depends on** | `setting` (project loader), `api` (`validate_draft`, `code_index`), `core` (`DuctaError`) |
+| **Depends on** | `setting` (project loader), `core` (`DuctaError`), `check` (profiling, validation); lazily `api` (`validate_draft`, `code_index`, `v2_store`, metrics, the execution manager) and `console` (`TemplateCommand`, for evals) |
 | **Used by** | `console` (`ducta ai …`), `api` (`/api/ai/*`, `/api/projects/{id}/ai/*`) |
 | **Key entry points** | `load_config`, `make_provider`, `generate`, `fix`, `apply_draft`, `build_context` |
 | **Install** | `pip install "ducta[ai]"` — brings `httpx`, `anthropic`, `keyring`, `ruamel.yaml`; the validator needs nothing from the `api` extra |

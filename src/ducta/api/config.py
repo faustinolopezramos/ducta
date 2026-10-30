@@ -29,6 +29,8 @@ from loguru import logger  # type: ignore
 from pydantic import Field, field_validator, model_validator  # type: ignore
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict  # type: ignore
 
+from ducta import state
+
 #: A list read from one environment variable, written either as JSON
 #: (``["a", "b"]``) or comma-separated (``a,b``) — the way docker-compose files and
 #: cloud consoles usually write it. Without ``NoDecode`` only JSON parsed, and
@@ -203,7 +205,7 @@ class Settings(BaseSettings):
         description="Log lines to accumulate before a single DB INSERT batch",
     )
     runs_dir: str = Field(
-        default="~/.ducta/runs",
+        default_factory=lambda: str(state.user_dir("runs")),
         description=(
             "Directory for the file-based run store (meta.json + logs.jsonl per run). "
             "This makes the optional SQLite store disposable: runs stay inspectable on "

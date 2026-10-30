@@ -117,19 +117,6 @@ class TestCandidateRunsDirs:
 
         assert [env for env, _ in candidates] == ["dev"]
 
-    def test_a_pre_convention_legacy_runs_dir_stays_discoverable(self, tmp_path, monkeypatch):
-        monkeypatch.chdir(tmp_path)
-        legacy = tmp_path / ".ducta" / "runs"
-        legacy.mkdir(parents=True)
-        monkeypatch.setattr(
-            certify_cmds, "_resolve_run_certificate_dir", lambda parsed_args, env: None
-        )
-        args = SimpleNamespace(dir=None, env=None, base_path=None)
-
-        candidates = _candidate_runs_dirs(args)
-
-        assert candidates == [(None, Path(".ducta/runs"))]
-
     def test_no_legacy_dir_means_no_extra_candidate(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr(

@@ -31,6 +31,7 @@ from ducta.setting.project.schema import (
     BUILTIN_SCORER,
     CatalogEntry,
     ChecksBlock,
+    GateSpec,
     IngestNode,
     StreamNode,
     TransformNode,
@@ -204,6 +205,9 @@ def _input_contracts(node: TransformNode, catalog: Dict[str, CatalogEntry]) -> D
 def compile_project(project: Project) -> Dict[str, Dict[str, Any]]:
     """The five engine documents for a validated project."""
     settings = copy.deepcopy(project.project.settings)
+    quality = settings.get("quality")
+    if isinstance(quality, dict) and quality.get("gate") is not None:
+        quality["gate"] = _gate(GateSpec.model_validate(quality["gate"]))
     global_config = {
         "mode": "local",  # GlobalConfigSchema's default; the engine requires the key
         **settings,

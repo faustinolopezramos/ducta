@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Set, cast
 
 from loguru import logger
 
@@ -295,7 +295,7 @@ def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[
 
     for line in reversed((proc.stdout or "").splitlines()):
         if line.startswith(_DEEP_PREFLIGHT_MARKER):
-            return json.loads(line[len(_DEEP_PREFLIGHT_MARKER) :])
+            return cast(Dict[str, Any], json.loads(line[len(_DEEP_PREFLIGHT_MARKER) :]))
 
     tail = ((proc.stderr or "") + (proc.stdout or ""))[-2000:]
     return {

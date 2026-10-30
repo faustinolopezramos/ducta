@@ -150,14 +150,14 @@ class TestCertify:
         assert _parse(["certify", "diff", "a", "b", "--base-path", "p"]).base_path == "p"
 
     def test_declared_environments_are_searched(self, monkeypatch, project):
-        from ducta.console.commands import certify_cmds
+        from ducta.core.certificate import search_environments
         from ducta.setting.environments import DEFAULT_ENVIRONMENTS
 
         declared = SimpleNamespace(project=SimpleNamespace(environments=["qa", "dev"]))
         monkeypatch.setattr(
             "ducta.setting.project.loader.validate_project", lambda root, *a, **k: declared
         )
-        envs = certify_cmds._search_envs(SimpleNamespace(base_path=str(project)))
+        envs = search_environments(project)
         assert envs == [*DEFAULT_ENVIRONMENTS, "qa"]
 
     def test_list_works_from_outside_the_project(self, project):

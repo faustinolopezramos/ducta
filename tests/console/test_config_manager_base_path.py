@@ -61,20 +61,3 @@ class TestFindingTheProject:
         (tmp_path / "ducta.yaml").write_text("project: {type: layered}\nlayers: {}\n")
         with pytest.raises(ConfigurationError, match="version: 2"):
             ConfigManager(str(tmp_path))
-
-
-class TestWorkingDirectory:
-    def test_runs_in_the_project_even_from_an_unrelated_launch_directory(
-        self, tmp_path, restore_cwd
-    ):
-        launch = tmp_path / "launch"
-        launch.mkdir()
-        project = _project(tmp_path / "project")
-        os.chdir(launch)
-
-        mgr = ConfigManager(str(project))
-        mgr.change_to_config_directory()
-        assert Path.cwd() == project.resolve()
-
-        mgr.restore_original_directory()
-        assert Path.cwd() == launch.resolve()

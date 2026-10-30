@@ -21,7 +21,7 @@ Temporal quality checks.
 """
 
 from datetime import date, datetime, timezone
-from typing import Any, ClassVar, Dict, FrozenSet, List, Optional
+from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, cast
 
 from loguru import logger
 
@@ -330,8 +330,8 @@ class FreshnessCheck(BaseQualityCheck):
 
     @staticmethod
     def _count_business_days(
-        start_date: "datetime.date",
-        end_date: "datetime.date",
+        start_date: date,
+        end_date: date,
         holidays: List[Any],
         include_weekends: bool,
     ) -> int:
@@ -385,7 +385,7 @@ class FreshnessCheck(BaseQualityCheck):
                 return None
             # Pandas Timestamp
             if hasattr(max_val, "to_pydatetime"):
-                return max_val.to_pydatetime()
+                return cast(datetime, max_val.to_pydatetime())
             # Already a datetime
             if isinstance(max_val, datetime):
                 if adapter.engine == "spark" and max_val.tzinfo is None:
@@ -394,7 +394,7 @@ class FreshnessCheck(BaseQualityCheck):
                     return max_val.astimezone(timezone.utc)
                 return max_val
             # Spark / Polars may return a date object — promote to datetime
-            if hasattr(max_val, "year") and not isinstance(max_val, datetime):
+            if isinstance(max_val, date):
                 return datetime(max_val.year, max_val.month, max_val.day)
             # String fallback (ISO-8601)
             if isinstance(max_val, str):

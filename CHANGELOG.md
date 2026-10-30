@@ -76,6 +76,59 @@ headline of everything else; `git log` has the detail.
   `IngestionServiceError`, `SUPPORTED_TYPES` and `DEFAULT_PORTS` moved to
   `ducta.setting.connections` and are no longer exported by `ducta.gate.gateway`.
 
+- **Compatibility with pre-0.3 layouts and names is gone.** Ducta no longer reads run
+  certificates from `<project>/.ducta/runs` or from per-environment subfolders
+  (`runs/<env>/<run_id>`), chain-state markers from `.ducta/chain_state`, or quality history
+  from `<output>/<env>/.quality` — move them to the current locations
+  (`<output>/<env>/.ducta/runs/<run_id>`, `.ducta/chain_state`, `quality`). A fingerprint
+  without an `algorithm` (written before v2) is reported as not comparable.
+  `fingerprint_mode: fast|full|exact-crypto` fall back to `exact` with a warning; use
+  `sample`, `exact` or `exact_crypto`. A stream's `input.watermark` is rejected: use
+  `streaming.watermark`. The quality gate keys `block_threshold`, `warn_threshold` and
+  `mandatory_checks` are refused: use `score_threshold` and `required_checks`. Stream
+  transforms are looked up only in the manager's registry (`TransformationRegistry.class_*`
+  removed). `MLOpsContext(backend_type=..., storage_path=...)` is gone: use
+  `MLOpsContext.from_config(MLOpsConfig(...))`.
+- **Unused code removed** (none of it was called by Ducta): `api.core.file_watcher`,
+  `api.workspace.loaders`, the `ducta.mlrun.mlflow` helpers (`mlflow_track`,
+  `log_model_metrics`, `MLflowHelper`, ...), `mlrun.resilience` `ResourceTracker`,
+  `CleanupManager`, `with_retry`, `with_mlops_resilience`, the `mlrun.concurrency`
+  transactions (`Transaction`, `SafeTransaction`, `ReadWriteLock`, `OptimisticLock`), the
+  deprecated `DQRunner`/`DQReporter`/`SanityCheckRunner`/`SanityReporter` aliases and about
+  60 methods nothing called.
+- **Internal (no change in behaviour or on disk):** where Ducta keeps its own state
+  (`.ducta/runs`, `locks`, `chain_state`, `streams`, `schema`, scratch, `~/.ducta`) is
+  decided in one module, `ducta.state`, instead of being spelled in a dozen files; the
+  quality history uses the shared lock in `ducta.locking` instead of its own copy (whose
+  Windows fix now applies to every lock); `ducta.console.template` is split into the
+  `ducta.console.templates` package, one module per template; and every module is now type
+  checked by mypy (the list of exempt modules is gone; the AI features take their folders
+  from `ducta.state` too).
+- **Every other compatibility path is gone too.** Database credentials are read only as
+  `<SOURCE>_USER`/`<SOURCE>_PASSWORD` (the type-wide `POSTGRESQL_USER` fallback is removed).
+  A `file_stream` input reads its path only from `input.options.path`. `--format` is no longer
+  an alias of `--output-format`. `ExecutionError` and `DataError` are no longer
+  `RuntimeError`s, and `ConfigurationError` and `ducta.mlrun` `ValidationError` are no longer
+  `ValueError`s: catch the Ducta class. The quality gate's `block`/`warn` behavior aliases are
+  removed. The API database starts from one migration (`0001`) that creates the current
+  schema; databases created by earlier versions are not upgraded. The `watchdog` dependency is
+  dropped.
+- **A key written twice in the same block is an error.** In `ducta.yaml`, `catalog.yaml`, a
+  pipeline file, `sources.yaml` or a JSON config, a second `quality:` under `settings` used
+  to replace the first one silently; it is now reported with both line numbers (`<<:` merge
+  keys may still be overridden).
+- **Environment variables are read only by their `DUCTA_*` names.** `Ducta_MLOPS_*`,
+  `Ducta_MLFLOW_ENABLED`, `Ducta_PERMISSIVE_PATH_VALIDATION` and `Ducta_THEME` are no longer
+  read: use `DUCTA_MLOPS_*`, `DUCTA_MLFLOW_ENABLED`, `DUCTA_PERMISSIVE_PATH_VALIDATION` and
+  `DUCTA_THEME`. (The docs also claimed `Ducta_CERTIFICATE_KEY` was accepted; it never was.)
+- **`DUCTA_HOME` moves all of `~/.ducta`**: the AI settings and evals followed it already,
+  and now the web app's run history (`runs_dir`) does too. Messages that pointed to
+  `~/.ducta/ai.toml` show the real path.
+- **Removed, unused:** `get_stats()` of `MLOpsContext`, `ExperimentTracker` and the storage
+  backends, `PipelineExecutor(config_directory=...)`, and the gateway's `_add_jar_to_spark`
+  (PySpark has no `addJar`; it could never have worked). An experiment run's metrics are
+  always rolling windows (the plain-list form written by early versions is not read).
+
 ### Security
 
 - **PostgreSQL, MySQL and MariaDB check the server's certificate unless it is on this
@@ -135,6 +188,19 @@ headline of everything else; `git log` has the detail.
   read back exactly.
 
 ### Fixed
+
+- **`ducta start` on a hybrid pipeline waits for its streaming phase** before it reports
+  and exits. It could finish while the stream was still writing, so the gold table was
+  sometimes empty (the `hybrid_basic` template now writes its 15 rows every time).
+- **A key placed at the wrong level is no longer "Did you mean" itself.** A key that is
+  valid elsewhere (`inputs:` at the top of a pipeline file, where it belongs to a node) said
+  `did you mean 'inputs'?`; it now says `'inputs' is not valid at this level`.
+- **Deleting or pruning an execution in a SQLite database now deletes its log lines.**
+  SQLite ignores `ON DELETE CASCADE` unless `PRAGMA foreign_keys=ON`, which the API's engine
+  now sets on every connection; the lines used to stay behind.
+- **`settings.quality.gate` now does what it says.** The project-wide gate was read with the
+  engine's key (`behavior`) and accepted any key, so `on_fail: stop_all` there was silently
+  ignored. It is now written and validated like a node's gate: `on_fail`, strict keys.
 
 - **`ducta.check` review.**
   - *Sanity gate:* a `sanity_gate` that never evaluates (`enabled: false`) or cannot be

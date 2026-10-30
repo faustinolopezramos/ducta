@@ -26,6 +26,7 @@ import threading
 from typing import Optional
 
 from loguru import logger
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from ducta.api.config import get_settings
@@ -71,11 +72,27 @@ def get_engine() -> Optional[AsyncEngine]:
             connect_args=connect_args,
             **engine_kwargs,
         )
+        if database_url.startswith("sqlite"):
+            enforce_sqlite_foreign_keys(_engine)
         logger.info(
             "Database engine initialised — url={driver}",
             driver=_engine.url.drivername,
         )
         return _engine
+
+
+def enforce_sqlite_foreign_keys(engine: AsyncEngine) -> None:
+    """Turn foreign keys on for every SQLite connection of *engine*.
+
+    SQLite ignores them unless asked, on each connection: deleting an execution
+    then left its log lines behind instead of cascading (``ON DELETE CASCADE``).
+    """
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _foreign_keys_on(dbapi_connection, _record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
 
 
 def is_db_enabled() -> bool:

@@ -283,12 +283,6 @@ class TestFileStreamReader:
         spark_session.readStream.load.assert_called_with("/tmp/in")
         assert result is not None
 
-    def test_deprecated_top_level_path_still_works(self, dict_context, spark_session):
-        reader = FileStreamReader(dict_context)
-        result = reader.read_stream({"path": "/tmp/in", "options": {}})
-        spark_session.readStream.load.assert_called_with("/tmp/in")
-        assert result is not None
-
     def test_defaults_to_parquet_format(self, dict_context, spark_session):
         reader = FileStreamReader(dict_context)
         reader.read_stream({"options": {"path": "/tmp/in"}})
@@ -324,12 +318,6 @@ class TestKinesisStreamingReader:
 
 
 class TestStreamingReaderFactory:
-    def test_lists_builtin_formats(self, dict_context):
-        factory = StreamingReaderFactory(dict_context)
-        formats = factory.list_supported_formats()
-        for fmt in ("kafka", "delta_stream", "file_stream", "kinesis"):
-            assert fmt in formats
-
     def test_get_reader_known_format(self, dict_context):
         factory = StreamingReaderFactory(dict_context)
         reader = factory.get_reader("kafka")
@@ -354,52 +342,3 @@ class TestStreamingReaderFactory:
         factory = StreamingReaderFactory(dict_context)
         with pytest.raises(StreamingError, match="non-empty string"):
             factory.get_reader("")
-
-    def test_register_custom_reader_new_format(self, dict_context):
-        class CustomReader(BaseStreamingReader):
-            def read_stream(self, config):
-                return "custom-result"
-
-        factory = StreamingReaderFactory(dict_context)
-        factory.register_custom_reader("custom", CustomReader)
-        reader = factory.get_reader("custom")
-        assert isinstance(reader, CustomReader)
-
-    def test_register_custom_reader_rejects_non_subclass(self, dict_context):
-        class NotAReader:
-            pass
-
-        factory = StreamingReaderFactory(dict_context)
-        with pytest.raises(StreamingError, match="must inherit"):
-            factory.register_custom_reader("bad", NotAReader)
-
-    def test_register_custom_reader_invalidates_cache(self, dict_context):
-        class ReaderA(BaseStreamingReader):
-            def read_stream(self, config):
-                return "a"
-
-        class ReaderB(BaseStreamingReader):
-            def read_stream(self, config):
-                return "b"
-
-        factory = StreamingReaderFactory(dict_context)
-        factory.register_custom_reader("custom", ReaderA)
-        first = factory.get_reader("custom")
-        factory.register_custom_reader("custom", ReaderB)
-        second = factory.get_reader("custom")
-        assert isinstance(first, ReaderA)
-        assert isinstance(second, ReaderB)
-
-    def test_register_custom_reader_forwards_extra_args(self, dict_context):
-        class ConfigurableReader(BaseStreamingReader):
-            def __init__(self, context, marker):
-                super().__init__(context)
-                self.marker = marker
-
-            def read_stream(self, config):
-                return self.marker
-
-        factory = StreamingReaderFactory(dict_context)
-        factory.register_custom_reader("custom", ConfigurableReader, "hello")
-        reader = factory.get_reader("custom")
-        assert reader.marker == "hello"

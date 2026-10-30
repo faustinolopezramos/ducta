@@ -47,21 +47,6 @@ ALLOW_UNAUTHENTICATED = {
 _INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
 
 
-def _renamed_option(old: str, new: str):
-    """An action for an option that was renamed: ``old`` still works and says so on stderr."""
-
-    class _Renamed(argparse.Action):
-        def __call__(self, parser, namespace, values, option_string=None):
-            if option_string == old:
-                print(
-                    f"warning: {old} is deprecated and will be removed; use {new}",
-                    file=sys.stderr,
-                )
-            setattr(namespace, self.dest, values)
-
-    return _Renamed
-
-
 class _SuggestingParser(argparse.ArgumentParser):
     """``ArgumentParser`` that answers a mistyped subcommand with the one it is closest to.
 
@@ -295,11 +280,9 @@ class UnifiedArgumentParser:
         )
         parser.add_argument(
             "--output-format",
-            "--format",
             dest="output_format",
             choices=["table", "json", "list"],
             default="table",
-            action=_renamed_option("--format", "--output-format"),
             help="Output format: table (default), json, or list",
         )
 
@@ -583,12 +566,10 @@ class UnifiedArgumentParser:
         status_parser.add_argument("--execution-id", "-i", help="Specific execution ID to check")
         status_parser.add_argument(
             "--output-format",
-            "--format",
             "-f",
             dest="format",
             default="table",
             choices=["table", "json"],
-            action=_renamed_option("--format", "--output-format"),
             help="Output format",
         )
 

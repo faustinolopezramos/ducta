@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from ducta.console.template import (
+from ducta.console.templates import (
     HybridBasicTemplate,
     MLBasicTemplate,
     TemplateFactory,

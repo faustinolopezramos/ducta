@@ -23,6 +23,7 @@ from __future__ import annotations
 from fastapi import Request, Response
 from fastapi.concurrency import run_in_threadpool
 
+from ducta import state
 from ducta.api.config import Settings
 
 # HTTP methods that warrant an audit entry (state-changing operations)
@@ -74,9 +75,7 @@ async def maybe_write_audit(
         workspace_root = getattr(request.state, "source_path", None) or getattr(
             request.state, "workspace_root", None
         )
-        audit_log_path = (
-            (workspace_root / ".ducta" / "audit.log") if workspace_root is not None else None
-        )
+        audit_log_path = (workspace_root / state.AUDIT_LOG) if workspace_root is not None else None
         # write_audit_entry does blocking file I/O under a threading.Lock —
         # keep it off the event loop.
         await run_in_threadpool(

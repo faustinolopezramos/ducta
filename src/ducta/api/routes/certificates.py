@@ -191,10 +191,7 @@ async def list_certificates(
 ) -> List[CertificateSummary]:
     summaries: List[CertificateSummary] = []
     for dir_env, runs_dir in _candidate_runs_dirs(_project_dir(manager.root, project_id), env):
-        for found_env, run_id, run_dir in iter_certificate_dirs(runs_dir):
-            run_env = dir_env or found_env
-            if env is not None and run_env != env:
-                continue
+        for run_id, run_dir in iter_certificate_dirs(runs_dir):
             try:
                 data = load_certificate(run_dir / "certificate.json")
             except Exception:  # noqa: BLE001 — a corrupt file must not break the listing
@@ -207,7 +204,7 @@ async def list_certificates(
                     status=str(data.get("status", "?")),
                     started_at=data.get("started_at"),
                     duration_seconds=data.get("duration_seconds"),
-                    environment_name=run_env or data.get("environment_name"),
+                    environment_name=dir_env or data.get("environment_name"),
                     signed=bool(data.get("signature")),
                     quality_passed=sum(1 for q in quality if q.get("passed")) if quality else None,
                     quality_total=len(quality) if quality else None,

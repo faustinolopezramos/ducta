@@ -111,7 +111,7 @@ def test_an_adaptive_trigger_written_in_yaml_runs(spark, tmp_path, monkeypatch):
     """`trigger: adaptive` had to clear the project schema, the stream validator and the
     scheduler; each rejected or ignored it."""
     from ducta.api.execution.runner import normalize_execution_context_paths
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
     from ducta.core.executors import PipelineExecutor
     from ducta.setting.project.loader import load_project_v2
 

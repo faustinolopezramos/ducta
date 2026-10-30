@@ -73,13 +73,13 @@ class TestResolveStoragePathPrecedence:
         assert got == str(tmp_path / "output" / "dev" / "sales" / "train")
 
     def test_no_env_and_no_project_falls_back_to_default(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("Ducta_MLOPS_PATH", raising=False)
+        monkeypatch.delenv("DUCTA_MLOPS_PATH", raising=False)
         monkeypatch.delenv("DUCTA_MLOPS_PATH", raising=False)
         got = mlops_commands._resolve_storage_path(None, env=None)
         assert got == "./mlops_data"
 
     def test_context_discovery_failure_falls_back_to_default(self, monkeypatch):
-        monkeypatch.delenv("Ducta_MLOPS_PATH", raising=False)
+        monkeypatch.delenv("DUCTA_MLOPS_PATH", raising=False)
         monkeypatch.delenv("DUCTA_MLOPS_PATH", raising=False)
         # No patching of ConfigManager/ContextInitializer: with no real ducta
         # project at cwd, _discover_context must swallow the failure and
@@ -88,7 +88,7 @@ class TestResolveStoragePathPrecedence:
         assert got == "./mlops_data"
 
     def test_env_var_used_when_no_context_and_no_global_config(self, monkeypatch):
-        monkeypatch.setenv("Ducta_MLOPS_PATH", "/from/env/var")
+        monkeypatch.setenv("DUCTA_MLOPS_PATH", "/from/env/var")
         got = mlops_commands._resolve_storage_path(None, env=None)
         assert got == "/from/env/var"
 

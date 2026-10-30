@@ -8,7 +8,7 @@
 |---|---|
 | **Purpose** | Load → interpolate → validate → model configuration into a typed `Context` |
 | **Layer** | Foundation / Configuration |
-| **Depends on** | `mlrun` (hyperparams), `check` (quality output types) |
+| **Depends on** | `check` (check registry and parameters, for validation and the JSON Schema), `gate` (JDBC connections, SQL predicate vetting, path checks); lazily `mlrun` (hyperparameter files) and `core` (`ml_contract`, in `project.inspect`) |
 | **Used by** | Every other Ducta module |
 | **Key entry points** | `load_project`, `validate_project`, `compile_project`, `Context`, `SparkSessionManager` |
 | **Install** | Bundled with the core engine (`pip install ducta`) |

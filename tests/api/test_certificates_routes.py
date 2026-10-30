@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from ducta.api.dependencies import get_current_user, get_source_path  # noqa: E402
 from ducta.api.models.auth import User  # noqa: E402
 from ducta.api.routes import certificates as certificates_route  # noqa: E402
-from ducta.api.services.run_certificates import env_runs_dir  # noqa: E402
+from ducta.api.services.run_certificates import candidate_runs_dirs  # noqa: E402
 
 RUN_ID = "6d5b1c20e9ab41268dec6f9bbf2faef7"
 
@@ -89,17 +89,16 @@ def client(workspace: Path) -> TestClient:
     return TestClient(app)
 
 
-class TestEnvRunsDir:
+class TestCandidateRunsDirs:
     def test_resolves_the_template_to_the_environment_output_dir(self, project: Path):
-        (project / "data" / "dev").mkdir(parents=True)
+        runs_dir = project / "data" / "dev" / ".ducta" / "runs"
+        runs_dir.mkdir(parents=True)
 
-        runs_dir = env_runs_dir(project, "dev")
-
-        assert runs_dir == (project / "data" / "dev" / ".ducta" / "runs").resolve()
+        assert candidate_runs_dirs(project, "dev") == [("dev", runs_dir)]
 
     def test_never_changes_the_server_process_cwd(self, project: Path):
         before = os.getcwd()
-        env_runs_dir(project, "dev")
+        candidate_runs_dirs(project, "dev")
         assert os.getcwd() == before
 
 
@@ -123,15 +122,6 @@ class TestGetCertificate:
         assert (
             client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=staging").status_code == 404
         )
-
-    def test_a_pre_convention_legacy_runs_dir_stays_readable(
-        self, client: TestClient, project: Path
-    ):
-        _write_certificate(project / ".ducta" / "runs", RUN_ID, None)
-
-        resp = client.get(f"/api/projects/batch/certificates/{RUN_ID}")
-
-        assert resp.status_code == 200
 
     def test_an_unknown_run_is_still_a_404(self, client: TestClient, project: Path):
         (project / "data" / "dev" / ".ducta" / "runs").mkdir(parents=True)

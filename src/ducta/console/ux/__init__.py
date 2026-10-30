@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from ducta.console.ux.error_analyzer import SparkErrorAnalyzer, format_error_for_developer
+from ducta.console.ux.error_analyzer import format_error_for_developer
 from ducta.console.ux.rich_logger import (
     ACCENT,
     BOLD_WHITE,
@@ -37,7 +37,6 @@ from ducta.console.ux.rich_logger import (
     TEXT_DEFAULT,
     TEXT_SECONDARY,
     WARNING,
-    Ducta_THEME,
     RichLoggerManager,
     log_node_complete,
     log_node_start,
@@ -50,7 +49,6 @@ __all__ = [
     # rich_logger
     "RichLoggerManager",
     "DUCTA_THEME",
-    "Ducta_THEME",
     "PRIMARY",
     "BOLD_WHITE",
     "PRIMARY_BOLD",
@@ -72,7 +70,6 @@ __all__ = [
     "log_node_start",
     "log_node_complete",
     # error_analyzer
-    "SparkErrorAnalyzer",
     "format_error_for_developer",
     # schema_formatter
     "print_spark_schema",

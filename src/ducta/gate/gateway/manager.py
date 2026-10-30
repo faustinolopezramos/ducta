@@ -19,9 +19,8 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
-import yaml
 from loguru import logger
 
 from .circuit_breaker import CircuitBreaker
@@ -104,13 +103,15 @@ class ConnectionManager:
         suffix = self.config_path.suffix.lower()
 
         if suffix in [".yaml", ".yml"]:
+            from ducta.setting.project.files import load_yaml
+
             with open(self.config_path, "r") as f:
-                return yaml.safe_load(f) or {}
+                return load_yaml(f) or {}
         elif suffix == ".json":
             import json
 
             with open(self.config_path, "r") as f:
-                return json.load(f)
+                return cast(Dict[str, Any], json.load(f))
         elif suffix == ".toml":
             try:
                 import toml
@@ -159,6 +160,8 @@ class ConnectionManager:
                 return
 
             jvm = spark.sparkContext._jvm
+            if jvm is None:
+                return
 
             try:
                 jar_url = jvm.java.io.File(str(jar_path)).toURI().toURL()
@@ -181,21 +184,6 @@ class ConnectionManager:
 
         except Exception as e:
             logger.debug(f"Could not load driver class {connector.source_type}: {e}")
-
-    def _add_jar_to_spark(self, jar_path: Path) -> None:
-        """Add JAR to Spark session if available."""
-        try:
-            from pyspark.sql import SparkSession
-
-            spark = SparkSession.getActiveSession()
-            if spark is not None:
-                # Add JAR to the Spark classpath
-                spark.sparkContext.addJar(str(jar_path))
-                logger.info(f"Added JAR to Spark: {jar_path}")
-            else:
-                logger.debug(f"No active SparkSession. JAR will be available at: {jar_path}")
-        except Exception as e:
-            logger.debug(f"Could not add JAR to Spark: {e}")
 
     def _create_connector(self, source_name: str) -> JDBCConnector:
         """Create JDBCConnector from source config."""
@@ -224,9 +212,9 @@ class ConnectionManager:
         name_prefix = source_name.upper()
 
         # The environment, then the ``.env`` of the project the sources file belongs to
-        # (wherever the process was started), then the deprecated type-wide pair.
+        # (wherever the process was started).
         project_root = self.project_root or project_root_for(self.config_path.parent)
-        credentials = resolve_credentials(source_name, source_type, project_root)
+        credentials = resolve_credentials(source_name, project_root)
         username, password = credentials.username, credentials.password
 
         if not username or not password:
@@ -250,10 +238,9 @@ class ConnectionManager:
             url_params=url_params if isinstance(url_params, dict) else None,
         )
 
-        # Ensure driver is available and added to Spark
+        # Ensure the driver is downloaded (the session puts it on spark.jars) and loaded
         try:
-            jar_path = connector.download_driver(self._lib_dir)
-            self._add_jar_to_spark(jar_path)
+            connector.download_driver(self._lib_dir)
             self._load_driver_class(connector)
         except Exception as e:
             logger.warning(f"Could not download driver for {source_name}: {e}")

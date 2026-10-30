@@ -1,6 +1,6 @@
 """Regression tests for ducta.check.advisor.ThresholdAdvisor.
 
-`analyze_history` used to propose `block_threshold = min(all_scores) * 0.95`,
+`analyze_history` used to propose a threshold of `min(all_scores) * 0.95`,
 including runs the gate had already blocked or that had check failures. That
 ratchets thresholds down every time a bad run happens — a regression makes
 the *next* proposal more permissive instead of flagging it. It now anchors to
@@ -34,7 +34,7 @@ class TestAnalyzeHistoryExcludesBlockedAndFailedRuns:
 
         assert result["ready"] is True
         # Anchored to the passing runs only — nowhere near the 0.10 outlier.
-        assert result["proposed_thresholds"]["block_threshold"] > 0.5
+        assert result["proposed_thresholds"]["score_threshold"] > 0.5
         assert result["stats"]["min_score"] >= 0.94
 
     def test_errors_count_alone_excludes_a_run_even_without_an_explicit_block(self, tmp_path):

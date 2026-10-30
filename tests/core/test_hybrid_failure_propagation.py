@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from ducta.core.errors import ExecutionError
 from ducta.core.executors.facade import PipelineExecutor
 from ducta.core.settings import CoreSettings
 
@@ -45,14 +46,14 @@ class TestHybridFailureSurfaces:
             "streaming_execution_ids": [],
         }
 
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(ExecutionError, match="boom"):
             engine.run_pipeline("hybrid_pipeline")
 
     def test_error_message_names_the_pipeline(self):
         engine = _executor()
         engine._hybrid_executor.execute.return_value = {"status": "failed", "errors": ["boom"]}
 
-        with pytest.raises(RuntimeError, match="hybrid_pipeline"):
+        with pytest.raises(ExecutionError, match="hybrid_pipeline"):
             engine.run_pipeline("hybrid_pipeline")
 
     def test_full_outcome_stays_reachable_on_the_exception(self):
@@ -63,7 +64,7 @@ class TestHybridFailureSurfaces:
             "streaming_execution_ids": ["e1"],
         }
 
-        with pytest.raises(RuntimeError) as caught:
+        with pytest.raises(ExecutionError) as caught:
             engine.run_pipeline("hybrid_pipeline")
 
         run_result = getattr(caught.value, "run_result")
@@ -75,7 +76,7 @@ class TestHybridFailureSurfaces:
         engine = _executor()
         engine._hybrid_executor.execute.return_value = {"status": "failed", "errors": []}
 
-        with pytest.raises(RuntimeError, match="hybrid pipeline failed"):
+        with pytest.raises(ExecutionError, match="hybrid pipeline failed"):
             engine.run_pipeline("hybrid_pipeline")
 
     def test_successful_hybrid_returns_an_ok_result(self):
@@ -111,7 +112,7 @@ class TestChainStopsOnHybridFailure:
         }
         engine.context.nodes_config = {"n1": {}, "n2": {}}
 
-        with pytest.raises(RuntimeError, match="Pipeline chain failed"):
+        with pytest.raises(ExecutionError, match="Pipeline chain failed"):
             engine.run_pipeline_chain("downstream")
 
         assert ran == ["upstream_hybrid"]

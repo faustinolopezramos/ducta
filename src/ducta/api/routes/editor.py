@@ -183,7 +183,7 @@ async def debug_socket(
             except OSError:
                 pass
         await asyncio.sleep(0.5)
-    if writer is None:
+    if reader is None or writer is None:
         await websocket.close(code=1013, reason="The debug run is not listening")
         return
     manager.mark_debug_attached(execution_id)

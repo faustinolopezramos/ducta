@@ -47,7 +47,7 @@ def test_anchors_and_ids_are_checked(tmp_path):
 
 @pytest.fixture
 def root(tmp_path, monkeypatch):
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"

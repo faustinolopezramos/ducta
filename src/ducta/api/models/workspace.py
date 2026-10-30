@@ -57,9 +57,8 @@ class WriteFileRequest(BaseModel):
 
     path: str = Field(description="File path relative to workspace root")
     # Unbounded `content` let a single request buffer an arbitrarily large
-    # string in memory (and on disk) — 10 MB matches the limit already
-    # enforced for config files (see workspace/loaders.py's
-    # _MAX_CONFIG_FILE_SIZE) as a reasonable ceiling for a single text file.
+    # string in memory (and on disk) — 10 MB is a reasonable ceiling for a
+    # single text file.
     content: str = Field(description="File text content to write", max_length=10 * 1024 * 1024)
     expected_version: Optional[str] = Field(
         default=None,
@@ -67,46 +66,3 @@ class WriteFileRequest(BaseModel):
         "(someone else, git, another editor), the write is refused with 409 and the "
         "current content — nothing is overwritten unseen.",
     )
-
-
-class ConnectRequest(BaseModel):
-    """Source to resolve: a local path or a Git URL, exactly one of them.
-
-    Kept as part of the public ``ducta.api`` models; the ``/api/connect``
-    endpoint that used it was removed (``/api/workspace/select`` resolves a
-    source now).
-    """
-
-    path: Optional[str] = Field(
-        default=None,
-        description=(
-            "Local directory path. Supports ~, environment variables, "
-            "and Windows/macOS/Linux paths."
-        ),
-    )
-    git_url: Optional[str] = Field(
-        default=None,
-        description="Git repository URL (HTTPS or SSH).",
-    )
-    alias: Optional[str] = Field(
-        default=None,
-        description="Optional friendly name for this connection.",
-    )
-
-
-class StructureInfo(BaseModel):
-    """Response for GET /api/structure — detected directory structure."""
-
-    structure_type: str = Field(
-        description=(
-            "Detected type: ducta_workspace | config_only | python_project | generic | empty"
-        ),
-    )
-    root: str = Field(description="Absolute path analysed")
-    has_project: bool = Field(default=False)
-    has_config_dir: bool = Field(default=False)
-    has_git: bool = Field(default=False)
-    environments: List[str] = Field(default_factory=list)
-    config_files: List[str] = Field(default_factory=list)
-    python_files: List[str] = Field(default_factory=list)
-    directories: List[str] = Field(default_factory=list)

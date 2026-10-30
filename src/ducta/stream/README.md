@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Run and supervise Spark Structured Streaming pipelines end to end |
 | **Layer** | Streaming execution engine |
-| **Depends on** | `setting` (`Context`, `FormatPolicy`) |
-| **Used by** | `core` (`StreamingExecutor` / `HybridExecutor`) |
+| **Depends on** | `setting` (`Context`, `FormatPolicy`, dependency inference); lazily `check` (micro-batch quality), `gate` (MERGE, predicates), `mlrun` (model scoring), `core` (`MLNodeContext`) |
+| **Used by** | `core` (`StreamingExecutor` / `HybridExecutor`), `console` (`ducta stream plan`, node state), `api` (run journal, node state) |
 | **Key entry points** | `StreamingPipelineManager`, `StreamingQueryManager`, `StreamingReaderFactory` / `StreamingWriterFactory` |
 | **Install** | `pip install "ducta[spark]"` |
 
@@ -132,13 +132,10 @@ registry.register("enrich", lambda df: df.withColumn("ingested", df["ts"]))
 execution_id = manager.start_pipeline("events", context.pipelines_config["events"])
 ```
 
-### Step 2: Monitor health and metrics
+### Step 2: Monitor health
 ```python
 status = manager.get_pipeline_status(execution_id)
 print(status["status"], status["active_queries"], status.get("health_monitors"))
-
-metrics = manager.get_pipeline_metrics(execution_id)
-print(metrics["performance_metrics"]["total_processing_rate"])
 ```
 
 ### Step 3: Control the lifecycle

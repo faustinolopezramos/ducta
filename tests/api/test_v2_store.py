@@ -21,7 +21,7 @@ from ducta.api.repositories.dataset_repository import DatasetRepository  # noqa:
 from ducta.api.repositories.node_repository import NodeRepository  # noqa: E402
 from ducta.api.repositories.project_repository import ProjectRepository  # noqa: E402
 from ducta.api.repositories.v2_store import V2ProjectStore  # noqa: E402
-from ducta.console.template import TemplateGenerator, TemplateType  # noqa: E402
+from ducta.console.templates import TemplateGenerator, TemplateType  # noqa: E402
 
 
 @pytest.fixture

@@ -35,7 +35,7 @@ def manager(obj_context):
 def _node(name, depends_on=None):
     node = {
         "name": name,
-        "input": {"format": "file_stream", "path": f"/tmp/{name}"},
+        "input": {"format": "file_stream", "options": {"path": f"/tmp/{name}"}},
         "output": {"format": "console"},
     }
     if depends_on:

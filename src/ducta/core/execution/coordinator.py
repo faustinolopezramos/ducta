@@ -36,6 +36,7 @@ from ducta.core.execution.output import report_node_failure
 from ducta.core.execution.state import ThreadSafeExecutionState
 from ducta.core.ledger import ledger_for
 from ducta.core.settings import CoreSettings
+from ducta.reporting import get_reporter
 
 
 class ParallelCoordinator:
@@ -66,8 +67,8 @@ class ParallelCoordinator:
         execution_state: ThreadSafeExecutionState,
         dag: Dict[str, Set[str]],
         node_configs: Dict[str, Dict[str, Any]],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Coordinate the main execution loop until all nodes complete or failure occurs."""
@@ -120,17 +121,9 @@ class ParallelCoordinator:
             self._log_ml_pipeline_summary(execution_state.execution_results, ml_info)
 
         try:
-            from ducta.console.ux import view
-            from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
-
-            if not view.is_compact():  # the compact view prints its own summary
-                console = RichLoggerManager.get_console()
-                console.print()
-                total_nodes = execution_state.get_completed_count()
-                print_process_separator(
-                    "summary", "EXECUTION SUMMARY", f"{total_nodes} nodes", console
-                )
-                console.print()
+            # The compact view prints its own summary: the reporter skips the banner.
+            total_nodes = execution_state.get_completed_count()
+            get_reporter().section("summary", "EXECUTION SUMMARY", f"{total_nodes} nodes")
         except Exception:
             pass
 
@@ -139,7 +132,7 @@ class ParallelCoordinator:
         )
 
     @staticmethod
-    def _build_failure_error(execution_state: ThreadSafeExecutionState) -> RuntimeError:
+    def _build_failure_error(execution_state: ThreadSafeExecutionState) -> PipelineExecutionError:
         """Build the pipeline-level error, chained to the node error that caused it."""
         first_failure = execution_state.get_first_failure()
         failed_nodes = sorted(
@@ -181,8 +174,8 @@ class ParallelCoordinator:
         self,
         execution_state: ThreadSafeExecutionState,
         executor: ThreadPoolExecutor,
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
         node_configs: Dict[str, Dict[str, Any]],
     ) -> None:
@@ -193,10 +186,7 @@ class ParallelCoordinator:
                 break
 
             try:
-                from ducta.console.ux.rich_logger import log_node_start
-
-                node_display = node_name.split(".")[-1] if "." in node_name else node_name
-                log_node_start(node_display, "")
+                get_reporter().node_started(node_name)
             except Exception:
                 logger.info("Starting execution of node: {}", node_name)
 
@@ -292,7 +282,7 @@ class ParallelCoordinator:
         run_started = getattr(self, "_run_started", None)
         if run_started is not None:
             remaining.append(self.settings.execution_timeout_seconds - (now - run_started))
-        return min(remaining)
+        return float(min(remaining))
 
     def _timeout_for(self, node_info: Dict[str, Any]) -> int:
         """The node's own ``timeout`` when it declares one, else ``node_timeout_seconds``.
@@ -577,11 +567,8 @@ class ParallelCoordinator:
         self._maybe_pause(node_name)
 
         try:
-            from ducta.console.ux.rich_logger import log_node_complete
-
             duration = time.time() - node_info["start_time"]
-            node_display = node_name.split(".")[-1] if "." in node_name else node_name
-            log_node_complete(node_display, duration, outputs=self._output_rows(node_info))
+            get_reporter().node_completed(node_name, duration, self._output_rows(node_info))
         except Exception:
             logger.info("Node '{}' completed successfully", node_name)
 
@@ -777,18 +764,10 @@ class ParallelCoordinator:
             logger.bind(node_error=True).error("Failed nodes: {}", ", ".join(failed_nodes))
 
         try:
-            from ducta.console.ux import view
-            from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
-
-            if not view.is_compact():
-                console = RichLoggerManager.get_console()
-                console.print()
-                print_process_separator(
-                    "summary",
-                    "ML PIPELINE SUMMARY",
-                    f"{len(successful_nodes)}/{len(successful_nodes) + len(failed_nodes)} nodes",
-                    console,
-                )
-                console.print()
+            get_reporter().section(
+                "summary",
+                "ML PIPELINE SUMMARY",
+                f"{len(successful_nodes)}/{len(successful_nodes) + len(failed_nodes)} nodes",
+            )
         except Exception:
             pass

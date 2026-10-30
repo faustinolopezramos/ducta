@@ -16,8 +16,7 @@ Where it lives
 
 One file per run, under the environment's output so a ``dev`` run and a ``prod``
 run with the same pipeline never collide (``settings.run_certificate_dir``
-moves it). Certificates written by older versions under ``.ducta/runs/`` are
-still listed by ``ducta certify``.
+moves it).
 
 Anatomy of a certificate
 -------------------------
@@ -223,9 +222,7 @@ see below):
 
    export DUCTA_CERTIFICATE_KEY="a-long-random-secret"
 
-The code also accepts the historical mixed-case name
-``Ducta_CERTIFICATE_KEY``; use the all-caps form above for anything you
-write yourself. A key can also live at
+A key can also live at
 ``settings.certificate_signing_key``, but Ducta logs a warning if you
 do — a key in a config file is usually committed to version control, and a
 short, human-chosen value is brute-forceable from the certificate's public
@@ -289,7 +286,7 @@ The CLI, end to end
 
 .. code-block:: bash
 
-   ducta certify list  [--env base] [--dir .ducta/runs]
+   ducta certify list  [--env base] [--dir <runs-dir>]
    ducta certify show    --run-id <id-or-prefix> [--json]
    ducta certify verify  --run-id <id-or-prefix> [--reproduce] [--start-date ...] [--end-date ...]
    ducta certify diff    <run_a> <run_b>

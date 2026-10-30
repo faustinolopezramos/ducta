@@ -160,7 +160,7 @@ class ExpiredTokenError(AuthenticationError):
 
 
 class ProjectNotFoundError(NotFoundError):
-    """Project directory or project_settings.yaml not found in workspace."""
+    """Project directory or its ducta.yaml not found in workspace."""
 
     error_code = ErrorCode.PROJECT_NOT_FOUND
 

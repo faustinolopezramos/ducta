@@ -19,12 +19,10 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 from loguru import logger  # type: ignore
 
-from ducta.core.context_utils import get_active_env
 from ducta.mlrun.config import MLOpsContext
 from ducta.mlrun.experiment_tracking import RunStatus
 
@@ -164,7 +162,7 @@ class MLOpsExecutorIntegration:
 
             self.active_experiment_id = exp.experiment_id
             logger.info(f"Created MLOps experiment {pipeline_name} (ID: {exp.experiment_id})")
-            return exp.experiment_id
+            return cast(Optional[str], exp.experiment_id)
 
         except Exception as e:
             logger.error(f"Failed to create experiment: {e}")
@@ -252,7 +250,7 @@ class MLOpsExecutorIntegration:
             self._stash_previous_fingerprints(experiment_id, pipeline_name, run.run_id)
 
             logger.info(f"Started MLOps run {pipeline_name} (ID: {run.run_id})")
-            return run.run_id
+            return cast(Optional[str], run.run_id)
 
         except Exception as e:
             logger.error(f"Failed to start run: {e}")
@@ -354,82 +352,6 @@ class MLOpsExecutorIntegration:
             logger.debug(f"Environment capture skipped: {e}")
             return None
 
-    def log_node_execution(
-        self,
-        run_id: str,
-        node_name: str,
-        status: str,
-        duration_seconds: float,
-        metrics: Optional[Dict[str, float]] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        """
-        Log node execution details.
-        """
-        if not self.is_available() or not run_id:
-            return
-
-        try:
-            log_strategy = {"log_metrics": True}
-            try:
-                from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
-
-                if self.context and hasattr(self.context, "nodes_config"):
-                    node_cfg = self.context.nodes_config.get(node_name, {})
-                    ml_stage = MLOpsAutoConfigurator.resolve_ml_stage(node_cfg)
-                    log_strategy = MLOpsAutoConfigurator.get_logging_strategy(ml_stage)
-            except Exception as e:
-                logger.debug(f"Could not load logging strategy: {e}")
-
-            self._tracker.log_parameter(
-                run_id,
-                f"node_{node_name}_status",
-                status,
-            )
-
-            self._tracker.log_metric(
-                run_id,
-                f"node_{node_name}_duration_seconds",
-                duration_seconds,
-                step=0,
-            )
-
-            if metrics and log_strategy.get("log_metrics", True):
-                _log_numeric_metrics(
-                    self._tracker, run_id, metrics, lambda key: f"node_{node_name}_{key}"
-                )
-
-            if error:
-                self._tracker.log_parameter(
-                    run_id,
-                    f"node_{node_name}_error",
-                    error,
-                )
-
-            logger.debug(f"Logged execution for node {node_name}")
-
-        except Exception as e:
-            logger.warning(f"Could not log node execution: {e}")
-
-    def log_pipeline_metrics(
-        self,
-        run_id: str,
-        metrics: Dict[str, float],
-    ) -> None:
-        """
-        Log pipeline-level metrics.
-        """
-        if not self.is_available() or not run_id:
-            return
-
-        try:
-            _log_numeric_metrics(self._tracker, run_id, metrics)
-
-            logger.debug("Logged pipeline metrics")
-
-        except Exception as e:
-            logger.warning(f"Could not log pipeline metrics: {e}")
-
     def log_artifact(
         self,
         run_id: str,
@@ -453,7 +375,7 @@ class MLOpsExecutorIntegration:
                 self.node_artifacts[run_id].append(artifact_uri)
 
             logger.info(f"Logged artifact {artifact_type}: {artifact_uri}")
-            return artifact_uri
+            return cast(Optional[str], artifact_uri)
 
         except Exception as e:
             logger.warning(f"Could not log artifact: {e}")
@@ -524,175 +446,3 @@ class MLOpsExecutorIntegration:
             logger.error(f"Failed to end run: {e}")
 
         return final_metrics
-
-    def register_model_from_run(
-        self,
-        run_id: str,
-        model_name: str,
-        artifact_path: str,
-        artifact_type: str,
-        framework: str,
-        description: str = "",
-        hyperparams: Optional[Dict[str, Any]] = None,
-        metrics: Optional[Dict[str, float]] = None,
-        tags: Optional[Dict[str, str]] = None,
-    ) -> Optional[str]:
-        """
-        Register trained model in Model Registry from run artifacts.
-        """
-        if not self.is_available():
-            return None
-
-        try:
-            enriched_tags = dict(tags or {})
-
-            if self.context:
-                environment = get_active_env(self.context)
-                if environment:
-                    enriched_tags["environment"] = str(environment)
-                    logger.debug(f"Registering model in environment: {environment}")
-                else:
-                    logger.warning(
-                        "No environment detected in context. "
-                        "Model will be registered without environment tag."
-                    )
-
-                exec_mode = getattr(self.context, "execution_mode", None)
-                if exec_mode:
-                    enriched_tags["execution_mode"] = str(exec_mode)
-
-            model_version = self._registry.register_model(
-                name=model_name,
-                artifact_path=artifact_path,
-                artifact_type=artifact_type,
-                framework=framework,
-                description=description,
-                hyperparameters=hyperparams,
-                metrics=metrics,
-                tags=enriched_tags,
-                experiment_run_id=run_id,
-            )
-
-            logger.info(
-                f"Registered model {model_name} v{model_version.version} from run {run_id} "
-                f"(environment: {enriched_tags.get('environment', 'unknown')})"
-            )
-
-            return model_version.artifact_uri
-
-        except Exception as e:
-            logger.error(f"Failed to register model: {e}")
-            return None
-
-    def get_run_comparison(
-        self,
-        experiment_id: str,
-        metric_filter: Optional[Dict[str, tuple]] = None,
-    ) -> Any:
-        """
-        Get DataFrame comparing runs in experiment.
-        """
-        if not self.is_available():
-            return None
-
-        try:
-            run_ids = self._tracker.search_runs(
-                experiment_id,
-                metric_filter=metric_filter,
-            )
-
-            if not run_ids:
-                return None
-
-            comparison_df = self._tracker.compare_runs(run_ids)
-
-            logger.info(f"Generated comparison DataFrame for {len(run_ids)} runs")
-            return comparison_df
-
-        except Exception as e:
-            logger.warning(f"Could not generate comparison: {e}")
-            return None
-
-
-class MLInfoConfigLoader:
-    """
-    Loader for ML configuration from YAML/JSON/TOML files.
-    """
-
-    @staticmethod
-    def load_ml_info_from_file(
-        filepath: str,
-    ) -> Dict[str, Any]:
-        """
-        Load ML info from YAML or JSON file.
-        """
-        path = Path(filepath)
-
-        if not path.exists():
-            logger.warning(f"ML info file not found: {filepath}")
-            return {}
-
-        try:
-            if path.suffix in [".yml", ".yaml"]:
-                import yaml  # type: ignore
-
-                with open(path) as f:
-                    data = yaml.safe_load(f) or {}
-            elif path.suffix == ".json":
-                import json
-
-                with open(path) as f:
-                    data = json.load(f)
-            else:
-                logger.warning(f"Unsupported file format: {path.suffix}")
-                return {}
-
-            logger.info(f"Loaded ML info from {filepath}")
-            return data
-
-        except Exception as e:
-            logger.error(f"Failed to load ML info from {filepath}: {e}")
-            return {}
-
-    @staticmethod
-    def load_ml_info_from_context(
-        context,
-        pipeline_name: str,
-    ) -> Dict[str, Any]:
-        """
-        Load ML info from context using existing method.
-        """
-        if not hasattr(context, "get_pipeline_ml_config"):
-            return {}
-
-        try:
-            ml_config = context.get_pipeline_ml_config(pipeline_name)
-            return ml_config or {}
-        except Exception as e:
-            logger.warning(f"Could not load ML config from context: {e}")
-            return {}
-
-    @staticmethod
-    def merge_ml_info(
-        base_ml_info: Dict[str, Any],
-        override_ml_info: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Merge ML info dictionaries with override taking precedence.
-        """
-        merged = dict(base_ml_info)
-        merged.update(override_ml_info)
-
-        # Merge nested dicts
-        for key in ["hyperparams", "metrics", "tags"]:
-            if (
-                key in base_ml_info
-                and key in override_ml_info
-                and isinstance(base_ml_info[key], dict)
-                and isinstance(override_ml_info[key], dict)
-            ):
-                merged_nested = dict(base_ml_info[key])
-                merged_nested.update(override_ml_info[key])
-                merged[key] = merged_nested
-
-        return merged

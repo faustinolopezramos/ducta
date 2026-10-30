@@ -30,7 +30,7 @@ def _client() -> TestClient:
 
 @pytest.fixture
 def project(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)  # the server's source confinement base
     root = tmp_path / "proj"
@@ -155,10 +155,9 @@ class TestTheRunTableChecksCertificates:
     """A run's certificate is looked up where the certificate routes look for it."""
 
     def _certify(self, project, run_id):
-        from ducta.api.services.run_certificates import env_runs_dir
+        from ducta.api.services.run_certificates import _configured_runs_dir
 
-        runs_dir = env_runs_dir(project, "dev")
-        assert runs_dir is not None
+        runs_dir = project / _configured_runs_dir(project, "dev")
         cert = RunCertificate(
             run_id=run_id,
             pipeline=PIPELINE,
@@ -169,7 +168,7 @@ class TestTheRunTableChecksCertificates:
             ducta_version="1.0.0",
         )
         cert.certificate_hash = cert.compute_hash()
-        return write_certificate(cert, runs_dir / "dev" / run_id)
+        return write_certificate(cert, runs_dir / run_id)
 
     def test_an_intact_certificate_is_ok(self, project, storage):
         self._certify(project, "run-intact")

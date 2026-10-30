@@ -141,8 +141,8 @@ class IngestionExecutor:
         self,
         node_name: str,
         node_config: Dict[str, Any],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
         pipeline_name: Optional[str] = None,
     ) -> None:
@@ -210,7 +210,8 @@ class IngestionExecutor:
                 ) from error
             opts["query"] = query
         else:
-            opts["dbtable"] = self._build_dbtable(node_name, table, columns, where)
+            # exactly one of table/query was checked above
+            opts["dbtable"] = self._build_dbtable(node_name, str(table), columns, where)
 
         # The reserved names were refused above, so what is left (fetchsize, numPartitions,
         # user, password…) may add to or replace the connection's own. Spark reads names

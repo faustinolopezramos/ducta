@@ -105,8 +105,8 @@ class BatchExecutor(BaseExecutor):
         self,
         pipeline: Dict[str, Any],
         node_name: Optional[str],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Execute batch flow logic with optional MLflow tracking."""
@@ -137,8 +137,8 @@ class BatchExecutor(BaseExecutor):
         self,
         node_name: Optional[str],
         pipeline: Dict[str, Any],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Execute batch nodes (single or all)."""
@@ -167,8 +167,8 @@ class BatchExecutor(BaseExecutor):
     def _execute_pipeline_nodes(
         self,
         pipeline_nodes: List[str],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """Execute all nodes in batch pipeline."""

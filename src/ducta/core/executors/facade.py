@@ -26,7 +26,7 @@ import gc
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from loguru import logger  # type: ignore
 
@@ -47,8 +47,9 @@ from ducta.core.settings import CHAIN_ON_GATE_BLOCKED_CONTINUE, EVIDENCE_SIGNED,
 from ducta.core.utils import extract_pipeline_nodes
 from ducta.gate.constants import WriteMode
 from ducta.setting.contexts import Context
-from ducta.setting.environments import sanitize_env_for_path
 from ducta.stream.constants import PipelineType
+
+T = TypeVar("T")
 
 #: The code fingerprint of a pipeline whose nodes are all declarative.
 NO_NODE_CODE = "none"
@@ -60,11 +61,9 @@ class PipelineExecutor:
     def __init__(
         self,
         context: Context,
-        config_directory: Optional[str] = None,
         settings: Optional[CoreSettings] = None,
     ):
         self.context = context
-        self.config_directory = config_directory
         # Resolved once and handed to every sub-executor, so the facade and the
         # executors it builds can never disagree about the configuration.
         self.settings = settings or CoreSettings.from_context(context)
@@ -489,7 +488,7 @@ class PipelineExecutor:
         return None
 
     @staticmethod
-    def _safe_streaming(fn: Callable[[], Any], default: Any) -> Any:
+    def _safe_streaming(fn: Callable[[], T], default: T) -> T:
         """Call ``fn()``, returning ``default`` if the streaming manager raises."""
         try:
             return fn()
@@ -553,17 +552,9 @@ class PipelineExecutor:
             manager = getattr(executor, "streaming_manager", None)
             if manager is not None and manager.has_execution(execution_id):
                 return self._safe_streaming(
-                    lambda m=manager: m.restart_node(execution_id, node_name), False
+                    lambda: bool(manager.restart_node(execution_id, node_name)), False
                 )
         return False
-
-    def get_streaming_pipeline_metrics(self, execution_id: str) -> Dict[str, Any]:
-        """Get metrics for a streaming pipeline."""
-        return self._safe_streaming(
-            lambda: self._streaming_manager_for(execution_id).get_pipeline_metrics(execution_id)
-            or {},
-            {},
-        )
 
     def run_streaming_pipeline(
         self,
@@ -621,7 +612,8 @@ class PipelineExecutor:
             manager = getattr(executor, "streaming_manager", None)
             if manager is None:
                 continue
-            for pipeline in self._safe_streaming(manager.list_running_pipelines, []):
+            running: List[Dict[str, Any]] = self._safe_streaming(manager.list_running_pipelines, [])
+            for pipeline in running:
                 execution_id = pipeline.get("execution_id")
                 if execution_id and execution_id not in ids:
                     ids.append(execution_id)
@@ -847,8 +839,8 @@ class PipelineExecutor:
         ):
             if recorded is None:
                 logger.info(
-                    "Not reusing '{}': its chain-state marker records no {} fingerprint "
-                    "(written by an older Ducta). Re-running once will record one.",
+                    "Not reusing '{}': its chain-state marker records no {} fingerprint. "
+                    "Re-running once will record one.",
                     pipeline_name,
                     label,
                 )
@@ -925,8 +917,6 @@ class PipelineExecutor:
         """Resolve the active environment name for output-path resolution."""
         return self.settings.env
 
-    _LEGACY_CHAIN_STATE_DIR = ".ducta/chain_state"
-
     def _chain_state_path(self, pipeline_name: str) -> Path:
         """Chain-state path for this pipeline.
 
@@ -936,18 +926,6 @@ class PipelineExecutor:
         """
         safe_name = pipeline_name.replace("/", "_")
         return Path(self.settings.chain_state_dir) / f"{safe_name}.json"
-
-    def _legacy_per_env_chain_state_path(self, pipeline_name: str) -> Path:
-        """Pre-restructure per-environment path (`.ducta/chain_state/<env>/…`,
-        relative to cwd), kept for backward-compat reads only."""
-        safe_name = pipeline_name.replace("/", "_")
-        env = sanitize_env_for_path(self.settings.env)
-        return Path(self._LEGACY_CHAIN_STATE_DIR) / env / f"{safe_name}.json"
-
-    def _legacy_chain_state_path(self, pipeline_name: str) -> Path:
-        """Pre-per-environment flat path, kept for backward-compat reads only."""
-        safe_name = pipeline_name.replace("/", "_")
-        return Path(self._LEGACY_CHAIN_STATE_DIR) / f"{safe_name}.json"
 
     def _effective_dates(
         self, start_date: Optional[str], end_date: Optional[str]
@@ -985,8 +963,8 @@ class PipelineExecutor:
             modules.discard(None)
             if not modules:
                 # Declarative nodes only (an ingestion): no code of the project's to
-                # change. A fixed value, so the marker can vouch for it — None here
-                # made every later run refuse it as "written by an older Ducta".
+                # change. A fixed value, so the marker can vouch for it (None would make
+                # every later run refuse to reuse it).
                 return NO_NODE_CODE
 
             loader = self.batch_executor.node_executor._function_loader
@@ -996,7 +974,7 @@ class PipelineExecutor:
             digest = hashlib.sha256()
             hashed_any = False
             with importer.temporary_sys_path(search_paths):
-                for module_path in sorted(modules):
+                for module_path in sorted(str(m) for m in modules):
                     spec = importlib.util.find_spec(str(module_path))
                     origin = getattr(spec, "origin", None) if spec else None
                     if not origin:
@@ -1057,15 +1035,11 @@ class PipelineExecutor:
     def _load_chain_state(self, pipeline_name: str) -> Optional[Dict[str, Any]]:
         """Read the chain-state marker for a pipeline; None when absent/corrupt."""
         try:
-            for candidate in (
-                self._chain_state_path(pipeline_name),
-                self._legacy_per_env_chain_state_path(pipeline_name),
-                self._legacy_chain_state_path(pipeline_name),
-            ):
-                if candidate.exists():
-                    data = json.loads(candidate.read_text(encoding="utf-8"))
-                    return data if isinstance(data, dict) else None
-            return None
+            path = self._chain_state_path(pipeline_name)
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else None
         except Exception:  # noqa: BLE001
             return None
 

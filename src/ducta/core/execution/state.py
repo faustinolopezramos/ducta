@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Deque, Dict, List, Optional, Set, cast
 
 
 class ThreadSafeExecutionState:
@@ -32,7 +32,7 @@ class ThreadSafeExecutionState:
 
     def __init__(self, execution_order: List[str], node_configs: Dict[str, Dict[str, Any]]):
         self._lock = threading.RLock()
-        self.ready_queue = deque()
+        self.ready_queue: Deque[str] = deque()
         self.running: Dict = {}
         self.completed: Set[str] = set()
         self.failed = False
@@ -113,7 +113,7 @@ class ThreadSafeExecutionState:
     def remove_running_future(self, future) -> Optional[Dict[str, Any]]:
         """Thread-safe remove running future."""
         with self._lock:
-            return self.running.pop(future, None)
+            return cast(Optional[Dict[str, Any]], self.running.pop(future, None))
 
     def get_running_count(self) -> int:
         """Thread-safe get count of running nodes."""

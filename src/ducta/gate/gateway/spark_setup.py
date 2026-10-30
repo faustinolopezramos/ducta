@@ -52,11 +52,12 @@ def collect_jdbc_jars(
 
 def _download_drivers_for_sources(sources_path: Path, lib_dir: Path) -> None:
     """Download the driver JAR for each unique source type in ``sources.yaml``."""
-    import yaml
+
+    from ducta.setting.project.files import load_yaml
 
     from .connector import JDBCConnector
 
-    config = yaml.safe_load(sources_path.read_text()) or {}
+    config = load_yaml(sources_path.read_text()) or {}
     sources = config.get("sources", {}) or {}
 
     for source_name, cfg in sources.items():

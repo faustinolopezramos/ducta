@@ -329,7 +329,7 @@ class ModelRegistry:
             name = validate_model_name(name)
             framework = validate_framework(framework)
             artifact_type = validate_artifact_type(artifact_type)
-            description = validate_description(description)
+            description = validate_description(description) or ""
             hyperparameters = validate_parameters(hyperparameters)
             tags = validate_tags(tags)
             metrics = validate_metrics(metrics)
@@ -589,33 +589,18 @@ class ModelRegistry:
         if model_rows.empty:
             raise ModelNotFoundError(name)
 
-        has_index_columns = "size_bytes" in model_rows.columns and "stage" in model_rows.columns
-
         result = []
         for _, row in model_rows.iterrows():
-            version = int(row["version"])
-            if has_index_columns:
-                raw_size = row["size_bytes"]
-                result.append(
-                    {
-                        "model_id": row["model_id"],
-                        "version": version,
-                        "created_at": row["created_at"],
-                        "stage": row["stage"],
-                        "size_bytes": None if pd.isna(raw_size) else int(raw_size),
-                    }
-                )
-            else:
-                model_version = self.get_model_version(name, version)
-                result.append(
-                    {
-                        "model_id": model_version.model_id,
-                        "version": version,
-                        "created_at": model_version.created_at,
-                        "stage": model_version.metadata.stage.value,
-                        "size_bytes": model_version.size_bytes,
-                    }
-                )
+            raw_size = row["size_bytes"]
+            result.append(
+                {
+                    "model_id": row["model_id"],
+                    "version": int(row["version"]),
+                    "created_at": row["created_at"],
+                    "stage": row["stage"],
+                    "size_bytes": None if pd.isna(raw_size) else int(raw_size),
+                }
+            )
 
         return result
 
@@ -665,7 +650,7 @@ class ModelRegistry:
                 "old_stage": old_stage.value,
                 "new_stage": stage.value,
             }
-            if gate_bypassed:
+            if gate_bypassed and policy is not None:
                 audit_details["gate_bypassed"] = True
                 audit_details["policy_metric"] = policy.metric
             if demoted_versions:
@@ -926,7 +911,9 @@ class ModelRegistry:
             index_path = str(Path(self.registry_path) / "models" / self._INDEX_FILENAME)
             return self.storage.read_dataframe(index_path)
         except FileNotFoundError:
-            return pd.DataFrame(columns=["model_id", "name", "version", "created_at"])
+            return pd.DataFrame(
+                columns=["model_id", "name", "version", "created_at", "stage", "size_bytes"]
+            )
 
     def _update_models_index(self, model_version: ModelVersion, skip_lock: bool = False) -> None:
         """

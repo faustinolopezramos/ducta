@@ -23,7 +23,7 @@ from pathlib import Path
 import pytest
 
 from ducta.console.core import ConfigFormat
-from ducta.console.template import (
+from ducta.console.templates import (
     StreamingBasicTemplate,
     TemplateFactory,
     TemplateGenerator,

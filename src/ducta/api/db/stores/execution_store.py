@@ -245,4 +245,4 @@ class DatabaseExecutionStore:
         deleted = result.rowcount
         if deleted:
             logger.debug("Pruned {n} stale execution records from DB", n=deleted)
-        return deleted
+        return int(deleted)

@@ -48,6 +48,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
+from ducta import state
 from ducta.api.dependencies import CurrentUserDep, get_execution_manager, require_permission
 from ducta.api.routes.projects import ProjectServiceDep
 
@@ -663,7 +664,7 @@ _JOB_ID = re.compile(r"^[0-9a-f]{12}\Z")
 
 
 def _jobs_dir(root: Path) -> Path:
-    return root / ".ducta" / "ai" / "jobs"
+    return state.ai_dir(root, "jobs")
 
 
 class _Jobs:

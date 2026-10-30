@@ -22,7 +22,7 @@ import os
 import threading
 from dataclasses import dataclass, field, fields, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, cast
 
 from loguru import logger
 
@@ -46,12 +46,8 @@ DEFAULT_STALE_RUN_AGE = 3600.0
 
 
 def _active_env(context: "Context") -> Optional[str]:
-    """The context's active environment name, however it's exposed.
-
-    Different Context flavors carry it under ``env`` or ``environment`` —
-    shared to avoid re-deriving this fallback at every call site.
-    """
-    return getattr(context, "env", None) or getattr(context, "environment", None)
+    """The context's active environment name (its ``env``)."""
+    return getattr(context, "env", None)
 
 
 def _expand_path_placeholders(path: str, context: "Context", gs: Dict[str, Any]) -> str:
@@ -110,13 +106,13 @@ class MLOpsConfig:
 
     @staticmethod
     def _env(name: str, default: Optional[str] = None) -> Optional[str]:
-        """Read a ``Ducta_MLOPS_*`` env var, also accepting the all-caps ``DUCTA_MLOPS_*``
-        form (the conventional Unix casing, unlike this codebase's historical mixed case) —
-        a very plausible typo/convention mismatch would otherwise silently fall back to
-        defaults with zero warning."""
+        """Read a ``DUCTA_MLOPS_*`` environment variable."""
         value = os.environ.get(name)
-        if value is None:
-            value = os.environ.get(name.upper())
+        return value if value is not None else default
+
+    @classmethod
+    def _env_str(cls, name: str, default: str) -> str:
+        value = cls._env(name)
         return value if value is not None else default
 
     @classmethod
@@ -147,7 +143,7 @@ class MLOpsConfig:
         """Parse a boolean env var, accepting the same spellings as
         ``ducta.core.settings.coerce_bool`` (``true/yes/on/1`` and
         ``false/no/off/0``) instead of only the literal string ``"true"`` —
-        the old behavior silently treated ``Ducta_MLOPS_ENABLE_RETRY=1`` as
+        the old behavior silently treated ``DUCTA_MLOPS_ENABLE_RETRY=1`` as
         False with no warning.
         """
         raw = cls._env(name)
@@ -174,28 +170,28 @@ class MLOpsConfig:
         """
 
         return cls(
-            backend_type=cls._env("Ducta_MLOPS_BACKEND", "local"),  # type: ignore
-            storage_path=cls._env("Ducta_MLOPS_PATH", DEFAULT_STORAGE_PATH),
+            backend_type=cls._env("DUCTA_MLOPS_BACKEND", "local"),  # type: ignore
+            storage_path=cls._env_str("DUCTA_MLOPS_PATH", DEFAULT_STORAGE_PATH),
             catalog=os.getenv("DATABRICKS_CATALOG"),
             schema=os.getenv("DATABRICKS_SCHEMA"),
             volume=os.getenv("DATABRICKS_VOLUME", "mlops_artifacts"),
-            registry_path=cls._env("Ducta_MLOPS_REGISTRY_PATH", DEFAULT_REGISTRY_PATH),
-            tracking_path=cls._env("Ducta_MLOPS_TRACKING_PATH", DEFAULT_TRACKING_PATH),
-            model_retention_days=cls._env_int("Ducta_MLOPS_MODEL_RETENTION_DAYS", 90),
-            max_versions_per_model=cls._env_int("Ducta_MLOPS_MAX_VERSIONS", 100),
+            registry_path=cls._env_str("DUCTA_MLOPS_REGISTRY_PATH", DEFAULT_REGISTRY_PATH),
+            tracking_path=cls._env_str("DUCTA_MLOPS_TRACKING_PATH", DEFAULT_TRACKING_PATH),
+            model_retention_days=cls._env_int("DUCTA_MLOPS_MODEL_RETENTION_DAYS", 90),
+            max_versions_per_model=cls._env_int("DUCTA_MLOPS_MAX_VERSIONS", 100),
             metric_buffer_size=cls._env_int(
-                "Ducta_MLOPS_METRIC_BUFFER_SIZE", DEFAULT_METRIC_BUFFER_SIZE
+                "DUCTA_MLOPS_METRIC_BUFFER_SIZE", DEFAULT_METRIC_BUFFER_SIZE
             ),
-            auto_flush_metrics=cls._env_bool("Ducta_MLOPS_AUTO_FLUSH", True),
-            max_retries=cls._env_int("Ducta_MLOPS_MAX_RETRIES", DEFAULT_MAX_RETRIES),
-            retry_delay=cls._env_float("Ducta_MLOPS_RETRY_DELAY", DEFAULT_RETRY_DELAY),
-            max_active_runs=cls._env_int("Ducta_MLOPS_MAX_ACTIVE_RUNS", DEFAULT_MAX_ACTIVE_RUNS),
-            auto_cleanup_stale=cls._env_bool("Ducta_MLOPS_AUTO_CLEANUP", True),
+            auto_flush_metrics=cls._env_bool("DUCTA_MLOPS_AUTO_FLUSH", True),
+            max_retries=cls._env_int("DUCTA_MLOPS_MAX_RETRIES", DEFAULT_MAX_RETRIES),
+            retry_delay=cls._env_float("DUCTA_MLOPS_RETRY_DELAY", DEFAULT_RETRY_DELAY),
+            max_active_runs=cls._env_int("DUCTA_MLOPS_MAX_ACTIVE_RUNS", DEFAULT_MAX_ACTIVE_RUNS),
+            auto_cleanup_stale=cls._env_bool("DUCTA_MLOPS_AUTO_CLEANUP", True),
             stale_run_age_seconds=cls._env_float(
-                "Ducta_MLOPS_STALE_RUN_AGE", DEFAULT_STALE_RUN_AGE
+                "DUCTA_MLOPS_STALE_RUN_AGE", DEFAULT_STALE_RUN_AGE
             ),
-            enable_retry=cls._env_bool("Ducta_MLOPS_ENABLE_RETRY", True),
-            enable_circuit_breaker=cls._env_bool("Ducta_MLOPS_CIRCUIT_BREAKER", False),
+            enable_retry=cls._env_bool("DUCTA_MLOPS_ENABLE_RETRY", True),
+            enable_circuit_breaker=cls._env_bool("DUCTA_MLOPS_CIRCUIT_BREAKER", False),
         )
 
     def with_overrides(self, overrides: Dict[str, Any]) -> "MLOpsConfig":
@@ -314,7 +310,8 @@ class StorageBackendFactory:
 
         try:
             backend_key = "databricks" if mode == "distributed" else mode
-            backend_cls = StorageBackendRegistry.get(backend_key)
+            # Each backend takes its own arguments (a path, or a UC volume).
+            backend_cls: Any = StorageBackendRegistry.get(backend_key)
 
             if mode == "local":
                 path = StorageBackendFactory._resolve_mlops_path(context, base_path, pipeline_name)
@@ -327,7 +324,7 @@ class StorageBackendFactory:
                     local_kwargs["retry_config"] = kwargs["retry_config"]
                 if "enable_circuit_breaker" in kwargs:
                     local_kwargs["enable_circuit_breaker"] = kwargs["enable_circuit_breaker"]
-                return backend_cls(base_path=path, **local_kwargs)
+                return cast(StorageBackend, backend_cls(base_path=path, **local_kwargs))
 
             if mode in ("databricks", "distributed"):
                 catalog_to_use = catalog or os.getenv("DATABRICKS_CATALOG", "main")
@@ -346,7 +343,7 @@ class StorageBackendFactory:
                 if "enable_circuit_breaker" in kwargs:
                     databricks_kwargs["enable_circuit_breaker"] = kwargs["enable_circuit_breaker"]
 
-                return backend_cls(
+                storage: StorageBackend = backend_cls(
                     catalog=catalog_to_use,
                     schema=schema_to_use,
                     volume_name=volume_to_use,
@@ -354,6 +351,7 @@ class StorageBackendFactory:
                     token=kwargs.get("token"),
                     **databricks_kwargs,
                 )
+                return storage
 
             raise ValueError(
                 f"Unsupported execution_mode: '{mode}'. "
@@ -438,7 +436,8 @@ def _resolve_component_storage(
     # Only the local backend has a ``base_path``; the Databricks one is a UC volume.
     base = getattr(storage, "base_path", None)
     if base is None and hasattr(storage, "volume_name"):
-        base = f"/Volumes/{storage.catalog}/{storage.schema}/{storage.volume_name}"
+        uc = cast(Any, storage)  # the Databricks backend
+        base = f"/Volumes/{uc.catalog}/{uc.schema}/{uc.volume_name}"
     logger.info(
         f"Creating {component_name} with {storage.__class__.__name__} "
         f"at base '{base}' "
@@ -552,49 +551,13 @@ class MLOpsContext:
         model_registry: Optional[ModelRegistry] = None,
         experiment_tracker: Optional[ExperimentTracker] = None,
         config: Optional[MLOpsConfig] = None,
-        # Legacy kwargs support
-        backend_type: Optional[str] = None,
-        storage_path: Optional[str] = None,
-        **kwargs,
     ):
         """
         Initialize MLOps context.
         """
-        # Check if using legacy API
-        if backend_type is not None or storage_path is not None:
-            # Legacy initialization - create from config
-            logger.debug("Using legacy MLOpsContext initialization")
-
-            if model_registry is not None or experiment_tracker is not None or config is not None:
-                logger.warning(
-                    "MLOpsContext() received both legacy kwargs (backend_type/storage_path) "
-                    "and modern kwargs (model_registry/experiment_tracker/config); the legacy "
-                    "path takes over and silently discards the modern kwargs you passed "
-                    "(model_registry={}, experiment_tracker={}, config={}). Pass only one "
-                    "style.",
-                    model_registry is not None,
-                    experiment_tracker is not None,
-                    config is not None,
-                )
-
-            legacy_config = MLOpsConfig(
-                backend_type=backend_type or "local",  # type: ignore
-                storage_path=storage_path or DEFAULT_STORAGE_PATH,
-                **{k: v for k, v in kwargs.items() if k in MLOpsConfig.__dataclass_fields__},
-            )
-
-            _, model_registry, experiment_tracker = MLOpsContext._build_from_config(legacy_config)
-            config = legacy_config
-
         self.model_registry = model_registry
         self.experiment_tracker = experiment_tracker
         self.config = config
-
-        # Expose storage for backward compatibility
-        if self.model_registry:
-            self.storage = self.model_registry.storage
-        else:
-            self.storage = None
 
         logger.info("MLOpsContext initialized")
 
@@ -627,17 +590,11 @@ class MLOpsContext:
         """Build the (storage, model_registry, experiment_tracker) triple a
         ``MLOpsConfig`` describes.
 
-        Shared by ``from_config`` and ``__init__``'s legacy-kwargs branch,
-        which previously built this triple independently and had drifted:
-        the legacy path never passed ``auto_cleanup_stale``/
-        ``stale_run_age_seconds`` to ``ExperimentTracker`` (silently ignoring
-        those ``MLOpsConfig`` settings) and constructed the Databricks backend
-        directly instead of through ``StorageBackendRegistry`` (silently
-        ignoring ``config.volume``). Does not call ``config.validate()`` —
-        callers decide whether/when to validate.
+        Does not call ``config.validate()`` — callers decide whether/when to
+        validate.
         """
         resolved_backend = _resolve_backend_type(config.backend_type)
-        backend_cls = StorageBackendRegistry.get(resolved_backend)
+        backend_cls: Any = StorageBackendRegistry.get(resolved_backend)
 
         if resolved_backend == "local":
             storage = backend_cls(base_path=config.storage_path)
@@ -768,20 +725,6 @@ class MLOpsContext:
         config = MLOpsConfig.from_env()
 
         return cls.from_config(config)
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get combined statistics from all components."""
-        return {
-            "model_registry": self.model_registry.get_stats() if self.model_registry else {},
-            "experiment_tracker": (
-                self.experiment_tracker.get_stats() if self.experiment_tracker else {}
-            ),
-            "storage": self.storage.get_stats() if self.storage else {},
-            "config": {
-                "backend_type": self.config.backend_type if self.config else "unknown",
-                "storage_path": self.config.storage_path if self.config else "unknown",
-            },
-        }
 
     def cleanup(self) -> None:
         """Clean up resources and close any open connections."""

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Collection, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Collection, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -30,6 +30,11 @@ from ducta.api.exceptions import ExecutionNotFoundError
 from ducta.api.execution.error_recovery import load_error_log_summary
 from ducta.api.models.execution import ExecutionResponse, LogEntry
 from ducta.api.utils.pagination import paginate
+
+if TYPE_CHECKING:
+    from ducta.api.execution.manager_state import _ManagerState as _Base
+else:
+    _Base = object
 
 
 def ran_in(
@@ -58,7 +63,7 @@ def _project_ids(workspace: Path) -> Optional[Set[str]]:
         from ducta.api.repositories.project_repository import ProjectRepository
 
         return set(ProjectRepository(Path(workspace)).list_ids()) or None
-    except Exception:  # noqa: BLE001 — unknown projects: keep every legacy record
+    except Exception:  # noqa: BLE001 — unknown projects: keep every record
         return None
 
 
@@ -94,7 +99,7 @@ def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     return dt
 
 
-class _ReadsMixin:
+class _ReadsMixin(_Base):
     """Read paths: in-memory lookups, filtering/pagination, and durable DB/file fallback reads."""
 
     def _get_owned(self, execution_id: str, user_id: Optional[str]) -> ExecutionResponse:

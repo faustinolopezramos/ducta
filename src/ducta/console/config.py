@@ -26,13 +26,13 @@ root or under ``config/``). Commands find the nearest one from ``--base-path``
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 from loguru import logger  # type: ignore
 
 from ducta.console.core import ConfigurationError, SecurityError, SecurityValidator
 from ducta.setting.project.context import find_nearest_project
-from ducta.setting.project.loader import PROJECT_FILE, project_file
+from ducta.setting.project.loader import PROJECT_FILE
 
 __all__ = ["ConfigManager", "find_nearest_project"]
 
@@ -40,7 +40,9 @@ __all__ = ["ConfigManager", "find_nearest_project"]
 class ConfigManager:
     """The project a command operates on, and the working directory it runs in."""
 
-    def __init__(self, base_path: Optional[str] = None, require_config: bool = True) -> None:
+    def __init__(
+        self, base_path: Union[str, Path, None] = None, require_config: bool = True
+    ) -> None:
         self.original_cwd = Path.cwd()
         self.base_path = Path(base_path) if base_path else Path.cwd()
         self.require_config = require_config
@@ -61,11 +63,6 @@ class ConfigManager:
                 )
             logger.debug("No project found under {}", self.base_path)
 
-    def get_config_file_path(self) -> str:
-        if self.project_root is None:
-            raise ConfigurationError("No active project")
-        return str(project_file(self.project_root).resolve())
-
     def get_config_directory(self) -> Path:
         if self.project_root is None:
             if not self.require_config:
@@ -80,9 +77,3 @@ class ConfigManager:
                 os.chdir(SecurityValidator.validate_project_root(self.project_root))
             except SecurityError as e:
                 raise ConfigurationError(f"Failed to change directory: {e}")
-
-    def restore_original_directory(self) -> None:
-        try:
-            os.chdir(self.original_cwd)
-        except OSError:
-            pass

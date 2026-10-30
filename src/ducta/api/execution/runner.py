@@ -30,6 +30,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 from loguru import logger  # type: ignore
 
+from ducta import state
 from ducta.api.execution.output_capture import ProcessOutputCapture
 from ducta.core.errors import DuctaError
 
@@ -475,7 +476,7 @@ def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
     successful run" staleness and "what changed" compare against.
     """
     original = Path(str(getattr(ctx, "output_path", None) or ctx.global_config.get("output_path")))
-    scratch = original / env / ".ducta" / "scratch"
+    scratch = state.scratch_dir(original, env)
     gs = ctx.global_config
     ctx.sample_rows = rows
     ctx.output_path = str(scratch)
@@ -491,9 +492,9 @@ def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
             # run writes none of it, only a local copy under the scratch.
             rel = Path(*str(key).split("."))
         cfg["filepath"] = str(scratch / rel)
-    gs["run_certificate_dir"] = str(scratch / ".ducta" / "runs")
+    gs["run_certificate_dir"] = str(state.under(scratch, "runs"))
     chain = gs.get("chain") if isinstance(gs.get("chain"), dict) else {}
-    gs["chain"] = {**chain, "state_dir": str(scratch / ".ducta" / "chain_state")}
+    gs["chain"] = {**chain, "state_dir": str(state.under(scratch, "chain_state"))}
     quality = gs.get("quality") if isinstance(gs.get("quality"), dict) else None
     if quality is not None:
         output = quality.get("output") if isinstance(quality.get("output"), dict) else {}
@@ -637,6 +638,12 @@ def run_pipeline_sync(
             # cleanup) cannot race with another execution's imports.
             with _execution_module_isolation_scope(execution_id, manager):
                 logger.info("Starting Ducta pipeline execution")
+                # The run log is what the engine prints: give it the CLI's reporter.
+                from ducta.console.ux.reporter import ConsoleReporter
+                from ducta.reporting import get_reporter, set_reporter
+
+                if not isinstance(get_reporter(), ConsoleReporter):
+                    set_reporter(ConsoleReporter())
                 try:
                     from ducta.console.ux.rich_logger import print_execution_header
 

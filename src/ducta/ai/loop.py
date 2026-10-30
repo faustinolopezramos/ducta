@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Set, Tuple
 
-from ducta.ai.config import AIConfig
+from ducta.ai.config import AIConfig, config_path
 from ducta.ai.context import MAX_CHARS
 from ducta.ai.drafts import Attempt, Draft, add_usage, utc_now
 from ducta.ai.errors import AICancelledError, AIConfigError, AIEnvironmentError, AIError
@@ -199,7 +199,7 @@ def too_large(config: AIConfig, chars: int) -> AIConfigError:
     return AIConfigError(
         f"The request (about {chars // CHARS_PER_TOKEN:,} tokens, plus room for the answer) "
         f"does not fit the model's context window ({config.context_tokens:,} tokens). Raise "
-        "context_tokens in ~/.ducta/ai.toml (if the model supports it) or narrow the request."
+        f"context_tokens in {config_path()} (if the model supports it) or narrow the request."
     )
 
 

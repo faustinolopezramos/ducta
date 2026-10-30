@@ -58,10 +58,3 @@ def test_reports_default_to_visible_quality_dir(executor, tmp_path):
     _run(executor, {"checks": {"row_count": {"min": 1}}})
     assert (tmp_path / "base" / "quality").is_dir()
     assert not (tmp_path / "base" / ".quality").exists()
-
-
-def test_an_existing_legacy_dir_keeps_its_history(executor, tmp_path):
-    (tmp_path / "base" / ".quality").mkdir(parents=True)
-    _run(executor, {"checks": {"row_count": {"min": 1}}})
-    assert any((tmp_path / "base" / ".quality").iterdir())
-    assert not (tmp_path / "base" / "quality").exists()

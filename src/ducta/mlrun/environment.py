@@ -23,7 +23,7 @@ import platform
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from loguru import logger
 
@@ -47,9 +47,12 @@ def _run_git_command(args: list, cwd: Optional[str] = None) -> Optional[str]:
         kwargs: Dict[str, Any] = {}
         if cwd:
             kwargs["cwd"] = cwd
-        return subprocess.check_output(
-            ["git"] + args, stderr=subprocess.DEVNULL, text=True, **kwargs
-        ).strip()
+        return cast(
+            str,
+            subprocess.check_output(
+                ["git"] + args, stderr=subprocess.DEVNULL, text=True, **kwargs
+            ).strip(),
+        )
     except Exception:
         return None
 

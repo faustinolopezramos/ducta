@@ -94,9 +94,9 @@ from ducta.core.ledger import RunLedger, ledger_for
 # ML context & MLOps integration
 # ---------------------------------------------------------------------------
 from ducta.core.ml_context import MLNodeContext
-from ducta.core.mlflow_node_executor import MLflowNodeExecutor, create_mlflow_executor
+from ducta.core.mlflow_node_executor import MLflowNodeExecutor
 from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
-from ducta.core.mlops_integration import MLInfoConfigLoader, MLOpsExecutorIntegration
+from ducta.core.mlops_integration import MLOpsExecutorIntegration
 
 # ---------------------------------------------------------------------------
 # Pipeline state & dependency resolution
@@ -148,7 +148,6 @@ from ducta.core.settings import (
 from ducta.core.split_validator import (
     SplitValidationError,
     document_split_semantics,
-    log_split_leakage_checks,
     validate_split_config,
 )
 
@@ -214,7 +213,6 @@ __all__ = [
     "PipelineValidator",
     "SplitValidationError",
     "document_split_semantics",
-    "log_split_leakage_checks",
     "validate_split_config",
     # preflight
     "PreflightReport",
@@ -227,11 +225,9 @@ __all__ = [
     "NodeFunction",
     # MLOps
     "MLNodeContext",
-    "MLInfoConfigLoader",
     "MLOpsExecutorIntegration",
     "MLOpsAutoConfigurator",
     "MLflowNodeExecutor",
-    "create_mlflow_executor",
     # certificates & security
     "RunCertificate",
     "VerifyResult",

@@ -71,8 +71,8 @@ class MLflowNodeExecutor(NodeExecutor):
     def execute_single_node(
         self,
         node_name: str,
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """
@@ -138,8 +138,8 @@ class MLflowNodeExecutor(NodeExecutor):
         execution_order: list,
         node_configs: Dict[str, Dict[str, Any]],
         dag: Dict[str, set],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> None:
         """
@@ -163,38 +163,3 @@ class MLflowNodeExecutor(NodeExecutor):
         except Exception:
             self.mlflow_tracker.log_pipeline_metric("pipeline_success", 0.0)
             raise
-
-
-def create_mlflow_executor(
-    context,
-    input_loader,
-    output_manager,
-    mlflow_config: Optional[Dict[str, Any]] = None,
-    max_workers: int = 4,
-) -> NodeExecutor:
-    """
-    Factory function to create an MLflow-enabled executor.
-    """
-    if not is_mlflow_available():
-        logger.warning("MLflow not available, falling back to standard executor")
-        return NodeExecutor(context, input_loader, output_manager, max_workers)
-
-    tracker = None
-    if mlflow_config:
-        tracker = MLflowPipelineTracker(
-            experiment_name=mlflow_config.get("experiment_name", "Ducta_pipeline"),
-            tracking_uri=mlflow_config.get("tracking_uri"),
-            artifact_location=mlflow_config.get("artifact_location"),
-            enable_autolog=mlflow_config.get("enable_autolog", True),
-            nested_runs=mlflow_config.get("nested_runs", True),
-            tags=mlflow_config.get("tags"),
-        )
-
-    return MLflowNodeExecutor(
-        context=context,
-        input_loader=input_loader,
-        output_manager=output_manager,
-        mlflow_tracker=tracker,
-        max_workers=max_workers,
-        enable_mlflow=True,
-    )

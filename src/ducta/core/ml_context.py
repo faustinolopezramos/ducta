@@ -73,5 +73,5 @@ class MLNodeContext(Mapping):
         return getattr(self, key, default) if key in self._keys() else default
 
     def to_dict(self) -> Dict[str, Any]:
-        """Return a plain dict copy (e.g. for serialization or legacy callers)."""
+        """Return a plain dict copy (e.g. for serialization)."""
         return {name: getattr(self, name) for name in self._keys()}

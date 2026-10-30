@@ -1,5 +1,4 @@
-"""Startup migrations: a fresh database gets its tables, and one created while
-migrations were being skipped (no ``alembic_version``) is stamped, not rebuilt."""
+"""Startup migrations: a fresh database gets every table, with the ORM's columns."""
 
 import asyncio
 import sqlite3
@@ -43,25 +42,22 @@ def test_fresh_database_gets_every_table(tmp_path):
     assert len(_version(db)) == 1
 
 
-def test_unversioned_current_database_is_stamped_not_recreated(tmp_path):
-    db = tmp_path / "old.db"
-    _migrate(db)
-    with sqlite3.connect(db) as conn:
-        conn.execute(
-            "insert into executions (id, pipeline_name, env, status) values ('keep', 'p', 'dev', 'success')"
-        )
-        conn.execute("drop table alembic_version")
-
-    _migrate(db)
-
-    assert len(_version(db)) == 1
-    with sqlite3.connect(db) as conn:
-        assert conn.execute("select id from executions").fetchall() == [("keep",)]
-
-
 def test_running_twice_is_a_no_op(tmp_path):
     db = tmp_path / "twice.db"
     _migrate(db)
     first = _version(db)
     _migrate(db)
     assert _version(db) == first
+
+
+def test_the_migrated_schema_is_the_orm_schema(tmp_path):
+    """One migration builds the whole schema: every ORM table and column, nothing else."""
+    import ducta.api.db.models  # noqa: F401 — registers the tables
+    from ducta.api.db.base import Base
+
+    db = tmp_path / "ducta.db"
+    _migrate(db)
+    with sqlite3.connect(db) as conn:
+        for name, table in Base.metadata.tables.items():
+            have = {row[1] for row in conn.execute(f"PRAGMA table_info({name})")}
+            assert have == {col.name for col in table.columns}, name

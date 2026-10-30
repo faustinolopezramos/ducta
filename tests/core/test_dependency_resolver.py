@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ducta.core.dependency_resolver import DependencyResolver, detect_cycles_dfs
+from ducta.core.errors import ConfigurationError
 
 
 class TestDetectCyclesDfs:
@@ -13,11 +14,11 @@ class TestDetectCyclesDfs:
         assert detect_cycles_dfs({"a": ["b"], "b": ["c"], "c": []}) is None
 
     def test_self_loop_detected(self):
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ConfigurationError, match="Circular dependency"):
             detect_cycles_dfs({"a": ["a"]})
 
     def test_cycle_detected(self):
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ConfigurationError, match="Circular dependency"):
             detect_cycles_dfs({"a": ["b"], "b": ["c"], "c": ["a"]})
 
 
@@ -38,7 +39,7 @@ class TestBuildDependencyGraph:
     def test_dependency_outside_pipeline_raises(self):
         nodes = ["a"]
         cfgs = {"a": {"dependencies": ["ghost"]}}
-        with pytest.raises(ValueError, match="not in the pipeline"):
+        with pytest.raises(ConfigurationError, match="not in the pipeline"):
             DependencyResolver.build_dependency_graph(nodes, cfgs)
 
     def test_inferred_edge_from_dataset_flow(self):
@@ -66,7 +67,7 @@ class TestTopologicalSort:
 
     def test_cycle_raises(self):
         dag = {"a": {"b"}, "b": {"a"}}
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ConfigurationError, match="Circular dependency"):
             DependencyResolver.topological_sort(dag)
 
     def test_independent_nodes_ordered_by_dict_insertion_not_hash_order(self):

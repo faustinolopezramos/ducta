@@ -34,7 +34,7 @@ Show the project's pipelines (the same as `ducta config list-pipelines`).
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 | `-e`, `--env` | Environment to use for listing |
 | `--filter` | Filter pipelines by name (case-insensitive substring match) |
-| `--output-format`, `--format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
+| `--output-format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
 
 ## ducta check
 
@@ -118,7 +118,7 @@ Check streaming pipeline status
 | `--config`, `-c` | ducta.yaml, or any file or directory inside the project (default: the project containing the current directory) |
 | `--env`, `-e` | Execution environment — default `base` |
 | `--execution-id`, `-i` | Specific execution ID to check |
-| `--output-format`, `--format`, `-f` | Output format — one of `table`, `json`; default `table` |
+| `--output-format`, `-f` | Output format — one of `table`, `json`; default `table` |
 
 ### ducta stream stop
 
@@ -162,7 +162,7 @@ List available pipelines
 |---|---|
 | `-e`, `--env` | Environment to use for listing |
 | `--filter` | Filter pipelines by name (case-insensitive substring match) |
-| `--output-format`, `--format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
+| `--output-format` | Output format: table (default), json, or list — one of `table`, `json`, `list`; default `table` |
 | `--base-path` | Project directory (default: the current directory or its nearest parent holding ducta.yaml) |
 
 ### ducta config pipeline-info

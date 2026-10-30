@@ -12,6 +12,7 @@ import threading
 
 import pytest
 
+from ducta.core.errors import ExecutionError
 from tests.core import fakes
 from tests.core.fakes import (
     FakeContext,
@@ -144,7 +145,7 @@ class TestFailurePropagation:
         }
         executor, _, _ = _executor(cfg)
 
-        with pytest.raises(RuntimeError) as caught:
+        with pytest.raises(ExecutionError) as caught:
             _run(executor, cfg)
 
         # The real error, not a generic "failed due to node failures".
@@ -159,7 +160,7 @@ class TestFailurePropagation:
         }
         executor, _, _ = _executor(cfg)
 
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ExecutionError):
             _run(executor, cfg)
 
         assert "b" not in fakes.EXECUTED
@@ -231,7 +232,7 @@ class TestTimeouts:
         executor, _, _ = _executor(cfg)
         executor._coordinator.node_timeout = 0.2
 
-        with pytest.raises(RuntimeError, match="timeout"):
+        with pytest.raises(ExecutionError, match="timeout"):
             _run(executor, cfg)
 
     def test_a_fast_node_is_unaffected_by_the_budget(self):
@@ -265,5 +266,5 @@ class TestRetry:
         cfg = {"always": node(fakes.register("always", fakes.failing("always")), retry=2)}
         executor, _, _ = _executor(cfg)
 
-        with pytest.raises(RuntimeError, match="always"):
+        with pytest.raises(ExecutionError, match="always"):
             _run(executor, cfg)

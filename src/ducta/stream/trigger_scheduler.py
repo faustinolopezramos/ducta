@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -120,7 +120,9 @@ class TriggerScheduler:
                 config_section=config_section,
                 config_value=interval,
             )
-        min_interval = float(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        min_interval = float(
+            cast(float, STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        )
         if self.validator.parse_time_to_seconds(interval) < min_interval:
             raise StreamingConfigurationError(
                 f"{config_section.split('.')[-1]} interval '{interval}' is below minimum of {min_interval} seconds",
@@ -166,7 +168,9 @@ class TriggerScheduler:
         base interval. The chosen value is always clamped to
         [min_trigger_interval_seconds, ceiling].
         """
-        min_interval = float(STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        min_interval = float(
+            cast(float, STREAMING_VALIDATIONS.get("min_trigger_interval_seconds", 1))
+        )
         ceiling = float(self._global_setting("streaming_adaptive_max_interval_seconds", 60.0))
         # An explicit interval acts as the base/preferred value when set.
         base_raw = trigger_config.get("interval") or self._global_setting(

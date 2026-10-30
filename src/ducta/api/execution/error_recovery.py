@@ -26,7 +26,7 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -205,7 +205,7 @@ class ExecutionErrorLog:
             path = Path(base_dir) / execution_id / _ERRORS_FILENAME
             if not path.is_file():
                 return None
-            return json.loads(path.read_text(encoding="utf-8"))
+            return cast(Optional[Dict[str, Any]], json.loads(path.read_text(encoding="utf-8")))
         except (OSError, ValueError) as exc:  # noqa: BLE001
             logger.warning(
                 "ExecutionErrorLog.load failed for {id}: {exc}", id=execution_id, exc=exc

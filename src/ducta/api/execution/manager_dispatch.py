@@ -25,7 +25,7 @@ import threading
 from datetime import datetime, timezone
 from functools import partial
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from loguru import logger  # type: ignore
@@ -37,6 +37,11 @@ from ducta.api.execution.manager_shared import _TERMINAL_STATUSES
 from ducta.api.execution.queue import ExecutionPriority
 from ducta.api.execution.runner import RunSpec, run_pipeline_sync
 from ducta.api.models.execution import ExecutionResponse, ExecutionStatus, SweepResponse
+
+if TYPE_CHECKING:
+    from ducta.api.execution.manager_state import _ManagerState as _Base
+else:
+    _Base = object
 
 #: Strong references to in-flight DB-store tasks.
 #:
@@ -67,7 +72,7 @@ def _spawn_db_task(coro: Any, label: str) -> None:
     task.add_done_callback(partial(_on_db_done, label=label))
 
 
-class _DispatchMixin:
+class _DispatchMixin(_Base):
     """Execution submission/cancellation, the active-engine registry, and the run loop."""
 
     def execute(

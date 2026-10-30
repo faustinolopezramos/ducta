@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 from loguru import logger  # type: ignore
 
@@ -95,63 +95,6 @@ def validate_split_config(split_config: Dict[str, Any], dataset_size: int) -> No
         dataset_size,
         min_train_rows,
     )
-
-
-def log_split_leakage_checks(
-    train_data: Any,
-    test_data: Any,
-    adapter_class: Any,
-    time_col: Optional[str] = None,
-    group_col: Optional[str] = None,
-) -> List[str]:
-    """Post-split validation: check for common data leakage patterns."""
-    warnings = []
-    train_adapter = adapter_class(train_data)
-    test_adapter = adapter_class(test_data)
-
-    train_size = train_adapter.count()
-    test_size = test_adapter.count()
-
-    if train_size < 10:
-        warnings.append(
-            f"Train set has only {train_size} rows; may be too small for reliable models."
-        )
-
-    if test_size < 5:
-        warnings.append(f"Test set has only {test_size} rows; statistical power is low.")
-
-    if time_col:
-        try:
-            train_min, train_max = train_adapter.min_max(time_col)
-            test_min, test_max = test_adapter.min_max(time_col)
-
-            if train_max is not None and test_min is not None:
-                if train_max > test_min:
-                    warnings.append(
-                        f"LEAKAGE: train.{time_col}.max ({train_max}) > test.{time_col}.min ({test_min}). "
-                        "Time ranges overlap! Check temporal split correctness."
-                    )
-        except Exception as e:
-            logger.debug(f"Could not validate temporal split: {e}")
-
-    if group_col:
-        try:
-            train_groups = set(train_adapter.distinct_values(group_col, limit=None))
-            test_groups = set(test_adapter.distinct_values(group_col, limit=None))
-            overlap = train_groups & test_groups
-
-            if overlap:
-                warnings.append(
-                    f"LEAKAGE: {len(overlap)} group(s) appear in BOTH train and test: {list(overlap)[:5]}... "
-                    "Group split failed; entities not properly isolated."
-                )
-        except Exception as e:
-            logger.debug(f"Could not validate group split: {e}")
-
-    for warning in warnings:
-        logger.warning(warning)
-
-    return warnings
 
 
 def document_split_semantics(split_config: Dict[str, Any]) -> str:

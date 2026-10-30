@@ -208,7 +208,9 @@ def handle_streaming_error(func):
     """
     func_name = getattr(func, "__name__", str(func))
 
-    def _make_error(e: Exception, args: tuple = (), kwargs: dict = None) -> StreamingError:
+    def _make_error(
+        e: Exception, args: tuple = (), kwargs: Optional[dict] = None
+    ) -> StreamingError:
         context = {
             "function": func_name,
             "args_count": len(args),

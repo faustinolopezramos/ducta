@@ -56,7 +56,9 @@ def _accepts_ml_context(func: Callable) -> bool:
 _date_params_cache: "WeakKeyDictionary[Callable, frozenset]" = WeakKeyDictionary()
 
 
-def _date_kwargs(func: Callable, start_date: str, end_date: str) -> Dict[str, str]:
+def _date_kwargs(
+    func: Callable, start_date: Optional[str], end_date: Optional[str]
+) -> Dict[str, Optional[str]]:
     """``start_date``/``end_date`` for the parameters ``func`` declares (or ``**kwargs``).
 
     A node function that has no use for the run window need not declare it: it
@@ -139,7 +141,9 @@ def _maybe_convert_vectorized_result(
 
 
 class NodeFunction(Protocol):
-    def __call__(self, *dfs: Any, start_date: str, end_date: str) -> Any: ...
+    def __call__(
+        self, *dfs: Any, start_date: Optional[str], end_date: Optional[str], **kwargs: Any
+    ) -> Any: ...
 
 
 class Command(ABC):
@@ -158,8 +162,8 @@ class NodeCommand(Command):
         self,
         function: NodeFunction,
         input_dfs: List[Any],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         node_name: str,
         node_config: Optional[Dict[str, Any]] = None,
         input_names: Optional[List[str]] = None,
@@ -228,8 +232,8 @@ class MLNodeCommand(NodeCommand):
         self,
         function: NodeFunction,
         input_dfs: List[Any],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         node_name: str,
         model_version: Optional[str],
         hyperparams: Optional[Dict[str, Any]] = None,

@@ -40,7 +40,7 @@ MIN_NAME_LENGTH = 1
 MAX_NAME_LENGTH = 255
 
 
-class ValidationError(MLOpsException, ValueError):
+class ValidationError(MLOpsException):
     """Base validation error."""
 
     error_code = ErrorCode.VALIDATION_FAILED
@@ -606,7 +606,7 @@ class ArtifactValidator:
         artifact_path: Path,
         framework: str,
         native_suffix: str,
-        native_loader: Callable[[Path], None],
+        native_loader: Callable[[Path], Any],
         trust_artifact_source: bool,
     ) -> None:
         """Try the framework's native (safe) format first; otherwise fall

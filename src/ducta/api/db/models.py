@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 from sqlalchemy import BigInteger, Boolean, Float, ForeignKey, Index, Integer, Text, event
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -76,7 +76,10 @@ class ExecutionLogRow(Base):
 
     __tablename__ = "execution_logs"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    # INTEGER on SQLite: only that type autoincrements there (as the migration declares it).
+    id: Mapped[int] = mapped_column(
+        BigInteger().with_variant(Integer(), "sqlite"), primary_key=True, autoincrement=True
+    )
     execution_id: Mapped[str] = mapped_column(
         Text, ForeignKey("executions.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -92,7 +95,7 @@ class ExecutionLogRow(Base):
     def extra(self) -> Dict[str, Any]:
         if self._extra_json:
             try:
-                return json.loads(self._extra_json)
+                return cast(Dict[str, Any], json.loads(self._extra_json))
             except (json.JSONDecodeError, TypeError):
                 return {}
         return {}
@@ -125,7 +128,7 @@ class UserRow(Base):
     @property
     def roles(self) -> List[str]:
         try:
-            return json.loads(self._roles_json)
+            return cast(List[str], json.loads(self._roles_json))
         except (json.JSONDecodeError, TypeError):
             return []
 

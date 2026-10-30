@@ -317,12 +317,6 @@ class StreamingValidator:
             required_options = format_config.get("required_options", [])
             missing_options = []
             for opt in required_options:
-                if (
-                    format_type == StreamingFormat.FILE_STREAM.value
-                    and opt == "path"
-                    and input_config.get("path")
-                ):
-                    continue
                 if opt not in options:
                     missing_options.append(opt)
             if missing_options:
@@ -340,11 +334,6 @@ class StreamingValidator:
                 self._validate_file_stream_options(options, node_name, input_config)
             elif format_type == StreamingFormat.KINESIS.value:
                 self._validate_kinesis_options(options, node_name)
-
-            # Validate watermark configuration
-            watermark = input_config.get("watermark")
-            if watermark:
-                self._validate_watermark_config(watermark, node_name)
 
         except StreamingValidationError:
             raise
@@ -471,7 +460,7 @@ class StreamingValidator:
             validate_merge_spec(merge)
         except ConfigurationError as e:
             raise StreamingValidationError(f"Node '{node_name}' {e}", field="output.merge") from e
-        order_by = merge.get("dedupe_order_by")
+        order_by = (merge or {}).get("dedupe_order_by")
         if order_by is not None and (not isinstance(order_by, str) or not order_by.strip()):
             raise StreamingValidationError(
                 f"Node '{node_name}' merge.dedupe_order_by must be a column name",
@@ -628,22 +617,6 @@ class StreamingValidator:
                 actual=str(type(function_config)),
             )
 
-        legacy_keys = {"function"}
-        has_legacy = legacy_keys.intersection(function_config)
-        has_key = "key" in function_config
-        if has_legacy and not has_key:
-            raise StreamingValidationError(
-                f"Node '{node_name}' function config must use 'key', not legacy keys {sorted(has_legacy)}",
-                field="function",
-                expected="{'key': ...}",
-                actual=str(list(function_config.keys())),
-            )
-        if has_legacy and has_key:
-            logger.warning(
-                f"Node '{node_name}' function config has both 'key' and legacy keys {sorted(has_legacy)}. "
-                f"Using 'key' value."
-            )
-
         key_value = function_config.get("key")
         if not isinstance(key_value, str) or not key_value.strip():
             raise StreamingValidationError(
@@ -767,10 +740,10 @@ class StreamingValidator:
         self, options: Dict[str, Any], node_name: str, input_config: Dict[str, Any]
     ) -> None:
         """Validate file stream-specific options."""
-        path_value = options.get("path") or input_config.get("path")
+        path_value = options.get("path")
         if not path_value:
             raise StreamingValidationError(
-                f"Node '{node_name}' file stream requires 'path' in input.options or input.path",
+                f"Node '{node_name}' file stream requires 'path' in input.options",
                 field=f"{INPUT_OPTIONS_FIELD}.path",
                 expected=NON_EMPTY_STRING,
                 actual=str(path_value),
@@ -782,12 +755,6 @@ class StreamingValidator:
                 field=f"{INPUT_OPTIONS_FIELD}.path",
                 expected=NON_EMPTY_STRING,
                 actual=str(path_value),
-            )
-
-        if input_config.get("path") and not options.get("path"):
-            logger.warning(
-                f"Node '{node_name}' uses deprecated input.path for file_stream. "
-                "Use input.options.path instead."
             )
 
         # Validate file_format
@@ -960,7 +927,7 @@ class StreamingValidator:
             )
 
     def _validate_watermark_config(
-        self, watermark: Dict[str, Any], node_name: str, field_prefix: str = "input.watermark"
+        self, watermark: Dict[str, Any], node_name: str, field_prefix: str = "streaming.watermark"
     ) -> None:
         """Validate watermark configuration with enhanced checks."""
         if not isinstance(watermark, dict):
@@ -1118,9 +1085,6 @@ class StreamingValidator:
 
         return True
 
-    # Backward-compat alias so existing callers using the private name still work.
-    _validate_time_interval = validate_time_interval
-
     def parse_time_to_seconds(self, interval: str) -> float:
         """Parse time interval to seconds. Reuses the precompiled multiplier table."""
         if not isinstance(interval, str):
@@ -1136,9 +1100,6 @@ class StreamingValidator:
             return number * self._UNIT_MULTIPLIERS.get(unit, 0.0)
         except (ValueError, TypeError):
             return 0.0
-
-    # Backward-compat alias so existing callers using the private name still work.
-    _parse_time_to_seconds = parse_time_to_seconds
 
     def _parse_time_to_minutes(self, interval: str) -> float:
         """Parse time interval to minutes."""

@@ -49,21 +49,6 @@ class TestHierarchy:
                 pytest.fail("DuctaError should not catch a TypeError")
 
 
-class TestBackwardCompatibleBases:
-    def test_configuration_errors_are_still_value_errors(self):
-        # Existing `except ValueError` call sites must keep working.
-        with pytest.raises(ValueError):
-            raise PipelineNotFoundError("p")
-
-    def test_execution_errors_are_still_runtime_errors(self):
-        with pytest.raises(RuntimeError):
-            raise PipelineExecutionError("p")
-
-    def test_data_errors_are_still_runtime_errors(self):
-        with pytest.raises(RuntimeError):
-            raise SanityCheckFailedError("n", 2)
-
-
 class TestStatusMapping:
     def test_config_errors_map_to_a_client_error(self):
         assert ConfigurationError("x").http_status == 400

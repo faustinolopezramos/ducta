@@ -282,25 +282,22 @@ class TestIterCertificateDirs:
         path.mkdir(parents=True)
         (path / "certificate.json").write_text("{}", encoding="utf-8")
 
-    def test_walks_legacy_flat_and_per_environment_layouts_together(self, tmp_path):
+    def test_walks_every_run_of_the_directory(self, tmp_path):
         base = tmp_path / "runs"
-        self._write_cert(base / "legacy-run")
-        self._write_cert(base / "dev" / "run-a")
-        self._write_cert(base / "prod" / "run-b")
+        self._write_cert(base / "run-a")
+        self._write_cert(base / "run-b")
 
-        found = sorted(iter_certificate_dirs(base), key=lambda row: row[1])
-        assert found == [
-            (None, "legacy-run", base / "legacy-run"),
-            ("dev", "run-a", base / "dev" / "run-a"),
-            ("prod", "run-b", base / "prod" / "run-b"),
+        assert list(iter_certificate_dirs(base)) == [
+            ("run-a", base / "run-a"),
+            ("run-b", base / "run-b"),
         ]
 
     def test_missing_base_dir_yields_nothing(self, tmp_path):
         assert list(iter_certificate_dirs(tmp_path / "does-not-exist")) == []
 
-    def test_environment_folder_without_any_certificate_is_ignored(self, tmp_path):
+    def test_a_folder_without_a_certificate_is_ignored(self, tmp_path):
         base = tmp_path / "runs"
-        (base / "dev" / "empty-run").mkdir(parents=True)  # no certificate.json inside
+        (base / "empty-run").mkdir(parents=True)  # no certificate.json inside
         assert list(iter_certificate_dirs(base)) == []
 
 
@@ -309,27 +306,14 @@ class TestFindCertificateDir:
         path.mkdir(parents=True)
         (path / "certificate.json").write_text("{}", encoding="utf-8")
 
-    def test_scopes_to_the_given_environment(self, tmp_path):
+    def test_finds_a_run_by_id(self, tmp_path):
         base = tmp_path / "runs"
-        self._write_cert(base / "dev" / "run-a")
-        self._write_cert(base / "prod" / "run-a")  # same run_id, different environment
-
-        assert find_certificate_dir(base, "run-a", env="dev") == base / "dev" / "run-a"
-        assert find_certificate_dir(base, "run-a", env="prod") == base / "prod" / "run-a"
-
-    def test_without_env_finds_a_legacy_flat_run(self, tmp_path):
-        base = tmp_path / "runs"
-        self._write_cert(base / "legacy-run")
-        assert find_certificate_dir(base, "legacy-run") == base / "legacy-run"
-
-    def test_without_env_finds_a_per_environment_run_by_id_alone(self, tmp_path):
-        base = tmp_path / "runs"
-        self._write_cert(base / "dev" / "run-a")
-        assert find_certificate_dir(base, "run-a") == base / "dev" / "run-a"
+        self._write_cert(base / "run-a")
+        assert find_certificate_dir(base, "run-a") == base / "run-a"
 
     def test_unknown_run_id_returns_none(self, tmp_path):
         base = tmp_path / "runs"
-        self._write_cert(base / "dev" / "run-a")
+        self._write_cert(base / "run-a")
         assert find_certificate_dir(base, "nope") is None
         assert find_certificate_dir(tmp_path / "does-not-exist", "run-a") is None
 
@@ -396,15 +380,6 @@ class TestEvidenceCompleteness:
 class TestFingerprintComparability:
     """An algorithm change must never be reported as a data change."""
 
-    def test_legacy_constant_matches_the_fingerprint_module(self):
-        # certificate.py duplicates this literal instead of importing it, because
-        # `ducta.mlrun` is an optional extra and `certify verify` must work
-        # without it. That duplication is only safe if something checks it.
-        from ducta.core.certificate import LEGACY_FINGERPRINT_ALGORITHM
-        from ducta.mlrun.fingerprint import ALGO_LEGACY
-
-        assert LEGACY_FINGERPRINT_ALGORITHM == ALGO_LEGACY
-
     def test_algorithm_leads_the_logical_fingerprint(self):
         from ducta.core.certificate import logical_fingerprint
 
@@ -413,10 +388,11 @@ class TestFingerprintComparability:
             {**same_data, "algorithm": "b/v2"}
         )
 
-    def test_missing_algorithm_reads_as_legacy(self):
-        from ducta.core.certificate import LEGACY_FINGERPRINT_ALGORITHM, logical_fingerprint
+    def test_a_fingerprint_without_an_algorithm_is_not_comparable(self):
+        from ducta.core.certificate import fingerprints_comparable
 
-        assert logical_fingerprint({"schema_hash": "s"})[0] == LEGACY_FINGERPRINT_ALGORITHM
+        ok, reason = fingerprints_comparable({"schema_hash": "s"}, {"algorithm": "a/v2"})
+        assert not ok and reason == "no fingerprint algorithm recorded"
 
     def test_diff_reports_not_comparable_rather_than_different(self):
         from ducta.core.certificate import diff_certificates

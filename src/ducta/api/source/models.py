@@ -57,5 +57,5 @@ class SourceInfo(BaseModel):
     config_files: List[str] = Field(default_factory=list)
     projects: List[str] = Field(
         default_factory=list,
-        description="Project IDs detected under projects/*/config/project_settings.yaml",
+        description="Project IDs detected in the workspace (projects/*/ducta.yaml)",
     )

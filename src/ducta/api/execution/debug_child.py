@@ -62,9 +62,12 @@ def main(argv: list) -> int:
     if spec.sample_rows:
         redirect_to_scratch(ctx, spec.env, int(spec.sample_rows))
 
+    from ducta.console.ux.reporter import ConsoleReporter
     from ducta.core.executors import PipelineExecutor
+    from ducta.reporting import set_reporter
     from ducta.stream.constants import PipelineType
 
+    set_reporter(ConsoleReporter())  # the parent streams this process's output to the run log
     engine = PipelineExecutor(ctx)
     pipeline = engine.batch_executor._get_pipeline_config(spec.pipeline_name)
     outcome = None

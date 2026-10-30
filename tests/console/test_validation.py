@@ -6,11 +6,8 @@ import pytest
 
 from ducta.console.core import ValidationError
 from ducta.console.validation import (
-    validate_conflicting_options,
-    validate_date_iso,
     validate_enum_field,
     validate_json_string,
-    validate_log_level,
     validate_positive_number,
     validate_required_field,
 )
@@ -67,36 +64,3 @@ class TestRequiredField:
     def test_empty_raises(self):
         with pytest.raises(ValidationError, match="--env is required"):
             validate_required_field("", "env")
-
-
-class TestDateIso:
-    def test_valid(self):
-        assert validate_date_iso("2026-01-01") is not None
-
-    def test_none(self):
-        assert validate_date_iso(None) is None
-
-    def test_invalid_raises(self):
-        with pytest.raises(ValidationError):
-            validate_date_iso("not-a-date")
-
-
-class TestConflictingOptions:
-    def test_single_option_ok(self):
-        assert validate_conflicting_options((True, "a"), (False, "b")) is True
-
-    def test_multiple_raises(self):
-        with pytest.raises(ValidationError):
-            validate_conflicting_options((True, "a"), (True, "b"), raise_error=True)
-
-
-class TestLogLevel:
-    def test_valid(self):
-        assert validate_log_level("INFO") is True
-
-    def test_none_ok(self):
-        assert validate_log_level(None) is True
-
-    def test_invalid_raises(self):
-        with pytest.raises(ValidationError):
-            validate_log_level("VERBOSE")

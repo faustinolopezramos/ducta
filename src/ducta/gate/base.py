@@ -63,6 +63,13 @@ class BaseIO:
         """Get SparkSession if present, else None."""
         return self.context_manager.get_spark()
 
+    def _require_spark(self) -> Any:
+        """The SparkSession, or a ConfigurationError saying one is needed."""
+        spark = self._ctx_spark()
+        if spark is None:
+            raise ConfigurationError("A Spark session is required for this operation")
+        return spark
+
     def _get_execution_mode(self) -> Optional[str]:
         """Get normalized execution mode from context."""
         return self.context_manager.get_execution_mode()

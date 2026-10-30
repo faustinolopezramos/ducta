@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
@@ -43,6 +43,7 @@ from ducta.check.storage import (
     FileStorageBackend,
     StorageBackend,
 )
+from ducta.reporting import RunReporter, get_reporter
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -52,26 +53,6 @@ from ducta.check.storage import (
 #: Default quality storage, under ``${output_path}/${environment}``: visible, so a
 #: project can browse or ship its reports (see "Ducta storage convention").
 QUALITY_DIR_NAME = "quality"
-#: The pre-convention default, still used where it already holds a history.
-LEGACY_QUALITY_DIR_NAME = ".quality"
-
-
-def _default_quality_dir(env_root: Path) -> str:
-    """``<env_root>/quality``, or ``<env_root>/.quality`` if only the legacy one exists.
-
-    Baselines and score history live in this directory, so a project that already
-    has them under the old hidden name keeps using it rather than starting over.
-    Renaming the directory to ``quality`` moves the project to the new default.
-    """
-    current = env_root / QUALITY_DIR_NAME
-    legacy = env_root / LEGACY_QUALITY_DIR_NAME
-    if not current.exists() and legacy.is_dir():
-        logger.info(
-            f"Quality reports stay in legacy '{legacy}'; rename it to '{current}' "
-            "to use the current default."
-        )
-        return str(legacy)
-    return str(current)
 
 
 def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[str] = None) -> None:
@@ -199,23 +180,20 @@ class QualityReporter:
         return Console()
 
     @staticmethod
-    def _compact_view() -> Any:
-        """The CLI's compact view, when it is on: it counts passing checks on the
-        node's line and prints only the ones that fail or warn."""
+    def _reported(show: Callable[[RunReporter], bool]) -> bool:
+        """Whether the run's reporter showed it its own way (the CLI's compact view
+        counts passing checks on the node's line and prints only the ones that
+        fail or warn)."""
         try:
-            from ducta.console.ux import view
-
-            return view if view.is_compact() else None
+            return show(get_reporter())
         except Exception:  # noqa: BLE001 — presentation must never break a check
-            return None
+            return False
 
     def render_report(self, report: QualityReport, verbose: bool = False) -> None:
         if not report:
             logger.warning("No quality report to render")
             return
-        compact = self._compact_view()
-        if compact is not None:
-            compact.quality_report(report)
+        if self._reported(lambda reporter: reporter.quality_report(report)):
             return
 
         if self.rich_available:
@@ -259,9 +237,7 @@ class QualityReporter:
         if not reports:
             logger.warning("No quality reports to render")
             return
-        compact = self._compact_view()
-        if compact is not None:
-            compact.quality_summary(reports)
+        if self._reported(lambda reporter: reporter.quality_summary(reports)):
             return
         total_passed = sum(1 for r in reports if r.passed)
         total_errors = sum(r.errors_count for r in reports)
@@ -319,64 +295,6 @@ class QualityReporter:
             return
 
         self.render_summary(report_list, verbose=show_details or verbose)
-
-    def render_gate_result(self, gate_result: Any) -> None:
-        action = getattr(gate_result, "action", None)
-        action_str = action.value.upper() if action else "UNKNOWN"
-        score = getattr(gate_result, "score", 0.0)
-        triggered = getattr(gate_result, "triggered_rules", [])
-        gate_name = getattr(gate_result, "gate_name", "quality_gate")
-        dataset_name = getattr(gate_result, "dataset_name", "?")
-        action_color = {"PASS": "green", "WARN": "yellow", "BLOCK": "red"}.get(action_str, "white")
-        if self.rich_available:
-            from rich.table import Table  # type: ignore
-
-            console = self._rich()
-            table = Table(title=f"Quality Gate: {gate_name} — {dataset_name}")
-            table.add_column("Field", style="cyan")
-            table.add_column("Value")
-            table.add_row("Action", f"[{action_color}]{action_str}[/{action_color}]")
-            table.add_row("Score", f"{score:.4f}")
-            for i, rule in enumerate(triggered, 1):
-                table.add_row(f"  Rule {i}", rule)
-            console.print(table)
-        else:
-            level = (
-                "INFO" if action_str == "PASS" else ("WARNING" if action_str == "WARN" else "ERROR")
-            )
-            logger.log(
-                level,
-                f"Quality Gate '{gate_name}' [{action_str}] score={score:.4f} dataset='{dataset_name}'",
-            )
-            for rule in triggered:
-                logger.log(level, f"  Triggered: {rule}")
-
-    def render_pipeline_score(self, pipeline_score: Any) -> None:
-        sanity = getattr(pipeline_score, "sanity_score", 1.0)
-        dq = getattr(pipeline_score, "dq_score", 1.0)
-        health = getattr(pipeline_score, "health_index", 1.0)
-        blocked = getattr(pipeline_score, "nodes_blocked", [])
-        run_id = getattr(pipeline_score, "run_id", None)
-        if self.rich_available:
-            from rich.table import Table  # type: ignore
-
-            console = self._rich()
-            table = Table(title="Pipeline Quality Score" + (f" (run: {run_id})" if run_id else ""))
-            table.add_column("Metric", style="cyan")
-            table.add_column("Score")
-            table.add_row("Sanity Score", f"{sanity:.4f}")
-            table.add_row("DQ Score", f"{dq:.4f}")
-            hc = "green" if health >= 0.8 else ("yellow" if health >= 0.5 else "red")
-            table.add_row("Health Index", f"[{hc}]{health:.4f}[/{hc}]")
-            table.add_row(
-                "Nodes Blocked",
-                str(len(blocked)) if not blocked else f"[red]{', '.join(blocked)}[/red]",
-            )
-            console.print(table)
-        else:
-            logger.info(
-                f"Pipeline Quality: sanity={sanity:.4f} dq={dq:.4f} health={health:.4f} blocked={blocked}"
-            )
 
 
 class SanityPhaseRunner:
@@ -598,13 +516,9 @@ class SanityPhaseRunner:
         node_gate_cfg = sanity_config_dict.get("sanity_gate")
         gate_result = None
         try:
-            QualityGateEvaluator = None
-            try:
-                from ducta.check.gate import QualityGateEvaluator  # lazy import
-            except ImportError:
-                logger.debug("Quality gate module not available, skipping gate evaluation")
+            from ducta.check.gate import QualityGateEvaluator
 
-            if QualityGateEvaluator and (node_gate_cfg or self._global_gate_config):
+            if node_gate_cfg or self._global_gate_config:
                 gate_result = QualityGateEvaluator.from_config(
                     report,
                     node_gate_cfg=node_gate_cfg,
@@ -617,7 +531,7 @@ class SanityPhaseRunner:
                         _raise_or_warn_gate(gate_result, node_name)
                 else:
                     report.score = QualityGateEvaluator.compute_score(report, {})
-            elif QualityGateEvaluator:
+            else:
                 report.score = QualityGateEvaluator.compute_score(report, {})
         except QualityGateBlocked:
             raise
@@ -813,7 +727,7 @@ class ValidationPhaseRunner:
                     # pathlib would collapse "s3://bucket" to "s3:/bucket"
                     base_path = f"{str(global_output).rstrip('/')}/{env}/{QUALITY_DIR_NAME}"
                 else:
-                    base_path = _default_quality_dir(Path(global_output) / env)
+                    base_path = str(Path(global_output) / env / QUALITY_DIR_NAME)
 
             if not format and not output_cfg.get("format"):
                 from ducta.gate.constants import is_cloud_path
@@ -984,10 +898,8 @@ class ValidationPhaseRunner:
                 if isinstance(config, dict)
                 else getattr(config, "quality_gate", None)
             )
-            if hasattr(node_gate_cfg, "model_dump"):
+            if node_gate_cfg is not None and hasattr(node_gate_cfg, "model_dump"):
                 node_gate_cfg = node_gate_cfg.model_dump(exclude_none=True)
-            elif hasattr(node_gate_cfg, "dict"):
-                node_gate_cfg = node_gate_cfg.dict(exclude_none=True)
 
             node_gate_cfg = apply_auto_tune(
                 self._profiles.get(profile_name) if profile_name else None,
@@ -1166,7 +1078,7 @@ class ValidationPhaseRunner:
             )
         else:
             pdf = adapter.to_pandas()
-        baseline = {}
+        baseline: Dict[str, Dict[str, Any]] = {}
 
         for column in pdf.columns:
             try:
@@ -1229,57 +1141,3 @@ class ValidationPhaseRunner:
             verbose: If True, show detailed results
         """
         self._reporter.render_summary(reports, verbose)
-
-
-#: Type aliases (no DeprecationWarning possible on a plain assignment).
-DQReport = QualityReport
-SanityCheckReport = QualityReport
-DQConfig = dict
-
-
-def SanityCheckRunner(*args: Any, **kwargs: Any) -> SanityPhaseRunner:
-    """Deprecated: use SanityPhaseRunner."""
-    import warnings
-
-    warnings.warn(
-        "SanityCheckRunner is deprecated, use SanityPhaseRunner instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return SanityPhaseRunner(*args, **kwargs)
-
-
-def DQRunner(*args: Any, **kwargs: Any) -> ValidationPhaseRunner:
-    """Deprecated: use ValidationPhaseRunner."""
-    import warnings
-
-    warnings.warn(
-        "DQRunner is deprecated, use ValidationPhaseRunner instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return ValidationPhaseRunner(*args, **kwargs)
-
-
-def SanityReporter(*args: Any, **kwargs: Any) -> QualityReporter:
-    """Deprecated: use QualityReporter."""
-    import warnings
-
-    warnings.warn(
-        "SanityReporter is deprecated, use QualityReporter instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return QualityReporter(*args, **kwargs)
-
-
-def DQReporter(*args: Any, **kwargs: Any) -> QualityReporter:
-    """Deprecated: use QualityReporter."""
-    import warnings
-
-    warnings.warn(
-        "DQReporter is deprecated, use QualityReporter instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return QualityReporter(*args, **kwargs)

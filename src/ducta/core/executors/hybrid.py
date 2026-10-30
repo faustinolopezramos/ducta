@@ -159,6 +159,13 @@ class HybridExecutor(BaseExecutor):
 
             handoff.clear(self.context)
 
+    @property
+    def _state(self) -> UnifiedPipelineState:
+        """The run's state: ``execute`` creates it before any phase runs."""
+        if self.unified_state is None:
+            raise RuntimeError("no hybrid run in progress")
+        return self.unified_state
+
     def _register_nodes_in_unified_state(
         self,
         batch_nodes: List[str],
@@ -172,23 +179,23 @@ class HybridExecutor(BaseExecutor):
         resolved = resolve_node_dependencies(all_nodes, node_configs)
 
         for node_name in batch_nodes:
-            self.unified_state.register_node(node_name, NodeType.BATCH, resolved[node_name])
+            self._state.register_node(node_name, NodeType.BATCH, resolved[node_name])
 
         for node_name in streaming_nodes:
-            self.unified_state.register_node(node_name, NodeType.STREAMING, resolved[node_name])
+            self._state.register_node(node_name, NodeType.STREAMING, resolved[node_name])
 
     def _execute_unified_hybrid_pipeline(
         self,
         batch_nodes: List[str],
         streaming_nodes: List[str],
         node_configs: Dict[str, Dict[str, Any]],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
-        execution_mode: str,
+        execution_mode: Optional[str],
     ) -> Dict[str, Any]:
         """Execute hybrid pipeline with enhanced error handling."""
-        execution_result = {
+        execution_result: Dict[str, Any] = {
             "batch_execution": {},
             "streaming_execution_ids": [],
             "status": "success",
@@ -268,8 +275,8 @@ class HybridExecutor(BaseExecutor):
         self,
         batch_nodes: List[str],
         node_configs: Dict[str, Dict[str, Any]],
-        start_date: str,
-        end_date: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
         ml_info: Dict[str, Any],
     ) -> Dict[str, Dict[str, Any]]:
         """Execute the hybrid pipeline's batch nodes through the normal batch engine.
@@ -292,7 +299,7 @@ class HybridExecutor(BaseExecutor):
         execution_order = DependencyResolver.topological_sort(dag)
 
         for node in execution_order:
-            self.unified_state.start_node_execution(node)
+            self._state.start_node_execution(node)
 
         try:
             self.node_executor.execute_nodes_parallel(
@@ -333,16 +340,16 @@ class HybridExecutor(BaseExecutor):
                 # dependency that never materialized. The *run* is not a failure
                 # — see `_execute_unified_hybrid_pipeline`, which halts before
                 # the streaming phase without setting an error status.
-                self.unified_state.fail_node_execution(node, results[node]["error"])
+                self._state.fail_node_execution(node, results[node]["error"])
             elif status == "success":
                 results[node] = {"status": "completed"}
-                self.unified_state.complete_node_execution(node)
+                self._state.complete_node_execution(node)
             elif status == "skipped":
                 results[node] = {"status": "skipped", "reason": record.get("error") or "skipped"}
             elif status == "failed":
                 error = record.get("error") or (str(failure) if failure else "node failed")
                 results[node] = {"status": "failed", "error": error}
-                self.unified_state.fail_node_execution(node, error)
+                self._state.fail_node_execution(node, error)
             else:
                 # No trace entry: the run aborted before this node ever started.
                 reason = "not executed (pipeline aborted earlier)"
@@ -359,7 +366,7 @@ class HybridExecutor(BaseExecutor):
         self,
         streaming_nodes: List[str],
         node_configs: Dict[str, Dict[str, Any]],
-        execution_mode: str,
+        execution_mode: Optional[str],
     ) -> List[str]:
         """Start the streaming nodes as a sub-pipeline and record what happened.
 
@@ -377,7 +384,7 @@ class HybridExecutor(BaseExecutor):
         pass and reads the real per-node outcome.
         """
         execution_ids: List[str] = []
-        startable = [n for n in streaming_nodes if self.unified_state.start_node_execution(n)]
+        startable = [n for n in streaming_nodes if self._state.start_node_execution(n)]
         if not startable:
             return execution_ids
 
@@ -391,7 +398,7 @@ class HybridExecutor(BaseExecutor):
         except Exception as e:
             logger.error("Failed to start streaming nodes {}: {}", startable, e)
             for node in startable:
-                self.unified_state.fail_node_execution(node, str(e))
+                self._state.fail_node_execution(node, str(e))
             raise
 
         started = self._record_streaming_startup(execution_id, startable)
@@ -408,8 +415,8 @@ class HybridExecutor(BaseExecutor):
         from ducta.core.pipeline_state import NodeStatus
 
         completed: Set[str] = set()
-        for name in self.unified_state.list_nodes(NodeType.BATCH):
-            if self.unified_state.get_node_status(name) is NodeStatus.COMPLETED:
+        for name in self._state.list_nodes(NodeType.BATCH):
+            if self._state.get_node_status(name) is NodeStatus.COMPLETED:
                 completed.add(name)
         return completed
 
@@ -428,16 +435,16 @@ class HybridExecutor(BaseExecutor):
         started: List[str] = []
         for node in startable:
             if node in skipped:
-                self.unified_state.fail_node_execution(node, f"not started: {skipped[node]}")
+                self._state.fail_node_execution(node, f"not started: {skipped[node]}")
             elif node in failed:
-                self.unified_state.fail_node_execution(node, f"failed to start: {failed[node]}")
+                self._state.fail_node_execution(node, f"failed to start: {failed[node]}")
             elif node in running:
-                self.unified_state.register_streaming_query(node, execution_id)
-                self.unified_state.complete_node_execution(node)
+                self._state.register_streaming_query(node, execution_id)
+                self._state.complete_node_execution(node)
                 started.append(node)
             else:
                 # Neither started nor accounted for: say so rather than assume.
-                self.unified_state.fail_node_execution(
+                self._state.fail_node_execution(
                     node, "the streaming manager reported no outcome for this node"
                 )
 

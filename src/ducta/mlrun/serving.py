@@ -425,7 +425,7 @@ def mlflow_client_from_context(context: Any) -> Any:
 
         # pyfunc downloads resolve models:/ URIs through the global registry URI.
         mlflow.set_tracking_uri(tracking_uri)
-        mlflow.set_registry_uri(registry_uri)
+        mlflow.set_registry_uri(registry_uri or tracking_uri)
     return MlflowClient(tracking_uri=tracking_uri, registry_uri=registry_uri)
 
 

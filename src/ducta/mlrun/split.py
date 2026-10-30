@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import hashlib
 from collections.abc import MutableMapping
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from loguru import logger
 
@@ -36,7 +36,7 @@ def _normalize_config(split_config: Any) -> Dict[str, Any]:
     if split_config is None:
         raise SplitError("No split configuration provided (ml_context['split'] is empty)")
     if hasattr(split_config, "model_dump"):
-        return split_config.model_dump()
+        return cast(Dict[str, Any], split_config.model_dump())
     if isinstance(split_config, dict):
         return dict(split_config)
     raise SplitError(f"Unsupported split config type: {type(split_config)}")
@@ -193,7 +193,7 @@ def _split_dataframe_impl(
         cut_train = int(round(n * (1 - holdout)))
         if val_size is not None:
             cut_val = int(round(n * (1 - test_size)))
-            parts = (
+            parts: Tuple[Any, ...] = (
                 ordered.iloc[:cut_train],
                 ordered.iloc[cut_train:cut_val],
                 ordered.iloc[cut_val:],

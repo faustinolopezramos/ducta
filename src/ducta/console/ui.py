@@ -27,9 +27,10 @@ from typing import Optional
 
 from loguru import logger
 
+from ducta import state
 from ducta.console.core import ExitCode
 
-_DEFAULT_DB_PATH = Path.home() / ".ducta" / "executions.db"
+_DEFAULT_DB_PATH = state.user_dir("executions.db")
 _PROJECT_SUFFIXES = (".yaml", ".yml", ".toml", ".json")
 
 

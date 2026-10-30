@@ -104,19 +104,15 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
         spark = self._ctx_spark()
         if not spark:
             return False
-        return spark.conf.get("spark.databricks.unityCatalog.enabled", "false").lower() == "true"
+        return bool(
+            spark.conf.get("spark.databricks.unityCatalog.enabled", "false").lower() == "true"
+        )
 
     def is_enabled(self) -> bool:
         """Whether Unity Catalog is available, resolved lazily and cached."""
         if self._enabled is None:
             self._enabled = self._check_enabled()
         return self._enabled
-
-    def clear_metadata_cache(self) -> None:
-        """Invalidate cached catalog and schema metadata."""
-        self._catalog_cache.clear()
-        self._schema_cache.clear()
-        logger.info("Unity Catalog metadata cache cleared")
 
     def _catalog_exists(self, catalog: str) -> bool:
         """Check catalog existence with per-instance dict caching."""
@@ -127,7 +123,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
             return False
 
         try:
-            spark = self._ctx_spark()
+            spark = self._require_spark()
             result = spark.sql(UnityCatalogDDL.catalog_exists_query(catalog))
             exists = len(result.take(1)) > 0
             self._catalog_cache[catalog] = exists
@@ -146,7 +142,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
             return False
 
         try:
-            spark = self._ctx_spark()
+            spark = self._require_spark()
             result = spark.sql(UnityCatalogDDL.schema_exists_query(catalog, schema))
             exists = len(result.take(1)) > 0
             self._schema_cache[cache_key] = exists
@@ -169,7 +165,7 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
             logger.warning("Spark unavailable for schema creation")
             return
 
-        spark = self._ctx_spark()
+        spark = self._require_spark()
 
         if not self._catalog_exists(catalog):
             logger.warning(

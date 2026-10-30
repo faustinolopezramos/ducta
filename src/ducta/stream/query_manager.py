@@ -22,7 +22,7 @@ import threading
 import time
 from functools import lru_cache
 from inspect import Parameter, Signature, signature
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
 from loguru import logger  # type: ignore
 
@@ -113,7 +113,7 @@ def get_query_exception(query: Any) -> Optional[Exception]:
         exc_attr = getattr(query, "exception", None)
         if exc_attr is None:
             return None
-        return exc_attr() if callable(exc_attr) else exc_attr
+        return cast(Optional[Exception], exc_attr() if callable(exc_attr) else exc_attr)
     except Exception:
         return None
 
@@ -173,9 +173,7 @@ _TIMESTAMP_CASTABLE_TYPES = frozenset(
 class _KeyedTransformationStore:
     """Thread-safe key->callable store with validation.
 
-    The core logic behind ``TransformationRegistry``'s instance-scoped and
-    class-scoped (backward-compat, process-wide) APIs, which previously each
-    reimplemented this same validation + locking independently.
+    The core logic behind ``TransformationRegistry``.
     """
 
     def __init__(self) -> None:
@@ -226,9 +224,6 @@ class TransformationRegistry:
     Secure registry for streaming transformations.
     """
 
-    # Process-wide store kept for backward-compat (class_* methods).
-    _global: ClassVar[_KeyedTransformationStore] = _KeyedTransformationStore()
-
     def __init__(self) -> None:
         """Create an isolated registry instance with its own state."""
         self._local = _KeyedTransformationStore()
@@ -254,33 +249,6 @@ class TransformationRegistry:
     def clear(self) -> None:  # noqa: F811
         """Clear all transformations in this isolated registry instance."""
         self._local.clear(label="instance")
-
-    # ---- classmethods (global shared state — backward-compat) ----
-
-    @classmethod
-    def class_register(cls, key: str, func: Callable[..., DataFrame]) -> None:
-        """Register a transformation in the global class-level registry."""
-        logger.warning(
-            "TransformationRegistry.class_register() uses a process-wide shared registry "
-            "that can cause state leakage between pipelines and tests. "
-            "Prefer creating a TransformationRegistry() instance and calling .register() on it."
-        )
-        cls._global.register(key, func, label="global")
-
-    @classmethod
-    def class_get(cls, key: str) -> Callable[..., DataFrame]:
-        """Get a transformation from the global registry."""
-        return cls._global.get(key)
-
-    @classmethod
-    def class_list_transformations(cls) -> List[str]:
-        """List all transformations in the global registry."""
-        return cls._global.list()
-
-    @classmethod
-    def class_unregister(cls, key: str) -> bool:
-        """Unregister a transformation from the global registry. Returns True if existed."""
-        return cls._global.unregister(key)
 
 
 class StreamingQueryManager:
@@ -334,7 +302,7 @@ class StreamingQueryManager:
         if listener is not None:
             listener(pipeline_name, execution_id, stats)
 
-    def _is_query_active(self, query: StreamingQuery) -> bool:
+    def _is_query_active(self, query: Optional[StreamingQuery]) -> bool:
         """Check if a streaming query is currently active."""
         return is_query_active(query)
 
@@ -342,7 +310,7 @@ class StreamingQueryManager:
         """Get the name of a streaming query."""
         return getattr(query, "name", getattr(query, "queryName", None))
 
-    def _get_query_id(self, query: StreamingQuery) -> Optional[str]:
+    def _get_query_id(self, query: Optional[StreamingQuery]) -> Optional[str]:
         """Get the unique identifier of a streaming query."""
         query_id = getattr(query, "id", None)
         return str(query_id) if query_id is not None else None
@@ -431,10 +399,8 @@ class StreamingQueryManager:
 
             streaming_df = reader.read_stream(input_config)
 
-            # streaming.watermark (documented location) takes precedence over
-            # the legacy input.watermark, which is kept as a fallback.
             streaming_block = node_config.get("streaming", {}) or {}
-            watermark_config = streaming_block.get("watermark") or input_config.get("watermark")
+            watermark_config = streaming_block.get("watermark")
             if watermark_config:
                 streaming_df = self._apply_watermark(streaming_df, watermark_config)
 
@@ -574,7 +540,7 @@ class StreamingQueryManager:
                     from ducta.mlrun.serving import score
 
                     logger.info("No transformation function: scoring with the built-in scorer")
-                    return score(input_df, serving)
+                    return cast(DataFrame, score(input_df, serving))
                 logger.info("No transformation function specified, using input DataFrame as-is")
                 return input_df
 
@@ -644,7 +610,7 @@ class StreamingQueryManager:
         params: Optional[Dict[str, Any]],
         ml_context: Any = None,
     ) -> DataFrame:
-        """Call transformation with backward-compatible signatures.
+        """Call a transformation with whichever signature it declares.
 
         Supported forms:
         - fn(df)
@@ -789,48 +755,29 @@ class StreamingQueryManager:
     def _get_registered_transformation(
         self, transformation_key: str, module_error: Optional[str] = None
     ) -> Callable:
-        """
-        Get transformation from the per-manager registry first, then fall back to global registry.
-        """
+        """Get a transformation from this manager's registry."""
         try:
-            # Try local registry first
             transform_func = self.transformation_registry.get(transformation_key)
-            logger.info(f"Applying local transformation: '{transformation_key}'")
-            return transform_func
-        except ValueError:
-            logger.debug(f"Transformation not found in local registry: {transformation_key}")
-
-        try:
-            # Fall back to the process-wide registry (TransformationRegistry.class_register).
-            transform_func = TransformationRegistry.class_get(transformation_key)
-            logger.info(f"Applying global transformation: '{transformation_key}'")
-            return transform_func
         except ValueError as e:
-            available_local = self.transformation_registry.list_transformations()
-            available_global = TransformationRegistry.class_list_transformations()
+            available = sorted(self.transformation_registry.list_transformations())
             hint = (
                 "To register a transform, call "
                 "query_manager.transformation_registry.register(key, fn) "
                 "before start_pipeline, or expose register_transforms(registry) in the "
-                "module named by function.module, or use "
-                "TransformationRegistry.class_register(key, fn) for the process-wide registry."
+                "module named by function.module."
             )
             if module_error:
                 hint = f"{module_error}. {hint}"
-            available = sorted(set(available_local) | set(available_global))
             available_str = ", ".join(available) if available else "(none)"
             raise StreamingConfigurationError(
                 f"Transformation '{transformation_key}' not registered. "
                 f"Available transformations: [{available_str}]. {hint}",
                 config_section="function.key",
                 config_value=transformation_key,
-                context={
-                    "available_transformations": available,
-                    "available_local": available_local,
-                    "available_global": available_global,
-                    "registration_hint": hint,
-                },
+                context={"available_transformations": available, "registration_hint": hint},
             ) from e
+        logger.info(f"Applying transformation: '{transformation_key}'")
+        return transform_func
 
     def _configure_and_start_query(
         self,
@@ -851,10 +798,10 @@ class StreamingQueryManager:
             # Shallow-copy top level + explicit copies of nested mutable dicts to avoid
             # sharing state across nodes without the overhead of deepcopy.
             # Note: "watermark" is deliberately not copied here — it's resolved
-            # and applied earlier in _load_streaming_input (streaming.watermark
-            # with input.watermark fallback), not read from this local dict.
+            # and applied earlier in _load_streaming_input (streaming.watermark),
+            # not read from this local dict.
             _d = DEFAULT_STREAMING_CONFIG
-            streaming_config = {
+            streaming_config: Dict[str, Any] = {
                 **_d,
                 "trigger": dict(_d["trigger"]),
                 "options": dict(_d["options"]),
@@ -1001,10 +948,6 @@ class StreamingQueryManager:
     def _determine_checkpoint_base(self, base_checkpoint: Optional[str]) -> str:
         """Determine the base directory for checkpoints."""
         return self.checkpoint_manager.determine_checkpoint_base(base_checkpoint)
-
-    def _ensure_checkpoint_dir(self, checkpoint_path: str) -> None:
-        """Ensure checkpoint directory exists for local filesystems."""
-        self.checkpoint_manager.ensure_checkpoint_dir(checkpoint_path)
 
     def _get_checkpoint_location(
         self,

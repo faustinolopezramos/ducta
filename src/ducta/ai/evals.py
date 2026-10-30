@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
+from ducta import state
 from ducta.ai.drafts import Draft, add_usage
 from ducta.ai.errors import AICancelledError, AIConfigError, AIError, AINotFoundError
 from ducta.ai.providers import LLMProvider
@@ -460,9 +461,7 @@ def run_eval(
 
 
 def reports_dir() -> Path:
-    from ducta.ai.config import ducta_home
-
-    return ducta_home() / "ai" / "evals"
+    return state.user_dir("ai", "evals")
 
 
 REPORT_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-z0-9._-]{1,80}\Z")

@@ -38,7 +38,7 @@ def _client(role: str = "developer") -> TestClient:
 
 @pytest.fixture
 def project(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)  # the server's source confinement base
     root = tmp_path / "proj"

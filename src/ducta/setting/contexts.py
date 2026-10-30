@@ -19,13 +19,12 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from functools import cached_property
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger  # type: ignore
 
 from ducta.check import QualityOutputPath
 from ducta.gate.validators import is_safe_path_segment
-from ducta.mlrun.hyperparams import HyperparamConfig, load_hyperparams_config
 from ducta.setting.environments import normalize_environment
 from ducta.setting.exceptions import ConfigLoadError, ConfigValidationError
 from ducta.setting.interpolator import VariableInterpolator
@@ -36,6 +35,9 @@ from ducta.setting.validators import (
     FormatPolicy,
     PipelineValidator,
 )
+
+if TYPE_CHECKING:  # mlrun imports setting at module level: importing it here made a cycle
+    from ducta.mlrun.hyperparams import HyperparamConfig
 
 
 class PipelineManager:
@@ -187,8 +189,10 @@ class MLConfigMixin:
             "pipeline_config": pconf,
         }
 
-    def _resolve_hyperparams_config(self, pipeline_name: str) -> Optional[HyperparamConfig]:
+    def _resolve_hyperparams_config(self, pipeline_name: str) -> Optional["HyperparamConfig"]:
         """Resolve the HyperparamConfig for a pipeline."""
+        from ducta.mlrun.hyperparams import load_hyperparams_config
+
         pipeline = self.pipelines_config.get(pipeline_name, {}) or {}
         hp_path = self.global_config.get("hyperparams_config_path")
         hp_info = (self.ml_info or {}).get("hyperparams_config")
@@ -457,17 +461,3 @@ class Context(MLConfigMixin):
             f"Tracked quality output: {path.report_type} for node {path.node_name} "
             f"at {path.output_path}"
         )
-
-    def get_quality_outputs(self) -> Dict[str, List[QualityOutputPath]]:
-        """Return tracked quality outputs grouped by report type."""
-        outputs: Dict[str, List[QualityOutputPath]] = {}
-        for path in self.quality_output_paths:
-            outputs.setdefault(path.report_type, []).append(path)
-        return outputs
-
-    def get_quality_outputs_by_node(self) -> Dict[str, List[QualityOutputPath]]:
-        """Return tracked quality outputs grouped by node name."""
-        outputs: Dict[str, List[QualityOutputPath]] = {}
-        for path in self.quality_output_paths:
-            outputs.setdefault(path.node_name, []).append(path)
-        return outputs

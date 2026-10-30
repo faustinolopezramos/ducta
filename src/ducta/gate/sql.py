@@ -31,7 +31,7 @@ try:
     SQLGLOT_AVAILABLE = True
 except ImportError:
     SQLGLOT_AVAILABLE = False
-    sqlglot = None
+    sqlglot = None  # type: ignore[assignment]  # optional: every use checks SQLGLOT_AVAILABLE
 
 
 _LEXICAL_PATTERN_CACHE: Dict[Any, Dict[str, "re.Pattern[str]"]] = {}

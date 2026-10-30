@@ -103,7 +103,7 @@ def _client() -> TestClient:
 
 @pytest.fixture
 def root(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"

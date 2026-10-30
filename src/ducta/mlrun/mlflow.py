@@ -25,9 +25,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from functools import wraps
-from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from loguru import logger
 
@@ -256,7 +254,7 @@ class MLflowPipelineTracker:
         # it claims to be. `required` fails the node instead of logging and moving on.
         self.required = required
 
-        self._client: Optional[MlflowClient] = None
+        self._client: Optional[Any] = None  # an MlflowClient, imported lazily
         self._experiment_id: Optional[str] = None
         self._active_pipeline_run: Optional[str] = None
         self._active_node_runs: Dict[str, str] = {}
@@ -265,6 +263,13 @@ class MLflowPipelineTracker:
         self._lock = threading.RLock()
 
         self._initialize_mlflow()
+
+    @property
+    def _tracking_client(self) -> Any:
+        """The MlflowClient tracking runs (created when tracking starts)."""
+        if self._client is None:
+            raise RuntimeError("MLflow tracking has not started")
+        return self._client
 
     def _initialize_mlflow(self) -> None:
         """Initialize MLflow client and experiment."""
@@ -379,7 +384,7 @@ class MLflowPipelineTracker:
                 pipeline_run_id = self._active_pipeline_run
             if pipeline_run_id:
                 try:
-                    self._client.set_terminated(pipeline_run_id, status="FAILED")
+                    self._tracking_client.set_terminated(pipeline_run_id, status="FAILED")
                 except Exception:
                     pass
             raise
@@ -452,7 +457,7 @@ class MLflowPipelineTracker:
                     # not in the ambient / parent run context.
                     with mlflow.start_run(run_id=node_run_id_for_error, nested=True):
                         mlflow.log_param("error_message", str(e))
-                    self._client.set_terminated(node_run_id_for_error, status="FAILED")
+                    self._tracking_client.set_terminated(node_run_id_for_error, status="FAILED")
                 except Exception:
                     pass
             raise
@@ -473,7 +478,7 @@ class MLflowPipelineTracker:
             with self._lock:
                 run_id = self._active_node_runs.get(node_name) if node_name else None
             if run_id:
-                self._client.log_metric(run_id, key, value, step=step or 0)
+                self._tracking_client.log_metric(run_id, key, value, step=step or 0)
             else:
                 mlflow.log_metric(key, value, step=step)
             logger.debug(f"Logged metric {key}={value}")
@@ -491,47 +496,12 @@ class MLflowPipelineTracker:
             with self._lock:
                 run_id = self._active_node_runs.get(node_name) if node_name else None
             if run_id:
-                self._client.log_param(run_id, key, value)
+                self._tracking_client.log_param(run_id, key, value)
             else:
                 mlflow.log_param(key, value)
             logger.debug(f"Logged param {key}={value}")
         except Exception as e:
             self._not_recorded(f"param '{key}'", e)
-
-    def log_node_artifact(
-        self,
-        local_path: Union[str, Path],
-        artifact_path: Optional[str] = None,
-        node_name: Optional[str] = None,
-    ) -> None:
-        """Log artifact for the current or specified node.
-
-        Uses ``self._client`` (an explicit run_id, no ambient state) rather
-        than ``with mlflow.start_run(run_id=...):`` + the fluent
-        ``mlflow.log_artifact(s)`` calls: the fluent API shares one process-
-        global "active run" stack, so (1) exiting that inner ``with`` block
-        ends the run via MLflow's own teardown, finalizing it before the
-        outer ``start_node_step`` context (still logging duration/end time)
-        has finished, and (2) nodes run on a thread pool
-        (``node_executor.py``), so two nodes' threads racing on that shared
-        global stack can misattribute artifacts to the wrong run.
-        """
-        try:
-            local_path = str(local_path)
-            run_id = self._active_node_runs.get(node_name) if node_name else None
-            if run_id:
-                if Path(local_path).is_dir():
-                    self._client.log_artifacts(run_id, local_path, artifact_path)
-                else:
-                    self._client.log_artifact(run_id, local_path, artifact_path)
-            else:
-                if Path(local_path).is_dir():
-                    mlflow.log_artifacts(local_path, artifact_path)
-                else:
-                    mlflow.log_artifact(local_path, artifact_path)
-            logger.info(f"Logged artifact: {local_path}")
-        except Exception as e:
-            self._not_recorded(f"artifact '{local_path}'", e)
 
     def log_model(
         self,
@@ -582,7 +552,7 @@ class MLflowPipelineTracker:
             logger.warning("No active pipeline run")
             return
         try:
-            self._client.log_metric(self._active_pipeline_run, key, value, step=step or 0)
+            self._tracking_client.log_metric(self._active_pipeline_run, key, value, step=step or 0)
             logger.debug(f"Logged pipeline metric {key}={value}")
         except Exception as e:
             self._not_recorded(f"pipeline metric '{key}'", e)
@@ -602,18 +572,6 @@ class MLflowPipelineTracker:
             error,
         )
 
-    def get_node_run_id(self, node_name: str) -> Optional[str]:
-        """Get run ID for a specific node."""
-        return self._active_node_runs.get(node_name)
-
-    def get_pipeline_run_id(self) -> Optional[str]:
-        """Get active pipeline run ID."""
-        return self._active_pipeline_run
-
-    def is_tracking_active(self) -> bool:
-        """Check if tracking is currently active."""
-        return self._active_pipeline_run is not None
-
     @staticmethod
     def from_context(context, experiment_name: Optional[str] = None) -> "MLflowPipelineTracker":
         """Factory method to create tracker from Ducta context."""
@@ -623,10 +581,11 @@ class MLflowPipelineTracker:
         gs = getattr(context, "global_config", {}) or {}
         mlflow_config = gs.get("mlflow", {}) or {}
 
-        experiment_name = (
+        experiment_name = str(
             experiment_name
             or mlflow_config.get("experiment_name")
-            or getattr(context, "project_name", "Ducta_pipeline")
+            or getattr(context, "project_name", None)
+            or "Ducta_pipeline"
         )
 
         # Resolve tracking_uri considering environment structure
@@ -681,240 +640,6 @@ def _log_model_by_flavor(
         mlflow.pyfunc.log_model(python_model=model, **where, **kwargs)
 
 
-def _mlf_log_params_from_call(
-    func: Callable, args, kwargs, log_params: Optional[List[str]]
-) -> None:
-    """Helper to log function parameters to MLflow."""
-    if not log_params or not MLFLOW_AVAILABLE:
-        return
-    try:
-        import inspect
-
-        sig = inspect.signature(func)
-        bound_args = sig.bind(*args, **kwargs)
-        bound_args.apply_defaults()
-        for param_name in log_params:
-            if param_name in bound_args.arguments:
-                value = bound_args.arguments[param_name]
-                try:
-                    mlflow.log_param(f"{func.__name__}_{param_name}", value)
-                except Exception as e:
-                    logger.debug(f"Could not log param {param_name}: {e}")
-    except Exception as e:
-        logger.debug(f"Could not bind or log params: {e}")
-
-
-def mlflow_track(
-    log_params: Optional[List[str]] = None,
-    log_result_as: Optional[str] = None,
-    log_execution_time: bool = True,
-):
-    """
-    Decorator for automatic MLflow tracking of functions.
-    """
-
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            if not MLFLOW_AVAILABLE:
-                return func(*args, **kwargs)
-
-            _mlf_log_params_from_call(func, args, kwargs, log_params)
-
-            start_time = time.perf_counter()
-            result = func(*args, **kwargs)
-            duration = time.perf_counter() - start_time
-
-            if log_execution_time:
-                try:
-                    mlflow.log_metric(f"{func.__name__}_execution_time", duration)
-                except Exception as e:
-                    logger.debug(f"Could not log execution time: {e}")
-
-            if log_result_as and isinstance(result, (int, float)):
-                try:
-                    mlflow.log_metric(log_result_as, result)
-                except Exception as e:
-                    logger.debug(f"Could not log result: {e}")
-
-            return result
-
-        return wrapper
-
-    return decorator
-
-
-def log_dataframe_stats(df: Any, prefix: str = "df") -> None:
-    """
-    Log basic DataFrame statistics to MLflow.
-    """
-    if not MLFLOW_AVAILABLE:
-        return
-
-    try:
-        if hasattr(df, "toPandas"):
-            # Spark DataFrame
-            mlflow.log_metric(f"{prefix}_rows", df.count())
-            mlflow.log_metric(f"{prefix}_cols", len(df.columns))
-        else:
-            # Pandas DataFrame
-            mlflow.log_metric(f"{prefix}_rows", len(df))
-            mlflow.log_metric(f"{prefix}_cols", len(df.columns))
-            null_count = df.isnull().sum().sum()
-            mlflow.log_metric(f"{prefix}_nulls", int(null_count))
-            memory_mb = df.memory_usage(deep=True).sum() / 1024 / 1024
-            mlflow.log_metric(f"{prefix}_memory_mb", memory_mb)
-    except Exception as e:
-        logger.debug(f"Could not log DataFrame stats: {e}")
-
-
-def log_model_metrics(
-    y_true: Any,
-    y_pred: Any,
-    prefix: str = "test",
-    task_type: str = "classification",
-) -> Dict[str, float]:
-    """
-    Log standard ML metrics to MLflow.
-    """
-    if not MLFLOW_AVAILABLE:
-        return {}
-
-    metrics = {}
-    try:
-        if task_type == "classification":
-            from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
-
-            metrics[f"{prefix}_accuracy"] = accuracy_score(y_true, y_pred)
-            metrics[f"{prefix}_precision"] = precision_score(
-                y_true, y_pred, average="weighted", zero_division=0
-            )
-            metrics[f"{prefix}_recall"] = recall_score(
-                y_true, y_pred, average="weighted", zero_division=0
-            )
-            metrics[f"{prefix}_f1"] = f1_score(y_true, y_pred, average="weighted", zero_division=0)
-        else:
-            from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-
-            metrics[f"{prefix}_mse"] = mean_squared_error(y_true, y_pred)
-            metrics[f"{prefix}_rmse"] = mean_squared_error(y_true, y_pred) ** 0.5
-            metrics[f"{prefix}_mae"] = mean_absolute_error(y_true, y_pred)
-            metrics[f"{prefix}_r2"] = r2_score(y_true, y_pred)
-
-        for key, value in metrics.items():
-            mlflow.log_metric(key, value)
-    except Exception as e:
-        logger.warning(f"Could not log model metrics: {e}")
-
-    return metrics
-
-
-def log_confusion_matrix(
-    y_true: Any,
-    y_pred: Any,
-    labels: Optional[List[str]] = None,
-    filename: str = "confusion_matrix.png",
-) -> None:
-    """Log confusion matrix as artifact in MLflow."""
-    if not MLFLOW_AVAILABLE:
-        return
-
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-        import seaborn as sns  # type: ignore
-        from sklearn.metrics import confusion_matrix
-
-        cm = confusion_matrix(y_true, y_pred)
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
-        plt.title("Confusion Matrix")
-        plt.ylabel("True Label")
-        plt.xlabel("Predicted Label")
-        plt.tight_layout()
-        mlflow.log_figure(plt.gcf(), filename)
-        plt.close()
-    except Exception as e:
-        logger.warning(f"Could not log confusion matrix: {e}")
-
-
-def log_feature_importance(
-    model: Any,
-    feature_names: List[str],
-    top_n: int = 10,
-    filename: str = "feature_importance.png",
-) -> None:
-    """Log feature importance as artifact in MLflow."""
-    if not MLFLOW_AVAILABLE:
-        return
-
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-        import pandas as pd
-
-        if hasattr(model, "feature_importances_"):
-            importances = model.feature_importances_
-        elif hasattr(model, "coef_"):
-            importances = abs(model.coef_[0])
-        else:
-            logger.warning("Model does not have feature_importances_ or coef_")
-            return
-
-        df = (
-            pd.DataFrame({"feature": feature_names, "importance": importances})
-            .sort_values("importance", ascending=False)
-            .head(top_n)
-        )
-
-        plt.figure(figsize=(10, 6))
-        plt.barh(df["feature"], df["importance"])
-        plt.xlabel("Importance")
-        plt.title(f"Top {top_n} Feature Importances")
-        plt.tight_layout()
-        mlflow.log_figure(plt.gcf(), filename)
-        plt.close()
-
-        for _, row in df.iterrows():
-            mlflow.log_metric(f"importance_{row['feature'].replace(' ', '_')}", row["importance"])
-    except Exception as e:
-        logger.warning(f"Could not log feature importance: {e}")
-
-
-def log_training_curve(
-    train_scores: List[float],
-    val_scores: Optional[List[float]] = None,
-    metric_name: str = "accuracy",
-    filename: str = "training_curve.png",
-) -> None:
-    """Log training curve as artifact in MLflow."""
-    if not MLFLOW_AVAILABLE:
-        return
-
-    try:
-        import matplotlib.pyplot as plt  # type: ignore
-
-        epochs = range(1, len(train_scores) + 1)
-        plt.figure(figsize=(10, 6))
-        plt.plot(epochs, train_scores, label=f"Train {metric_name}", marker="o")
-        if val_scores:
-            plt.plot(epochs, val_scores, label=f"Val {metric_name}", marker="s")
-        plt.xlabel("Epoch")
-        plt.ylabel(metric_name.capitalize())
-        plt.title(f"Training Curve - {metric_name}")
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
-        mlflow.log_figure(plt.gcf(), filename)
-        plt.close()
-
-        for epoch, score in enumerate(train_scores, 1):
-            mlflow.log_metric(f"train_{metric_name}", score, step=epoch)
-        if val_scores:
-            for epoch, score in enumerate(val_scores, 1):
-                mlflow.log_metric(f"val_{metric_name}", score, step=epoch)
-    except Exception as e:
-        logger.warning(f"Could not log training curve: {e}")
-
-
 class MLflowNodeContext:
     """
     Convenient context manager for logging in pipeline nodes.
@@ -953,148 +678,3 @@ class MLflowNodeContext:
         """Log model, auto-detecting the flavor unless one is given."""
         if MLFLOW_AVAILABLE:
             _log_model_by_flavor(model, artifact_path, flavor, **kwargs)
-
-
-class MLflowHelper:
-    """Helper utilities for working with MLflow in ducta."""
-
-    @staticmethod
-    def log_dataframe_sample(
-        df: Any,
-        name: str = "data_sample",
-        n_rows: int = 100,
-        artifact_path: Optional[str] = None,
-    ) -> None:
-        """Log DataFrame sample as artifact."""
-        if not MLFLOW_AVAILABLE:
-            return
-
-        try:
-            import tempfile
-
-            if hasattr(df, "toPandas"):
-                df = df.limit(n_rows).toPandas()
-            else:
-                df = df.head(n_rows)
-
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
-                df.to_csv(f.name, index=False)
-                temp_path = f.name
-
-            mlflow.log_artifact(temp_path, artifact_path or "data")
-            Path(temp_path).unlink(missing_ok=True)
-            logger.debug(f"Logged DataFrame sample: {name}")
-        except Exception as e:
-            logger.warning(f"Could not log DataFrame sample: {e}")
-
-    @staticmethod
-    def log_plot(fig: Any, name: str, artifact_path: Optional[str] = None) -> None:
-        """Log matplotlib/plotly figure as artifact."""
-        if not MLFLOW_AVAILABLE:
-            return
-
-        try:
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                temp_path = f.name
-
-            if hasattr(fig, "savefig"):
-                fig.savefig(temp_path, bbox_inches="tight", dpi=150)
-            elif hasattr(fig, "write_image"):
-                fig.write_image(temp_path)
-            else:
-                logger.warning(f"Unknown figure type: {type(fig)}")
-                return
-
-            mlflow.log_artifact(temp_path, artifact_path or "plots")
-            Path(temp_path).unlink(missing_ok=True)
-            logger.debug(f"Logged plot: {name}")
-        except Exception as e:
-            logger.warning(f"Could not log plot: {e}")
-
-    @staticmethod
-    def log_dict_as_json(
-        data: Dict[str, Any],
-        name: str,
-        artifact_path: Optional[str] = None,
-    ) -> None:
-        """Log dictionary as JSON artifact."""
-        if not MLFLOW_AVAILABLE:
-            return
-
-        try:
-            import json
-            import tempfile
-
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-                json.dump(data, f, indent=2)
-                temp_path = f.name
-
-            mlflow.log_artifact(temp_path, artifact_path or "config")
-            Path(temp_path).unlink(missing_ok=True)
-            logger.debug(f"Logged JSON: {name}")
-        except Exception as e:
-            logger.warning(f"Could not log JSON: {e}")
-
-    @staticmethod
-    def get_best_run(
-        experiment_name: str,
-        metric: str,
-        mode: str = "max",
-    ) -> Optional[Any]:
-        """Get best run from experiment by metric."""
-        if not MLFLOW_AVAILABLE:
-            return None
-
-        try:
-            client = MlflowClient()
-            experiment = client.get_experiment_by_name(experiment_name)
-            if not experiment:
-                logger.warning(f"Experiment not found: {experiment_name}")
-                return None
-
-            runs = client.search_runs(
-                experiment_ids=[experiment.experiment_id],
-                filter_string="",
-                order_by=[f"metrics.{metric} {'DESC' if mode == 'max' else 'ASC'}"],
-                max_results=1,
-            )
-            return runs[0] if runs else None
-        except Exception as e:
-            logger.warning(f"Could not get best run: {e}")
-            return None
-
-    @staticmethod
-    def log_system_metrics() -> None:
-        """Log system metrics (CPU, memory, etc.)."""
-        if not MLFLOW_AVAILABLE:
-            return
-
-        try:
-            import psutil  # type: ignore
-
-            mlflow.log_metric("system_cpu_percent", psutil.cpu_percent())
-            mlflow.log_metric("system_memory_percent", psutil.virtual_memory().percent)
-            logger.debug("Logged system metrics")
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.debug(f"Could not log system metrics: {e}")
-
-
-def setup_mlflow_for_Ducta(
-    config: Optional[MLflowConfig] = None,
-    config_path: Optional[str] = None,
-) -> MLflowConfig:
-    """
-    Complete MLflow setup for ducta.
-    """
-    if config is None:
-        if config_path and Path(config_path).exists():
-            config = MLflowConfig.from_yaml(config_path)
-        else:
-            config = MLflowConfig.from_env()
-
-    config.apply()
-    return config

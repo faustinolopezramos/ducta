@@ -201,11 +201,6 @@ class MLOpsException(Exception):
                 self.context.additional_info[key] = value
         return self
 
-    def with_suggestion(self, suggestion: str) -> "MLOpsException":
-        """Add a suggestion and return self for chaining."""
-        self.suggestions.append(suggestion)
-        return self
-
 
 class ModelNotFoundError(MLOpsException):
     """Raised when a requested model is not found in the registry."""
@@ -593,39 +588,6 @@ class StorageBackendError(MLOpsException):
         )
 
 
-class StorageCircuitOpenError(MLOpsException):
-    """Raised when storage circuit breaker is open."""
-
-    error_code = ErrorCode.STORAGE_CIRCUIT_OPEN
-
-    def __init__(self, backend_name: str, reset_time: float, **kwargs):
-        self.backend_name = backend_name
-        self.reset_time = reset_time
-
-        context = ErrorContext(
-            operation="storage_operation",
-            component="storage",
-            additional_info={
-                "backend": backend_name,
-                "reset_time_seconds": reset_time,
-            },
-        )
-
-        super().__init__(
-            message=(
-                f"Storage circuit breaker '{backend_name}' is open. "
-                f"Will reset in {reset_time:.1f} seconds."
-            ),
-            context=context,
-            suggestions=[
-                "Wait for the circuit breaker to reset",
-                "Check underlying storage system health",
-                "Consider manual circuit breaker reset if storage is healthy",
-            ],
-            **kwargs,
-        )
-
-
 class ModelRegistrationError(MLOpsException):
     """Raised when model registration fails."""
 
@@ -751,60 +713,3 @@ class ConfigurationError(MLOpsException):
             ],
             **kwargs,
         )
-
-
-class BackendNotConfiguredError(MLOpsException):
-    """Raised when a backend is not properly configured."""
-
-    error_code = ErrorCode.BACKEND_NOT_CONFIGURED
-
-    def __init__(self, backend_type: str, missing: str, **kwargs):
-        self.backend_type = backend_type
-        self.missing = missing
-        super().__init__(
-            message=f"Backend '{backend_type}' not configured: {missing}",
-            context=ErrorContext(
-                operation="initialize_backend",
-                component="config",
-                resource_type="backend",
-                resource_id=backend_type,
-            ),
-            suggestions=[
-                f"Set the required configuration: {missing}",
-                "Use environment variables or configuration file",
-            ],
-            **kwargs,
-        )
-
-
-def create_error_response(exception: MLOpsException) -> Dict[str, Any]:
-    """
-    Create a standardized error response from an exception.
-    """
-    return {
-        "error": True,
-        "error_code": exception.error_code.value,
-        "message": exception.message,
-        "suggestions": exception.suggestions,
-        "context": exception.context.to_dict() if exception.context else None,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-
-
-def wrap_exception(
-    exception: Exception,
-    error_code: ErrorCode = ErrorCode.UNKNOWN_ERROR,
-    context: Optional[ErrorContext] = None,
-) -> MLOpsException:
-    """
-    Wrap a generic exception in an MLOpsException.
-    """
-    if isinstance(exception, MLOpsException):
-        return exception
-
-    return MLOpsException(
-        message=str(exception),
-        error_code=error_code,
-        context=context,
-        cause=exception,
-    )

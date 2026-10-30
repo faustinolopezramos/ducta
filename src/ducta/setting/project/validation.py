@@ -89,8 +89,14 @@ def _errors(
         msg = err["msg"].removeprefix("Value error, ")
         if err["type"] == "extra_forbidden" and loc:
             key = str(loc[-1])
-            close = difflib.get_close_matches(key, _schema_keys(), n=1, cutoff=0.5)
-            msg = f"unknown key '{key}'" + (f" — did you mean '{close[0]}'?" if close else "")
+            known = _schema_keys()
+            if key in known:
+                # Valid somewhere else (a node's `inputs` written on the pipeline):
+                # suggesting the key itself would read "did you mean 'inputs'?".
+                msg = f"'{key}' is not valid at this level"
+            else:
+                close = difflib.get_close_matches(key, known, n=1, cutoff=0.5)
+                msg = f"unknown key '{key}'" + (f" — did you mean '{close[0]}'?" if close else "")
         out.append(
             f"{_locate(where, prefix, err['loc'])} {label}{'.' + dotted if dotted else ''}: {msg}"
         )

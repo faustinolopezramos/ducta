@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 from ducta.console.core import ExitCode
-from ducta.console.template import TemplateGenerator, TemplateType
+from ducta.console.templates import TemplateGenerator, TemplateType
 from ducta.console.wrapper import main
 
 

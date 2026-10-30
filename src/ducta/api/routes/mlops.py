@@ -200,7 +200,7 @@ def _resolve_mlops_storage(
     mlops_cfg = gs.get("mlops") or {}
     path = mlops_cfg.get("storage_path") or gs.get("mlops_storage_path")
     if path:
-        return path
+        return str(path)
 
     # Fall back to a conventional location relative to the workspace
     return str(source_path / "mlops_data")

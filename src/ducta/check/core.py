@@ -19,15 +19,16 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import importlib
+import sys
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Tuple
 
-try:
+if sys.version_info >= (3, 11):
     from enum import StrEnum
-except ImportError:  # Python < 3.11
+else:
     from enum import Enum
 
     class StrEnum(str, Enum):
@@ -233,8 +234,8 @@ class DFAdapter:
             is_numeric = dtype in ("double", "float")
 
             if is_numeric:
-                return self.df.filter(F.isnull(column) | F.isnan(column)).count()
-            return self.df.filter(F.isnull(column)).count()
+                return int(self.df.filter(F.isnull(column) | F.isnan(column)).count())
+            return int(self.df.filter(F.isnull(column)).count())
         return int(self.df[column].isna().sum())
 
     def min_max(self, column: str) -> Tuple[Optional[float], Optional[float]]:
@@ -278,7 +279,7 @@ class DFAdapter:
             vals = q.limit(limit).collect() if limit is not None else q.collect()
             return [r[0] for r in vals]
         vals = self.df[column].unique()
-        return vals[:limit].tolist() if limit is not None else vals.tolist()
+        return list(vals[:limit] if limit is not None else vals)
 
     def value_counts(self, column: str, topk: int = 100) -> dict:
         if self.engine == "spark":
@@ -291,12 +292,7 @@ class DFAdapter:
                 .collect()
             )
             return {r[column]: r["cnt"] for r in rows}
-        return self.df[column].value_counts().head(topk).to_dict()
-
-    def filter_antijoin(self, column: str, reference_values: List[Any]) -> int:
-        if self.engine == "spark":
-            return self.df.filter(~self._spark().col(column).isin(reference_values)).count()
-        return len(self.df[~self.df[column].isin(reference_values)])
+        return dict(self.df[column].value_counts().head(topk).to_dict())
 
     def anti_join(
         self, column: str, other: "DFAdapter", other_column: str, allow_null: bool = False
@@ -310,13 +306,15 @@ class DFAdapter:
                 source_df = source_df[source_df[column].notna()]
 
         if self.engine == "spark" and other.engine == "spark":
-            return source_df.join(
-                other.df, source_df[column] == other.df[other_column], how="left_anti"
-            ).count()
+            return int(
+                source_df.join(
+                    other.df, source_df[column] == other.df[other_column], how="left_anti"
+                ).count()
+            )
         # Fallback for Pandas or mixed engines
         ref_values = other.distinct_values(other_column, limit=None)
         if self.engine == "spark":
-            return source_df.filter(~self._spark().col(column).isin(ref_values)).count()
+            return int(source_df.filter(~self._spark().col(column).isin(ref_values)).count())
         return len(source_df[~source_df[column].isin(ref_values)])
 
     def sample(self, max_rows: int = 10000) -> Any:
@@ -337,9 +335,11 @@ class DFAdapter:
             name = f"_quality_{uuid.uuid4().hex[:8]}"
             self.df.createOrReplaceTempView(name)
             try:
-                return self.df.sparkSession.sql(
-                    f"SELECT COUNT(*) FROM {name} WHERE {sql_condition}"
-                ).collect()[0][0]
+                return int(
+                    self.df.sparkSession.sql(
+                        f"SELECT COUNT(*) FROM {name} WHERE {sql_condition}"
+                    ).collect()[0][0]
+                )
             finally:
                 self.df.sparkSession.catalog.dropTempView(name)
         try:

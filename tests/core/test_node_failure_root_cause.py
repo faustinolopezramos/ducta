@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pytest
 
+from ducta.core.errors import ExecutionError, PipelineExecutionError
 from ducta.core.execution.coordinator import ParallelCoordinator
 from ducta.core.execution.state import ThreadSafeExecutionState
 
@@ -68,7 +69,7 @@ class TestBuiltFailureError:
 
         error = ParallelCoordinator._build_failure_error(state)
 
-        assert isinstance(error, RuntimeError)
+        assert isinstance(error, PipelineExecutionError)
         assert "extract" in str(error)
         assert "BespokeNodeError" in str(error)
         assert "column 'revenue' not found" in str(error)
@@ -100,7 +101,7 @@ class TestBuiltFailureError:
 
         error = ParallelCoordinator._build_failure_error(state)
 
-        assert isinstance(error, RuntimeError)
+        assert isinstance(error, PipelineExecutionError)
         assert error.__cause__ is None
 
     def test_raising_it_preserves_the_original_traceback(self):
@@ -111,7 +112,7 @@ class TestBuiltFailureError:
             original = exc
             state.mark_failed("extract", _failure_info(exc), exception=exc)
 
-        with pytest.raises(RuntimeError) as caught:
+        with pytest.raises(ExecutionError) as caught:
             raise ParallelCoordinator._build_failure_error(state)
 
         assert caught.value.__cause__ is original

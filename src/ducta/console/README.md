@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Human/CI entry point: run pipelines, scaffold projects, inspect configs and quality |
 | **Layer** | Interface (CLI) |
-| **Depends on** | `core`, `setting`, `check` |
-| **Used by** | End users & CI (the `ducta` command) |
+| **Depends on** | `core`, `setting`, `check`, `mlrun`, `stream`, `ai` (`ducta ai …`), `api` (`ducta ui`, shared services), `skills` |
+| **Used by** | End users & CI (the `ducta` command); `api` and `ai` reuse its presentation and templates |
 | **Key entry points** | `ducta` console script → `UnifiedCLI`, subcommands (`start`, `stream`, `template`, `quality`, …) |
 | **Install** | Bundled with the core engine (`pip install ducta`) |
 
@@ -116,7 +116,7 @@ ducta config list-pipelines
 
 # Streaming lifecycle
 ducta stream run --pipeline events_stream --mode async
-ducta stream status --execution-id <id> --format table
+ducta stream status --execution-id <id> --output-format table
 ducta stream stop --execution-id <id> --timeout 60
 
 # Data quality on a file

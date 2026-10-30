@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, cast
 
 
 def get_context_value(context: Any, key: str, default: Any = None) -> Any:
@@ -48,16 +48,10 @@ def set_context_value(context: Any, key: str, value: Any) -> None:
 
 
 def get_active_env(context: Any) -> Optional[str]:
-    """The context's active environment name, under whichever attribute it's
-    exposed (``env`` or the legacy ``environment``).
+    """The context's active environment name (its ``env``).
 
-    This is the same quick, duck-typed fallback already used ad hoc across
-    the codebase (``mlrun.config._active_env``,
-    ``stream.context_utils.get_active_env``) — not a replacement for
-    ``CoreSettings._resolve_env``, which additionally consults
-    ``global_config`` and is the authoritative resolver used when building a
-    ``CoreSettings`` instance.
+    Not a replacement for ``CoreSettings._resolve_env``, which additionally
+    consults ``global_config`` and is the authoritative resolver used when
+    building a ``CoreSettings`` instance.
     """
-    return get_context_value(context, "env", None) or get_context_value(
-        context, "environment", None
-    )
+    return cast(Optional[str], get_context_value(context, "env", None))

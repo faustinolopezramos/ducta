@@ -33,11 +33,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ducta import state
+
 _ID = re.compile(r"^[0-9A-Za-z-]{1,64}\Z")
 
 
 def agent_dir(root: Path, agent: str) -> Path:
-    return Path(root) / ".ducta" / "ai" / agent
+    return state.ai_dir(root, agent)
 
 
 def now() -> str:

@@ -21,9 +21,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from loguru import logger  # type: ignore
 
@@ -151,8 +151,8 @@ class GitSyncManager:
                     name, email = author
                 else:
                     reader = repo.config_reader()
-                    name = reader.get_value("user", "name", self.auto_commit_author)
-                    email = reader.get_value("user", "email", self.auto_commit_email)
+                    name = str(reader.get_value("user", "name", self.auto_commit_author))
+                    email = str(reader.get_value("user", "email", self.auto_commit_email))
                 actor = Actor(name, email)
                 repo.index.commit(
                     message or "Auto: config update via API/CLI", author=actor, committer=actor
@@ -211,60 +211,6 @@ class GitSyncManager:
                     "error": str(e),
                 }
 
-    def detect_external_changes(self, force_fetch: bool = False) -> bool:
-        if not self.is_available():
-            return False
-
-        repo = self._require_repo()
-        with self._lock:
-            try:
-                now = datetime.now()
-                if (
-                    not force_fetch
-                    and self._last_fetch
-                    and (now - self._last_fetch).total_seconds() < self._fetch_interval
-                ):
-                    return False
-
-                origin = repo.remote("origin")
-                origin.fetch()
-                self._last_fetch = now
-
-                local_commit = repo.head.commit.hexsha
-
-                tracking_branch = None
-                try:
-                    tracking_branch = repo.active_branch.tracking_branch()
-                except TypeError:
-                    pass
-
-                if tracking_branch is not None:
-                    remote_commit = tracking_branch.commit.hexsha
-                else:
-                    remote_commit = None
-                    for ref_name in ("main", "master"):
-                        ref = getattr(origin.refs, ref_name, None)
-                        if ref is not None:
-                            remote_commit = ref.commit.hexsha
-                            break
-                    if remote_commit is None:
-                        return False
-
-                has_changes = local_commit != remote_commit
-                if has_changes:
-                    logger.warning(
-                        "External changes detected: {local} vs {remote}",
-                        local=local_commit[:7],
-                        remote=remote_commit[:7],
-                    )
-                return has_changes
-
-            except (AttributeError, IndexError):
-                return False
-            except Exception as e:
-                logger.debug("Failed to detect external changes: {err}", err=e)
-                return False
-
     def branches(self) -> List[Dict[str, Any]]:
         """Local and remote-tracking branches, each with the commit it points at."""
         repo = self._require_repo()
@@ -304,7 +250,7 @@ class GitSyncManager:
                 blob = repo.commit(rev).tree / rel_path
             except (KeyError, ValueError):
                 return None
-            return blob.data_stream.read().decode("utf-8", "replace")
+            return cast(bytes, blob.data_stream.read()).decode("utf-8", "replace")
 
     def working_diff(self, rel_path: str) -> Dict[str, str]:
         """``{original, modified}``: *rel_path* at HEAD ("" if new) and on disk ("" if deleted)."""
@@ -319,38 +265,6 @@ class GitSyncManager:
         path = self.workspace_root / rel_path
         modified = path.read_text(encoding="utf-8", errors="replace") if path.is_file() else ""
         return {"original": original, "modified": modified}
-
-    def get_remote_url(self) -> Optional[str]:
-        if not self.is_available():
-            return None
-        repo = self._require_repo()
-        with self._lock:
-            try:
-                return repo.remote("origin").url
-            except (AttributeError, ValueError):
-                return None
-
-    def get_commit_history(self, max_count: int = 10) -> List[Dict]:
-        if not self.is_available():
-            return []
-
-        repo = self._require_repo()
-        with self._lock:
-            try:
-                return [
-                    {
-                        "sha": c.hexsha[:7],
-                        "message": c.message.strip(),
-                        "author": c.author.name,
-                        "date": datetime.fromtimestamp(
-                            c.committed_date, tz=timezone.utc
-                        ).isoformat(),
-                    }
-                    for c in repo.iter_commits(max_count=max_count)
-                ]
-            except Exception as e:
-                logger.error("Failed to get commit history: {err}", err=e)
-                return []
 
     def _git_operation(self, operation: str, **kwargs) -> Tuple[bool, str]:
         """Generic helper for pull/push operations."""

@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
-from datetime import datetime
 from itertools import islice
 from typing import Callable, Deque, Optional
 
@@ -69,11 +68,6 @@ class CircularLogBuffer:
         with self._lock:
             return list(self._buffer)
 
-    def get_after(self, timestamp: datetime) -> list[LogEntry]:
-        """Return entries after a specific timestamp."""
-        with self._lock:
-            return [e for e in self._buffer if e.timestamp > timestamp]
-
     def get_from(self, seq: int) -> tuple[list[LogEntry], int, int]:
         """Return entries appended at or after absolute sequence *seq*.
 
@@ -92,13 +86,6 @@ class CircularLogBuffer:
                 return [], self._total_appended, dropped
             entries = list(islice(self._buffer, start, None))
             return entries, self._total_appended, dropped
-
-    def get_last(self, count: int) -> list[LogEntry]:
-        """Return the last N entries."""
-        if count <= 0:
-            return []
-        with self._lock:
-            return list(self._buffer)[-count:]
 
     def clear(self) -> None:
         """Clear all entries."""
@@ -192,11 +179,6 @@ class BufferedLogManager:
         """Incrementally fetch logs appended since absolute sequence *seq*."""
         buffer = self.get_buffer(execution_id)
         return buffer.get_from(seq) if buffer else ([], seq, 0)
-
-    def get_logs_after(self, execution_id: str, timestamp: datetime) -> list[LogEntry]:
-        """Get logs for execution after a timestamp."""
-        buffer = self.get_buffer(execution_id)
-        return buffer.get_after(timestamp) if buffer else []
 
     def delete_buffer(self, execution_id: str) -> int:
         """Delete buffer for execution and return the number of logs deleted."""

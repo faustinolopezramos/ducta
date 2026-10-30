@@ -175,7 +175,6 @@ def spark_session():
     spark.conf.get.return_value = "false"
     spark.sparkContext._jvm = MagicMock()
     spark.sparkContext._jvm.java = MagicMock()
-    spark.sparkContext.addJar = MagicMock()
     spark.sql = MagicMock()
     spark.createDataFrame = MagicMock()
     spark.read = MagicMock()

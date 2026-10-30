@@ -194,6 +194,8 @@ class PickleReader(SparkReaderBase):
     def _read_distributed_pickle(self, source: str, config: Dict[str, Any]) -> Any:
         """Read pickle files using Spark distributed processing with memory safety."""
         spark = self._ctx_spark()
+        if spark is None:
+            raise ReadOperationError("A Spark session is required to read pickles distributed")
         to_dataframe = config.get("to_dataframe", True)
 
         max_records = self._get_safe_max_records(config)
@@ -326,6 +328,8 @@ class QueryReader(BaseIO):
             sanitized = self.sanitize_sql_query(str(query))
 
             spark = self._ctx_spark()
+            if spark is None:
+                raise ReadOperationError("Spark session is required to execute queries")
             return spark.sql(sanitized)
 
         except ConfigurationError as error:

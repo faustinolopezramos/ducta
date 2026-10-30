@@ -22,14 +22,19 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
 from ducta.api.execution.error_recovery import get_error_log, try_get_error_log
 from ducta.api.execution.manager_shared import _TERMINAL_STATUSES
 from ducta.api.models.execution import ExecutionResponse, LogEntry
 
+if TYPE_CHECKING:
+    from ducta.api.execution.manager_state import _ManagerState as _Base
+else:
+    _Base = object
 
-class _StreamingMixin:
+
+class _StreamingMixin(_Base):
     """Live status/log emission and the SSE log-streaming generator."""
 
     #: Max entries per WebSocket message — keeps a large catch-up batch (e.g.
@@ -95,15 +100,6 @@ class _StreamingMixin:
             extra=extra,
         )
         self._emit(record.id, entry)
-
-    def emit_node_status(self, execution_id: str, node_id: str, status: str) -> None:
-        entry = LogEntry(
-            timestamp=datetime.now(tz=timezone.utc),
-            level="INFO",
-            message=f"[node_status] node_id={node_id} status={status}",
-            extra={"type": "node_status", "node_id": node_id, "status": status},
-        )
-        self._emit(execution_id, entry)
 
     def _record_top_level_error(self, execution_id: str, exception: Exception) -> None:
         """Record a whole-pipeline failure into the execution's error log."""

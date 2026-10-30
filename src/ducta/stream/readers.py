@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -82,7 +82,7 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
             return value.strip().lower() in ("1", "true", "yes", "on")
         return bool(value)
 
-    def _validate_options(self, config: Dict[str, Any], format_name: str = None) -> None:
+    def _validate_options(self, config: Dict[str, Any], format_name: Optional[str] = None) -> None:
         """Validate required options for the streaming format."""
         try:
             format_key = format_name or self.FORMAT_NAME
@@ -154,8 +154,7 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
         if schema_cfg is None:
             return None
         try:
-            struct_type_cls = StructType if isinstance(StructType, type) else None
-            if struct_type_cls and isinstance(schema_cfg, struct_type_cls):
+            if isinstance(StructType, type) and isinstance(schema_cfg, StructType):
                 return schema_cfg
             if isinstance(schema_cfg, str):
                 ddl_schema = schema_cfg.strip()
@@ -163,11 +162,11 @@ class BaseStreamingReader(ABC, _StreamingSparkMixin):
                     return None
 
                 from_ddl = getattr(StructType, "fromDDL", None)
-                if callable(from_ddl):
-                    return from_ddl(ddl_schema)
+                if callable(from_ddl):  # PySpark 4
+                    return cast("StructType", from_ddl(ddl_schema))
 
                 # Fallback for PySpark versions that do not expose StructType.fromDDL.
-                return self.spark.createDataFrame([], ddl_schema).schema
+                return cast("StructType", self.spark.createDataFrame([], ddl_schema).schema)
 
             logger.warning("json_schema provided but not a StructType or DDL string; ignoring")
             return None
@@ -237,7 +236,7 @@ class KafkaStreamingReader(BaseStreamingReader):
                 else:
                     logger.warning("parse_json=True but no valid json_schema provided")
 
-            return streaming_df
+            return cast(DataFrame, streaming_df)
 
         except StreamingError:
             raise
@@ -283,7 +282,7 @@ class DeltaStreamingReader(BaseStreamingReader):
 
             reader = self._spark_read_stream().format("delta")
             reader = self._apply_options(reader, self._merge_backpressure_defaults(options))
-            return reader.load(path_str)
+            return cast(DataFrame, reader.load(path_str))
 
         except StreamingError:
             raise
@@ -364,16 +363,9 @@ class FileStreamReader(BaseStreamingReader):
         try:
             self._validate_options(config, self.FORMAT_NAME)
             options = config.get("options", {}) or {}
-            path = config.get("path") or options.get("path")
-
-            if config.get("path") and not options.get("path"):
-                logger.warning(
-                    "FileStreamReader: 'path' at the top level of the input config is deprecated. "
-                    "Move it to input.options.path instead."
-                )
-
+            path = options.get("path")
             if not path:
-                raise StreamingError(f"{self.FORMAT_NAME} requires 'path' in config or options")
+                raise StreamingError(f"{self.FORMAT_NAME} requires 'path' in input.options")
 
             file_format = config.get("file_format", "parquet")
 
@@ -388,7 +380,7 @@ class FileStreamReader(BaseStreamingReader):
             if schema:
                 reader = reader.schema(schema)
 
-            return reader.load(str(path))
+            return cast(DataFrame, reader.load(str(path)))
 
         except StreamingError:
             raise
@@ -416,7 +408,7 @@ class KinesisStreamingReader(BaseStreamingReader):
 
             reader = self._spark_read_stream().format("kinesis")
             reader = self._apply_options(reader, self._merge_backpressure_defaults(options))
-            return reader.load()
+            return cast(DataFrame, reader.load())
 
         except StreamingError:
             raise
@@ -447,7 +439,7 @@ class RateStreamingReader(BaseStreamingReader):
             options = config.get("options", {}) or {}
             logger.info(f"Creating rate streaming reader with options: {list(options.keys())}")
             reader = self._apply_options(self._spark_read_stream().format("rate"), options)
-            return reader.load()
+            return cast(DataFrame, reader.load())
         except StreamingError:
             raise
         except Exception as e:
@@ -472,7 +464,7 @@ class SocketStreamingReader(BaseStreamingReader):
                 "cannot resume from a checkpoint"
             )
             reader = self._apply_options(self._spark_read_stream().format("socket"), options)
-            return reader.load()
+            return cast(DataFrame, reader.load())
         except StreamingError:
             raise
         except Exception as e:
@@ -502,12 +494,4 @@ class StreamingReaderFactory(StreamingHandlerFactory):
 
     def get_reader(self, format_name: str) -> BaseStreamingReader:
         """Get streaming reader for specified format."""
-        return self.get(format_name)
-
-    def register_custom_reader(self, format_name: str, reader_class, *args, **kwargs):
-        """Register a custom streaming reader.
-
-        ``*args`` and ``**kwargs`` are stored and forwarded to the reader
-        constructor on its first use, alongside the mandatory ``context`` arg.
-        """
-        self.register_custom(format_name, reader_class, *args, **kwargs)
+        return cast(BaseStreamingReader, self.get(format_name))

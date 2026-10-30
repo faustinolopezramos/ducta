@@ -106,7 +106,7 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
 def build_node_payload(
     node_name: str,
     *,
-    env: str,
+    env: Optional[str],
     ml_info: Dict[str, Any],
     pipeline_name: Optional[str] = None,
     start_date: Optional[str] = None,

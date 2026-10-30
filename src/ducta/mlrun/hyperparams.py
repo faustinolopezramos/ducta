@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import itertools
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, List, Optional, Sequence, Union, cast
 
 from loguru import logger
 
@@ -247,7 +247,7 @@ class HyperparamConfig:
         if not self._is_conditional(spec):
             return self._values_for(name)
 
-        dep = spec["depends_on"]
+        dep = cast(Dict[str, Any], spec)["depends_on"]
         parent = dep["param"]
         pv = parent_values.get(parent)
 
@@ -354,69 +354,6 @@ class HyperparamConfig:
                 dists[name] = self._values_for(name)
         return dists
 
-    def build_optuna_space(self) -> Dict[str, dict]:
-        """Build an Optuna-compatible space definition."""
-        try:
-            import optuna  # noqa: F401
-        except ImportError:
-            raise HyperparamConfigError(
-                "Bayesian search requires 'optuna'. Install with: pip install optuna"
-            )
-
-        space: Dict[str, dict] = {}
-        for name, spec in self.search_space.items():
-            if self._is_conditional(spec):
-                dep = spec["depends_on"]
-                parent = dep["param"]
-                mapping = dep["mapping"]
-                all_choices = self._values_for(name)
-                space[name] = {
-                    "type": "conditional",
-                    "args": {
-                        "depends_on": parent,
-                        "mapping": {str(k): list(v) for k, v in mapping.items()},
-                        "choices": all_choices,
-                    },
-                }
-            elif self._is_int_range(spec):
-                args: Dict[str, Any] = {"low": int(spec["min"]), "high": int(spec["max"])}
-                if spec.get("log", False):
-                    args["log"] = True
-                elif int(spec.get("step", 1)) != 1:
-                    args["step"] = int(spec["step"])
-                space[name] = {"type": "int", "args": args}
-            elif self._is_range_spec(spec):
-                if spec.get("log", False):
-                    space[name] = {
-                        "type": "float",
-                        "args": {"low": spec["min"], "high": spec["max"], "log": True},
-                    }
-                else:
-                    space[name] = {
-                        "type": "float",
-                        "args": {"low": spec["min"], "high": spec["max"]},
-                    }
-            else:
-                values = list(spec)
-                if all(isinstance(v, bool) for v in values):
-                    space[name] = {
-                        "type": "categorical",
-                        "args": {"choices": list(values)},
-                    }
-                elif all(isinstance(v, int) for v in values):
-                    space[name] = {"type": "int", "args": {"low": min(values), "high": max(values)}}
-                elif all(isinstance(v, float) for v in values):
-                    space[name] = {
-                        "type": "float",
-                        "args": {"low": min(values), "high": max(values)},
-                    }
-                else:
-                    space[name] = {
-                        "type": "categorical",
-                        "args": {"choices": list(values)},
-                    }
-        return space
-
     def suggest_params(self, trial: Any) -> Dict[str, Any]:
         """Sample a set of parameters from an Optuna trial."""
         params: Dict[str, Any] = {}
@@ -503,9 +440,9 @@ def expand_sweep_grid(
 
     keys = list(swept.keys())
     combos = []
-    for values in itertools.product(*(swept[k] for k in keys)):
+    for combo_values in itertools.product(*(swept[k] for k in keys)):
         combo = dict(fixed)
-        combo.update(dict(zip(keys, values)))
+        combo.update(dict(zip(keys, combo_values)))
         combos.append(combo)
     return combos
 

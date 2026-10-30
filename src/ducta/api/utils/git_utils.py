@@ -69,18 +69,6 @@ def safe_path(base: Path, untrusted: str) -> Path:
     return resolved
 
 
-def http_auth_env(username: str, token: str) -> dict:
-    """Return GIT_CONFIG_* env vars injecting an HTTP Basic auth header."""
-    import base64
-
-    basic = base64.b64encode(f"{username}:{token}".encode()).decode()
-    return {
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.extraHeader",
-        "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}",
-    }
-
-
 def sanitize_git_remote_url(url: str) -> str:
     """Remove embedded credentials from an HTTP(S) git remote URL."""
     parsed = urlparse(url)
@@ -96,12 +84,6 @@ def sanitize_git_remote_url(url: str) -> str:
 
 
 _URL_CREDENTIALS_RE = re.compile(r"(?P<scheme>[a-zA-Z][a-zA-Z0-9+.-]*://)(?P<userinfo>[^/@\s]+@)")
-
-
-def redact_git_credentials(text: str) -> str:
-    """Redact credentials embedded in any git URL substring within *text*."""
-    redacted = _URL_CREDENTIALS_RE.sub(r"\g<scheme>", text)
-    return redacted
 
 
 # ── Shared utilities for repositories ────────────────────────────────────────
@@ -183,28 +165,6 @@ def validate_version(root: Path, path: Path, expected: str | None) -> None:
                 "expected_sha": expected,
                 "current_sha": current,
                 "message": "The file changed since you opened it. Reload it, or compare first.",
-            },
-        )
-
-
-def validate_occ(root: Path, file_path: Path, expected_sha: str | None) -> None:
-    """Raise :exc:`~ducta.api.exceptions.ConcurrencyError` if *file_path* has been
-    modified since *expected_sha* (Optimistic Concurrency Control)..
-    """
-    if not expected_sha:
-        return
-    current = file_commit_sha(root, file_path)
-    if current and current != expected_sha:
-        from ducta.api.exceptions import ConcurrencyError
-        from ducta.api.utils.platform_utils import posix_relative
-
-        raise ConcurrencyError(
-            f"Concurrent modification detected on {file_path.name}",
-            detail={
-                "path": posix_relative(file_path, root),
-                "expected_sha": expected_sha,
-                "current_sha": current,
-                "message": "Another user may have modified this file. Please refresh and try again.",
             },
         )
 

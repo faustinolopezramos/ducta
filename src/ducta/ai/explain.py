@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ducta import state
 from ducta.ai.context import find_secrets, redact, redact_code, redact_config
 from ducta.ai.providers import LLMProvider
 
@@ -233,7 +234,7 @@ def explain_failure(
 
 def _path(root: Path, run_id: str) -> Path:
     safe = "".join(c for c in run_id if c.isalnum() or c in "-_")
-    return Path(root) / ".ducta" / "ai" / "explanations" / f"{safe}.json"
+    return state.ai_dir(root, "explanations", f"{safe}.json")
 
 
 def save_explanation(root: Path, run_id: str, explanation: Explanation) -> Path:

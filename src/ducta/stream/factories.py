@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
-from typing import Any, Dict, List, Tuple, Type
+from typing import Any, Dict, Tuple, Type
 
 from loguru import logger  # type: ignore
 
@@ -95,10 +95,6 @@ class StreamingHandlerFactory:
         except Exception as e:
             logger.error(f"Error getting {self._KIND} for format '{format_name}': {str(e)}")
             raise
-
-    def list_supported_formats(self) -> List[str]:
-        """List all supported streaming formats."""
-        return list(self._classes.keys())
 
     def register_custom(self, format_name: str, handler_class: type, *args: Any, **kwargs: Any):
         """Register a custom handler class.

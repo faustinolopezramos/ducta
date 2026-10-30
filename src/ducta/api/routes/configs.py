@@ -61,7 +61,10 @@ async def list_configs(
     """Return all resolved config files for an environment."""
     _validate_env(env)
     try:
-        return config_svc.list_configs(env)
+        return {
+            name: ConfigFileResponse.model_validate(cfg)
+            for name, cfg in config_svc.list_configs(env).items()
+        }
     except ConfigFileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
 
@@ -80,7 +83,7 @@ async def get_config(
     """Return content of a single config file."""
     _validate_env(env)
     try:
-        return config_svc.get_config(name, env)
+        return ConfigFileResponse.model_validate(config_svc.get_config(name, env))
     except ConfigFileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
 
@@ -100,8 +103,8 @@ async def update_config(
     """Update a config file and commit to git."""
     _validate_env(env)
     try:
-        return config_svc.save_config(
-            name, body.content, env, expected_sha=body.expected_commit_sha
+        return ConfigFileResponse.model_validate(
+            config_svc.save_config(name, body.content, env, expected_sha=body.expected_commit_sha)
         )
     except ConfigFileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message)
@@ -121,4 +124,4 @@ async def validate_configs(
     env: str = "base",
 ) -> ConfigValidationResponse:
     """Validate workspace configs against ducta schemas."""
-    return config_svc.validate_configs(env)
+    return ConfigValidationResponse.model_validate(config_svc.validate_configs(env))

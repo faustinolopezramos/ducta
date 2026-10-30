@@ -86,7 +86,7 @@ def _render_schema_footer(console: Console, table: Table, field_count: int) -> N
 
 
 def print_spark_schema(
-    schema_text: str, title: str = "DataFrame Schema", console: Console = None
+    schema_text: str, title: str = "DataFrame Schema", console: Optional[Console] = None
 ) -> None:
     """
     Display Spark DataFrame schema in an elegant table format.
@@ -124,7 +124,7 @@ def print_spark_schema(
 
 
 def print_pandas_schema(
-    df: object, title: str = "DataFrame Schema", console: Console = None
+    df: object, title: str = "DataFrame Schema", console: Optional[Console] = None
 ) -> None:
     """Display a pandas DataFrame schema in the same table format as Spark."""
     if console is None:

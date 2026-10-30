@@ -8,8 +8,8 @@
 |---|---|
 | **Purpose** | Expose Ducta over HTTP/WS for tools, automation, and the web UI |
 | **Layer** | Interface (service) |
-| **Depends on** | `core`, `setting`, `console`; optional SQLAlchemy persistence |
-| **Used by** | `ui` and any external HTTP client |
+| **Depends on** | `core`, `setting`, `console` (presentation, `ConsoleReporter`), `ai`, `check`, `mlrun`, `stream`, `gate`; optional SQLAlchemy persistence |
+| **Used by** | `ui` and any external HTTP client; `console` (`ducta ui`, shared services) and `ai` (draft validation, execution manager) |
 | **Key entry points** | `create_app()` / `ducta.api.main:app`, routers under `/api`, `ducta server start` |
 | **Install** | `pip install "ducta[api]"` |
 

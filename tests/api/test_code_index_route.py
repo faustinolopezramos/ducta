@@ -21,7 +21,7 @@ def _client() -> TestClient:
 
 
 def _project(tmp_path: Path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     monkeypatch.chdir(tmp_path)
     root = tmp_path / "proj"

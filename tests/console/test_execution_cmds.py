@@ -144,6 +144,40 @@ class TestGateBlockedReportsNonZeroExit:
         exec_obj.wait_for_streaming_startup.assert_called_once()
         assert exec_obj.get_streaming_pipeline_status.call_count == 3
 
+    def test_a_hybrid_run_waits_for_its_stream_phase_before_reporting(self, monkeypatch):
+        # The batch phase is over (status SUCCESS) but the stream phase runs in this
+        # process: returning killed an `available_now` stream before its first batch.
+        from ducta.console import execution
+
+        monkeypatch.setattr(execution, "_FOREGROUND_POLL_SECONDS", 0)
+        exec_obj = _executor_returning(
+            PipelineRunResult(pipeline="my_pipeline", streaming_execution_ids=["exec-1"])
+        )
+        exec_obj.get_streaming_pipeline_status.side_effect = [
+            {"active_queries": 1},
+            {"active_queries": 1},
+            {"active_queries": 0},
+            {"active_queries": 0},
+        ]
+
+        result = _cmd_with_fake_executor(exec_obj)
+
+        assert result == ExitCode.SUCCESS.value
+        exec_obj.wait_for_streaming_startup.assert_called_once()
+        assert exec_obj.get_streaming_pipeline_status.call_count == 4
+
+    def test_a_lost_hybrid_stream_fails_the_run_even_when_the_batch_phase_passed(self, monkeypatch):
+        from ducta.console import execution
+
+        monkeypatch.setattr(execution, "_FOREGROUND_POLL_SECONDS", 0)
+        monkeypatch.setattr(execution, "_FOREGROUND_MAX_UNANSWERED", 2)
+        exec_obj = _executor_returning(
+            PipelineRunResult(pipeline="my_pipeline", streaming_execution_ids=["exec-1"])
+        )
+        exec_obj.get_streaming_pipeline_status.return_value = {}
+
+        assert _cmd_with_fake_executor(exec_obj) == ExitCode.EXECUTION_ERROR.value
+
     def test_missing_deps_skip_reports_a_dependency_error(self):
         # A skip used to exit 0, so no script wrapping `ducta` could tell a run
         # that did its work from one that skipped it. DEPENDENCY_ERROR names the

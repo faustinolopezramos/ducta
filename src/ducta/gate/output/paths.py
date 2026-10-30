@@ -148,10 +148,8 @@ class _PathManager(BaseIO):
 
         base_path = str(output_path)
         execution_mode = self._get_execution_mode()
-        should_include_env = execution_mode in ("local", "distributed") and env
-
         parts = []
-        if should_include_env:
+        if env and execution_mode in ("local", "distributed"):
             parts.append(self.config_validator.validate_path_segment(env, "environment"))
 
         parts.append(components.schema)

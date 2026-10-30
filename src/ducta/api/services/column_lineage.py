@@ -37,7 +37,8 @@ def _sources_of(column: str, sql: str, dialect: Optional[str]) -> List[str]:
     out = set()
     # `schema` by keyword: sqlglot 30.22 made it a required argument, and the
     # keyword form works from 23.0 (the floor in pyproject) onwards.
-    for leaf in lineage(column, sql, schema=None, dialect=dialect).walk():
+    # sqlglot types `schema` as required; None is what it means by "no schema".
+    for leaf in lineage(column, sql, schema=None, dialect=dialect).walk():  # type: ignore[call-overload]
         if list(leaf.downstream):
             continue
         col = leaf.name.split(".")[-1]
@@ -65,7 +66,7 @@ def ingest_column_lineage(ingest: Dict[str, Any], dialect: Optional[str] = None)
         select = tree if isinstance(tree, exp.Select) else tree.find(exp.Select)
         if select is None:
             return {"columns": [], "note": "Not a SELECT"}
-        columns = []
+        columns: List[Dict[str, Any]] = []
         for projection in select.expressions:
             if isinstance(projection, exp.Star):
                 return {

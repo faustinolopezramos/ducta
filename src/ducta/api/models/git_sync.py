@@ -39,27 +39,6 @@ class GitSyncStatus(BaseModel):
     error: Optional[str] = Field(default=None, description="Error message if status failed")
 
 
-# Alias for backward compatibility
-GitStatusResponse = GitSyncStatus
-
-
-class GitCommitInfo(BaseModel):
-    """Information about a single commit."""
-
-    sha: str = Field(description="Commit hash (short)")
-    message: str = Field(description="Commit message")
-    author: str = Field(description="Author name")
-    date: str = Field(description="Commit date (ISO format)")
-
-
-class GitHistoryResponse(BaseModel):
-    """Recent commit history."""
-
-    commits: List[GitCommitInfo] = Field(default_factory=list, description="List of recent commits")
-    count: int = Field(description="Number of commits returned")
-    available: bool = Field(description="Git is available")
-
-
 class GitStageRequest(BaseModel):
     """Request to stage changes."""
 
@@ -75,7 +54,7 @@ class GitStageResponse(BaseModel):
     success: bool = Field(description="Whether staging succeeded")
     staged_count: int = Field(description="Number of files staged")
     message: str = Field(description="Status message")
-    git_status: GitStatusResponse = Field(description="Current git status")
+    git_status: GitSyncStatus = Field(description="Current git status")
 
 
 class GitCommitRequest(BaseModel):
@@ -105,18 +84,7 @@ class GitCommitResponse(BaseModel):
         default=None, description="Commit hash (short) if successful"
     )
     message: str = Field(description="Status message")
-    git_status: GitStatusResponse = Field(description="Current git status")
-
-
-class GitExternalChangesResponse(BaseModel):
-    """Response from external change detection."""
-
-    has_changes: bool = Field(
-        description="True if external changes detected (remote != local HEAD)"
-    )
-    local_commit: Optional[str] = Field(default=None, description="Local HEAD commit hash")
-    remote_commit: Optional[str] = Field(default=None, description="Remote HEAD commit hash")
-    force_fetched: bool = Field(description="Whether this check forced a git fetch")
+    git_status: GitSyncStatus = Field(description="Current git status")
 
 
 class GitChange(BaseModel):

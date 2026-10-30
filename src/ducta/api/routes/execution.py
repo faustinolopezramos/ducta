@@ -23,7 +23,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 import msgpack  # type: ignore
 from fastapi import (  # type: ignore
@@ -38,6 +38,7 @@ from loguru import logger  # type: ignore
 
 from ducta.api.config import Settings, get_settings
 from ducta.api.dependencies import (
+    CurrentUserDep,
     ExecutionManagerDep,
     OptionalSourcePathDep,
     SourcePathDep,
@@ -45,13 +46,11 @@ from ducta.api.dependencies import (
     WorkspaceManagerDep,
     authenticate_websocket,
     extract_ws_token,
-    get_current_user,
     require_permission,
     resolve_websocket_user,
 )
 from ducta.api.exceptions import ExecutionNotFoundError, http_error_on
 from ducta.api.execution.manager import ExecutionManager
-from ducta.api.models.auth import User
 from ducta.api.models.execution import (
     BulkCancelRequest,
     BulkCancelResponse,
@@ -71,7 +70,7 @@ _WS_INACTIVITY_TIMEOUT = 600
 
 
 def _get_exec_manager_ws(websocket: WebSocket) -> ExecutionManager:
-    return websocket.app.state.execution_manager
+    return cast(ExecutionManager, websocket.app.state.execution_manager)
 
 
 router = APIRouter(prefix="/executions", tags=["Execution"])
@@ -101,7 +100,7 @@ async def get_queue_status(exec_manager: ExecutionManagerDep) -> QueueStatusResp
 )
 async def list_executions(
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
     skip: int = 0,
     limit: int = 50,
     pipeline_name: Optional[str] = None,
@@ -146,7 +145,7 @@ async def list_executions(
 async def get_execution(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
 
@@ -169,8 +168,8 @@ async def get_execution(
 async def get_execution_streaming_status(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
+    current_user: CurrentUserDep,
     source_path: OptionalSourcePathDep = None,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
 ) -> StreamingStatusResponse:
     from ducta.api.services.streaming_status import journal_lookup, streaming_status
 
@@ -209,7 +208,7 @@ async def restart_execution_streaming_node(
     stream_execution_id: str,
     node: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> StreamingRestartResponse:
     user_id = current_user.id if current_user else None
     await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
@@ -228,7 +227,7 @@ async def restart_execution_streaming_node(
 async def get_execution_logs(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
     since: Optional[str] = None,
 ) -> List[LogEntry]:
     """Get execution logs, optionally filtered since a timestamp (ISO format)."""
@@ -257,7 +256,7 @@ async def get_execution_diagnosis(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
     manager: WorkspaceManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> dict:
     user_id = current_user.id if current_user else None
     # Memory first, then the persisted run: a diagnosis must survive a restart.
@@ -341,7 +340,7 @@ def build_diagnosis(record: Any, exec_manager: Any, project_root: Optional[Path]
 async def get_execution_errors(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> ExecutionErrorsResponse:
     """Return categorized failures (type, category, full traceback, hint)
     for a finished execution. Empty result when the run recorded no errors."""
@@ -393,7 +392,7 @@ async def get_execution_errors(
 async def cancel_execution(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> ExecutionResponse:
     user_id = current_user.id if current_user else None
     # ExecutionNotFoundError propagates to the global DuctaAPIError handler.
@@ -409,7 +408,7 @@ async def cancel_execution(
 async def bulk_cancel_executions(
     body: BulkCancelRequest,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> BulkCancelResponse:
     """Cancel many executions at once. Non-cancellable/unknown IDs are skipped."""
     user_id = current_user.id if current_user else None
@@ -434,7 +433,7 @@ async def bulk_cancel_executions(
 async def resume_execution(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> Dict[str, Any]:
     if not exec_manager.resume(execution_id):
         raise HTTPException(status_code=409, detail="The run is not paused at a breakpoint")
@@ -451,7 +450,7 @@ async def retry_execution(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
     source_path: SourcePathDep,
-    current_user: Annotated[User, Depends(get_current_user)] = None,
+    current_user: CurrentUserDep,
 ) -> ExecutionResponse:
     """Clone a terminal execution and re-enqueue it with the same parameters."""
     user_id = current_user.id if current_user else None

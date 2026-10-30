@@ -68,8 +68,8 @@ class TestResolveBackendType:
 
 class TestFromEnv:
     def test_reads_env(self, monkeypatch):
-        monkeypatch.setenv("Ducta_MLOPS_BACKEND", "local")
-        monkeypatch.setenv("Ducta_MLOPS_PATH", "/custom/mlops")
+        monkeypatch.setenv("DUCTA_MLOPS_BACKEND", "local")
+        monkeypatch.setenv("DUCTA_MLOPS_PATH", "/custom/mlops")
         cfg = MLOpsConfig.from_env()
         assert cfg.backend_type == "local"
         assert cfg.storage_path == "/custom/mlops"
@@ -129,26 +129,26 @@ class TestResolveMLOpsPath:
 
 class TestEnvBoolAcceptsCommonSpellings:
     """_env_bool used to only recognize the literal "true"; a plausible
-    Ducta_MLOPS_ENABLE_RETRY=1 silently became False with no warning."""
+    DUCTA_MLOPS_ENABLE_RETRY=1 silently became False with no warning."""
 
     @pytest.mark.parametrize("raw", ["true", "yes", "on", "1", "TRUE", "On"])
     def test_true_spellings(self, monkeypatch, raw):
-        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", raw)
-        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", False) is True
+        monkeypatch.setenv("DUCTA_MLOPS_ENABLE_RETRY", raw)
+        assert MLOpsConfig._env_bool("DUCTA_MLOPS_ENABLE_RETRY", False) is True
 
     @pytest.mark.parametrize("raw", ["false", "no", "off", "0"])
     def test_false_spellings(self, monkeypatch, raw):
-        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", raw)
-        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", True) is False
+        monkeypatch.setenv("DUCTA_MLOPS_ENABLE_RETRY", raw)
+        assert MLOpsConfig._env_bool("DUCTA_MLOPS_ENABLE_RETRY", True) is False
 
     def test_unrecognized_value_falls_back_to_default_with_warning(self, monkeypatch, caplog):
-        monkeypatch.setenv("Ducta_MLOPS_ENABLE_RETRY", "maybe")
-        assert MLOpsConfig._env_bool("Ducta_MLOPS_ENABLE_RETRY", True) is True
+        monkeypatch.setenv("DUCTA_MLOPS_ENABLE_RETRY", "maybe")
+        assert MLOpsConfig._env_bool("DUCTA_MLOPS_ENABLE_RETRY", True) is True
 
 
 class TestFromContextConfigWiring:
     """MLOpsContext.from_context() used to ignore MLOpsConfig entirely — every
-    Ducta_MLOPS_* env var and every field on a caller-built MLOpsConfig had no
+    DUCTA_MLOPS_* env var and every field on a caller-built MLOpsConfig had no
     effect on the path a real pipeline run actually takes."""
 
     def _ctx(self, tmp_path):
@@ -160,13 +160,13 @@ class TestFromContextConfigWiring:
         )
 
     def test_explicit_kwarg_wins_over_env(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("Ducta_MLOPS_MAX_ACTIVE_RUNS", "3")
+        monkeypatch.setenv("DUCTA_MLOPS_MAX_ACTIVE_RUNS", "3")
         ctx = self._ctx(tmp_path)
         mlops_ctx = MLOpsContext.from_context(ctx, max_active_runs=2, pipeline_name="sales.train")
         assert mlops_ctx.experiment_tracker.max_active_runs == 2
 
     def test_env_var_takes_effect_without_explicit_kwarg(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("Ducta_MLOPS_MAX_ACTIVE_RUNS", "3")
+        monkeypatch.setenv("DUCTA_MLOPS_MAX_ACTIVE_RUNS", "3")
         ctx = self._ctx(tmp_path)
         mlops_ctx = MLOpsContext.from_context(ctx, pipeline_name="sales.train")
         assert mlops_ctx.experiment_tracker.max_active_runs == 3
@@ -207,30 +207,3 @@ class TestMLOpsContextSharedStorage:
         assert mlops_ctx.model_registry is not None
         assert mlops_ctx.experiment_tracker is not None
         assert mlops_ctx.model_registry.storage is mlops_ctx.experiment_tracker.storage
-
-
-class TestMLOpsContextMixedKwargsWarning:
-    def test_warns_when_legacy_and_modern_kwargs_both_given(self, tmp_path, caplog):
-        from ducta.mlrun.experiment_tracking import ExperimentTracker
-        from ducta.mlrun.storage import LocalStorageBackend
-
-        storage = LocalStorageBackend(base_path=str(tmp_path), enable_circuit_breaker=False)
-        tracker = ExperimentTracker(storage=storage)
-
-        warned = []
-        import ducta.mlrun.config as config_module
-
-        orig_warning = config_module.logger.warning
-
-        def capture(*args, **kwargs):
-            warned.append((args, kwargs))
-            return orig_warning(*args, **kwargs)
-
-        import unittest.mock as mock
-
-        with mock.patch.object(config_module.logger, "warning", side_effect=capture):
-            MLOpsContext(
-                experiment_tracker=tracker, backend_type="local", storage_path=str(tmp_path)
-            )
-
-        assert len(warned) == 1

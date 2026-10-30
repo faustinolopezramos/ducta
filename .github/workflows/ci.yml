@@ -37,9 +37,8 @@ jobs:
       # keep it a hard failure rather than let the backlog grow back.
       - name: Ruff format check
         run: poetry run ruff format --check src tests
-      # Blocking. Modules that still had errors when it was switched on are
-      # listed under [[tool.mypy.overrides]] in pyproject.toml (the ratchet):
-      # everything else, and every new module, must type-check.
+      # Blocking, for every module: the ratchet list it started with in
+      # 2026-10 (486 errors in 103 files) is empty and gone.
       - name: mypy
         run: poetry run mypy src/ducta
 

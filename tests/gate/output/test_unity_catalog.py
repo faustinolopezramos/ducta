@@ -31,12 +31,6 @@ class TestUnityCatalogManager:
         ucm = UnityCatalogManager({"spark": spark_session})
         assert ucm.is_enabled() is True
 
-    def test_clear_metadata_cache(self, dict_context_with_spark):
-        ucm = UnityCatalogManager(dict_context_with_spark)
-        ucm._catalog_cache["test"] = True
-        ucm.clear_metadata_cache()
-        assert ucm._catalog_cache == {}
-
     def test_quote_table_name(self):
         ucm = UnityCatalogManager({"spark": MagicMock()})
         result = ucm.quote_table_name("cat.sch.tbl")

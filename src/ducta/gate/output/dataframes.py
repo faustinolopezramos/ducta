@@ -30,13 +30,13 @@ from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 try:
     from pyspark.sql import DataFrame as SparkDataFrame  # type: ignore
 except ImportError:
-    SparkDataFrame = type("SparkDataFrame", (), {})
+    SparkDataFrame = type("SparkDataFrame", (), {})  # type: ignore[misc,assignment]  # no pyspark
 
 try:
     from pyspark.sql.connect.dataframe import DataFrame as ConnectDataFrame  # type: ignore
 except ImportError:
     # Spark Connect is optional (`pyspark[connect]`) and unimportable on 3.12+.
-    ConnectDataFrame = type("ConnectDataFrame", (), {})
+    ConnectDataFrame = type("ConnectDataFrame", (), {})  # type: ignore[misc,assignment]
 
 try:
     import pandas as pd  # type: ignore
@@ -60,7 +60,7 @@ class _DataFrameManager(BaseIO):
         if self.is_spark_dataframe(dataframe):
             return dataframe
 
-        spark = self._ctx_spark()
+        spark = self._require_spark()
 
         if pd and isinstance(dataframe, pd.DataFrame):
             logger.debug("Converting pandas DataFrame to Spark")

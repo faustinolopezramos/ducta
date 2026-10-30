@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import pytest
 
+from ducta.core.errors import ConfigurationError
 from ducta.core.pipeline_validator import PipelineValidator
 
 
@@ -22,7 +23,7 @@ class TestInferredCycleDetection:
             "node_a": {"input": ["ds_b"], "output": ["ds_a"]},
             "node_b": {"input": ["ds_a"], "output": ["ds_b"]},
         }
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ConfigurationError, match="Circular dependency"):
             PipelineValidator.validate_no_dag_cycles(["node_a", "node_b"], node_configs)
 
     def test_explicit_cycle_is_still_caught(self):
@@ -30,7 +31,7 @@ class TestInferredCycleDetection:
             "node_a": {"dependencies": ["node_b"]},
             "node_b": {"dependencies": ["node_a"]},
         }
-        with pytest.raises(ValueError, match="Circular dependency"):
+        with pytest.raises(ConfigurationError, match="Circular dependency"):
             PipelineValidator.validate_no_dag_cycles(["node_a", "node_b"], node_configs)
 
     def test_acyclic_inferred_graph_passes(self):

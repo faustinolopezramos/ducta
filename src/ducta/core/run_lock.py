@@ -60,8 +60,9 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from loguru import logger
 
+from ducta import state
 from ducta.core.errors import ConfigurationError, PipelineLockedError
-from ducta.core.locking import try_lock_fd, unlock_fd
+from ducta.locking import try_lock_fd, unlock_fd
 
 BACKEND_LOCAL = "local"
 BACKEND_STORAGE = "storage"
@@ -69,7 +70,6 @@ BACKENDS = (BACKEND_LOCAL, BACKEND_STORAGE)
 ON_CONFLICT_FAIL = "fail"
 ON_CONFLICT_WAIT = "wait"
 ON_CONFLICT_CHOICES = (ON_CONFLICT_FAIL, ON_CONFLICT_WAIT)
-DEFAULT_LOCK_DIR = "${output_path}/${environment}/.ducta/locks"
 
 _POLL_SECONDS = 1.0
 
@@ -81,7 +81,7 @@ class RunLockSettings:
     ttl_seconds: int = 300
     on_conflict: str = ON_CONFLICT_FAIL
     wait_timeout_seconds: int = 600
-    lock_dir: str = ".ducta/locks"
+    lock_dir: str = state.under(".", "locks").as_posix()
 
 
 def lock_filename(key: str) -> str:

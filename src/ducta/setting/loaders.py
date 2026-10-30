@@ -37,6 +37,7 @@ except ImportError:
         tomllib = None  # type: ignore
 
 from ducta.setting.exceptions import ConfigLoadError
+from ducta.setting.project.files import load_yaml
 
 
 class ConfigLoader:
@@ -111,7 +112,7 @@ class YamlConfigLoader(BaseFormatLoader):
             raise ConfigLoadError("PyYAML not installed. Run: pip install PyYAML")
         try:
             with safe_path.open("r", encoding="utf-8") as file:
-                return yaml.safe_load(file) or {}
+                return load_yaml(file) or {}
         except yaml.YAMLError as e:  # type: ignore
             raise ConfigLoadError(f"Invalid YAML in {safe_path}: {str(e)}") from e
 
@@ -200,7 +201,7 @@ class ConfigLoaderFactory:
         except Exception:
             if yaml is not None:
                 try:
-                    parsed = yaml.safe_load(text)
+                    parsed = load_yaml(text)
                     if not isinstance(parsed, dict):
                         return None
                     return parsed or {}

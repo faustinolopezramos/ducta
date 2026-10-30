@@ -21,7 +21,7 @@ def _client(role: str) -> TestClient:
 
 
 def _project(tmp_path: Path, monkeypatch, kind) -> Path:
-    from ducta.console.template import TemplateGenerator
+    from ducta.console.templates import TemplateGenerator
 
     monkeypatch.chdir(tmp_path)  # the server's source confinement base
     root = tmp_path / "proj"
@@ -31,7 +31,7 @@ def _project(tmp_path: Path, monkeypatch, kind) -> Path:
 
 @pytest.fixture
 def ml_project(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateType
+    from ducta.console.templates import TemplateType
 
     return _project(tmp_path, monkeypatch, TemplateType.ML_BASIC)
 
@@ -57,7 +57,7 @@ def test_it_says_what_each_ml_node_is_given(ml_project):
 
 
 def test_a_pipeline_without_ml_has_no_nodes(tmp_path, monkeypatch):
-    from ducta.console.template import TemplateType
+    from ducta.console.templates import TemplateType
 
     root = _project(tmp_path, monkeypatch, TemplateType.MEDALLION_BASIC)
     r = _client("viewer").get(_url("etl"), params={"source": str(root)})

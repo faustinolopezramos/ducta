@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml  # type: ignore[import-untyped]
 
+from ducta import state
 from ducta.ai.builder import find_pipeline_file
 from ducta.ai.context import redact_config
 from ducta.ai.errors import AIConfigError
@@ -385,7 +386,7 @@ def review_pipeline(
 
 def _path(root: Path, pipeline: str) -> Path:
     safe = "".join(c for c in pipeline if c.isalnum() or c in "-_.")
-    return Path(root) / ".ducta" / "ai" / "reviews" / "pipelines" / f"{safe}.json"
+    return state.ai_dir(root, "reviews", "pipelines", f"{safe}.json")
 
 
 def save_pipeline_review(root: Path, review: PipelineReview) -> Path:

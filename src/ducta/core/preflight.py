@@ -713,21 +713,6 @@ def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
             )
 
 
-def _check_deprecated_pipeline_keys(report: PreflightReport, context: Any, name: str) -> None:
-    """Pipeline-level ``inputs``/``outputs`` are declared but never read.
-
-    They restate what the nodes already declare and have to be kept in sync by
-    hand; nothing consumes them, so a stale list misleads without failing.
-    """
-    raw = (getattr(context, "pipelines_config", None) or {}).get(name) or {}
-    stale = [k for k in ("inputs", "outputs") if raw.get(k)]
-    if stale:
-        report.warn(
-            f"Pipeline '{name}': {stale} are deprecated and ignored — a pipeline's "
-            "inputs and outputs are those of its nodes. Remove them."
-        )
-
-
 def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     """Validate a single pipeline's configuration without executing it."""
     report = PreflightReport(pipeline_name=pipeline_name)
@@ -738,8 +723,6 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         available = ", ".join(sorted(pipelines)) or "(none)"
         report.error(f"Pipeline '{pipeline_name}' not found. Available: {available}")
         return report
-
-    _check_deprecated_pipeline_keys(report, context, pipeline_name)
 
     try:
         PipelineValidator.validate_pipeline_config(pipeline)

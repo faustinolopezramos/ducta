@@ -22,10 +22,9 @@ import functools
 import random
 import threading
 import time
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Optional, TypeVar
 
 from loguru import logger
 
@@ -60,12 +59,6 @@ DEFAULT_RETRY_CONFIG = RetryConfig(
     max_delay=5.0,
 )
 
-IO_RETRY_CONFIG = RetryConfig(
-    max_attempts=5,
-    initial_delay=0.2,
-    max_delay=10.0,
-    retryable_exceptions=(IOError, OSError, TimeoutError, ConnectionError),
-)
 
 STORAGE_RETRY_CONFIG = RetryConfig(
     max_attempts=3,
@@ -74,48 +67,6 @@ STORAGE_RETRY_CONFIG = RetryConfig(
     retryable_exceptions=(IOError, OSError, TimeoutError),
     non_retryable_exceptions=(PermissionError, ValueError, FileNotFoundError, FileExistsError),
 )
-
-
-def _map_mlops_exception(
-    exc: Exception,
-    error_mapping: Optional[Dict[Type[Exception], Type[Exception]]],
-    operation_name: str,
-) -> Optional[Exception]:
-    if not error_mapping:
-        return None
-    for src_exc, dest_exc in error_mapping.items():
-        if isinstance(exc, src_exc):
-            return dest_exc(f"{operation_name} failed: {str(exc)}")
-    return None
-
-
-def with_mlops_resilience(
-    operation_name: str,
-    retry_config: Optional[RetryConfig] = None,
-    error_mapping: Optional[Dict[Type[Exception], Type[Exception]]] = None,
-):
-    """
-    Decorator to apply consistent resilience and error handling to MLOps operations.
-    v2.1+: Standardizes error wrapping and recovery patterns.
-    """
-
-    def decorator(func):
-        config = retry_config or DEFAULT_RETRY_CONFIG
-        _decorated = with_retry(config)(func)
-
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return _decorated(*args, **kwargs)
-            except Exception as e:
-                mapped = _map_mlops_exception(e, error_mapping, operation_name)
-                if mapped:
-                    raise mapped from e
-                raise
-
-        return wrapper
-
-    return decorator
 
 
 class RetryExhaustedError(ResilienceError):
@@ -179,7 +130,7 @@ def should_retry(
         return decision
 
     cause = getattr(exception, "cause", None) or exception.__cause__
-    if cause is not None and cause is not exception:
+    if isinstance(cause, Exception) and cause is not exception:
         return bool(_classify(cause))
 
     return False
@@ -249,28 +200,6 @@ def retry_call(
             _handle_retry_exception(e, attempt, operation_name, config, on_retry)
 
     raise RetryExhaustedError(operation_name, config.max_attempts, last_exception)
-
-
-def with_retry(
-    config: Optional[RetryConfig] = None,
-    operation_name: Optional[str] = None,
-    on_retry: Optional[Callable[[Exception, int], None]] = None,
-) -> Callable[[F], F]:
-    """
-    Decorator to add retry logic to a function, with ``config`` fixed at
-    decoration time. For retry behavior that must vary per instance (not per
-    function), call ``retry_call`` directly instead.
-    """
-
-    def decorator(func: F) -> F:
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            name = operation_name or func.__name__
-            return retry_call(config, name, func, *args, on_retry=on_retry, **kwargs)
-
-        return wrapper  # type: ignore
-
-    return decorator
 
 
 def with_instance_retry(operation_name: str) -> Callable[[F], F]:
@@ -438,208 +367,3 @@ class CircuitBreaker:
                 raise
 
         return wrapper  # type: ignore
-
-
-@dataclass
-class ResourceLimits:
-    """Resource limits configuration."""
-
-    max_active_runs: int = 100
-    max_metrics_per_run: int = 10000
-    max_parameters_per_run: int = 1000
-    max_artifacts_per_run: int = 100
-    max_memory_mb: Optional[int] = None
-    warn_threshold: float = 0.8  # Warn at 80% of limit
-
-
-class ResourceTracker:
-    """
-    Track and enforce resource limits.
-    """
-
-    def __init__(
-        self,
-        name: str,
-        limits: Optional[ResourceLimits] = None,
-    ):
-        self.name = name
-        self.limits = limits or ResourceLimits()
-
-        self._counters: Dict[str, int] = {}
-        self._lock = threading.RLock()
-
-    def increment(self, resource: str, amount: int = 1) -> int:
-        """
-        Increment a resource counter.
-        """
-        with self._lock:
-            current = self._counters.get(resource, 0)
-            new_value = current + amount
-
-            # Check limits
-            limit = self._get_limit(resource)
-            if limit is not None and new_value > limit:
-                raise ResourceLimitError(resource, new_value, limit)
-
-            # Warn if approaching limit
-            if limit is not None:
-                ratio = new_value / limit
-                if ratio >= self.limits.warn_threshold:
-                    logger.warning(
-                        f"Resource '{resource}' at {ratio:.0%} of limit ({new_value}/{limit})"
-                    )
-
-            self._counters[resource] = new_value
-            return new_value
-
-    def decrement(self, resource: str, amount: int = 1) -> int:
-        """
-        Decrement a resource counter.
-        """
-        with self._lock:
-            current = self._counters.get(resource, 0)
-            new_value = max(0, current - amount)
-            self._counters[resource] = new_value
-            return new_value
-
-    def get(self, resource: str) -> int:
-        """Get current count for a resource."""
-        with self._lock:
-            return self._counters.get(resource, 0)
-
-    def reset(self, resource: Optional[str] = None) -> None:
-        """Reset resource counter(s)."""
-        with self._lock:
-            if resource:
-                self._counters.pop(resource, None)
-            else:
-                self._counters.clear()
-
-    def _get_limit(self, resource: str) -> Optional[int]:
-        """Get limit for a resource."""
-        limit_map = {
-            "active_runs": self.limits.max_active_runs,
-            "metrics": self.limits.max_metrics_per_run,
-            "parameters": self.limits.max_parameters_per_run,
-            "artifacts": self.limits.max_artifacts_per_run,
-        }
-        return limit_map.get(resource)
-
-    def get_status(self) -> Dict[str, Any]:
-        """Get current resource status."""
-        with self._lock:
-            status = {}
-            for resource, count in self._counters.items():
-                limit = self._get_limit(resource)
-                status[resource] = {
-                    "current": count,
-                    "limit": limit,
-                    "usage": f"{count}/{limit}" if limit else str(count),
-                }
-            return status
-
-
-@dataclass
-class CleanupTask:
-    """Represents a cleanup task."""
-
-    name: str
-    callback: Callable[[], None]
-    priority: int = 0  # Higher = run first
-    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-
-
-class CleanupManager:
-    """
-    Manage cleanup tasks for graceful shutdown.
-    """
-
-    def __init__(self):
-        self._tasks: List[CleanupTask] = []
-        self._lock = threading.RLock()
-        self._executed = False
-
-    def register(
-        self,
-        name: str,
-        callback: Callable[[], None],
-        priority: int = 0,
-    ) -> None:
-        """
-        Register a cleanup task.
-        """
-        with self._lock:
-            task = CleanupTask(name=name, callback=callback, priority=priority)
-            self._tasks.append(task)
-            logger.debug(f"Registered cleanup task: {name}")
-
-    def unregister(self, name: str) -> bool:
-        """
-        Unregister a cleanup task.
-        """
-        with self._lock:
-            original_len = len(self._tasks)
-            self._tasks = [t for t in self._tasks if t.name != name]
-            removed = len(self._tasks) < original_len
-            if removed:
-                logger.debug(f"Unregistered cleanup task: {name}")
-            return removed
-
-    def _execute_single_task(
-        self, task: CleanupTask, timeout_per_task: float, silent: bool
-    ) -> bool:
-        """Execute a single cleanup task."""
-        try:
-            start = time.time()
-            task.callback()
-            elapsed = time.time() - start
-
-            if not silent and elapsed > timeout_per_task:
-                logger.warning(
-                    f"Cleanup task '{task.name}' took {elapsed:.2f}s "
-                    f"(expected < {timeout_per_task}s)"
-                )
-
-            if not silent:
-                logger.debug(f"Cleanup task '{task.name}' completed")
-            return True
-
-        except Exception as e:
-            if not silent:
-                logger.error(f"Cleanup task '{task.name}' failed: {e}")
-            return False
-
-    def _log_execution_summary(self, results: Dict[str, bool], silent: bool) -> None:
-        """Log the summary of cleanup execution."""
-        if not silent and results:
-            logger.info(
-                f"Cleanup completed: {sum(results.values())}/{len(results)} tasks successful"
-            )
-
-    def execute(self, timeout_per_task: float = 5.0, silent: bool = False) -> Dict[str, bool]:
-        """
-        Execute all cleanup tasks.
-        """
-        with self._lock:
-            if self._executed:
-                if not silent:
-                    logger.warning("Cleanup already executed")
-                return {}
-
-            self._executed = True
-
-            # Sort by priority (descending)
-            sorted_tasks = sorted(self._tasks, key=lambda t: t.priority, reverse=True)
-
-            results = {}
-            for task in sorted_tasks:
-                results[task.name] = self._execute_single_task(task, timeout_per_task, silent)
-
-            self._log_execution_summary(results, silent)
-            return results
-
-    def reset(self) -> None:
-        """Reset cleanup manager for reuse."""
-        with self._lock:
-            self._tasks.clear()
-            self._executed = False

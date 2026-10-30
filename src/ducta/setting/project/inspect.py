@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
+from ducta import state
 from ducta.setting.project import files as pf
 from ducta.setting.project.defaults import resolve_extends
 from ducta.setting.project.loader import (
@@ -329,7 +330,7 @@ def convert_project(root: Path, target: Path, fmt: str) -> List[Path]:
         raise ProjectConfigError([f"{target} is not empty; convert into a new directory"])
     ext = f".{fmt}"
     written: List[Path] = []
-    schemas = ".ducta/schema"
+    schemas = state.SCHEMA_DIR
     sources: List[Tuple[Path, str]] = []
     for stem, kind in (("ducta", "project"), ("catalog", "catalog")):
         sources += [(f, kind) for f in pf.find_files(root, stem)]

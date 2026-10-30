@@ -11,7 +11,7 @@ import yaml
 
 from ducta.console.commands.config_cmds import handle_config
 from ducta.console.core import ExitCode
-from ducta.console.template import TemplateGenerator, TemplateType
+from ducta.console.templates import TemplateGenerator, TemplateType
 
 
 @pytest.fixture

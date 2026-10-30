@@ -71,6 +71,15 @@ class TestWriteConfiguration:
         assert w._determine_write_mode({"write_mode": "ignore"}) == "ignore"
         assert w._determine_write_mode({"write_mode": "error"}) == "error"
 
+    def test_determine_write_mode_accepts_the_settings_enum(self):
+        # `defaults.catalog: {write: {mode: overwrite}}` reaches the writer as this enum;
+        # Spark's .mode() needs the plain "overwrite", not "WriteMode.OVERWRITE".
+        from ducta.setting.schemas import WriteMode as SettingsWriteMode
+
+        w = _writer()
+        assert w._determine_write_mode({"write_mode": SettingsWriteMode.OVERWRITE}) == "overwrite"
+        assert w._determine_write_mode({"write_mode": SettingsWriteMode.APPEND}) == "append"
+
     def test_determine_write_mode_invalid(self):
         # Regression: an invalid write_mode used to silently fall back to
         # 'overwrite' — the most destructive mode available — instead of

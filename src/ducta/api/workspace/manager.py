@@ -226,8 +226,8 @@ class WorkspaceManager:
         repo = get_repo(self.root)
         diff_index = repo.index.diff(None)
         return {
-            "modified": [item.a_path for item in diff_index if not item.deleted_file],
-            "deleted": [item.a_path for item in diff_index if item.deleted_file],
+            "modified": [str(item.a_path) for item in diff_index if not item.deleted_file],
+            "deleted": [str(item.a_path) for item in diff_index if item.deleted_file],
             "added": list(repo.untracked_files),
         }
 
@@ -269,7 +269,7 @@ class WorkspaceManager:
             args = [commit_a, commit_b]
             if path:
                 args += ["--", path]
-            return repo.git.diff(*args)
+            return str(repo.git.diff(*args))
         except Exception as exc:
             logger.debug("get_git_diff failed: {exc}", exc=exc)
             return ""
@@ -388,11 +388,11 @@ class WorkspaceManager:
             name: Optional[str] = None
             email: Optional[str] = None
             try:
-                name = reader.get_value("user", "name", None)
+                name = str(reader.get_value("user", "name", "")) or None
             except Exception:
                 pass
             try:
-                email = reader.get_value("user", "email", None)
+                email = str(reader.get_value("user", "email", "")) or None
             except Exception:
                 pass
             return {"name": name or None, "email": email or None}

@@ -24,7 +24,7 @@ import asyncio
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -64,6 +64,9 @@ from ducta.api.services.project import ProjectService
 from ducta.api.utils.validators import validate_environment_name, validate_identifier
 from ducta.api.workspace.manager import WorkspaceManager
 from ducta.api.workspace.preflight import PreflightValidator, run_deep_preflight
+
+if TYPE_CHECKING:
+    from ducta.api.services.comments import LocalCommentStore
 
 router = APIRouter(prefix="/projects", tags=["Projects"])
 
@@ -302,7 +305,10 @@ async def create_project_pipeline(
     validate_pipeline(body.name, body.spec, node_svc.list_nodes())
     commit_sha = svc.save_project_pipeline(project_id, body.name, body.spec)
     return ProjectPipelineResponse(
-        name=body.name, spec=body.spec, project_id=project_id, commit_sha=commit_sha or None
+        name=body.name,
+        spec=PipelineSpec.model_validate(body.spec),
+        project_id=project_id,
+        commit_sha=commit_sha or None,
     )
 
 
@@ -317,7 +323,7 @@ async def get_project_pipeline(
     spec = svc.get_pipeline(project_id, name)
     return ProjectPipelineResponse(
         name=name,
-        spec=spec,
+        spec=PipelineSpec.model_validate(spec),
         project_id=project_id,
         commit_sha=svc.get_pipelines_commit_sha(project_id),
     )
@@ -343,7 +349,10 @@ async def update_project_pipeline(
         project_id, name, body.spec, expected_sha=body.expected_sha
     )
     return ProjectPipelineResponse(
-        name=name, spec=body.spec, project_id=project_id, commit_sha=commit_sha or None
+        name=name,
+        spec=PipelineSpec.model_validate(body.spec),
+        project_id=project_id,
+        commit_sha=commit_sha or None,
     )
 
 
@@ -750,7 +759,7 @@ async def list_node_templates(project_id: str, svc: ProjectServiceDep) -> Dict[s
     from ducta.setting.project.files import load
 
     root = svc.store(project_id).root
-    out = []
+    out: List[Dict[str, Any]] = []
     folder = root / NODE_TEMPLATES_DIR
     for path in sorted(folder.glob("*.y*ml")) if folder.is_dir() else []:
         try:
@@ -790,7 +799,7 @@ async def list_pipeline_templates(project_id: str, svc: ProjectServiceDep) -> Di
 
     root = svc.store(project_id).root
     folder = root / PIPELINE_TEMPLATES_DIR
-    out = []
+    out: List[Dict[str, Any]] = []
     for path in sorted(folder.glob("*.y*ml")) if folder.is_dir() else []:
         try:
             doc = load(path)
@@ -888,7 +897,7 @@ def _code_entry(svc: Any, project_id: str, node: str) -> Dict[str, Any]:
     entry = next((n for n in index["nodes"] if n["node"] == node), None)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Node '{node}' runs no project function")
-    return entry
+    return cast(Dict[str, Any], entry)
 
 
 class SnapshotTestRequest(BaseModel):
@@ -1268,7 +1277,7 @@ async def get_governance(
 # ── Comments ─────────────────────────────────────────────
 
 
-def _comment_store(svc: Any, project_id: str) -> Any:
+def _comment_store(svc: Any, project_id: str) -> "LocalCommentStore":
     from ducta.api.services.comments import LocalCommentStore
 
     return LocalCommentStore(svc.store(project_id).root)
@@ -1278,14 +1287,14 @@ def _author(user: Any, root: Path) -> str:
     """Who is commenting: the signed-in user, or — on a local server without
     accounts — the name git knows the developer by."""
     if get_settings().auth_enabled:
-        return user.username
+        return str(user.username)
     try:
         from git import Repo
 
         with Repo(root, search_parent_directories=True) as repo:
             return str(repo.config_reader().get_value("user", "name", user.username))
     except Exception:  # noqa: BLE001 — no repo, no name: the account name will do
-        return user.username
+        return str(user.username)
 
 
 class CommentRequest(BaseModel):

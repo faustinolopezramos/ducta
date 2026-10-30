@@ -43,7 +43,7 @@ class StreamingExecutor(BaseExecutor):
         max_streaming_pipelines = self.settings.max_streaming_pipelines
         self._max_streaming_pipelines = max_streaming_pipelines
         self._exit_stack = ExitStack()
-        self._active_execution_id = None
+        self._active_execution_id: Optional[str] = None
         #: Called with a stream's ``finished`` event once its outcome is in the ledger;
         #: the facade seals an asynchronous run's certificate from it.
         self.on_finished: Optional[Callable[[Dict[str, Any]], None]] = None
@@ -230,7 +230,7 @@ class StreamingExecutor(BaseExecutor):
     def _extract_path_from_config(self, cfg: Dict[str, Any]) -> Optional[str]:
         path = cfg.get("path")
         if path:
-            return path
+            return str(path)
         opts = cfg.get("options", {}) or {}
         return opts.get("path")
 

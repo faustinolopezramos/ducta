@@ -36,8 +36,9 @@ from __future__ import annotations
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Dict, List
+from typing import Any, Dict, List
 
+from ducta import state
 from ducta.api.repositories.v2_store import V2ProjectStore
 from ducta.api.services.code_index import module_file, top_level_functions
 from ducta.setting.problems import Problem, parse_problems
@@ -47,7 +48,7 @@ from ducta.setting.project.loader import ProjectConfigError, validate_project
 #: configuration or code, and too large to copy for every draft.
 _SKIP = {
     ".git",
-    ".ducta",
+    state.DIR_NAME,
     ".venv",
     "venv",
     "site-packages",
@@ -123,7 +124,9 @@ def code_problems(store: V2ProjectStore) -> List[Problem]:
         if not module or not function:
             continue
         pipeline = owner.get(name)
-        where = dict(node=name, pipeline=pipeline, file=files.get(pipeline or ""), source="code")
+        where: Dict[str, Any] = dict(
+            node=name, pipeline=pipeline, file=files.get(pipeline or ""), source="code"
+        )
         path = module_file(root, module)
         rel = path.relative_to(root).as_posix()
         if not path.exists():

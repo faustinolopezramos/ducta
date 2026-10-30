@@ -91,14 +91,13 @@ from ducta.console.parser import UnifiedArgumentParser
 # ---------------------------------------------------------------------------
 # Template
 # ---------------------------------------------------------------------------
-from ducta.console.template import (
+from ducta.console.template import TemplateCommand, handle_template_command
+from ducta.console.templates import (
     MedallionBasicTemplate,
-    TemplateCommand,
     TemplateError,
     TemplateFactory,
     TemplateGenerator,
     TemplateType,
-    handle_template_command,
 )
 
 # ---------------------------------------------------------------------------
@@ -111,7 +110,6 @@ from ducta.console.ui import launch_ui
 # ---------------------------------------------------------------------------
 from ducta.console.ux import (
     RichLoggerManager,
-    SparkErrorAnalyzer,
     format_error_for_developer,
     log_node_complete,
     log_node_start,
@@ -168,7 +166,6 @@ __all__ = [
     "handle_config",
     # from UX subpackage
     "RichLoggerManager",
-    "SparkErrorAnalyzer",
     "format_error_for_developer",
     "log_node_complete",
     "log_node_start",

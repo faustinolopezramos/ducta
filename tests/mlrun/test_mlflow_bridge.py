@@ -65,28 +65,3 @@ class TestStartPipelineRunBestEffort:
         with pytest.raises(ValueError, match="node blew up"):
             with tracker.start_pipeline_run("my_pipeline"):
                 raise ValueError("node blew up")
-
-
-class TestLogNodeArtifactUsesClientNotFluentApi:
-    def test_log_artifact_within_node_step_does_not_end_the_run_early(self, tracker, tmp_path):
-        artifact = tmp_path / "out.txt"
-        artifact.write_text("hello")
-
-        with tracker.start_pipeline_run("pipe"):
-            with tracker.start_node_step("node1") as node_run_id:
-                tracker.log_node_artifact(str(artifact), node_name="node1")
-                # The node's run must still be RUNNING — logging the artifact
-                # (via MlflowClient, not the fluent API) must not have ended it.
-                run = tracker._client.get_run(node_run_id)
-                assert run.info.status == "RUNNING"
-
-    def test_artifact_is_actually_recorded_on_the_right_run(self, tracker, tmp_path):
-        artifact = tmp_path / "out.txt"
-        artifact.write_text("hello")
-
-        with tracker.start_pipeline_run("pipe"):
-            with tracker.start_node_step("node1") as node_run_id:
-                tracker.log_node_artifact(str(artifact), node_name="node1")
-
-        artifacts = [a.path for a in tracker._client.list_artifacts(node_run_id)]
-        assert "out.txt" in artifacts

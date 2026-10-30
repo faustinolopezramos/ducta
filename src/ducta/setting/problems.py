@@ -61,6 +61,7 @@ _CODES = (
     ("duplicate_definition", "also defined"),
     ("unknown_key", "extra inputs are not permitted"),
     ("unknown_key", "unknown key"),
+    ("unknown_key", "is not valid at this level"),
     ("missing_field", "field required"),
     ("pipeline_not_found", "not found. available"),
     ("unknown_node", "is not a node of pipeline"),

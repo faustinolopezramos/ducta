@@ -11,7 +11,7 @@ from ducta.api.services.streaming_status import streaming_status
 
 @pytest.fixture
 def engine(spark, tmp_path, monkeypatch):
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
     from ducta.core.executors import PipelineExecutor
     from ducta.setting.project.loader import load_project_v2
 

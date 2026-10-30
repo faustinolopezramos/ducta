@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ducta import state
 from ducta.ai.errors import AIConfigError, AIConflictError, AINotFoundError
 
 
@@ -178,7 +179,7 @@ DRAFT_ID = re.compile(r"^[0-9A-Za-z-]{1,64}\Z")
 
 
 def drafts_dir(root: Path) -> Path:
-    return Path(root) / ".ducta" / "ai" / "drafts"
+    return state.ai_dir(root, "drafts")
 
 
 def save_draft(root: Path, draft: Draft) -> Path:

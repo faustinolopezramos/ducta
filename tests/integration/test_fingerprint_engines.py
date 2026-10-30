@@ -152,12 +152,10 @@ class TestComparability:
         assert ok is False
         assert "algorithm differs" in reason
 
-    def test_against_a_legacy_fingerprint_is_refused(self, make_df):
-        # Certificates written before v2 must not be reported as "the data
-        # changed" the first time someone upgrades.
+    def test_a_fingerprint_without_an_algorithm_is_refused(self, make_df):
         ok, reason = comparable(fp(make_df(BASE)).to_dict(), {"algorithm": None})
         assert ok is False
-        assert "legacy/v1" in reason
+        assert reason == "no fingerprint algorithm recorded"
 
     def test_schema_only_never_claims_content_equality(self, make_df):
         a, b = fp(make_df(BASE), mode="schema"), fp(make_df(BASE), mode="schema")

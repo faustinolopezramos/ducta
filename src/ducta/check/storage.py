@@ -23,12 +23,13 @@ import os
 import re
 import time
 from abc import ABC, abstractmethod
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Generator, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 from loguru import logger  # type: ignore
+
+from ducta.locking import exclusive_lock
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,41 +40,6 @@ from loguru import logger  # type: ignore
 #: file). Keeps every StorageBackend path shaped the same
 #: ({root}/{pipeline_name}/{dataset_name}/...) with no special-cased branch.
 DEFAULT_PIPELINE_NAME = "_adhoc"
-
-
-@contextmanager
-def _exclusive_lock(f: Any) -> Generator[None, None, None]:
-    try:
-        import fcntl
-
-        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-    except ImportError:
-        try:
-            import msvcrt
-        except ImportError:
-            # Neither fcntl (POSIX) nor msvcrt (Windows) is available;
-            # concurrent writes may corrupt files.
-            yield
-            return
-
-        # msvcrt.locking() locks a byte range starting at the *current* file
-        # position, so pin it to a fixed 1-byte region at offset 0 — the
-        # LK_LOCK and matching LK_UNLCK calls must agree on both the start
-        # offset and length, and callers seek around inside `f` while the
-        # lock is held.
-        original_pos = f.tell()
-        f.seek(0)
-        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
-        try:
-            f.seek(original_pos)
-            yield
-        finally:
-            f.seek(0)
-            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def _write_json_atomic(path: Path, data: Any) -> None:
@@ -121,7 +87,7 @@ def _append_json_history(path: Path, metric_entry: Any) -> None:
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path.with_name(path.name + ".lock"), "a+") as lock_file:
-        with _exclusive_lock(lock_file):
+        with exclusive_lock(lock_file):
             history = _read_json_tolerant(path) if path.exists() else []
             if history is None or not isinstance(history, list):
                 if path.exists():
@@ -416,23 +382,6 @@ class FileStorageBackend(StorageBackend):
         except Exception:
             return []
 
-    def cleanup_old_reports(
-        self,
-        dataset_name: str,
-        keep_latest: int = 100,
-        pipeline_name: str = DEFAULT_PIPELINE_NAME,
-    ) -> None:
-        try:
-            files = sorted(
-                self._reports_dir(dataset_name, pipeline_name).glob("*.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for f in files[keep_latest:]:
-                f.unlink()
-        except Exception as e:  # noqa: BLE001 — retention is best effort
-            logger.debug("Old quality reports were not pruned: {}", e)
-
 
 # ---------------------------------------------------------------------------
 # Context-aware implementation (Spark/Pandas)
@@ -501,7 +450,7 @@ class ContextAwareStorageBackend(StorageBackend):
         p = self._root / safe_pipeline / safe
         if not self._is_cloud_path(str(self._root)):
             self._base_io._prepare_local_directory(str(p))
-        return p
+        return cast(Path, p)  # a _CloudPath on cloud storage: it answers like a Path
 
     def _reports_dir(self, dataset_name: str, pipeline_name: str = DEFAULT_PIPELINE_NAME) -> Path:
         p = self._dataset_dir(dataset_name, pipeline_name) / "reports"
@@ -578,7 +527,7 @@ class ContextAwareStorageBackend(StorageBackend):
         try:
             reader = ReaderFactory(self.context).get_handler(self.format)
             df = reader.read(str(path), {"format": self.format})
-            return self._from_dataframe(df)
+            return cast(Optional[List[Any]], self._from_dataframe(df))
         except Exception as e:
             logger.debug(f"Failed to read {self.format} from {path}: {e}")
             return None
@@ -687,7 +636,7 @@ class ContextAwareStorageBackend(StorageBackend):
                 self._extend_history(history_file, metric_entry, dataset_name, pipeline_name)
                 return
             with open(history_file.with_name("history.lock"), "a+") as lockf:
-                with _exclusive_lock(lockf):
+                with exclusive_lock(lockf):
                     self._extend_history(history_file, metric_entry, dataset_name, pipeline_name)
 
     def _extend_history(self, history_file, metric_entry, dataset_name, pipeline_name) -> None:

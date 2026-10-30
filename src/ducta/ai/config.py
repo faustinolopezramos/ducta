@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 from urllib.parse import urlparse
 
+from ducta import state
 from ducta.ai.errors import AIConfigError
 
 if sys.version_info >= (3, 11):
@@ -91,12 +92,8 @@ def _is_metadata_host(host: str) -> bool:
         return False
 
 
-def ducta_home() -> Path:
-    return Path(os.environ.get("DUCTA_HOME") or Path.home() / ".ducta").expanduser()
-
-
 def config_path() -> Path:
-    return ducta_home() / "ai.toml"
+    return state.user_dir("ai.toml")
 
 
 @dataclass

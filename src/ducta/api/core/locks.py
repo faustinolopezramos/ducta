@@ -29,7 +29,8 @@ from typing import Optional
 
 from loguru import logger  # type: ignore
 
-from ducta.core.locking import try_lock_fd, unlock_fd
+from ducta import state
+from ducta.locking import try_lock_fd, unlock_fd
 
 
 class ConfigLockError(Exception):
@@ -39,7 +40,7 @@ class ConfigLockError(Exception):
 class ConfigLockManager:
     """Process-level locking for coordinating CLI ↔ API writes to config."""
 
-    def __init__(self, workspace_root: Path, lock_file: str = ".ducta/config.lock"):
+    def __init__(self, workspace_root: Path, lock_file: str = state.CONFIG_LOCK):
         self.workspace_root = Path(workspace_root)
         self.lock_file = self.workspace_root / lock_file
         self.lock_file.parent.mkdir(parents=True, exist_ok=True)
@@ -101,28 +102,3 @@ class ConfigLockManager:
                 self._lock_fd = None
         finally:
             self._is_locked = False
-
-    def is_locked(self) -> bool:
-        return self._is_locked
-
-    def acquire_non_blocking(self) -> bool:
-        if self._is_locked:
-            return False
-        try:
-            self._lock_fd = os.open(str(self.lock_file), os.O_CREAT | os.O_WRONLY, 0o600)
-            if not try_lock_fd(self._lock_fd):
-                os.close(self._lock_fd)
-                self._lock_fd = None
-                return False
-            self._is_locked = True
-            return True
-        except Exception as e:
-            logger.error("Failed to acquire non-blocking lock: {err}", err=e)
-            if self._lock_fd is not None:
-                os.close(self._lock_fd)
-                self._lock_fd = None
-            return False
-
-    def release_non_blocking(self) -> None:
-        if self._is_locked:
-            self._release_lock()

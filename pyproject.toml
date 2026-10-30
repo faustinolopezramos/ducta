@@ -125,7 +125,6 @@ psycopg2-binary = { version = "^2.9.0", optional = true }
 
 # --- Infrastructure (extra: api) ---
 GitPython = { version = "^3.1.0", optional = true }
-watchdog = { version = "^4.0.0", optional = true }
 redis = { version = "^5.0.0", optional = true }
 # Round-trip YAML for API edits of format-2 projects: keeps the comments and
 # key order of files people also edit by hand.
@@ -173,7 +172,7 @@ spark = ["pyspark", "pyarrow", "setuptools"]
 api = [
     "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "watchdog", "redis", "ruamel.yaml",
+    "GitPython", "redis", "ruamel.yaml",
 ]
 database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
 mlops = ["mlflow", "scikit-learn", "numpy", "scipy", "optuna"]
@@ -186,7 +185,7 @@ all = [
     "pyspark", "pyarrow", "setuptools", "delta-spark",
     "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
     "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "watchdog", "redis", "ruamel.yaml",
+    "GitPython", "redis", "ruamel.yaml",
     "mlflow", "scikit-learn", "numpy", "scipy", "optuna",
     "xgboost", "lightgbm",
     "prometheus-client",
@@ -273,117 +272,6 @@ show_error_codes = true
 [[tool.mypy.overrides]]
 module = ["sphinx.*"]
 follow_imports = "skip"
-
-# Type-checking ratchet. mypy is blocking in CI for every module except these,
-# which still had errors when it was switched on (2026-10-14: 486 errors in 103
-# files). Clean a module, delete its line, and mypy keeps it clean from then on.
-# Never add a module here: new code type-checks.
-[[tool.mypy.overrides]]
-module = [
-    "ducta.api.core.file_watcher",
-    "ducta.api.core.git_sync",
-    "ducta.api.db.models",
-    "ducta.api.db.stores.execution_store",
-    "ducta.api.dependencies",
-    "ducta.api.execution.error_recovery",
-    "ducta.api.execution.manager_dispatch",
-    "ducta.api.execution.manager_lifecycle",
-    "ducta.api.execution.manager_reads",
-    "ducta.api.execution.manager_streaming",
-    "ducta.api.middleware",
-    "ducta.api.middleware.rate_limit",
-    "ducta.api.repositories.pipeline_ops",
-    "ducta.api.routes.auth",
-    "ducta.api.routes.configs",
-    "ducta.api.routes.editor",
-    "ducta.api.routes.execution",
-    "ducta.api.routes.mlops",
-    "ducta.api.routes.projects",
-    "ducta.api.services.column_lineage",
-    "ducta.api.services.comments",
-    "ducta.api.services.draft_validation",
-    "ducta.api.services.language_server",
-    "ducta.api.services.metrics",
-    "ducta.api.services.node_schema_service",
-    "ducta.api.services.node_tests",
-    "ducta.api.services.project",
-    "ducta.api.services.streaming_status",
-    "ducta.api.workspace.loaders",
-    "ducta.api.workspace.manager",
-    "ducta.api.workspace.preflight",
-    "ducta.check.advisor",
-    "ducta.check.checks.business",
-    "ducta.check.checks.cross_table",
-    "ducta.check.checks.distribution",
-    "ducta.check.checks.model",
-    "ducta.check.checks.structural",
-    "ducta.check.checks.temporal",
-    "ducta.check.core",
-    "ducta.check.engine",
-    "ducta.check.profiling",
-    "ducta.check.service",
-    "ducta.check.storage",
-    "ducta.console.cli",
-    "ducta.console.commands.config_cmds",
-    "ducta.console.commands.execution_cmds",
-    "ducta.console.mlops_commands",
-    "ducta.console.template",
-    "ducta.console.ux.error_analyzer",
-    "ducta.console.ux.rich_logger",
-    "ducta.console.ux.schema_formatter",
-    "ducta.core.commands",
-    "ducta.core.context_utils",
-    "ducta.core.execution.coordinator",
-    "ducta.core.execution.ingestion",
-    "ducta.core.execution.output",
-    "ducta.core.execution.quality",
-    "ducta.core.execution.runner",
-    "ducta.core.execution.state",
-    "ducta.core.executors.base",
-    "ducta.core.executors.batch",
-    "ducta.core.executors.facade",
-    "ducta.core.executors.hybrid",
-    "ducta.core.executors.streaming",
-    "ducta.core.ledger",
-    "ducta.core.mlops_integration",
-    "ducta.core.node_worker",
-    "ducta.core.pipeline_state",
-    "ducta.core.pipeline_validator",
-    "ducta.core.storage.base",
-    "ducta.core.utils",
-    "ducta.gate.gateway.connector",
-    "ducta.gate.gateway.manager",
-    "ducta.gate.gateway.spark_setup",
-    "ducta.gate.input",
-    "ducta.gate.output.dataframes",
-    "ducta.gate.output.manager",
-    "ducta.gate.output.paths",
-    "ducta.gate.output.unity_catalog",
-    "ducta.gate.readers",
-    "ducta.gate.sql",
-    "ducta.gate.writers",
-    "ducta.mlrun.concurrency",
-    "ducta.mlrun.config",
-    "ducta.mlrun.environment",
-    "ducta.mlrun.experiment_tracking",
-    "ducta.mlrun.hyperparams",
-    "ducta.mlrun.mlflow",
-    "ducta.mlrun.model_registry",
-    "ducta.mlrun.resilience",
-    "ducta.mlrun.serving",
-    "ducta.mlrun.split",
-    "ducta.mlrun.storage",
-    "ducta.mlrun.validators",
-    "ducta.stream.context_utils",
-    "ducta.stream.exceptions",
-    "ducta.stream.pipeline_manager",
-    "ducta.stream.query_manager",
-    "ducta.stream.readers",
-    "ducta.stream.trigger_scheduler",
-    "ducta.stream.validators",
-    "ducta.stream.writers",
-]
-ignore_errors = true
 
 [tool.ruff]
 line-length = 100

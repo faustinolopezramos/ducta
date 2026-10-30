@@ -181,9 +181,7 @@ class SecurityValidator:
 
     @staticmethod
     def _is_permissive() -> bool:
-        val = os.getenv("Ducta_PERMISSIVE_PATH_VALIDATION") or os.getenv(
-            "DUCTA_PERMISSIVE_PATH_VALIDATION", "0"
-        )
+        val = os.getenv("DUCTA_PERMISSIVE_PATH_VALIDATION", "0")
         return val in ("1", "true", "True", "yes", "YES")
 
     @staticmethod

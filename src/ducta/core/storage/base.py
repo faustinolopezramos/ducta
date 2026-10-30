@@ -25,9 +25,11 @@ import tempfile
 import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List, Optional, cast
 
 from loguru import logger
+
+from ducta import state
 
 
 class StorageBackend(ABC):
@@ -65,7 +67,7 @@ class LocalStorageBackend(StorageBackend):
     """Local filesystem implementation of StorageBackend."""
 
     def __init__(self, root_dir: Optional[Path] = None) -> None:
-        self.root_dir = (root_dir or Path.home() / ".ducta" / "storage").resolve()
+        self.root_dir = (root_dir or state.user_dir("storage")).resolve()
         self.root_dir.mkdir(parents=True, exist_ok=True)
 
     def _resolve_path(self, key: str) -> Path:
@@ -180,7 +182,7 @@ class S3StorageBackend(StorageBackend):
     def get_object(self, key: str) -> bytes:
         full = self._full_key(key)
         res = self._get_client().get_object(Bucket=self.bucket, Key=full)
-        return res["Body"].read()
+        return cast(bytes, res["Body"].read())
 
     def delete_object(self, key: str) -> bool:
         """Delete an object; False when it did not exist."""
@@ -224,7 +226,7 @@ _storage_lock = threading.Lock()
 
 def _build_storage_backend(backend_type: Optional[str]) -> StorageBackend:
     """Construct a backend from *backend_type* (or the DUCTA_STORAGE_* env)."""
-    btype = (backend_type or os.getenv("DUCTA_STORAGE_BACKEND", "local")).lower()
+    btype = (backend_type or os.environ.get("DUCTA_STORAGE_BACKEND") or "local").lower()
 
     if btype in ("s3", "minio"):
         bucket = os.getenv("DUCTA_STORAGE_BUCKET", "ducta-artifacts")

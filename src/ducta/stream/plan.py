@@ -329,9 +329,7 @@ def plan_pipeline(
         if isinstance(function, dict) and function.get("module"):
             modules.append(str(function["module"]))
     module_problems = _load_transforms(registry, dict.fromkeys(modules))
-    registered = set(registry.list_transformations()) | set(
-        TransformationRegistry.class_list_transformations()
-    )
+    registered = set(registry.list_transformations())
 
     produced = {
         str((single_spec(cfg, "output") or {}).get("path"))

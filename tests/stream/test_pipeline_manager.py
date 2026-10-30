@@ -30,7 +30,7 @@ def manager(obj_context):
 def _node(name, depends_on=None):
     node = {
         "name": name,
-        "input": {"format": "file_stream", "path": f"/tmp/{name}"},
+        "input": {"format": "file_stream", "options": {"path": f"/tmp/{name}"}},
         "output": {"format": "console"},
     }
     if depends_on:
@@ -375,26 +375,6 @@ class TestPipelineStatusAndMetrics:
         pipelines = manager.list_running_pipelines()
         assert len(pipelines) == 1
         assert pipelines[0]["execution_id"] == "exec1"
-
-    def test_get_pipeline_metrics_computes_health_score(self, manager, mock_streaming_query):
-        q1 = mock_streaming_query(name="a", query_id="a")
-        execution_id = "exec1"
-        manager._running_pipelines[execution_id] = {
-            "pipeline_name": "p1",
-            "pipeline_config": {},
-            "status": "running",
-            "start_time": 0,
-            "queries": {"a": q1},
-            "completed_nodes": 1,
-            "failed_nodes": {},
-            "skipped_nodes": {},
-            "error": None,
-        }
-        metrics = manager.get_pipeline_metrics(execution_id)
-        assert metrics["performance_metrics"]["health_score"] == 100.0
-
-    def test_get_pipeline_metrics_unknown_returns_none(self, manager):
-        assert manager.get_pipeline_metrics("missing") is None
 
 
 class TestProgressSinkCleanup:

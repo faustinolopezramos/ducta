@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from loguru import logger  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ducta import state
+
 
 class ExecutionMode(str, Enum):
     """Supported execution modes."""
@@ -127,7 +129,7 @@ class ChainReuseConfig(BaseModel):
         ),
     )
     state_dir: str = Field(
-        default="${output_path}/${environment}/.ducta/chain_state",
+        default=state.CHAIN_STATE_DIR,
         description=(
             "Directory where chain-state markers (the date range a batch "
             "pipeline last ran, for reuse_materialized) are written. Same "
@@ -290,8 +292,7 @@ class GlobalConfigSchema(BaseModel):
             "and by a sample above it; outputs by every row of the written batch. "
             "'exact' (every row, order-independent), 'exact_crypto' (same, SHA-256), "
             "'sample' (the N rows with the lowest row hash, chosen by content) or "
-            "'schema' (schema and row count, no content) force one strategy. The "
-            "legacy names 'fast' and 'full' still parse."
+            "'schema' (schema and row count, no content) force one strategy."
         ),
     )
     fingerprint_exact_max_bytes: Optional[int] = Field(
@@ -446,7 +447,7 @@ class GlobalConfigSchema(BaseModel):
         "variable: a key in a config file is usually committed.",
     )
     run_certificate_dir: str = Field(
-        default="${output_path}/${environment}/.ducta/runs",
+        default=state.RUNS_DIR,
         description=(
             "Directory where Run Certificates are written. Supports "
             "${output_path}/${environment} interpolation (the Ducta storage "
@@ -647,19 +648,21 @@ class QualityGateSchema(BaseModel):
             "or 'persisted' (from storage). If None, falls back to memory."
         ),
     )
-    behavior: str = Field(
+    behavior: Literal["skip_downstream", "stop_all", "warn_only"] = Field(
         default="skip_downstream",
         description=(
-            "Gate action behavior: 'skip_downstream' (mark descendants, continue siblings), "
-            "'stop_all' (halt pipeline), or 'warn_only' (log but continue)"
+            "Gate action behavior (``on_fail`` in project files): 'skip_downstream' "
+            "(mark descendants, continue siblings), 'stop_all' (halt pipeline), or "
+            "'warn_only' (log but continue)"
         ),
     )
+    enabled: Optional[bool] = Field(default=None, description="False turns the gate off")
     output: Optional[QualityOutputSchema] = Field(
         default=None,
         description="Gate result persistence configuration (for audit trail)",
     )
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
 
 class QualityGlobalConfig(BaseModel):

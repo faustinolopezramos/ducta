@@ -33,11 +33,12 @@ import copy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, cast
 
+from ducta import state
 from ducta.setting.project.loader import (
     _conventional_path,
 )
 
-_SCHEMA_DIR = ".ducta/schema"
+_SCHEMA_DIR = state.SCHEMA_DIR
 
 
 # ── decompiling to a format-2 tree ───────────────────────────────────────────

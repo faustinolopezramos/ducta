@@ -25,21 +25,6 @@ from pathlib import Path
 CONFIG_EXTENSIONS = (".yaml", ".yml", ".json", ".toml")
 
 
-def find_config_file(directory: Path, stem: str) -> Path | None:
-    """Return ``<directory>/<stem>.<ext>`` for the first ext in
-    ``CONFIG_EXTENSIONS`` that exists, or None."""
-    for ext in CONFIG_EXTENSIONS:
-        candidate = directory / f"{stem}{ext}"
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def has_config_file(directory: Path, stem: str) -> bool:
-    """Whether *directory* holds ``<stem>`` in any supported config format."""
-    return find_config_file(directory, stem) is not None
-
-
 def resolve_module_path(workspace_root: Path, module_dotted: str) -> Path:
     """Convert a dotted module path to a ``.py`` file path inside *workspace_root*."""
     from ducta.api.utils.git_utils import safe_path  # avoid circular at top level

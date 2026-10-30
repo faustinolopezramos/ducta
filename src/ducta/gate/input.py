@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, cast
 
 from loguru import logger  # type: ignore
 
@@ -49,8 +49,8 @@ def sample(df: Any, rows: int) -> Any:
 class InputLoader(BaseIO):
     """Unified InputLoader with parallel loading strategy."""
 
-    def __init__(self, context: Dict[str, Any]):
-        """Initialize the InputLoader."""
+    def __init__(self, context: Any):
+        """Initialize the InputLoader (a Context or a dict: gate reads either)."""
         super().__init__(context)
         self.reader_factory = ReaderFactory(context)
         self._verify_format_dependencies()
@@ -104,7 +104,7 @@ class InputLoader(BaseIO):
     @staticmethod
     def _is_query_format(config: Dict[str, Any]) -> bool:
         """True when the dataset's format is 'query' (no filepath to resolve)."""
-        return config.get("format", "").lower() == "query"
+        return str(config.get("format") or "").lower() == "query"
 
     def _inputs_available(self, node: Dict[str, Any]) -> "tuple[bool, List[str]]":
         """Check whether every declared input for *node* currently resolves."""
@@ -343,7 +343,7 @@ class InputLoader(BaseIO):
         """Return the function parameter names when ``input`` is a named map."""
         keys = node.get("input")
         if self._is_named_input_map(keys):
-            return [str(param) for param in keys.keys()]
+            return [str(param) for param in cast(Dict[str, Any], keys).keys()]
         return None
 
     def _get_input_keys(self, node: Dict[str, Any]) -> List[str]:

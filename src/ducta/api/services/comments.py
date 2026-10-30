@@ -33,7 +33,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-COMMENTS_DIR = Path(".ducta") / "comments"
+from ducta import state
+
+COMMENTS_DIR = Path(state.COMMENTS_DIR)
 _ID = re.compile(r"^[0-9a-f]{32}\Z")
 
 
@@ -85,7 +87,7 @@ class CommentStore(Protocol):
 def clean_anchor(anchor: Dict[str, Any]) -> Dict[str, Any]:
     """A node (``pipeline`` + ``node``) or a line of a file (``file`` + ``line``)."""
     if anchor.get("node"):
-        out = {"node": str(anchor["node"])}
+        out: Dict[str, Any] = {"node": str(anchor["node"])}
         if anchor.get("pipeline"):
             out["pipeline"] = str(anchor["pipeline"])
         return out

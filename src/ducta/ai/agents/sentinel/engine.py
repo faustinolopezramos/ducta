@@ -126,7 +126,7 @@ def engine_lock(root: Path, wait: float = 0.0) -> Iterator[bool]:
     overwrites another. *wait* seconds are spent trying (none: take it if free).
     The lock is never held across a re-run or a model call: those take minutes.
     """
-    from ducta.core.locking import try_lock_fd, unlock_fd
+    from ducta.locking import try_lock_fd, unlock_fd
 
     path = agent_dir(root, AGENT) / "engine.lock"
     path.parent.mkdir(parents=True, exist_ok=True)

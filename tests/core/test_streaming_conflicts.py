@@ -30,7 +30,7 @@ def _kafka_node(topic):
 
 
 def _file_node(path):
-    return {"input": {"format": "file_stream", "path": path}}
+    return {"input": {"format": "file_stream", "options": {"path": path}}}
 
 
 def _delta_out_node(path):

@@ -183,7 +183,7 @@ class TestMLConfigMixin:
         assert result["project_name"] == "test_project"
         assert result["model_name"] == "base_model"
 
-    @patch("ducta.setting.contexts.load_hyperparams_config")
+    @patch("ducta.mlrun.hyperparams.load_hyperparams_config")
     def test_resolve_hyperparams_config_skips_non_ml_pipeline(self, mock_load):
         """A global hyperparams_config_path must not be resolved for a batch
         pipeline — only type=="ml" pipelines may fall back to the path-only
@@ -199,7 +199,7 @@ class TestMLConfigMixin:
         assert result is None
         mock_load.assert_not_called()
 
-    @patch("ducta.setting.contexts.load_hyperparams_config")
+    @patch("ducta.mlrun.hyperparams.load_hyperparams_config")
     def test_resolve_hyperparams_config_still_resolves_ml_pipeline(self, mock_load):
         mixin = MLConfigMixin()
         mixin.ml_info = {}
@@ -268,49 +268,6 @@ class TestContextLazySpark:
         assert ctx.has_spark_session() is True
         assert ctx.spark is injected
         mock_get_session.assert_not_called()
-
-
-class TestContextQualityOutput:
-    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
-    def test_add_and_get_quality_outputs(self, mock_get_session):
-        mock_get_session.return_value = MagicMock()
-
-        ctx = _make_bare_context(
-            global_config={"input_path": "/in", "output_path": "/out", "mode": "local"},
-            pipelines_config={},
-            nodes_config={},
-            input_config={},
-            output_config={},
-        )
-        from ducta.check import QualityOutputPath
-
-        q1 = QualityOutputPath(
-            report_type="dq",
-            node_name="n1",
-            run_id="r1",
-            output_path="/tmp/q1",
-            format="parquet",
-            rows_written=10,
-        )
-        q2 = QualityOutputPath(
-            report_type="sanity",
-            node_name="n1",
-            run_id="r1",
-            output_path="/tmp/q2",
-            format="parquet",
-            rows_written=5,
-        )
-        ctx.add_quality_output_path(q1)
-        ctx.add_quality_output_path(q2)
-        assert len(ctx.quality_output_paths) == 2
-
-        grouped = ctx.get_quality_outputs()
-        assert "dq" in grouped
-        assert "sanity" in grouped
-
-        by_node = ctx.get_quality_outputs_by_node()
-        assert "n1" in by_node
-        assert len(by_node["n1"]) == 2
 
 
 def _documents(**global_overrides):

@@ -44,8 +44,7 @@ SHOP_DB_USER=reader
 SHOP_DB_PASSWORD=…
 ```
 
-from the process environment first and then the project's `.env` (never commit it). The
-older type-based names (`POSTGRESQL_USER`) still work with a deprecation warning.
+from the process environment first and then the project's `.env` (never commit it).
 
 **As an assistant:** never write the password into a file yourself and never ask the
 user to paste it into the chat. Tell the user which two variable names to set, and

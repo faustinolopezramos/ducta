@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,7 +33,8 @@ from ducta.console.core import CLIConfig, ExitCode
 def _trial_outcome(future, payload: Dict[str, Any]) -> Dict[str, Any]:
     """A worker's answer, or a failed trial when the worker process died."""
     try:
-        return future.result()
+        outcome: Dict[str, Any] = future.result()
+        return outcome
     except Exception as e:  # noqa: BLE001 — a dead worker is one failed trial
         return {
             "index": payload["trial_index"],
@@ -345,7 +347,7 @@ class ExecutionCommands:
         context = context_init.initialize(self.config.env)
         from ducta.core import PipelineExecutor
 
-        exec_obj = PipelineExecutor(context, self.config_manager.get_config_directory())
+        exec_obj = PipelineExecutor(context)
         if not exec_obj.validate_pipeline(self.config.pipeline):
             available = exec_obj.list_pipelines()
             logger.error("Pipeline '{}' not found", self.config.pipeline)
@@ -372,7 +374,7 @@ class ExecutionCommands:
         context = context_init.initialize(self.config.env)
         from ducta.core import PipelineExecutor
 
-        exec_obj = PipelineExecutor(context, self.config_manager.get_config_directory())
+        exec_obj = PipelineExecutor(context)
 
         if not exec_obj.validate_pipeline(self.config.pipeline):
             available = exec_obj.list_pipelines()
@@ -398,7 +400,7 @@ class ExecutionCommands:
             return self._execute_search(exec_obj, base_hyperparams)
 
         if self.config.sweep:
-            return self._execute_sweep(exec_obj, base_hyperparams)
+            return self._execute_sweep(exec_obj, base_hyperparams, self.config.sweep)
 
         import time
 
@@ -431,11 +433,22 @@ class ExecutionCommands:
             # A streaming pipeline started in async mode: its queries run in this
             # process, so returning now would end them before they wrote anything.
             return _stay_in_foreground(
-                exec_obj, self.config.pipeline, result.streaming_execution_ids[0]
+                exec_obj, self.config.pipeline, result.streaming_execution_ids[0], self.config.env
             )
-        return report_run_outcome(
+        streams_code = ExitCode.SUCCESS.value
+        for execution_id in result.streaming_execution_ids:
+            # A hybrid run: the batch phase is done, but its stream phase runs in this
+            # process too. Returning killed it before its first micro-batch (a
+            # `trigger: available_now` stream wrote nothing, or part of its input).
+            code = _stay_in_foreground(
+                exec_obj, self.config.pipeline, execution_id, self.config.env
+            )
+            streams_code = streams_code or code
+        sys.stdout.flush()  # the stream's tables (print) before the run's summary
+        outcome = report_run_outcome(
             result, pipeline=self.config.pipeline, elapsed=time.monotonic() - started
         )
+        return streams_code or outcome
 
     @staticmethod
     def _output_names(exec_obj, nodes: List[str]) -> List[str]:
@@ -472,11 +485,11 @@ class ExecutionCommands:
             _report_error(str(error), list(getattr(error, "hints", None) or []))
         return int(getattr(error, "exit_code", ExitCode.EXECUTION_ERROR.value))
 
-    def _execute_sweep(self, exec_obj, base_hyperparams) -> int:
+    def _execute_sweep(self, exec_obj, base_hyperparams, sweep_file: str) -> int:
         from ducta.core.sweep import SweepError, expand_sweep, load_sweep_spec, new_sweep_id
 
         try:
-            spec = load_sweep_spec(self.config.sweep)
+            spec = load_sweep_spec(sweep_file)
             combos = expand_sweep(spec, max_runs=self.config.max_sweep_size)
         except SweepError as e:
             logger.error("Invalid sweep spec: {}", e)

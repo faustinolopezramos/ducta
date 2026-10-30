@@ -25,7 +25,7 @@ import copy
 import re
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 from loguru import logger  # type: ignore
 
@@ -49,6 +49,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from ducta.api.services.project import ProjectService
 
 # Fields merged from the global node config when the pipeline-level spec omits them.
+CheckPhase = Literal["sanity", "quality"]
+
+
 _MERGEABLE_FIELDS = (
     "module",
     "fn",
@@ -273,7 +276,7 @@ class NodeSchemaService:
         """
         sanity = node_spec.get("sanity_checks") or node_spec.get("sanityChecks")
         dq = node_spec.get("data_quality") or node_spec.get("dataQuality")
-        blocks: List[tuple[str, Dict[str, Any]]] = []
+        blocks: List[tuple[CheckPhase, Dict[str, Any]]] = []
         if isinstance(sanity, dict) and NodeSchemaService._block_on(sanity):
             blocks.append(("sanity", NodeSchemaService._flatten_per_input(sanity)))
         if isinstance(dq, dict) and NodeSchemaService._block_on(dq):
@@ -294,12 +297,12 @@ class NodeSchemaService:
         if not checks and not gates:
             return None
 
-        # data_quality wins when both are enabled — the legacy summary's rule.
+        # data_quality wins when both are enabled.
         primary_phase, primary = blocks[-1]
-        legacy_gate = NodeSchemaService._gate_block(primary)
+        primary_gate = NodeSchemaService._gate_block(primary)
         gate_behavior = None
-        if isinstance(legacy_gate, dict) and legacy_gate.get("enabled"):
-            behavior = legacy_gate.get("behavior")
+        if isinstance(primary_gate, dict) and primary_gate.get("enabled"):
+            behavior = primary_gate.get("behavior")
             gate_behavior = str(behavior) if behavior else None
 
         return QualityInfo(
@@ -332,7 +335,7 @@ class NodeSchemaService:
         return {**block, "checks": checks}
 
     @staticmethod
-    def _enabled_checks(checks: Any, phase: str) -> List[QualityCheck]:
+    def _enabled_checks(checks: Any, phase: CheckPhase) -> List[QualityCheck]:
         """Checks declared as ``{name: params}`` or as a list, minus ``enabled: false``."""
         out: List[QualityCheck] = []
         if isinstance(checks, dict):
@@ -369,7 +372,7 @@ class NodeSchemaService:
         )
 
     @staticmethod
-    def _declared_gate(block: Dict[str, Any], phase: str) -> Optional[QualityGate]:
+    def _declared_gate(block: Dict[str, Any], phase: CheckPhase) -> Optional[QualityGate]:
         gate = NodeSchemaService._gate_block(block)
         if not isinstance(gate, dict) or gate.get("enabled") is False:
             return None
@@ -624,9 +627,9 @@ class NodeSchemaService:
         node_name = getattr(run, "node_name", None)
         node_names = getattr(run, "node_names", None)
         if node_name:
-            return node_name == node_id
+            return bool(node_name == node_id)
         if node_names:
-            return node_id in node_names
+            return bool(node_id in node_names)
         return True  # the whole pipeline
 
     def _certificate(
@@ -654,5 +657,5 @@ class NodeSchemaService:
     def _cert_node(cert: Optional[Dict[str, Any]], node_id: str) -> Optional[Dict[str, Any]]:
         for node in (cert or {}).get("nodes") or []:
             if node.get("name") == node_id:
-                return node
+                return cast(Dict[str, Any], node)
         return None

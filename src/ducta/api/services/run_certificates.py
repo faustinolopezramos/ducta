@@ -32,14 +32,14 @@ from loguru import logger
 
 from ducta.api.execution.runner import normalize_execution_context_paths, select_execution_cwd
 from ducta.api.workspace.manager import WorkspaceManager
-from ducta.core.certificate import find_certificate_dir, iter_certificate_dirs, load_certificate
+from ducta.core.certificate import candidate_runs_dirs as shared_candidate_runs_dirs
+from ducta.core.certificate import (
+    find_certificate_dir,
+    iter_certificate_dirs,
+    load_certificate,
+    search_environments,
+)
 from ducta.core.settings import CoreSettings
-from ducta.setting.environments import DEFAULT_ENVIRONMENTS
-
-#: Pre-convention default, relative to the project directory. Kept discoverable
-#: (read-only) so certificates written before the storage convention moved
-#: run_certificate_dir under ${output_path}/${environment} don't disappear.
-_LEGACY_RUNS_DIR = Path(".ducta") / "runs"
 
 
 def _env_context(project_dir: Path, env: str) -> Optional[Tuple[Any, Path]]:
@@ -58,20 +58,6 @@ def _env_context(project_dir: Path, env: str) -> Optional[Tuple[Any, Path]]:
     return ctx, execution_cwd
 
 
-def env_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
-    """The run-certificates directory a run in *env* writes to, or None.
-
-    So the ``${output_path}/${environment}/.ducta/runs`` template lands on the
-    directory the executor actually wrote (see ``_env_context``).
-    """
-    loaded = _env_context(project_dir, env)
-    if loaded is None:
-        return None
-    ctx, execution_cwd = loaded
-    runs_dir = Path(CoreSettings.from_context(ctx).run_certificate_dir)
-    return runs_dir if runs_dir.is_absolute() else execution_cwd / runs_dir
-
-
 def env_stream_journal_dir(project_dir: Path, env: str) -> Optional[Path]:
     """Where a streaming run in *env* journals itself (ducta.stream.journal), or None."""
     from ducta.stream.journal import journal_base
@@ -86,21 +72,24 @@ def env_stream_journal_dir(project_dir: Path, env: str) -> Optional[Path]:
     return Path(base) if Path(base).is_absolute() else execution_cwd / base
 
 
+def _configured_runs_dir(project_dir: Path, env: str) -> Optional[Path]:
+    """*env*'s ``run_certificate_dir`` as configured, still relative when it is:
+    ``candidate_runs_dirs`` decides which directories it may be relative to."""
+    try:
+        ctx = WorkspaceManager(project_dir).load_context(env)
+    except Exception as exc:  # noqa: BLE001 — an environment the project can't load is skipped
+        logger.debug("Could not load the context of env '{}': {}", env, exc)
+        return None
+    return Path(CoreSettings.from_context(ctx).run_certificate_dir)
+
+
 def candidate_runs_dirs(project_dir: Path, env: Optional[str]) -> List[Tuple[Optional[str], Path]]:
-    """``[(env, runs_dir), ...]`` to search: each environment's own directory
-    that exists (only *env* when given), then the legacy directory — labelled
-    ``None`` because its layout may itself nest several environments."""
-    dirs: List[Tuple[Optional[str], Path]] = []
-    seen: set = set()
-    for candidate_env in [env] if env else DEFAULT_ENVIRONMENTS:
-        runs_dir = env_runs_dir(project_dir, candidate_env)
-        if runs_dir is not None and runs_dir.is_dir() and runs_dir not in seen:
-            seen.add(runs_dir)
-            dirs.append((candidate_env, runs_dir))
-    legacy = project_dir / _LEGACY_RUNS_DIR
-    if legacy.is_dir():
-        dirs.append((None, legacy))
-    return dirs
+    """``[(env, runs_dir), ...]`` to search — the same directories ``ducta certify``
+    searches (see ``ducta.core.certificate.candidate_runs_dirs``)."""
+    envs = [env] if env else search_environments(project_dir)
+    return shared_candidate_runs_dirs(
+        project_dir, envs, lambda e: _configured_runs_dir(project_dir, e)
+    )
 
 
 def certificates(
@@ -108,12 +97,9 @@ def certificates(
 ) -> Iterator[Tuple[Optional[str], Dict[str, Any]]]:
     """Every readable certificate of the project (in *env* when given), as ``(env, data)``."""
     for dir_env, runs_dir in candidate_runs_dirs(project_dir, env):
-        for found_env, _run_id, run_dir in iter_certificate_dirs(runs_dir):
-            run_env = dir_env or found_env
-            if env is not None and run_env != env:
-                continue
+        for _run_id, run_dir in iter_certificate_dirs(runs_dir):
             try:
-                yield run_env, load_certificate(run_dir / "certificate.json")
+                yield dir_env, load_certificate(run_dir / "certificate.json")
             except Exception:  # noqa: BLE001 — a corrupt file is skipped, not fatal
                 continue
 
@@ -166,8 +152,8 @@ def load_run_certificate(
     project_dir: Path, run_id: str, env: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """*run_id*'s certificate: the project's own copy first, then the mirror."""
-    for dir_env, runs_dir in candidate_runs_dirs(project_dir, env):
-        run_dir = find_certificate_dir(runs_dir, run_id, env=env if dir_env is None else None)
+    for _env, runs_dir in candidate_runs_dirs(project_dir, env):
+        run_dir = find_certificate_dir(runs_dir, run_id)
         if run_dir is not None:
             return load_certificate(run_dir / "certificate.json")
     data = mirrored_certificate(project_dir, run_id)

@@ -29,7 +29,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 from uuid import uuid4
 
 import pandas as pd  # type: ignore
@@ -207,10 +207,6 @@ class StorageBackend(ABC):
     def delete(self, path: str) -> None:
         """Delete path (file or directory)."""
         pass
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get storage statistics (optional override)."""
-        return {}
 
     # ── Circuit breaker bookkeeping ─────────────────────────────────────────
     # Shared by LocalStorageBackend and DatabricksStorageBackend (previously
@@ -533,7 +529,7 @@ class LocalStorageBackend(StorageBackend):
                 raise FileNotFoundError(f"File {full_path} not found")
 
             with open(full_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+                data: Dict[str, Any] = json.load(f)
 
             self._stats["reads"] += 1
             self._record_success()
@@ -694,13 +690,6 @@ class LocalStorageBackend(StorageBackend):
             self._record_failure(e)
             raise StorageBackendError("delete", path, e) from e
 
-    def get_stats(self) -> Dict[str, Any]:
-        """Get storage statistics."""
-        stats = self._stats.copy()
-        if self._circuit_breaker:
-            stats["circuit_breaker_state"] = self._circuit_breaker.state.value
-        return stats
-
 
 class DatabricksStorageBackend(StorageBackend):
     """
@@ -849,7 +838,7 @@ class DatabricksStorageBackend(StorageBackend):
         try:
             now = datetime.now(timezone.utc).isoformat()
 
-            if self._use_spark():
+            if self.spark is not None:
                 # Convert to Spark DataFrame and write as Delta
                 spark_df = self.spark.createDataFrame(df)
                 table_name = self._get_table_name(path)
@@ -901,7 +890,7 @@ class DatabricksStorageBackend(StorageBackend):
         self._check_circuit_breaker()
 
         try:
-            if self._use_spark():
+            if self.spark is not None:
                 table_name = self._get_table_name(path)
 
                 spark_df = self.spark.table(table_name)
@@ -1020,7 +1009,7 @@ class DatabricksStorageBackend(StorageBackend):
                 self._stats["spark_reads"] += 1
                 self._record_success()
 
-                return json.loads(content)
+                return cast(Dict[str, Any], json.loads(content))
 
             # Try local cache
             local_path = self._get_local_cache_path(path)
@@ -1030,7 +1019,7 @@ class DatabricksStorageBackend(StorageBackend):
             if local_path.exists():
                 self._stats["local_fallbacks"] += 1
                 with open(local_path, "r", encoding="utf-8") as f:
-                    return json.load(f)
+                    return cast(Dict[str, Any], json.load(f))
 
             raise FileNotFoundError(f"JSON not found at volume path or local cache: {path}")
 
@@ -1247,37 +1236,6 @@ class DatabricksStorageBackend(StorageBackend):
         except Exception as e:
             self._record_failure(e)
             raise StorageBackendError("delete", path, e) from e
-
-    def get_stats(self) -> Dict[str, Any]:
-        """Get storage statistics."""
-        stats = self._stats.copy()
-        stats["spark_available"] = self._use_spark()
-        if self._circuit_breaker:
-            stats["circuit_breaker_state"] = self._circuit_breaker.state.value
-        return stats
-
-    def sync_to_volume(self) -> int:
-        """
-        Sync local cache to Unity Catalog volume.
-        """
-        if not self._use_spark():
-            logger.warning("Cannot sync: Spark not available")
-            return 0
-
-        synced = 0
-
-        for local_file in self._local_cache_path.rglob("*"):
-            if local_file.is_file():
-                relative_path = str(local_file.relative_to(self._local_cache_path))
-
-                try:
-                    self.write_artifact(str(local_file), relative_path)
-                    synced += 1
-                except Exception as e:
-                    logger.error(f"Failed to sync {relative_path}: {e}")
-
-        logger.info(f"Synced {synced} files to volume")
-        return synced
 
 
 StorageBackendRegistry.register("local", LocalStorageBackend)

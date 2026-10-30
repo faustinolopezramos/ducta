@@ -129,6 +129,9 @@ class BaseSparkWriter(BaseIO):
     def _determine_write_mode(self, config: Dict[str, Any]) -> str:
         """Determine the write mode."""
         write_mode = config.get("write_mode", WriteMode.OVERWRITE.value)
+        # A project's ``write.mode`` arrives as the settings enum, whose ``str()`` is
+        # "WriteMode.OVERWRITE", not what Spark's ``.mode()`` accepts.
+        write_mode = getattr(write_mode, "value", write_mode)
         valid_modes = [mode.value for mode in WriteMode]
         if write_mode not in valid_modes:
             raise ConfigurationError(f"Invalid write_mode '{write_mode}'. Valid: {valid_modes}")
@@ -138,7 +141,7 @@ class BaseSparkWriter(BaseIO):
             raise ConfigurationError(
                 f"write_mode 'merge' is supported only for format 'delta', not " f"'{self.FORMAT}'"
             )
-        return write_mode
+        return str(write_mode)
 
     def _apply_partition(
         self,
@@ -218,14 +221,14 @@ class BaseSparkWriter(BaseIO):
             raise ConfigurationError(f"replaceWhere requires: {', '.join(missing)}")
 
         if not (
-            ConfigValidator.validate_date_format(start_date)
-            and ConfigValidator.validate_date_format(end_date)
+            ConfigValidator.validate_date_format(str(start_date))
+            and ConfigValidator.validate_date_format(str(end_date))
         ):
             raise ConfigurationError(
                 f"Invalid date format: {start_date} - {end_date}. Expected: YYYY-MM-DD"
             )
 
-        predicate = replace_where_clause(partition_col, start_date, end_date)
+        predicate = replace_where_clause(str(partition_col), str(start_date), str(end_date))
         writer = writer.option("replaceWhere", predicate).option("overwriteSchema", "false")
         logger.debug("replaceWhere applied: {}", predicate)
         return writer

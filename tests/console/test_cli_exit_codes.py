@@ -188,23 +188,19 @@ class TestOptionNames:
     def test_output_format_is_the_same_flag(self, argv, attr):
         assert getattr(self._parse(*argv), attr) == "json"
 
+    def test_the_short_form_of_stream_status_still_works(self):
+        assert self._parse("stream", "status", "-f", "json").format == "json"
+
     @pytest.mark.parametrize(
-        "argv,attr",
+        "argv",
         [
-            (("stream", "status", "--format", "json"), "format"),
-            (("stream", "status", "-f", "json"), "format"),
-            (("config", "list-pipelines", "--format", "list"), "output_format"),
+            ("stream", "status", "--format", "json"),
+            ("config", "list-pipelines", "--format", "list"),
         ],
     )
-    def test_the_old_spelling_still_works_and_says_it_is_deprecated(self, argv, attr, capsys):
-        args = self._parse(*argv)
-
-        assert getattr(args, attr) in ("json", "list")
-        err = capsys.readouterr().err
-        if "--format" in argv:
-            assert "--format is deprecated" in err and "--output-format" in err
-        else:
-            assert err == ""
+    def test_the_removed_format_spelling_is_refused(self, argv):
+        with pytest.raises(SystemExit):
+            self._parse(*argv)
 
     @pytest.mark.parametrize(
         "argv,suggestion",

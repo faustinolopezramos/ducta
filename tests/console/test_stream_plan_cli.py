@@ -14,7 +14,7 @@ from ducta.console.parser import UnifiedArgumentParser
 
 @pytest.fixture
 def project(tmp_path, monkeypatch) -> Path:
-    from ducta.console.template import TemplateGenerator, TemplateType
+    from ducta.console.templates import TemplateGenerator, TemplateType
 
     root = tmp_path / "sb"
     TemplateGenerator(root).generate_project(TemplateType.STREAMING_BASIC, "sb")

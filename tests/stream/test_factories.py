@@ -117,12 +117,6 @@ class TestRegisterCustom:
         assert handler.extra_kwargs == {"key": "value"}
 
 
-class TestListSupportedFormats:
-    def test_list_supported_formats(self):
-        factory = _TestFactory(context="ctx")
-        assert sorted(factory.list_supported_formats()) == ["csv", "json"]
-
-
 class TestInstantiationFailure:
     def test_constructor_failure_wraps_as_streaming_error(self):
         factory = _TestFactory(context="ctx")

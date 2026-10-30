@@ -376,6 +376,14 @@ class ProjectFile(_Strict):
         known = set(GlobalConfigSchema.model_fields) | set(_RUNTIME_GLOBAL_CONFIG_KEYS)
         known -= set(reserved)
         _reject_unknown(value, known, "settings")
+        gate = (
+            (value.get("quality") or {}).get("gate")
+            if isinstance(value.get("quality"), dict)
+            else None
+        )
+        if gate is not None:
+            # The project-wide gate is written like a node's (``on_fail``, strict keys).
+            GateSpec.model_validate(gate)
         return value
 
 
@@ -916,9 +924,6 @@ class StreamInput(_Strict):
     parse_json: Optional[bool] = None
     json_schema: Optional[Any] = None
     auto_enable_cdf: Optional[bool] = None
-    watermark: Optional[Watermark] = Field(
-        default=None, description="Prefer streaming.watermark; kept as a fallback"
-    )
 
 
 #: Keys of a stream node's ``streaming:`` block that people put elsewhere.
