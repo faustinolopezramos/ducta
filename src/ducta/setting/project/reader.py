@@ -89,12 +89,48 @@ def project_file(root: Path) -> Path:
     return found[0] if found else Path(root) / PROJECT_FILE
 
 
-def _declares_v2(path: Path) -> bool:
+def _declared_version(path: Path) -> Any:
+    """The ``version`` a ``ducta.*`` file declares; None when it has none or does not parse."""
     try:
         data = pf.load(path)
     except Exception:  # noqa: BLE001 — not ours to diagnose here
-        return False
-    return isinstance(data, dict) and data.get("version") == PROJECT_FORMAT_VERSION
+        return None
+    return data.get("version") if isinstance(data, dict) else None
+
+
+def _declares_v2(path: Path) -> bool:
+    return bool(_declared_version(path) == PROJECT_FORMAT_VERSION)
+
+
+def other_format(start: Path) -> Optional[str]:
+    """Why the nearest ``ducta.*`` at or above *start* is not a project this Ducta reads.
+
+    A project written for another format (a newer Ducta's ``version: 3``) used to
+    be reported as no project at all. None when the nearest one is format 2, or
+    when no ``ducta.*`` declares a version.
+    """
+    start = Path(start).resolve()
+    for directory in (start, *start.parents):
+        for candidate in (directory, directory / "config"):
+            found = pf.find_files(candidate, "ducta")
+            versions = [(path, _declared_version(path)) for path in found]
+            if any(v == PROJECT_FORMAT_VERSION for _, v in versions):
+                return None
+            for path, declared in versions:
+                if declared is not None:
+                    return _other_format_message(path, declared)
+    return None
+
+
+def _other_format_message(path: Path, declared: Any) -> str:
+    from ducta import __version__
+
+    if isinstance(declared, int) and declared > PROJECT_FORMAT_VERSION:
+        return (
+            f"{path} uses project format {declared}; this Ducta ({__version__}) reads "
+            f"format {PROJECT_FORMAT_VERSION}: upgrade Ducta (pip install -U ducta)"
+        )
+    return f"{path} declares `version: {declared}`; Ducta reads `version: {PROJECT_FORMAT_VERSION}`"
 
 
 # ── reading, with positions ──────────────────────────────────────────────────

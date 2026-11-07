@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import os
-import sys
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
@@ -29,11 +29,6 @@ from urllib.parse import urlparse
 
 from ducta import state
 from ducta.ai.errors import AIConfigError
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:  # pragma: no cover — 3.10
-    import tomli as tomllib
 
 #: The two wire protocols a provider speaks.
 OPENAI_COMPATIBLE = "openai_compatible"

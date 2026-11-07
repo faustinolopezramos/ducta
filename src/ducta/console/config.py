@@ -50,6 +50,11 @@ class ConfigManager:
         if self.project_root is None:
             if require_config:
                 from ducta.console.ux.view import display_path
+                from ducta.setting.project.reader import other_format
+
+                other = other_format(self.base_path)
+                if other:
+                    raise ConfigurationError(other)
 
                 shown = display_path(self.base_path)
                 where = "here" if shown == "." else f"in {shown}"

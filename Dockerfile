@@ -1,5 +1,9 @@
 # syntax=docker/dockerfile:1
 
+# Base image for the Python stages. continuumio/miniconda3 stopped at 26.7; this is
+# its successor. Debian 13 underneath: JDK 21 (Spark 3.5 and 4 both run on it).
+ARG CONDA_IMAGE=anaconda/miniconda:26.9.4
+
 # ==============================================================================
 # Stage 1: ui-build — compile the React/Vite frontend to static files.
 # The FastAPI server serves these from `ducta/ui/dist` (see ducta.api.main),
@@ -20,7 +24,7 @@ RUN npm run build
 # ==============================================================================
 # Stage 2: builder — resolve and install the Python package + its extras.
 # ==============================================================================
-FROM continuumio/miniconda3:23.10.0-1 AS builder
+FROM ${CONDA_IMAGE} AS builder
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -33,8 +37,8 @@ RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-RUN conda create -y -n ducta python=3.10 && conda clean -ya
-ENV PATH=/opt/conda/envs/ducta/bin:$PATH
+RUN conda create -y -n ducta -c conda-forge --override-channels python=3.12 && conda clean -ya
+ENV PATH=/opt/miniconda3/envs/ducta/bin:$PATH
 
 RUN pip install "poetry>=1.8,<3.0" poetry-plugin-export
 
@@ -55,33 +59,33 @@ RUN poetry export --extras "spark api mlops" --without-hashes -o /tmp/constraint
 # the compiled UI, and a non-root user. No build tools, no dev dependencies,
 # no source tree, no Node.
 # ==============================================================================
-FROM continuumio/miniconda3:23.10.0-1 AS runtime
+FROM ${CONDA_IMAGE} AS runtime
 
 # JAVA_HOME points at a stable, architecture-independent symlink created below.
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     JAVA_HOME=/opt/java \
-    PATH=/opt/conda/envs/ducta/bin:$PATH \
+    PATH=/opt/miniconda3/envs/ducta/bin:$PATH \
     PYTHONUNBUFFERED=1
 
 # Install the headless JRE and expose it at a fixed path regardless of arch.
-# The Debian package installs to /usr/lib/jvm/java-11-openjdk-<arch> (amd64 or
+# The Debian package installs to /usr/lib/jvm/java-21-openjdk-<arch> (amd64 or
 # arm64); we resolve that real directory from the `java` binary and symlink it
 # to /opt/java (= JAVA_HOME). This is what lets PySpark start on both x86-64 and
 # Apple-Silicon/arm64 hosts without editing the Dockerfile per platform.
 RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends openjdk-11-jre-headless && \
+    apt-get install -y --no-install-recommends openjdk-21-jre-headless && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* && \
     ln -sfn "$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" /opt/java && \
     "$JAVA_HOME/bin/java" -version
 
-COPY --from=builder /opt/conda/envs/ducta /opt/conda/envs/ducta
+COPY --from=builder /opt/miniconda3/envs/ducta /opt/miniconda3/envs/ducta
 
 # Drop the compiled UI where the installed package expects it
 # (ducta.api.main._UI_DIR = <package>/ui/dist). With this present the server
 # serves the SPA at "/" and the API under "/api" on the same port.
-COPY --from=ui-build /ui/dist /opt/conda/envs/ducta/lib/python3.10/site-packages/ducta/ui/dist
+COPY --from=ui-build /ui/dist /opt/miniconda3/envs/ducta/lib/python3.12/site-packages/ducta/ui/dist
 
 RUN useradd --create-home --uid 1000 --shell /bin/bash ducta
 WORKDIR /ducta
@@ -110,7 +114,7 @@ CMD ["ui", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
 # their local ./src over /workspace/src so edits are live (the API hot-reloads).
 # Built only when the compose dev override selects `target: dev`.
 # ==============================================================================
-FROM continuumio/miniconda3:23.10.0-1 AS dev
+FROM ${CONDA_IMAGE} AS dev
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -122,14 +126,14 @@ ENV LANG=C.UTF-8 \
 # stable, architecture-independent JAVA_HOME just like the runtime stage.
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
-        build-essential openjdk-11-jre-headless git && \
+        build-essential openjdk-21-jre-headless git && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
     ln -sfn "$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" /opt/java
 
 # One conda env for the project; Poetry installs straight into it (no nested
 # virtualenv) so `python`, `pytest` and `ducta` all resolve without activation.
-RUN conda create -y -n ducta python=3.10 && conda clean -ya
-ENV PATH=/opt/conda/envs/ducta/bin:$PATH
+RUN conda create -y -n ducta -c conda-forge --override-channels python=3.12 && conda clean -ya
+ENV PATH=/opt/miniconda3/envs/ducta/bin:$PATH
 RUN pip install --no-cache-dir "poetry>=1.8,<3.0" && poetry config virtualenvs.create false
 
 WORKDIR /workspace

@@ -91,3 +91,45 @@ def test_the_default_output_is_unchanged(tmp_path, monkeypatch, capsys, flag):
     monkeypatch.setattr(sys, "argv", ["ducta", "config", "validate", "--env", "dev", *flag])
     assert main() == ExitCode.SUCCESS.value
     assert not capsys.readouterr().out.lstrip().startswith("{")
+
+
+def test_environment_problems_are_listed_and_do_not_fail(tmp_path, monkeypatch, capsys):
+    import ducta.runtime_check as runtime_check
+
+    monkeypatch.setattr(runtime_check, "stack_warnings", lambda: ("Java 11 is too old",))
+    monkeypatch.setattr(runtime_check, "config_warnings", lambda spark_config: ())
+    code, doc = _validate(monkeypatch, capsys, _project(tmp_path))
+    assert code == ExitCode.SUCCESS.value, doc
+    assert doc["ok"] is True and doc["environment"] == ["Java 11 is too old"]
+
+
+def _set_spark_config(root: Path, entries: str) -> None:
+    project = root / "ducta.yaml"
+    text = project.read_text()
+    assert text.count("\n  spark_config:\n") == 1, text
+    project.write_text(text.replace("\n  spark_config:\n", f"\n  spark_config:\n{entries}"))
+
+
+def test_spark_defaults_left_unset_are_listed(tmp_path, monkeypatch, capsys):
+    import ducta.runtime_check as runtime_check
+
+    monkeypatch.setattr(runtime_check, "stack_warnings", lambda: ())
+    monkeypatch.setattr(runtime_check, "_version", lambda name: "4.2.0")
+    code, doc = _validate(monkeypatch, capsys, _project(tmp_path))
+    assert code == ExitCode.SUCCESS.value, doc
+    assert [w for w in doc["environment"] if runtime_check.ANSI_KEY in w]
+    assert [w for w in doc["environment"] if runtime_check.TIMEZONE_KEY in w]
+
+
+def test_setting_the_spark_keys_silences_them(tmp_path, monkeypatch, capsys):
+    import ducta.runtime_check as runtime_check
+
+    monkeypatch.setattr(runtime_check, "stack_warnings", lambda: ())
+    monkeypatch.setattr(runtime_check, "_version", lambda name: "4.2.0")
+    root = _project(tmp_path)
+    _set_spark_config(
+        root, "    spark.sql.ansi.enabled: 'false'\n    spark.sql.session.timeZone: UTC\n"
+    )
+    code, doc = _validate(monkeypatch, capsys, root)
+    assert code == ExitCode.SUCCESS.value, doc
+    assert doc["environment"] == []

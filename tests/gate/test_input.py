@@ -444,3 +444,38 @@ class TestFillNoneLeavesAGapInTheEvidence:
 
         reason = loader._note_evidence_gap.call_args[0][0]
         assert "bad" in reason and "boom" in reason and "None" in reason
+
+
+class TestIncrementalWindow:
+    """--end-date is the last day to process: a date end covers that whole day."""
+
+    @staticmethod
+    def _frame():
+        import pandas as pd
+
+        stamps = [
+            "2026-01-01 01:30", "2026-01-01 23:30",
+            "2026-01-02 00:00", "2026-01-02 23:30",
+            "2026-01-03 00:00", "2026-01-03 09:30",
+        ]  # fmt: skip
+        return pd.DataFrame({"ts": pd.to_datetime(stamps), "n": range(6)})
+
+    def test_a_timestamp_column_keeps_the_whole_last_day(self):
+        window = {"column": "ts", "start": "2026-01-01", "end": "2026-01-02"}
+        kept = InputLoader._apply_window(self._frame(), window)
+        assert list(kept["n"]) == [0, 1, 2, 3]  # BETWEEN dropped 2026-01-02 23:30
+
+    def test_a_single_day(self):
+        window = {"column": "ts", "start": "2026-01-02", "end": "2026-01-02"}
+        assert list(InputLoader._apply_window(self._frame(), window)["n"]) == [2, 3]
+
+    def test_a_date_column_is_unchanged(self):
+        import pandas as pd
+
+        frame = pd.DataFrame({"d": pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03"])})
+        window = {"column": "d", "start": "2026-01-01", "end": "2026-01-02"}
+        assert len(InputLoader._apply_window(frame, window)) == 2
+
+    def test_a_datetime_end_is_inclusive_to_the_instant(self):
+        window = {"column": "ts", "start": "2026-01-01", "end": "2026-01-02T00:00:00"}
+        assert list(InputLoader._apply_window(self._frame(), window)["n"]) == [0, 1, 2]

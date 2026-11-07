@@ -101,11 +101,11 @@ class ConsoleReporter(RunReporter):
 
             console = RichLoggerManager.get_console()
             if is_spark:
-                schema_output = ""
-                try:
-                    schema_output = df._jdf.schema().treeString()
-                except Exception as e:  # noqa: BLE001
-                    logger.debug("Could not extract schema tree string: {}", e)
+                from ducta.spark_jvm import schema_tree
+
+                schema_output = schema_tree(df)
+                if not schema_output:
+                    logger.debug("Could not extract the schema tree of {}", node)
 
                 from ducta.console.ux.schema_formatter import print_spark_schema
 

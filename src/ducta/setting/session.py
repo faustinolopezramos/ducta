@@ -41,6 +41,9 @@ class SparkSessionManager:
     _lock = threading.RLock()
     _cleanup_registered = False
     _session_timeout = 3600  # 1 hour default
+    #: The key whose ``ml_config`` the JVM session currently carries, and those settings.
+    _conf_owner: Optional[str] = None
+    _owner_conf: Dict[str, str] = {}
 
     @classmethod
     def _register_cleanup(cls) -> None:
@@ -86,6 +89,7 @@ class SparkSessionManager:
                 if cls._is_session_valid(session, session_key):
                     logger.debug("Reusing existing Spark session: {}", session_key)
                     cls._update_session_access_time(session_key)
+                    cls._align_session_conf(session, session_key, mode, ml_config)
                     return session
                 else:
                     logger.info("Existing session invalid, creating new one: {}", session_key)
@@ -101,8 +105,68 @@ class SparkSessionManager:
                 "mode": mode,
                 "ml_config": ml_config,
             }
+            cls._align_session_conf(session, session_key, mode, ml_config)
 
             return session
+
+    @classmethod
+    def _align_session_conf(
+        cls,
+        session: Any,
+        session_key: str,
+        mode: str,
+        ml_config: Optional[Dict[str, Any]],
+    ) -> None:
+        """Give this configuration a session free of the previous configuration's settings.
+
+        A process has one JVM session, whatever the key: in the API server every project
+        runs on it, and what one project set in ``spark_config`` stayed for the next (a
+        ``partitionOverwriteMode: dynamic`` turned another project's overwrite into a
+        partial one). Runs there are serial, so settings can change between them.
+
+        Settings fixed when the JVM starts (``spark.jars.packages``…) cannot change: a
+        different value is reported. Databricks sessions are remote and are left alone.
+        """
+        if mode == "databricks" or cls._conf_owner == session_key:
+            return
+        wanted = {
+            k: str(v).lower() if isinstance(v, bool) else str(v)
+            for k, v in (ml_config or {}).items()
+            if k not in SparkSessionFactory.PROTECTED_CONFIGS
+        }
+        first_session = cls._conf_owner is None
+        previous = cls._owner_conf
+        cls._conf_owner, cls._owner_conf = session_key, wanted
+        if first_session:
+            return  # the builder has just applied them
+
+        defaults = {
+            **SparkSessionFactory.PERFORMANCE_CONFIGS,
+            **SparkSessionFactory.LOCAL_DEFAULT_CONFIGS,
+        }
+        conf = session.conf
+        for key in set(previous) - set(wanted):
+            try:
+                if not conf.isModifiable(key):
+                    continue
+                if key in defaults:
+                    conf.set(key, str(defaults[key]))
+                else:
+                    conf.unset(key)
+            except Exception:  # noqa: BLE001 — the name only: values can carry secrets
+                logger.debug("Could not restore Spark config {}", key, exc_info=True)
+        for key, value in wanted.items():
+            try:
+                if conf.isModifiable(key):
+                    conf.set(key, value)
+                elif conf.get(key, None) != value:
+                    logger.warning(
+                        "Spark config '{}' is fixed when the JVM starts: this process keeps "
+                        "the value it started with. Restart it to change it.",
+                        key,
+                    )
+            except Exception:  # noqa: BLE001 — as above
+                logger.debug("Could not apply Spark config {}", key, exc_info=True)
 
     @classmethod
     def _is_session_valid(cls, session: Any, session_key: str) -> bool:
@@ -198,6 +262,7 @@ class SparkSessionManager:
                     "Spark session of {} is shared with another key: not stopped", session_key
                 )
                 return
+            cls._conf_owner, cls._owner_conf = None, {}  # the next session starts clean
             try:
                 cls._stop_session_quietly(session)
                 logger.debug("Stopped Spark session: {}", session_key)
@@ -313,8 +378,13 @@ class SparkSessionManager:
             return info
 
 
-#: Delta Lake release built for each Spark minor (Scala 2.12 builds).
+#: Delta Lake release built for each Spark minor. Spark 4 is Scala 2.13, and from
+#: Delta 4.1 there is one artifact per Spark minor (``delta-spark_4.2_2.13``).
+#: Merge verified on 4.2 and 3.5; 4.1 and 4.0 are the builds Delta publishes for them.
 _DELTA_FOR_SPARK = {
+    "4.2": "io.delta:delta-spark_4.2_2.13:4.4.1",
+    "4.1": "io.delta:delta-spark_4.1_2.13:4.4.1",
+    "4.0": "io.delta:delta-spark_2.13:4.0.1",
     "3.5": "io.delta:delta-spark_2.12:3.2.1",
     "3.4": "io.delta:delta-core_2.12:2.4.0",
 }
@@ -520,6 +590,11 @@ class SparkSessionFactory:
     @staticmethod
     def _create_local_session(ml_config: Optional[Dict[str, Any]] = None):
         """Create a local Spark session with ML optimizations."""
+        from ducta.runtime_check import config_warnings, stack_warnings
+
+        # Before Spark fails on it (often much later), or gives other results elsewhere.
+        for warning in (*stack_warnings(), *config_warnings(ml_config)):
+            logger.warning(warning)
         try:
             from pyspark.sql import SparkSession  # type: ignore
 
@@ -543,6 +618,7 @@ class SparkSessionFactory:
             if ml_config and isinstance(ml_config, dict):
                 builder = SparkSessionFactory._apply_ml_configs(builder, ml_config)
 
+            _mute_pyspark_error_echo()
             return builder.getOrCreate()
         except Exception as e:
             SparkSessionFactory._raise_if_databricks_connect_shadows_pyspark(e)
@@ -635,6 +711,29 @@ logger.adaptive.level = error
 logger.fairpool.name = org.apache.spark.scheduler.FairSchedulableBuilder
 logger.fairpool.level = error
 """
+
+
+#: PySpark 4 loggers that print every failed query to stderr as one JSON line (one
+#: such line was 18,892 characters, with the JVM stack) the moment the exception is
+#: created, before Ducta reports the same message and SQL fragment itself.
+_PYSPARK_ERROR_ECHO = ("SQLQueryContextLogger", "DataFrameQueryContextLogger")
+
+
+def _mute_pyspark_error_echo() -> None:
+    """Keep PySpark 4's JSON copy of a query error off a local run's console.
+
+    The loggers must be PySparkLogger instances: PySpark calls them with keyword
+    fields (``errorClass=…``) that a plain ``logging.Logger`` rejects, so they are
+    created through PySpark and only their level is raised. Spark 3.5 has neither.
+    """
+    try:
+        from pyspark.logger import PySparkLogger  # type: ignore
+    except ImportError:
+        return
+    import logging
+
+    for name in _PYSPARK_ERROR_ECHO:
+        PySparkLogger.getLogger(name).setLevel(logging.CRITICAL)
 
 
 def _quiet_log4j_file() -> Optional[Path]:

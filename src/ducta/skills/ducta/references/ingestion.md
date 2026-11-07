@@ -86,6 +86,12 @@ nodes:
 Declare `bronze.shop.orders` in the catalog. An ingest node accepts only its own keys
 (no `run:`, no `inputs:`).
 
+To load by day (or month) instead of the whole table, add `incremental: {column: order_ts}`
+to `ingest:` and run with `--start-date`/`--end-date`: the database filters
+`order_ts >= start AND order_ts < end + 1 day` and returns only that window. Pair it with a
+write that re-runs safely (`partition_overwrite: dynamic`, or Delta `merge`/`replaceWhere`).
+For year/month partition columns use a `query` that computes them.
+
 ## Troubleshooting
 
 | Symptom | Fix |

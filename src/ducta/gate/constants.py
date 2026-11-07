@@ -60,7 +60,18 @@ class ExecutionMode(Enum):
     DISTRIBUTED = "distributed"
 
 
-DEFAULT_CSV_OPTIONS = {"header": "true"}
+# RFC 4180: a quote inside a quoted value is doubled. Spark's own default escape is a
+# backslash, which read back what a CSV writer wrote as different values.
+DEFAULT_CSV_OPTIONS = {"header": "true", "quote": '"', "escape": '"'}
+# A value may hold a line break; without multiLine it reads as two rows. The cost is that a
+# file is no longer split: set `multiLine: false` on a large file known to have none.
+CSV_READ_DEFAULTS = {**DEFAULT_CSV_OPTIONS, "multiLine": "true"}
+# Spark trims values when it writes a CSV, and nothing says so.
+CSV_WRITE_DEFAULTS = {
+    **DEFAULT_CSV_OPTIONS,
+    "ignoreLeadingWhiteSpace": "false",
+    "ignoreTrailingWhiteSpace": "false",
+}
 DEFAULT_VACUUM_RETENTION_HOURS = 168  # 7 days
 MIN_VACUUM_RETENTION_HOURS = 168  # Delta Lake enforced minimum
 DEFAULT_ENCODING = "UTF-8"  # Default encoding for text file operations

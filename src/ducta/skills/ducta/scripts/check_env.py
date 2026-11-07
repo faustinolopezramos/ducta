@@ -191,14 +191,22 @@ def check(project: Path) -> Dict[str, Any]:
     extras = {extra: all(found.get(m) for m in mods) for extra, mods in EXTRAS.items()}
 
     py = probe.get("python") or platform.python_version()
-    if tuple(int(x) for x in re.findall(r"\d+", py)[:2]) < (3, 10):
-        warnings.append(f"Ducta needs Python 3.10 or newer; its interpreter is {py}.")
+    py_version = tuple(int(x) for x in re.findall(r"\d+", py)[:2])
+    if py_version < (3, 11):
+        warnings.append(f"Ducta needs Python 3.11 or newer; its interpreter is {py}.")
 
     java = _java()
     if extras.get("spark"):
         if not java["found"]:
             warnings.append("PySpark is installed but no `java` is on PATH: Spark needs a JDK.")
         pyspark = probe.get("pyspark") or ""
+        if pyspark.startswith("3.") and py_version >= (3, 14):
+            warnings.append(
+                f"PySpark {pyspark} does not run on Python {py}: install PySpark 4.2 "
+                "(pip install 'pyspark>=4.2,<4.3') or use Python 3.13."
+            )
+        if pyspark.startswith("4.") and java["major"] and java["major"] < 17:
+            warnings.append(f"PySpark {pyspark} needs Java 17 or 21; `java` is {java['major']}.")
         if pyspark.startswith("3.5") and (java["major"] or 0) >= 21:
             warnings.append(
                 f"PySpark {pyspark} with Java {java['major']}: Arrow cannot run on JDK 21+. "

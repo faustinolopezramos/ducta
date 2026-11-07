@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import re
+from datetime import date, datetime, timedelta
 from typing import Any, ClassVar, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
@@ -646,12 +647,51 @@ def checked_predicate(rule: Any, what: str) -> str:
     return text
 
 
+def window_bounds(start_date: str, end_date: str) -> Tuple[str, str, bool]:
+    """``(start, end, end_inclusive)`` for a run's ``--start-date``/``--end-date`` window.
+
+    ``--end-date`` is the *last day to process*, so a date (``2026-01-02``) covers that whole
+    day: the bound is the next midnight, exclusive. ``BETWEEN start AND end`` read that day
+    as its first instant, which kept a DATE column right and lost every row of the last day
+    of a TIMESTAMP one. An end that carries a time of day is taken as the instant it says,
+    inclusive. Anything that is not an ISO date or datetime is refused.
+    """
+    try:
+        start = str(start_date).strip()
+        end = str(end_date).strip()
+        if len(start) == 10:
+            date.fromisoformat(start)
+        else:
+            datetime.fromisoformat(start)
+        if len(end) == 10:
+            return start, (date.fromisoformat(end) + timedelta(days=1)).isoformat(), False
+        datetime.fromisoformat(end)
+        return start, end, True
+    except ValueError as error:
+        raise ConfigurationError(
+            f"Invalid window {start_date!r} .. {end_date!r}: expected ISO dates (YYYY-MM-DD) "
+            "or datetimes"
+        ) from error
+
+
+def window_predicate(column: str, start_date: str, end_date: str) -> str:
+    """SQL predicate for a run's window on *column*, with the column and dates escaped.
+
+    ``col >= start AND col < end + 1 day`` for a date end; the one rule every reader and
+    writer of a window uses (incremental reads, ``replaceWhere``, ``OPTIMIZE``).
+    """
+    start, end, inclusive = window_bounds(start_date, end_date)
+    quoted_col = SqlSafetyMixin.quote_column_path(column)
+    upper = "<=" if inclusive else "<"
+    return (
+        f"{quoted_col} >= '{SqlSafetyMixin.escape_string(start)}' "
+        f"AND {quoted_col} {upper} '{SqlSafetyMixin.escape_string(end)}'"
+    )
+
+
 def replace_where_clause(column: str, start_date: str, end_date: str) -> str:
     """``replaceWhere`` predicate for a date window, with the column and dates escaped."""
-    quoted_col = SqlSafetyMixin.quote_column_path(column)
-    start = SqlSafetyMixin.escape_string(start_date)
-    end = SqlSafetyMixin.escape_string(end_date)
-    return f"{quoted_col} BETWEEN '{start}' AND '{end}'"
+    return window_predicate(column, start_date, end_date)
 
 
 class UnityCatalogDDL:
@@ -705,10 +745,9 @@ class UnityCatalogDDL:
     def optimize_where(
         cls, quoted_table_name: str, column: str, start_date: str, end_date: str
     ) -> str:
-        quoted_col = cls._safety.quote_column_path(column)
-        start = cls._safety.escape_string(start_date)
-        end = cls._safety.escape_string(end_date)
-        return f"OPTIMIZE {quoted_table_name} WHERE {quoted_col} BETWEEN '{start}' AND '{end}'"
+        return (
+            f"OPTIMIZE {quoted_table_name} WHERE {window_predicate(column, start_date, end_date)}"
+        )
 
     @classmethod
     def vacuum(cls, quoted_table_name: str, hours: int) -> str:

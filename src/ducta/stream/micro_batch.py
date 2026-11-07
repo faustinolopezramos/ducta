@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional
 from loguru import logger  # type: ignore
 
 from ducta.setting.environments import sanitize_env_for_path
+from ducta.spark_jvm import hadoop_configuration, jvm
 from ducta.stream.checkpoints import CheckpointManager
 from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import StreamingConfigurationError
@@ -417,14 +418,16 @@ def _latest_per_key(df: Any, keys: List[str], order_by: str) -> Any:
 
 def _query_id_from_checkpoint(spark: Any, checkpoint_location: str) -> Optional[str]:
     """The query id Spark keeps in ``<checkpoint>/metadata`` (any Hadoop filesystem)."""
-    jvm = spark.sparkContext._jvm
-    hadoop_path = jvm.org.apache.hadoop.fs.Path(f"{checkpoint_location.rstrip('/')}/metadata")
-    fs = hadoop_path.getFileSystem(spark.sparkContext._jsc.hadoopConfiguration())
+    gateway, hadoop_conf = jvm(spark), hadoop_configuration(spark)
+    if gateway is None or hadoop_conf is None:  # Spark Connect: no local JVM to read it with
+        return None
+    hadoop_path = gateway.org.apache.hadoop.fs.Path(f"{checkpoint_location.rstrip('/')}/metadata")
+    fs = hadoop_path.getFileSystem(hadoop_conf)
     if not fs.exists(hadoop_path):
         return None
     stream = fs.open(hadoop_path)
     try:
-        reader = jvm.java.io.BufferedReader(jvm.java.io.InputStreamReader(stream, "UTF-8"))
+        reader = gateway.java.io.BufferedReader(gateway.java.io.InputStreamReader(stream, "UTF-8"))
         line = reader.readLine()
     finally:
         stream.close()

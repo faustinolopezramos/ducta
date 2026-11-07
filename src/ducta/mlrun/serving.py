@@ -45,6 +45,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from loguru import logger
 
 from ducta.setting.project.schema import ModelRef
+from ducta.spark_jvm import java_version
 
 #: Frameworks whose artifact is a pickle: loading one executes it.
 PICKLE_FRAMEWORKS = frozenset({"sklearn", "scikit-learn", "pickle", "joblib", "custom"})
@@ -69,6 +70,8 @@ class ResolvedModel:
     stage_at_resolution: Optional[str] = None
     registered_sha256: Optional[str] = None
     input_schema: Optional[Dict[str, str]] = None
+    #: The versions it was registered with (Ducta registry only; empty otherwise).
+    framework_versions: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -147,6 +150,7 @@ def resolve_model(
         stage_at_resolution=str(stage).lower() if stage else None,
         registered_sha256=getattr(mv, "artifact_sha256", None),
         input_schema=mv.metadata.input_schema,
+        framework_versions=dict(getattr(mv.metadata, "framework_versions", None) or {}),
     )
 
 
@@ -205,6 +209,47 @@ def _download(resolved: ResolvedModel, registry: Any, workdir: Path) -> Path:
         )
     registry.storage.read_artifact(resolved.uri, str(dest))
     return dest
+
+
+def framework_drift(resolved: ResolvedModel) -> List[str]:
+    """One sentence per package installed at another version than at registration.
+
+    A pickle from another scikit-learn only warns (InconsistentVersionWarning), and
+    can predict differently: say it where the run log shows it. Nothing for models
+    registered before Ducta recorded the versions.
+    """
+    from importlib import metadata
+
+    found: List[str] = []
+    for distribution, trained in sorted(resolved.framework_versions.items()):
+        if distribution == "python":
+            import platform
+
+            # A patch release of Python changes nothing a model depends on.
+            running = platform.python_version()
+            if running.split(".")[:2] == str(trained).split(".")[:2]:
+                continue
+            installed: Optional[str] = running
+        else:
+            try:
+                installed = metadata.version(distribution)
+            except metadata.PackageNotFoundError:
+                installed = None
+        if installed == trained:
+            continue
+        model = f"model '{resolved.name}' v{resolved.version}"
+        if installed is None:
+            found.append(
+                f"{model} was registered with {distribution} {trained}, which is not installed"
+            )
+            continue
+        major = str(trained).split(".")[0] != installed.split(".")[0]
+        found.append(
+            f"{model} was registered with {distribution} {trained}; {installed} is installed"
+            + (" (another major version: it may not load)" if major else "")
+            + ": predictions can differ"
+        )
+    return found
 
 
 def _load_pickle(path: Path) -> Any:
@@ -325,6 +370,8 @@ def prepare_model(
             f"does not match the one recorded at registration ({resolved.registered_sha256}) "
             "— it changed after it was registered"
         )
+    for warning in framework_drift(resolved):
+        logger.warning(warning)
     model = load_model(resolved, local_path, trust=ref.trust_artifact, registry=registry)
     logger.info(
         "Serving model '{}' v{} ({}, {}){}",
@@ -648,10 +695,8 @@ def _arrow_udfs_work(df: Any) -> bool:
     set. There the scorer falls back to a row-based path: slower, but correct.
     """
     global _arrow_warned
-    try:
-        jvm = df.sparkSession.sparkContext._jvm
-        java = str(jvm.java.lang.System.getProperty("java.specification.version"))
-    except Exception:  # noqa: BLE001 — Spark Connect: no local JVM, the server decides
+    java = java_version(df.sparkSession)
+    if java is None:  # Spark Connect: no local JVM, the server decides
         return True
     java_major = int(java.split(".")[1] if java.startswith("1.") else java.split(".")[0])
     spark_major = int(str(df.sparkSession.version).split(".")[0])

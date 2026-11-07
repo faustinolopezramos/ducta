@@ -275,18 +275,25 @@ class InputLoader(BaseIO):
 
     @staticmethod
     def _apply_window(dataframe: Any, window: Dict[str, Any]) -> Any:
-        """Keep rows with ``column BETWEEN start AND end`` (inclusive).
+        """Keep the rows of the run's window on ``column``.
 
-        On Spark this is a predicate the source can push down (partition
-        pruning, Delta data skipping), so the read itself shrinks too.
+        ``--end-date`` is the last day to process, so a date end covers that whole day
+        (``col >= start AND col < end + 1 day``); see :func:`ducta.gate.sql.window_bounds`.
+        On Spark this is a predicate the source can push down (partition pruning, Delta data
+        skipping), so the read itself shrinks too.
         """
-        column, start, end = window["column"], window["start"], window["end"]
+        from ducta.gate.sql import window_bounds
+
+        column = window["column"]
+        start, end, inclusive = window_bounds(window["start"], window["end"])
         if hasattr(dataframe, "rdd"):
             from pyspark.sql import functions as F  # type: ignore
 
-            return dataframe.where(F.col(column).between(start, end))
+            col = F.col(column)
+            return dataframe.where((col >= start) & ((col <= end) if inclusive else (col < end)))
         series = dataframe[column]
-        return dataframe[(series >= start) & (series <= end)]
+        upper = (series <= end) if inclusive else (series < end)
+        return dataframe[(series >= start) & upper]
 
     def _enforce_fingerprint_policy(self, input_key: str, data_fingerprint) -> None:
         """Apply fingerprint_policy against the previous successful run."""

@@ -23,6 +23,8 @@ from typing import Any, Dict, List, Optional, cast
 
 from loguru import logger
 
+from ducta import spark_jvm
+
 from .circuit_breaker import CircuitBreaker
 from .connector import JDBCConnector
 from .credentials import project_root_for, resolve_credentials
@@ -159,8 +161,8 @@ class ConnectionManager:
                 logger.debug(f"Driver JAR not found: {jar_path}")
                 return
 
-            jvm = spark.sparkContext._jvm
-            if jvm is None:
+            jvm = spark_jvm.jvm(spark)
+            if jvm is None:  # Spark Connect: drivers load on the server
                 return
 
             try:

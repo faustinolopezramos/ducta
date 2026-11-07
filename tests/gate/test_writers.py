@@ -137,7 +137,7 @@ class TestReplaceWhere:
     def test_predicate_quotes_the_column(self):
         writer = self._apply(self.CONFIG)
         writer.option.assert_any_call(
-            "replaceWhere", "`event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+            "replaceWhere", "`event_date` >= '2024-01-01' AND `event_date` < '2024-02-01'"
         )
 
     def test_a_hostile_column_name_stays_one_identifier(self):
@@ -145,7 +145,7 @@ class TestReplaceWhere:
         predicate = next(
             c.args[1] for c in writer.option.call_args_list if c.args[0] == "replaceWhere"
         )
-        assert predicate.startswith("`d`` OR 1=1 --` BETWEEN")
+        assert predicate.startswith("`d`` OR 1=1 --` >= '2024-01-01' AND ")
 
     def test_custom_predicate_is_used_as_written(self):
         writer = self._apply({"overwrite_strategy": "replaceWhere", "replace_predicate": "x = 1"})
@@ -265,3 +265,43 @@ class TestMergeNamesAreQuoted:
 
         assert _quote("a`b") == "`a``b`"
         assert _quote("order id") == "`order id`"
+
+
+class TestPartitionOverwrite:
+    """`partition_overwrite: dynamic` — an overwrite replaces only the partitions it wrote."""
+
+    CONFIG = {"partition": ["day"], "partition_overwrite": "dynamic"}
+
+    def test_dynamic_sets_the_spark_option(self):
+        writer = MagicMock()
+        _writer(ParquetWriter)._apply_partition_overwrite(writer, self.CONFIG, "overwrite")
+        writer.option.assert_called_once_with("partitionOverwriteMode", "dynamic")
+
+    @pytest.mark.parametrize(
+        "config", [{}, {"partition_overwrite": "static"}, {"partition_overwrite": None}]
+    )
+    def test_static_is_the_default_and_changes_nothing(self, config):
+        writer = MagicMock()
+        returned = _writer(ParquetWriter)._apply_partition_overwrite(writer, config, "overwrite")
+        assert returned is writer
+        writer.option.assert_not_called()
+
+    def test_delta_is_pointed_to_replacewhere_and_merge(self):
+        with pytest.raises(ConfigurationError, match="replaceWhere"):
+            _writer(DeltaWriter)._apply_partition_overwrite(MagicMock(), self.CONFIG, "overwrite")
+
+    def test_it_needs_an_overwrite(self):
+        with pytest.raises(ConfigurationError, match="needs write mode 'overwrite'"):
+            _writer(ParquetWriter)._apply_partition_overwrite(MagicMock(), self.CONFIG, "append")
+
+    def test_it_needs_partition_columns(self):
+        with pytest.raises(ConfigurationError, match="partition columns"):
+            _writer(ParquetWriter)._apply_partition_overwrite(
+                MagicMock(), {"partition_overwrite": "dynamic"}, "overwrite"
+            )
+
+    def test_an_unknown_value_is_refused(self):
+        with pytest.raises(ConfigurationError, match="Valid: static, dynamic"):
+            _writer(ParquetWriter)._apply_partition_overwrite(
+                MagicMock(), {"partition": ["d"], "partition_overwrite": "merge"}, "overwrite"
+            )

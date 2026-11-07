@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Optional, cast
 
 from loguru import logger  # type: ignore
 
+from ducta.spark_jvm import jvm
 from ducta.stream.constants import (
     DEFAULT_ADAPTIVE_BASE_INTERVAL,
     STREAMING_VALIDATIONS,
@@ -317,8 +318,11 @@ def _quiet_fair_pool_warning(spark_context: Any) -> None:
     if key in _QUIETED_CONTEXTS:
         return
     _QUIETED_CONTEXTS.add(key)
+    gateway = jvm(spark_context)
+    if gateway is None:  # Spark Connect: the server's logging is not ours to set
+        return
     try:
-        log4j = spark_context._jvm.org.apache.logging.log4j
+        log4j = gateway.org.apache.logging.log4j
         log4j.core.config.Configurator.setLevel(
             "org.apache.spark.scheduler.FairSchedulableBuilder", log4j.Level.ERROR
         )

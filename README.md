@@ -7,7 +7,7 @@
 An open-source Python framework for building **reproducible**, **quality-controlled**
 and **auditable** data pipelines across local Spark and Databricks.
 
-[![Python](https://img.shields.io/badge/python-3.10%20|%203.11%20|%203.12%20|%203.13-blue)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13%20|%203.14-blue)](https://www.python.org/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](https://github.com/faustinolopezramos/ducta/blob/main/LICENSE)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md)
 
@@ -92,7 +92,7 @@ and tamper-evident once you configure a signing key.
 
 ## Quick Start
 
-**Requires Python 3.10–3.13.** From nothing to a verified run in under five minutes.
+**Requires Python 3.11–3.14** (and a JDK 17 or 21 to run Spark). From nothing to a verified run in under five minutes.
 
 ### 1. Install and run
 

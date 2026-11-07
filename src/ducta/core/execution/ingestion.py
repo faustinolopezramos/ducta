@@ -33,7 +33,7 @@ from ducta.core.execution.quality import QualityCheckExecutor
 from ducta.core.settings import CoreSettings
 from ducta.gate.exceptions import ConfigurationError as GateConfigurationError
 from ducta.gate.gateway.connector import reserved_read_options
-from ducta.gate.sql import SQLSanitizer
+from ducta.gate.sql import SqlSafetyMixin, SQLSanitizer, window_bounds
 
 
 class IngestionExecutor:
@@ -87,7 +87,46 @@ class IngestionExecutor:
     _IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 
     @classmethod
-    def _build_dbtable(cls, node_name: str, table: str, columns, where) -> str:
+    def _window_clause(
+        cls,
+        node_name: str,
+        incremental: Any,
+        start_date: str,
+        end_date: str,
+        source_type: str,
+    ) -> str:
+        """``col >= start AND col < end + 1 day`` for the run's window, in the source's dialect.
+
+        The same rule as every other window (:func:`ducta.gate.sql.window_bounds`): the end
+        date is the last day to process, whole. The column is a plain identifier and the
+        dates are validated ISO values, so nothing from the config reaches the statement as
+        text of its own. Oracle needs its ``DATE``/``TIMESTAMP`` literals; the other
+        supported databases read an ISO string against a date or timestamp column.
+        """
+        column = incremental.get("column") if isinstance(incremental, dict) else None
+        if not column or not cls._IDENTIFIER_RE.fullmatch(str(column)):
+            raise ValueError(
+                f"Ingestion node '{node_name}': 'incremental' needs a 'column' that is a plain "
+                f"column name, got {column!r}."
+            )
+        try:
+            start, end, inclusive = window_bounds(start_date, end_date)
+        except GateConfigurationError as error:
+            raise ValueError(f"Ingestion node '{node_name}': {error}") from error
+
+        def literal(value: str) -> str:
+            text = SqlSafetyMixin.escape_string(value.replace("T", " "))
+            if str(source_type).lower() == "oracle":
+                return f"TIMESTAMP '{text}'" if " " in text else f"DATE '{text}'"
+            return f"'{text}'"
+
+        upper = "<=" if inclusive else "<"
+        return f"{column} >= {literal(start)} AND {column} {upper} {literal(end)}"
+
+    @classmethod
+    def _build_dbtable(
+        cls, node_name: str, table: str, columns, where, window: Optional[str] = None
+    ) -> str:
         """Compose a `dbtable` value, optionally selecting columns / filtering rows.
 
         Everything interpolated here reaches the database verbatim, so each part
@@ -103,7 +142,7 @@ class IngestionExecutor:
                 f"(optionally schema-qualified), got {table!r}. Use 'query' for anything else."
             )
 
-        if not columns and not where:
+        if not columns and not where and not window:
             return table
 
         if columns:
@@ -124,8 +163,10 @@ class IngestionExecutor:
             select = "*"
 
         sql = f"SELECT {select} FROM {table}"
-        if where:
-            sql += f" WHERE {where}"
+        if where and window:
+            sql += f" WHERE ({where}) AND {window}"
+        elif where or window:
+            sql += f" WHERE {where or window}"
 
         try:
             SQLSanitizer.sanitize_query(sql)
@@ -152,6 +193,7 @@ class IngestionExecutor:
         query = node_config.get("query")
         columns = node_config.get("columns")
         where = node_config.get("where")
+        incremental = node_config.get("incremental")
         options = node_config.get("options") or {}
 
         if not source:
@@ -191,6 +233,21 @@ class IngestionExecutor:
         manager = self._get_connection_manager(sources_path)
         conn = manager.get(source)
 
+        window = None
+        if incremental is not None:
+            if start_date and end_date:
+                window = self._window_clause(
+                    node_name, incremental, start_date, end_date, conn.connector.source_type
+                )
+            else:
+                logger.warning(
+                    "Ingestion node '{}' declares incremental column '{}' but the run has no "
+                    "date range; reading the whole {}.",
+                    node_name,
+                    incremental.get("column") if isinstance(incremental, dict) else incremental,
+                    "table" if table else "query",
+                )
+
         opts: Dict[str, str] = {
             "url": conn.jdbc_url,
             "user": conn.jdbc_properties["user"],
@@ -208,10 +265,20 @@ class IngestionExecutor:
                     f"Ingestion node '{node_name}': 'query' rejected ({error}). "
                     f"Ingestion queries must be read-only SELECT/WITH statements."
                 ) from error
+            if window:
+                # The source filters the window: the declared query becomes its inner select.
+                query = f"SELECT * FROM ({query}) AS q WHERE {window}"
+                try:
+                    SQLSanitizer.sanitize_query(query)
+                except GateConfigurationError as error:
+                    raise ValueError(
+                        f"Ingestion node '{node_name}': 'query' with 'incremental' rejected "
+                        f"({error})."
+                    ) from error
             opts["query"] = query
         else:
             # exactly one of table/query was checked above
-            opts["dbtable"] = self._build_dbtable(node_name, str(table), columns, where)
+            opts["dbtable"] = self._build_dbtable(node_name, str(table), columns, where, window)
 
         # The reserved names were refused above, so what is left (fetchsize, numPartitions,
         # user, password…) may add to or replace the connection's own. Spark reads names
@@ -227,6 +294,8 @@ class IngestionExecutor:
             f"table '{table}'" if table else "query",
             source,
         )
+        if window:
+            logger.info("Ingestion node '{}': window {}", node_name, window)
 
         try:
             result_df = spark.read.format("jdbc").options(**opts).load()

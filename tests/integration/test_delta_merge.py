@@ -122,6 +122,15 @@ class TestMerge:
         assert identity["version"] == commit["version"]
 
 
+class TestRoundTrip:
+    def test_every_value_comes_back_the_same(self, spark, tmp_path):
+        rows = [(1, 'has "quote"'), (2, "line1\nline2"), (3, "  spaces  "), (4, None), (5, "")]
+        df = spark.createDataFrame(rows, "id INT, txt STRING")
+        _writer().write(df, str(tmp_path / "t"), {})
+        back = spark.read.format("delta").load(str(tmp_path / "t")).collect()
+        assert sorted((r["id"], r["txt"]) for r in back) == rows
+
+
 class TestConfiguration:
     def test_merge_on_parquet_is_refused(self, spark, tmp_path):
         df = spark.createDataFrame([(1,)], "id INT")

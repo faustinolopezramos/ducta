@@ -29,7 +29,12 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from loguru import logger  # type: ignore
 
-from ducta.core.errors import NodeTimeoutError, PipelineExecutionError
+from ducta.core.errors import (
+    JVM_GONE_HINT,
+    NodeTimeoutError,
+    PipelineExecutionError,
+    is_jvm_gone,
+)
 from ducta.core.execution.cancellation import cancel_node
 from ducta.core.execution.ml_builder import MLContextBuilder
 from ducta.core.execution.output import report_node_failure
@@ -147,6 +152,8 @@ class ParallelCoordinator:
 
         node_name, exception = first_failure
         detail = f"{type(exception).__name__}: {exception}" if exception else "unknown error"
+        if exception and is_jvm_gone(exception):
+            detail += f". {JVM_GONE_HINT}"
         others = [n for n in failed_nodes if n != node_name]
         suffix = f" (also failed: {others})" if others else ""
 

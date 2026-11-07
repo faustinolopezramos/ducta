@@ -19,21 +19,12 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import importlib
-import sys
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Tuple
-
-if sys.version_info >= (3, 11):
-    from enum import StrEnum
-else:
-    from enum import Enum
-
-    class StrEnum(str, Enum):
-        pass
-
 
 from loguru import logger  # type: ignore
 

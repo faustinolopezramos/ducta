@@ -105,6 +105,7 @@ def _compile_dataset(name: str, entry: CatalogEntry, *, as_input: bool) -> Dict[
                     "partition_col": w.partition_col,
                     "replace_predicate": w.replace_predicate,
                     "overwrite_schema": w.overwrite_schema,
+                    "partition_overwrite": w.partition_overwrite,
                 }
             )
         )

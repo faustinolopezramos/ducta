@@ -93,6 +93,9 @@ class ModelMetadata:
     input_schema: Optional[Dict[str, str]] = None
     output_schema: Optional[Dict[str, str]] = None
     dependencies: List[str] = field(default_factory=list)
+    #: The versions it was registered with ({"python": "3.13.14", "scikit-learn": "1.9.0"}),
+    #: compared with the installed ones when it is served. Empty before Ducta recorded it.
+    framework_versions: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
@@ -171,9 +174,46 @@ class ModelVersion:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ModelVersion":
-        """Create from dictionary."""
-        data["metadata"] = ModelMetadata.from_dict(data["metadata"])
-        return cls(**data)
+        """Create from dictionary. Keys this Ducta does not know (written by a newer
+        one) are skipped, as :meth:`ModelMetadata.from_dict` does."""
+        valid = {f.name for f in fields(cls)}
+        kept = {k: v for k, v in data.items() if k in valid}
+        kept["metadata"] = ModelMetadata.from_dict(data["metadata"])
+        return cls(**kept)
+
+
+#: The distributions whose version decides whether a model of each framework loads
+#: and predicts the same; "python" is always recorded.
+FRAMEWORK_DISTRIBUTIONS: Dict[str, tuple] = {
+    "sklearn": ("scikit-learn", "joblib"),
+    "scikit-learn": ("scikit-learn", "joblib"),
+    "pickle": ("scikit-learn", "joblib"),
+    "joblib": ("scikit-learn", "joblib"),
+    "xgboost": ("xgboost",),
+    "lightgbm": ("lightgbm",),
+    "catboost": ("catboost",),
+    "pytorch": ("torch",),
+    "tensorflow": ("tensorflow",),
+    "keras": ("keras",),
+    "jax": ("jax",),
+    "onnx": ("onnx", "onnxruntime"),
+    "spark-mllib": ("pyspark",),
+    "mlflow_pyfunc": ("mlflow",),
+}
+
+
+def framework_versions(framework: str) -> Dict[str, str]:
+    """The installed versions that matter for a *framework* model, by distribution."""
+    import platform
+    from importlib import metadata
+
+    found = {"python": platform.python_version()}
+    for distribution in FRAMEWORK_DISTRIBUTIONS.get(str(framework).lower(), ()):
+        try:
+            found[distribution] = metadata.version(distribution)
+        except metadata.PackageNotFoundError:
+            continue
+    return found
 
 
 class ModelRegistry:
@@ -400,6 +440,7 @@ class ModelRegistry:
                     input_schema=input_schema,
                     output_schema=output_schema,
                     dependencies=dependencies or [],
+                    framework_versions=framework_versions(framework),
                 )
 
                 artifact_destination = str(

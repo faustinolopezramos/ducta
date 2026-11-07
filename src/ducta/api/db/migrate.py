@@ -77,5 +77,41 @@ def _apply_migrations(connection, alembic_cfg, url: str) -> None:
     alembic_cfg.attributes["connection"] = connection
     alembic_cfg.set_main_option("sqlalchemy.url", url)
     from alembic import command  # type: ignore
+    from alembic.runtime.migration import MigrationContext  # type: ignore
+    from alembic.script import ScriptDirectory  # type: ignore
 
+    current = MigrationContext.configure(connection).get_current_revision()
+    script = ScriptDirectory.from_config(alembic_cfg)
+    head = script.get_current_head()
+    if current is not None and current not in {rev.revision for rev in script.walk_revisions()}:
+        # A newer Ducta migrated it: Alembic alone says "Can't locate revision".
+        raise RuntimeError(
+            f"The database {url} was migrated by a newer Ducta (migration {current}); "
+            f"this Ducta knows migrations up to {head}. Upgrade Ducta "
+            "(pip install -U ducta) or point it at another database."
+        )
+    if current is not None and current != head:
+        _back_up_before_migrating(url, current)
     command.upgrade(alembic_cfg, "head")
+
+
+def _back_up_before_migrating(url: str, current: str) -> None:
+    """Copy a SQLite file before a migration changes it: there is no way back."""
+    from sqlalchemy.engine import make_url
+
+    parsed = make_url(url)
+    database = parsed.database or ""
+    if not parsed.get_backend_name().startswith("sqlite") or database in ("", ":memory:"):
+        logger.warning(
+            "Migrating the database {} from {}: back it up first, a migration cannot be undone",
+            url,
+            current,
+        )
+        return
+    import sqlite3
+
+    backup = Path(f"{database}.bak-{current}")
+    # sqlite3's backup API copies a consistent snapshot, WAL included.
+    with sqlite3.connect(database) as source, sqlite3.connect(backup) as target:
+        source.backup(target)
+    logger.info("Database backed up to {} before migrating it from {}", backup, current)

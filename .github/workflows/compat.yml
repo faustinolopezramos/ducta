@@ -1,0 +1,141 @@
+name: Compatibility
+
+# ci.yml tests the versions in poetry.lock. Users never get those: `pip install
+# ducta[all]` resolves the newest release inside every range in pyproject.toml.
+# This workflow tests what users get today (blocking) and what the next majors
+# will bring (advisory), so a breaking release on PyPI shows up here first.
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - pyproject.toml
+      - poetry.lock
+      - .github/workflows/compat.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # What `pip install ducta[all]` installs today, on the oldest and newest Python
+  # Ducta supports. A failure here is a user-facing break: fix it or cap the
+  # dependency that caused it.
+  latest-in-range:
+    name: Latest in range (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      # No lock and no constraints: the resolver picks what a user would get.
+      - name: Install without the lock
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[all]" pytest pytest-cov httpx
+      - name: Show what moved past poetry.lock
+        run: |
+          python - <<'PY'
+          import importlib.metadata as md
+          import tomllib
+          lock = {p["name"].lower().replace("_", "-"): p["version"]
+                  for p in tomllib.load(open("poetry.lock", "rb"))["package"]}
+          moved = []
+          for dist in md.distributions():
+              name = dist.metadata["Name"].lower().replace("_", "-")
+              if name in lock and lock[name] != dist.version:
+                  moved.append(f"{name} {lock[name]} -> {dist.version}")
+          print("\n".join(sorted(moved)) or "nothing: the lock is current")
+          PY
+      - run: pip freeze > resolved.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resolved-py${{ matrix.python-version }}
+          path: resolved.txt
+      - name: Run tests
+        run: pytest
+
+  # Advisory: the releases Ducta does not accept yet. A red leg is a forecast of
+  # work, not a broken build — read the failures before widening a range.
+  next-majors:
+    name: Next majors (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The newest release of every direct dependency, ignoring Ducta's caps.
+          # PySpark and Delta move together in the spark-next leg, pandas in
+          # pandas-next; databricks-connect replaces pyspark and is never installed
+          # with it.
+          - name: uncapped
+            python-version: "3.14"
+          # pandas 3 turns a missing text value into "NaN" on its way to Spark, so
+          # its own leg runs only the type contract: green means the cap can go.
+          - name: pandas-next
+            python-version: "3.14"
+          # The next Python, which pyproject.toml does not accept yet.
+          - name: python-next
+            python-version: "3.15"
+          # The newest PySpark (Ducta stops at <4.3). Delta has no build for it
+          # yet, so its tests skip: that is part of what this leg reports.
+          - name: spark-next
+            python-version: "3.14"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install --ignore-requires-python ".[all]" pytest pytest-cov httpx
+      - name: Lift the caps
+        if: matrix.name == 'uncapped'
+        run: |
+          names=$(python - <<'PY'
+          import tomllib
+          deps = tomllib.load(open("pyproject.toml", "rb"))["tool"]["poetry"]["dependencies"]
+          skip = {"python", "pyspark", "delta-spark", "databricks-connect", "pandas"}
+          print(" ".join(n for n in deps if n.lower() not in skip))
+          PY
+          )
+          pip install --upgrade --no-deps $names
+      - name: Install the newest pandas
+        if: matrix.name == 'pandas-next'
+        run: pip install --upgrade --no-deps pandas
+      - name: Install the newest PySpark
+        if: matrix.name == 'spark-next'
+        # --no-deps: Ducta's pyspark range refuses it.
+        run: pip install --upgrade --no-deps pyspark "py4j>=0.10.9.9"
+      - name: Conflicts with the declared ranges
+        run: pip check || true
+      - run: pip freeze > resolved.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-majors-${{ matrix.name }}
+          path: resolved.txt
+      - name: Run tests
+        if: matrix.name != 'pandas-next'
+        run: pytest
+      - name: Run the type contract
+        if: matrix.name == 'pandas-next'
+        run: pytest tests/integration/test_type_contract.py

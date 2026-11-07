@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
@@ -159,7 +159,22 @@ def _log_preflight_report(name: str, report, prefix: str = "") -> None:
         logger.info("    warning  {}", warn)
 
 
-def _validation_document(env: str, reports: dict, error: Optional[BaseException]) -> dict:
+def _environment_warnings(context: Any = None) -> List[str]:
+    """Version combinations known to fail and, for a local project, the Spark defaults
+    it leaves unset that change results. ``context`` is None when the project did not load.
+    """
+    from ducta.runtime_check import config_warnings, stack_warnings
+
+    found = list(stack_warnings())
+    if context is not None and str(getattr(context, "execution_mode", "")).lower() == "local":
+        global_config = getattr(context, "global_config", None) or {}
+        found.extend(config_warnings(global_config.get("spark_config") or {}))
+    return found
+
+
+def _validation_document(
+    env: str, reports: dict, error: Optional[BaseException], context: Any = None
+) -> dict:
     """``config validate --output-format json``: every problem, located and with its fix."""
     from ducta.setting.problems import parse_problems
 
@@ -184,14 +199,17 @@ def _validation_document(env: str, reports: dict, error: Optional[BaseException]
         "env": env,
         "pipelines": pipelines,
         "config_error": config_error,
+        # Python/Spark/Java/pandas combinations known to fail, and Spark defaults
+        # left unset that change results: warnings, not errors.
+        "environment": _environment_warnings(context),
     }
 
 
 def _print_validation_json(
-    parsed_args, reports: dict, error: Optional[BaseException] = None
+    parsed_args, reports: dict, error: Optional[BaseException] = None, context: Any = None
 ) -> int:
     env = getattr(parsed_args, "env", None) or "base"
-    document = _validation_document(env, reports, error)
+    document = _validation_document(env, reports, error, context)
     print(json.dumps(document, indent=2, ensure_ascii=False, default=str))
     if error is None:
         return ExitCode.SUCCESS.value if document["ok"] else ExitCode.VALIDATION_ERROR.value
@@ -221,7 +239,10 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
                 return ExitCode.SUCCESS.value
 
         if as_json:
-            return _print_validation_json(parsed_args, reports)
+            return _print_validation_json(parsed_args, reports, context=context)
+
+        for warning in _environment_warnings(context):
+            logger.warning("Environment: {}", warning)
 
         total_errors = 0
         for name in sorted(reports):

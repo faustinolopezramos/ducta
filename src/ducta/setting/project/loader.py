@@ -63,6 +63,7 @@ from ducta.setting.project.reader import (
     catalog_dir_files,
     catalog_location,
     find_project_root,
+    other_format,
     project_file,
     read_project,
     visible_in,
@@ -202,7 +203,8 @@ def load_project(
         if root is not None:
             return load_project_v2(root, env, allow_python_config)
     raise ConfigurationError(
-        f"No Ducta project found at or above {start} (looked for {PROJECT_FILE}, "
+        other_format(start)
+        or f"No Ducta project found at or above {start} (looked for {PROJECT_FILE}, "
         "ducta.toml or ducta.json with `version: 2`). Create one with `ducta template`."
     )
 

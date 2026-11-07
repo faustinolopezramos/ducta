@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 import os
+import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -27,14 +28,6 @@ try:
     import yaml  # type: ignore
 except Exception:  # pragma: no cover - yaml is optional, handled in load()
     yaml = None  # type: ignore
-
-try:
-    import tomllib  # type: ignore
-except ImportError:
-    try:
-        import tomli as tomllib  # type: ignore
-    except ImportError:
-        tomllib = None  # type: ignore
 
 from ducta.setting.exceptions import ConfigLoadError
 from ducta.setting.project.files import load_yaml
@@ -137,12 +130,6 @@ class TomlConfigLoader(BaseFormatLoader):
 
     def _load_format(self, safe_path: Path) -> Dict[str, Any]:
         """Load TOML file with proper error handling."""
-        if tomllib is None:
-            raise ConfigLoadError(
-                "TOML support requires 'tomli' package for Python < 3.11. "
-                "Install with: pip install tomli"
-            )
-
         try:
             with safe_path.open("rb") as f:
                 return tomllib.load(f) or {}

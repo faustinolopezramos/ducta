@@ -304,3 +304,105 @@ class TestSessionLifecycle:
         first.stop.assert_not_called()  # "b" still runs on the same context
         manager._cleanup_session("b")
         second.stop.assert_called_once()
+
+
+class TestSessionConfIsolation:
+    """One JVM session serves every project of the API server."""
+
+    def setup_method(self):
+        SparkSessionManager._conf_owner, SparkSessionManager._owner_conf = None, {}
+
+    def teardown_method(self):
+        SparkSessionManager._sessions.clear()
+        SparkSessionManager._session_metadata.clear()
+        SparkSessionManager._conf_owner, SparkSessionManager._owner_conf = None, {}
+
+    @staticmethod
+    def _session(session=None):
+        return patch(
+            "ducta.setting.session.SparkSessionFactory.create_session",
+            return_value=session or MagicMock(),
+        )
+
+    def test_a_setting_does_not_reach_the_next_project(self):
+        session = MagicMock()
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.x": "a"})
+            session.conf.unset.assert_not_called()  # the builder applied the first one
+            SparkSessionManager.get_or_create_session("local", {})
+        session.conf.unset.assert_called_once_with("spark.sql.x")
+
+    def test_a_framework_default_is_restored_rather_than_unset(self):
+        session = MagicMock()
+        key = "spark.sql.shuffle.partitions"
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("local", {key: "8"})
+            SparkSessionManager.get_or_create_session("local", {})
+        session.conf.set.assert_called_once_with(key, "2")
+
+    def test_going_back_to_a_cached_key_applies_its_settings_again(self):
+        session = MagicMock()
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.x": "a"})
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.y": "b"})
+            session.conf.set.reset_mock()
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.x": "a"})
+        session.conf.set.assert_called_once_with("spark.sql.x", "a")
+
+    def test_the_same_configuration_touches_nothing(self):
+        session = MagicMock()
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.x": "a"})
+            SparkSessionManager.get_or_create_session("local", {"spark.sql.x": "a"})
+        session.conf.set.assert_not_called()
+        session.conf.unset.assert_not_called()
+
+    def test_a_setting_fixed_at_jvm_start_is_not_forced(self):
+        session = MagicMock()
+        session.conf.isModifiable.return_value = False
+        session.conf.get.return_value = "old"
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("local", {"spark.jars": "old"})
+            SparkSessionManager.get_or_create_session("local", {"spark.jars": "new"})
+        session.conf.set.assert_not_called()
+
+    def test_a_databricks_session_is_left_alone(self):
+        session = MagicMock()
+        with self._session(session):
+            SparkSessionManager.get_or_create_session("databricks", {"spark.sql.x": "a"})
+            SparkSessionManager.get_or_create_session("databricks", {})
+        session.conf.unset.assert_not_called()
+
+
+class TestPySparkErrorEcho:
+    """PySpark 4 prints each failed query as one JSON line before Ducta reports it."""
+
+    def test_its_loggers_are_raised_to_critical_through_pyspark(self, monkeypatch):
+        import logging
+        import sys
+        import types
+
+        from ducta.setting import session
+
+        made = {}
+
+        class FakePySparkLogger(logging.Logger):
+            @staticmethod
+            def getLogger(name):
+                made[name] = FakePySparkLogger(name)
+                return made[name]
+
+        module = types.ModuleType("pyspark.logger")
+        module.PySparkLogger = FakePySparkLogger
+        monkeypatch.setitem(sys.modules, "pyspark.logger", module)
+        session._mute_pyspark_error_echo()
+        assert set(made) == set(session._PYSPARK_ERROR_ECHO)
+        assert all(lg.level == logging.CRITICAL for lg in made.values())
+
+    def test_spark_3_has_nothing_to_mute(self, monkeypatch):
+        import sys
+
+        from ducta.setting import session
+
+        monkeypatch.setitem(sys.modules, "pyspark.logger", None)  # import fails
+        session._mute_pyspark_error_echo()

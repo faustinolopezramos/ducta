@@ -33,6 +33,7 @@ except ImportError:  # PySpark not installed (e.g. pure-Python test environments
     from_json = None  # type: ignore
     StructType = Any  # type: ignore
 
+from ducta.spark_jvm import scala_suffix
 from ducta.stream.constants import (
     STREAMING_BACKPRESSURE_DEFAULTS,
     STREAMING_FORMAT_CONFIGS,
@@ -195,7 +196,10 @@ class KafkaStreamingReader(BaseStreamingReader):
         except Exception:
             pass
 
-        package = f"org.apache.spark:spark-sql-kafka-0-10_2.12:{spark_version}"
+        # Spark 4 is built for Scala 2.13: a _2.12 connector does not exist for it.
+        package = (
+            f"org.apache.spark:spark-sql-kafka-0-10_{scala_suffix(spark_version)}:{spark_version}"
+        )
         return (
             f"{error_message}. Configure global_config.spark_config with "
             f"'spark.jars.packages={package}' and restart the pipeline."

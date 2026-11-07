@@ -5,7 +5,14 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from ducta.gate.exceptions import ConfigurationError
-from ducta.gate.sql import SQLGLOT_AVAILABLE, SqlSafetyMixin, SQLSanitizer, UnityCatalogDDL
+from ducta.gate.sql import (
+    SQLGLOT_AVAILABLE,
+    SqlSafetyMixin,
+    SQLSanitizer,
+    UnityCatalogDDL,
+    window_bounds,
+    window_predicate,
+)
 
 # ── Tests using regex fallback (sqlglot not installed) ───────────────────────
 
@@ -483,7 +490,8 @@ class TestUnityCatalogDDL:
             "`cat`.`sch`.`tbl`", "event_date", "2024-01-01", "2024-01-31"
         )
         assert sql == (
-            "OPTIMIZE `cat`.`sch`.`tbl` WHERE `event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+            "OPTIMIZE `cat`.`sch`.`tbl` WHERE `event_date` >= '2024-01-01' "
+            "AND `event_date` < '2024-02-01'"
         )
 
     def test_vacuum(self):
@@ -492,7 +500,7 @@ class TestUnityCatalogDDL:
 
     def test_replace_where_clause(self):
         sql = UnityCatalogDDL.replace_where_clause("event_date", "2024-01-01", "2024-01-31")
-        assert sql == "`event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+        assert sql == "`event_date` >= '2024-01-01' AND `event_date` < '2024-02-01'"
 
 
 class TestSetOperatorsAreReadOnlyToo:
@@ -764,13 +772,52 @@ class TestOrdinaryNamesAreNotMistakenForCallsOrFiles:
 class TestDottedPartitionColumns:
     def test_replace_where_quotes_each_part(self):
         sql = UnityCatalogDDL.replace_where_clause("meta.event_date", "2024-01-01", "2024-01-31")
-        assert sql == "`meta`.`event_date` BETWEEN '2024-01-01' AND '2024-01-31'"
+        assert sql == "`meta`.`event_date` >= '2024-01-01' AND `meta`.`event_date` < '2024-02-01'"
 
     def test_optimize_where_quotes_each_part(self):
         sql = UnityCatalogDDL.optimize_where("`c`.`s`.`t`", "meta.d", "2024-01-01", "2024-01-02")
-        assert "WHERE `meta`.`d` BETWEEN" in sql
+        assert "WHERE `meta`.`d` >= '2024-01-01' AND `meta`.`d` < '2024-01-03'" in sql
 
     @pytest.mark.parametrize("column", ["", "a..b", ".a"])
     def test_an_empty_part_is_refused(self, column):
         with pytest.raises(ConfigurationError, match="Invalid"):
             UnityCatalogDDL.replace_where_clause(column, "2024-01-01", "2024-01-31")
+
+
+class TestWindowPredicate:
+    """One rule for a run's window: --end-date is the last day to process, whole."""
+
+    def test_a_date_end_covers_its_whole_day(self):
+        assert window_bounds("2026-01-01", "2026-01-02") == ("2026-01-01", "2026-01-03", False)
+        assert window_predicate("ts", "2026-01-01", "2026-01-02") == (
+            "`ts` >= '2026-01-01' AND `ts` < '2026-01-03'"
+        )
+
+    def test_a_single_day_window(self):
+        assert window_predicate("d", "2026-03-31", "2026-03-31").endswith("`d` < '2026-04-01'")
+
+    def test_the_end_of_a_month_and_a_year_roll_over(self):
+        assert window_bounds("2025-12-01", "2025-12-31")[1] == "2026-01-01"
+        assert window_bounds("2024-02-01", "2024-02-29")[1] == "2024-03-01"
+
+    def test_a_datetime_end_is_the_instant_it_says(self):
+        assert window_bounds("2026-01-01T00:00:00", "2026-01-02T10:30:00") == (
+            "2026-01-01T00:00:00",
+            "2026-01-02T10:30:00",
+            True,
+        )
+        assert window_predicate("ts", "2026-01-01", "2026-01-02T10:30:00").endswith(
+            "`ts` <= '2026-01-02T10:30:00'"
+        )
+
+    @pytest.mark.parametrize(
+        "start,end",
+        [("2026-13-01", "2026-01-02"), ("2026-01-01", "tomorrow"), ("", "2026-01-02")],
+    )
+    def test_anything_that_is_not_a_date_is_refused(self, start, end):
+        with pytest.raises(ConfigurationError, match="Invalid window"):
+            window_predicate("d", start, end)
+
+    def test_an_injected_value_never_reaches_the_predicate(self):
+        with pytest.raises(ConfigurationError):
+            window_predicate("d", "2026-01-01", "2026-01-02' OR '1'='1")

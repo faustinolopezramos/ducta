@@ -338,3 +338,61 @@ class TestNativeXgboostNeedsNoTrust:
         assert served.model.__class__.__name__ == "Booster"
         assert scored["prediction"].between(0, 1).all()
         assert scored["prediction"].iloc[-1] > 0.5 > scored["prediction"].iloc[0]
+
+
+class TestFrameworkVersions:
+    """A model served under other library versions than it was registered with says so.
+
+    Seen 2026-11-06: a pickle from scikit-learn 1.9.0 loaded on 1.9.1 only raised an
+    InconsistentVersionWarning, which a run log does not show.
+    """
+
+    def test_registration_records_them_and_they_survive_a_reread(self, registry, tmp_path):
+        mv = _register(registry, tmp_path)
+        recorded = registry.get_model_version("clf", mv.version).metadata.framework_versions
+        assert recorded["scikit-learn"] == sklearn.__version__ and "python" in recorded
+
+    def test_the_same_versions_say_nothing(self, registry, tmp_path):
+        from ducta.mlrun.serving import framework_drift
+
+        mv = _register(registry, tmp_path)
+        resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
+        assert resolved.framework_versions and framework_drift(resolved) == []
+
+    def test_another_version_is_named(self, registry, tmp_path):
+        from dataclasses import replace
+
+        from ducta.mlrun.serving import framework_drift
+
+        mv = _register(registry, tmp_path)
+        resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
+        minor = replace(resolved, framework_versions={"scikit-learn": "1.0.0"})
+        [said] = framework_drift(minor)
+        assert "scikit-learn 1.0.0" in said and sklearn.__version__ in said
+        major = replace(resolved, framework_versions={"scikit-learn": "0.24.2"})
+        assert "another major version" in framework_drift(major)[0]
+
+    def test_a_missing_package_and_python_patch_releases(self, registry, tmp_path):
+        import platform
+        from dataclasses import replace
+
+        from ducta.mlrun.serving import framework_drift
+
+        mv = _register(registry, tmp_path)
+        resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
+        major, minor, _ = platform.python_version().split(".")
+        same_minor = replace(
+            resolved,
+            framework_versions={"python": f"{major}.{minor}.0", "not-a-real-dist": "1.0"},
+        )
+        [said] = framework_drift(same_minor)
+        assert "not-a-real-dist 1.0, which is not installed" in said
+
+    def test_a_model_registered_before_this_says_nothing(self, registry, tmp_path):
+        from dataclasses import replace
+
+        from ducta.mlrun.serving import framework_drift
+
+        mv = _register(registry, tmp_path)
+        resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
+        assert framework_drift(replace(resolved, framework_versions={})) == []

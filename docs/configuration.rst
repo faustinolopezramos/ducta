@@ -431,7 +431,11 @@ a dataset by its name; the catalog says where it is and how to handle it.
        ``catalog_name``/``schema_name`` where needed).
    * - ``options``
      - Reader options, passed to Spark as-is (``header``, ``sep``,
-       ``mergeSchema``…).
+       ``mergeSchema``…). A CSV reads with ``header``, ``quote`` and ``escape``
+       set to ``"`` and ``multiLine: true``, so what Ducta writes reads back the
+       same. ``multiLine`` keeps a file in one Spark partition: set
+       ``multiLine: false`` on a large file with no line breaks inside values.
+       An empty string in a CSV reads back as null.
    * - ``schema``
      - A DDL string (``"order_id BIGINT, amount DOUBLE"``) applied when reading.
    * - ``incremental``
@@ -536,8 +540,12 @@ Writing
 duplicate keys fails with the offending keys rather than Delta's own error, and
 a first run creates the table. For a Delta overwrite of one slice only, use
 ``overwrite_strategy: replaceWhere`` with ``partition_col`` or
-``replace_predicate``. ``write.options`` holds writer options when they differ
-from the reader's ``options``.
+``replace_predicate``; the run's ``--start-date``/``--end-date`` window is the
+slice when the dataset names none. For a partitioned file output
+(Parquet, CSV, JSON, ORC) ``partition_overwrite: dynamic`` replaces only the
+partitions the run wrote instead of the whole dataset (the default is
+``static``). ``write.options`` holds writer options when they differ from the
+reader's ``options``. See :doc:`best_practices` for choosing between them.
 
 .. _catalog-folder:
 
@@ -961,6 +969,12 @@ no code:
              }
            }
          }
+
+An ``ingest`` node can read just the run's window with
+``incremental: {column: order_date}``: Ducta adds
+``order_date >= start AND order_date < end + 1 day`` to the statement sent to the
+database (a ``query`` becomes the inner select). Without ``--start-date``/``--end-date``
+the node reads everything.
 
 .. tab-set::
    :sync-group: ducta-format

@@ -113,14 +113,107 @@ before every node that reads it:
            }
          }
 
-**Make large inputs incremental.** ``incremental: {column: …}`` reads — and
-fingerprints — only the run's ``--start-date``/``--end-date`` window, so a daily
-run costs a day of data, not the whole table.
+**Make large inputs incremental.** ``incremental: {column: …}`` on a dataset — or
+on an ``ingest`` node, where the database does the filtering — reads only the
+run's ``--start-date``/``--end-date`` window, so a daily run costs a day of data,
+not the whole table. ``--end-date`` is the *last day to process*: a date covers that
+whole day, on a date column and on a timestamp one (an end with a time of day,
+``2026-01-02T10:30:00``, is that instant, inclusive).
 
-**Make re-runs safe.** Writing the same window twice must not duplicate it:
-use ``write.mode: merge`` with ``keys`` for Delta tables, or
-``overwrite_strategy: replaceWhere`` to replace exactly the window a run
-produces. Plain ``append`` duplicates on every retry.
+**Make re-runs safe.** Writing the same window twice must not duplicate it, and
+writing one window must not erase the others. How an overwrite behaves is the
+author's choice, and each one has a different effect on a partitioned dataset:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - ``write`` setting
+     - What a run for one window does
+   * - ``mode: overwrite`` (default)
+     - Replaces the **whole** dataset. Right for a table recomputed in full; wrong for
+       a daily load, where it leaves only the last day. ``ducta config validate`` warns
+       when a node reads a window and overwrites a partitioned output this way.
+   * - ``partition_overwrite: dynamic``
+     - Parquet, CSV, JSON and ORC: replaces only the partitions the run wrote and keeps
+       the rest. Needs ``partition`` and ``mode: overwrite``. A partition the run wrote
+       no row for is not touched.
+   * - ``overwrite_strategy: replaceWhere``
+     - Delta: replaces exactly the run's window on ``partition_col``.
+   * - ``mode: merge`` with ``keys``
+     - Delta: an upsert; the window can be re-run any number of times.
+   * - ``mode: append``
+     - Adds rows. It duplicates on every retry.
+
+Partitioning by year, year and month, month or day
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``write.partition`` names columns that already exist; Ducta does not derive them. Add
+``year``/``month`` in the node (``withColumn``) or, for an ``ingest`` node with no Python,
+in its ``query`` (``SELECT …, YEAR(order_date) AS year, MONTH(order_date) AS month``).
+A window is any range: a daily job runs one day, a monthly one passes the first and last
+day of the month, and a backfill is the same command over past windows (run it from the
+scheduler; with a re-runnable write the result does not depend on how many times).
+
+Choose the grain by volume, not by habit. A partition per day pays off from roughly a
+gigabyte a day; with less, a month — or no partition — avoids thousands of tiny files. The
+demos hold a few hundred rows, so they are not partitioned.
+
+.. code-block:: yaml
+
+   # catalog.yaml
+   raw.sales.events:
+     format: csv
+     path: ${paths.input}/events.csv
+     incremental: {column: event_date}        # read only the run's window
+   bronze.sales.events:
+     format: parquet
+     write:
+       mode: overwrite
+       partition: [event_date]
+       partition_overwrite: dynamic           # a run replaces its own days, keeps the others
+   silver.sales.events:
+     format: delta
+     write:
+       mode: merge
+       merge: {keys: [event_id]}
+       partition: [event_month]               # coarser than the load: fewer, larger files
+
+.. code-block:: yaml
+
+   # pipelines/orders_daily.yaml
+   requires_dates: true
+   nodes:
+     land_orders:
+       kind: ingest
+       ingest:
+         source: shop_db
+         table: public.orders
+         incremental: {column: updated_at}    # the database returns only the window
+       outputs: [bronze.shop.orders]
+
+Layers are names, not a feature: Ducta imposes no architecture. ``defaults.catalog`` sets
+a layer's format and write policy once, by pattern. A common choice:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 22 42 36
+
+   * - Layer
+     - Format and write
+     - Partition
+   * - Raw / bronze
+     - Parquet or Delta; replace the window (``dynamic``/``replaceWhere``) or append
+     - The load date, or the event date
+   * - Silver / curated
+     - Delta; ``merge`` on the business key
+     - Month, to avoid small files
+   * - Gold / marts
+     - Overwrite in full: the tables are small
+     - None, or month
+   * - Model results
+     - ``append`` with the run id and model version, or the last run only
+     - The run date
 
 Nodes
 -----

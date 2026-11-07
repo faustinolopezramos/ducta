@@ -41,7 +41,29 @@ anything the core raises on purpose while still letting genuine bugs (a
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
+
+#: What py4j says when the Spark JVM is no longer there. None of it names the real cause,
+#: which is usually a java.lang.OutOfMemoryError printed earlier in the log.
+JVM_GONE_PATTERN = re.compile(
+    r"does not exist in the JVM"
+    r"|Answer from Java side is empty"
+    r"|Error while sending or receiving"
+    r"|Java gateway process exited",
+    re.IGNORECASE,
+)
+
+JVM_GONE_HINT = (
+    "The Spark JVM stopped during this run, usually because it ran out of memory (look for "
+    "java.lang.OutOfMemoryError above). Give it more with settings.spark_config: "
+    "{spark.driver.memory: 4g}"
+)
+
+
+def is_jvm_gone(error: BaseException) -> bool:
+    """Whether *error* is py4j reporting that the Spark JVM has gone away."""
+    return bool(JVM_GONE_PATTERN.search(str(error)))
 
 
 class DuctaError(Exception):

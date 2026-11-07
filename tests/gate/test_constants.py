@@ -57,7 +57,7 @@ class TestExecutionMode:
 
 class TestConstants:
     def test_csv_options(self):
-        assert DEFAULT_CSV_OPTIONS == {"header": "true"}
+        assert DEFAULT_CSV_OPTIONS == {"header": "true", "quote": '"', "escape": '"'}
 
     def test_encoding(self):
         assert DEFAULT_ENCODING == "UTF-8"

@@ -29,6 +29,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+from rich.markup import escape
+
 from ducta.ai.errors import AIConfigError
 from ducta.console.commands.ai_cmds import AICommands, _console, _project_root
 from ducta.console.core import ExitCode
@@ -102,7 +104,7 @@ class ArchitectCommands:
         else:
             console = _console()
             for e in report.errors:
-                console.print(f"[red]error[/] {e}", highlight=False)
+                console.print(f"[red]error[/] {escape(str(e))}", highlight=False)
             for w in report.warnings:
                 console.print(f"[yellow]warning[/] {w}", highlight=False)
             if report.ok:
@@ -188,7 +190,7 @@ class ArchitectCommands:
             console = _console()
             console.print(f"Pipelines: {', '.join(report.pipelines)}")
             for e in report.errors:
-                console.print(f"[red]error[/] {e}", highlight=False)
+                console.print(f"[red]error[/] {escape(str(e))}", highlight=False)
             for w in report.warnings:
                 console.print(f"[yellow]warning[/] {w}", highlight=False)
             for r in report.runs:

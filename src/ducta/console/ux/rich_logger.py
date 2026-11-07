@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from loguru import Record
 from rich.console import Console
 from rich.logging import RichHandler
+from rich.markup import escape
 from rich.rule import Rule
 from rich.text import Text
 from rich.theme import Theme
@@ -147,7 +148,12 @@ class RichLoggerManager:
         time_tag = f"[dim][{time_str}][/] "
         level_tag = f"[{level_style}]{level_name: <8}[/] "
 
-        return f"{prefix}{time_tag}{level_tag}{{message}}"
+        # The handler reads the line as Rich markup, and only the prefix above is markup.
+        # A message is literal text: unescaped, `ducta[api]` printed as `ducta` and a
+        # `[/data/x.csv]` raised MarkupError, which lost the message.
+        record["extra"]["_rich_message"] = escape(record["message"])
+
+        return f"{prefix}{time_tag}{level_tag}{{extra[_rich_message]}}"
 
     @classmethod
     def setup(

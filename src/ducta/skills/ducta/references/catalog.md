@@ -33,7 +33,7 @@ gold.sales.daily:
 | `format` | required: `csv`, `json`, `parquet`, `delta`, `orc`, `avro`, `xml`, `query` (SQL/JDBC), `pickle`; `unity_catalog` for outputs registered in Unity Catalog |
 | `path` | file, directory or URI — optional for a three-part name (below) |
 | `table` | a metastore / Unity Catalog table instead of a path |
-| `options` | reader options passed to Spark as-is (`header`, `sep`, `mergeSchema`…) |
+| `options` | reader options passed to Spark as-is (`header`, `sep`, `mergeSchema`…); CSV defaults to `multiLine: true` (one partition per file: `multiLine: false` on a large file with no line breaks in values) |
 | `schema` | a DDL string applied when reading: `"order_id BIGINT, amount DOUBLE"` |
 | `incremental` | `{column: …}` — the read is filtered to `--start-date`/`--end-date` on that column |
 | `read` | Delta time travel: `{version: 12}` or `{timestamp: "2026-01-31"}` |
@@ -67,7 +67,14 @@ silver.sales.customers:
 - `merge` is an upsert on `keys` for Delta (needs the `delta` extra); a batch with
   duplicate keys fails naming them; the first run creates the table.
 - Replace only one slice of a Delta table: `overwrite_strategy: replaceWhere` with
-  `partition_col` or `replace_predicate`.
+  `partition_col` or `replace_predicate`; without either window it is the run's
+  `--start-date`/`--end-date`.
+- Replace only the partitions a run wrote in a Parquet/CSV/JSON/ORC output:
+  `partition_overwrite: dynamic` (needs `partition` and `mode: overwrite`). The default
+  overwrite is `static`: it replaces the whole dataset, so a daily load leaves one day.
+  `ducta config validate` warns about that case.
+- `incremental: {column: …}` reads only the run's window; `--end-date` is the last day,
+  whole, on a date or a timestamp column.
 - `write.options` holds writer options that differ from the reader's `options`.
 - **Re-runs must be safe:** `append` duplicates on every retry — prefer `merge` or
   `replaceWhere` for windowed pipelines.

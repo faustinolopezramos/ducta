@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import difflib
 import inspect
+import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -220,6 +222,16 @@ def _check_ingestion_node(
         report.error(f"Node '{node_name}': ingestion node requires 'table' or 'query'.")
     if has_table and has_query:
         report.error(f"Node '{node_name}': ingestion node must set 'table' OR 'query', not both.")
+    incremental = node_config.get("incremental")
+    if incremental is not None:
+        column = incremental.get("column") if isinstance(incremental, dict) else None
+        if not column or not re.fullmatch(
+            r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*", str(column)
+        ):
+            report.error(
+                f"Node '{node_name}': ingest.incremental needs a 'column' that is a plain "
+                f"column name, got {column!r}."
+            )
 
 
 def _accepts_var_keyword(sig: inspect.Signature) -> bool:
@@ -352,9 +364,8 @@ def _check_io_keys(
 
         declared = (output_config.get(key) or {}).get("filepath")
         try:
-            conventional = validator.validate_output_key(key)
+            validator.validate_output_key(key)
         except Exception as e:  # noqa: BLE001 — ConfigurationError → finding
-            conventional = None
             if not declared:
                 # Only a key with no explicit filepath needs the three-part
                 # shape: it is what the path is derived from.
@@ -362,8 +373,6 @@ def _check_io_keys(
                     f"Node '{node_name}': invalid output key '{key}' — {e}. Give it an "
                     "explicit 'filepath', or use a schema.sub_folder.table key."
                 )
-        if declared and conventional:
-            _warn_if_filepath_moves_output(report, node_name, key, str(declared), conventional)
 
 
 _EXTRA_NODE_KEYS = frozenset(
@@ -379,6 +388,7 @@ _EXTRA_NODE_KEYS = frozenset(
         "sources",  # core.execution.ingestion._resolve_sources_path
         "columns",  # core.execution.ingestion._build_dbtable
         "where",  # core.execution.ingestion._build_dbtable
+        "incremental",  # core.execution.ingestion (the run's window on one column)
         "options",  # ingestion JDBC options / inline connector options
         "on_missing_input",  # gate.input.InputLoader.load_inputs
         "fail_fast",  # gate.input.InputLoader.load_inputs
@@ -637,27 +647,86 @@ def _check_unknown_node_keys(
         )
 
 
-def _warn_if_filepath_moves_output(
-    report: PreflightReport,
-    node_name: str,
-    key: str,
-    declared: str,
-    parsed: Dict[str, str],
-) -> None:
-    """An output's ``filepath`` used to be ignored; now it is honoured.
+def _written_paths(context: Any, node_configs: Dict[str, Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Where the batch outputs of these nodes land: ``{normalized path: [dataset, ...]}``.
 
-    A project that declared one pointing somewhere other than the conventional
-    path would silently start writing to a new location — and its downstream
-    inputs, still pointing at the old one, would read stale data. Say so.
+    An output that cannot be resolved is left out: ``_check_io_keys`` reports it.
     """
-    tail = "/".join([parsed["schema"], parsed["sub_folder"], parsed["table_name"]])
-    if not declared.replace("\\", "/").rstrip("/").endswith(tail):
-        report.warn(
-            f"Node '{node_name}': output '{key}' writes to its declared filepath "
-            f"'{declared}'. Before Ducta 0.2 that filepath was ignored and the output went "
-            f"to the conventional '<output_path>/<env>/{tail}'. Check that the inputs "
-            "reading this dataset point to the same place."
-        )
+    from ducta.core.settings import CoreSettings
+    from ducta.gate.output.paths import _PathManager
+
+    output_config = getattr(context, "output_config", {}) or {}
+    written: Dict[str, List[str]] = {}
+    try:
+        paths = _PathManager(context, ConfigValidator())
+        env = CoreSettings.from_context(context).env
+    except Exception as e:  # noqa: BLE001 — never let a checker crash the preflight
+        logger.debug("Shared-output check skipped: {}", e)
+        return written
+    for node_config in node_configs.values():
+        if _is_streaming_node(node_config):
+            continue
+        for key in _output_keys(node_config):
+            entry = output_config.get(key)
+            if not isinstance(entry, dict) or entry.get("format") == "unity_catalog":
+                continue
+            try:
+                path = paths.resolve_output_path(entry, key, env)
+            except Exception as e:  # noqa: BLE001 — never let a checker crash the preflight
+                logger.debug("Could not resolve the path of output '{}': {}", key, e)
+                continue
+            keys = written.setdefault(os.path.normpath(path), [])
+            if key not in keys:
+                keys.append(key)
+    return written
+
+
+def _check_shared_output_paths(
+    report: PreflightReport,
+    context: Any,
+    pipeline_name: str,
+    node_configs: Dict[str, Dict[str, Any]],
+) -> None:
+    """Two datasets written to one path replace each other, or collide mid-write.
+
+    Same pipeline: an error, unless both only append (then a warning: appends that run in
+    parallel can still collide). Another pipeline: a warning, since they may never run
+    together. An input reading another pipeline's output path is fine, and not looked at.
+    """
+    output_config = getattr(context, "output_config", {}) or {}
+    written = _written_paths(context, node_configs)
+    for path, keys in written.items():
+        if len(keys) < 2:
+            continue
+        message = f"Datasets {', '.join(sorted(keys))} all write to '{path}'"
+        modes = {str(getattr(m, "value", m)) for m in _write_modes(output_config, keys)}
+        if modes == {"append"}:
+            report.warn(f"{message}: nodes running in parallel can collide. Order them.")
+        else:
+            report.error(f"{message}: each write would replace or collide with the others.")
+
+    pipelines = getattr(context, "pipelines", {}) or {}
+    nodes_config = getattr(context, "nodes_config", {}) or {}
+    for other_name, other in pipelines.items():
+        if other_name == pipeline_name:
+            continue
+        try:
+            other_nodes = extract_pipeline_nodes(other)
+        except Exception as e:  # noqa: BLE001 — that pipeline's own preflight reports it
+            logger.debug("Could not read the nodes of pipeline '{}': {}", other_name, e)
+            continue
+        other_configs = {n: (nodes_config.get(n) or {}) for n in other_nodes}
+        for path, other_keys in _written_paths(context, other_configs).items():
+            distinct = sorted(set(other_keys) - set(written.get(path, [])))
+            if path in written and distinct:
+                report.warn(
+                    f"Datasets {', '.join(sorted(written[path]))} and {', '.join(distinct)} "
+                    f"(pipeline '{other_name}') all write to '{path}'."
+                )
+
+
+def _write_modes(output_config: Dict[str, Any], keys: List[str]) -> List[Any]:
+    return [(output_config.get(k) or {}).get("write_mode", "overwrite") for k in keys]
 
 
 def _check_merge_outputs(
@@ -689,6 +758,51 @@ def _check_merge_outputs(
             validate_merge_spec(entry.get("merge"))
         except GateConfigurationError as e:
             report.error(f"Node '{node_name}': output '{key}': {e}")
+
+
+def _check_windowed_overwrite(
+    report: PreflightReport,
+    node_name: str,
+    node_config: Dict[str, Any],
+    input_config: Dict[str, Any],
+    output_config: Dict[str, Any],
+) -> None:
+    """A node that reads one window and overwrites a partitioned dataset replaces all of it.
+
+    Spark's overwrite is static: it deletes every partition first, so a run for one day of
+    a table partitioned by day leaves that day and nothing else. Said before the first run
+    rather than found in the data. Silent when the author chose: `partition_overwrite:
+    dynamic`, `overwrite_strategy: replaceWhere` or mode `merge`.
+    """
+    if _is_streaming_node(node_config):
+        return
+    reads_a_window = bool(node_config.get("incremental")) or any(
+        isinstance(key, str) and (input_config.get(key) or {}).get("incremental")
+        for key in _input_keys(node_config)
+    )
+    if not reads_a_window:
+        return
+    for key in _output_keys(node_config):
+        entry = output_config.get(key) or {}
+        if not isinstance(entry, dict) or not entry.get("partition"):
+            continue
+        mode = str(
+            getattr(entry.get("write_mode"), "value", entry.get("write_mode")) or "overwrite"
+        )
+        if mode != "overwrite":
+            continue
+        if str(entry.get("partition_overwrite") or "").lower() == "dynamic":
+            continue
+        if str(entry.get("overwrite_strategy") or "").lower() == "replacewhere":
+            continue
+        report.warn(
+            f"Node '{node_name}': output '{key}' is partitioned and overwritten, but the node "
+            "reads one window (incremental). Each run replaces the WHOLE dataset, not just "
+            "the window it read. Choose: `write.partition_overwrite: dynamic` (parquet, csv, "
+            "json, orc), `write.overwrite_strategy: replaceWhere` or `write.mode: merge` "
+            "(Delta) to replace only the run's slice, or keep this if replacing everything "
+            "is what you want."
+        )
 
 
 def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
@@ -775,6 +889,10 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         _check_stream_quality(report, node_name, node_configs[node_name])
         _check_unknown_node_keys(report, node_name, node_configs[node_name])
         _check_merge_outputs(report, node_name, node_configs[node_name], output_config)
+        _check_windowed_overwrite(
+            report, node_name, node_configs[node_name], input_config, output_config
+        )
+    _check_shared_output_paths(report, context, pipeline_name, node_configs)
 
     _check_profiles(report, context)
     _check_evidence_policy(report, context)

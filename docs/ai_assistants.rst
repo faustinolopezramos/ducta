@@ -159,7 +159,11 @@ the skill, for CI and for any script:
 
 ``config_error`` holds what stops the project from loading (an unknown key, a dataset
 missing from the catalog…). Once it loads, preflight's problems appear per pipeline,
-``"pipelines": {"etl": {"ok": false, "problems": [...]}}``.
+``"pipelines": {"etl": {"ok": false, "problems": [...]}}``. ``environment`` lists
+versions of Python, Spark, Java or pandas known not to work together, and the Spark
+settings a local project leaves unset that change results (ANSI mode on Spark 4, the
+session time zone) — sentences, each with its fix; they are warnings and do not change
+``ok``.
 
 The exit codes are unchanged: ``0`` valid, ``2`` the project does not load
 (``config_error``), ``3`` problems found by preflight.

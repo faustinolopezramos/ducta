@@ -11,7 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  POETRY_VERSION: "1.8.3"
+  # The Poetry that writes poetry.lock (format 2.1): 1.8 cannot read it.
+  POETRY_VERSION: "2.4.1"
 
 jobs:
   lint:
@@ -43,7 +44,7 @@ jobs:
         run: poetry run mypy src/ducta
 
   test:
-    name: Tests (py${{ matrix.python-version }})
+    name: Tests (py${{ matrix.python-version }}, Spark ${{ matrix.spark }})
     runs-on: ubuntu-latest
     env:
       # Several tests chdir into a temporary project and spawn worker processes
@@ -60,7 +61,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+        # poetry.lock resolves Spark 4.2. Spark 3.5 is still supported (until its
+        # end of life, 2027-11-30): one more leg runs the suite on it. `spark` is a
+        # dimension of its own so that leg is added, not merged into py3.11's.
+        spark: ["4.2"]
+        include:
+          - python-version: "3.11"
+            spark: "3.5"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -77,10 +85,14 @@ jobs:
       # databricks-connect overwrites pyspark and breaks every Spark test.
       - name: Install dependencies
         run: poetry install --extras all
+      # Delta's Python package and its jar follow the Spark line (3.x <-> Spark 3.5).
+      - name: Switch to Spark ${{ matrix.spark }}
+        if: matrix.spark == '3.5'
+        run: poetry run pip install "pyspark>=3.5,<3.6" "delta-spark>=3.2,<4"
       - name: Run tests
         run: poetry run pytest --cov=ducta --cov-report=term --cov-report=xml
       - name: Upload coverage
-        if: matrix.python-version == '3.11'
+        if: matrix.python-version == '3.11' && matrix.spark == '4.2'
         uses: actions/upload-artifact@v4
         with:
           name: coverage
@@ -95,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -118,18 +130,6 @@ jobs:
         run: |
           npm ci
           npm run build
-      # Poetry asks *git* what to ignore, and `src/ducta/ui/dist` is gitignored
-      # because it is a build artifact. In Poetry 1.8 that veto beats the
-      # explicit `include` in pyproject.toml, so `poetry build` silently emits a
-      # wheel with no web app — precisely the failure the assertion below exists
-      # to catch, and the reason this job has been red. Staging the freshly
-      # built assets takes them out of git's ignore set for the rest of this
-      # ephemeral checkout; nothing is committed.
-      # Delete this step once POETRY_VERSION moves to 2.x, where an explicit
-      # `include` wins over the VCS ignore on its own.
-      - name: Make the built UI visible to Poetry
-        run: git add --force src/ducta/ui/dist
-
       - name: Build wheel
         run: poetry build
       - name: Assert the wheel bundles the web app
@@ -166,6 +166,26 @@ jobs:
           assert "/api/ai/settings" in paths
           print("smoke OK", ducta.__version__)
           PY
+
+  # The image is what a deployment runs: build it and start Spark in it, so a base
+  # image, Python or JDK that no longer fits is caught here and not at deploy time.
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the runtime image
+        run: docker build --target runtime -t ducta:ci .
+      - name: Smoke-test it
+        run: |
+          docker run --rm ducta:ci --version
+          docker run --rm --entrypoint python ducta:ci -c "
+          from pyspark.sql import SparkSession
+          spark = SparkSession.builder.master('local[1]').getOrCreate()
+          assert spark.range(3).count() == 3
+          print('Spark', spark.version, 'runs in the image')
+          spark.stop()
+          "
 
   ui:
     name: UI (typecheck, tests, quality)

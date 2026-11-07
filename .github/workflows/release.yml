@@ -20,7 +20,8 @@ permissions:
   contents: read
 
 env:
-  POETRY_VERSION: "1.8.3"
+  # The Poetry that writes poetry.lock (format 2.1): 1.8 cannot read it.
+  POETRY_VERSION: "2.4.1"
 
 jobs:
   build:
@@ -37,7 +38,9 @@ jobs:
           cache: "npm"
           cache-dependency-path: src/ducta/ui/package-lock.json
       - name: Install Poetry
-        run: pipx install "poetry==$POETRY_VERSION"
+        run: |
+          pipx install "poetry==$POETRY_VERSION"
+          pipx inject poetry poetry-plugin-export
 
       - name: Refuse to release a tag that disagrees with pyproject
         if: startsWith(github.ref, 'refs/tags/v')
@@ -55,16 +58,6 @@ jobs:
         run: |
           npm ci
           npm run build
-
-      # Poetry asks *git* what to ignore, and `src/ducta/ui/dist` is gitignored
-      # because it is a build artifact. In Poetry 1.8 that veto beats the
-      # explicit `include` in pyproject.toml, so the step above builds the web
-      # app and `poetry build` then leaves it out anyway. Without this the
-      # assertion below would block every release — which is the workflow doing
-      # its job, but for a reason nothing here explained.
-      # Delete this step once POETRY_VERSION moves to 2.x.
-      - name: Make the built UI visible to Poetry
-        run: git add --force src/ducta/ui/dist
 
       - name: Build sdist and wheel
         run: poetry build
@@ -103,6 +96,21 @@ jobs:
           name: dist
           path: dist/
 
+      # The exact versions this release was tested with, one file per Python.
+      # pip ignores poetry.lock, so whoever needs a reproducible install passes
+      # one with `-c`. Raw `poetry export` output pins numpy twice for 3.13+ and
+      # pip refuses it: scripts/constraints.py keeps one version per package.
+      # Kept out of dist/: the PyPI upload takes every file there.
+      - name: Export the constraints files
+        run: |
+          poetry export --extras all --without-hashes -o exported.txt
+          python -m pip install packaging
+          python scripts/constraints.py exported.txt 3.11 3.12 3.13 3.14
+      - uses: actions/upload-artifact@v4
+        with:
+          name: constraints
+          path: constraints-py*.txt
+
   publish:
     name: Publish to ${{ github.event.inputs.target || 'pypi' }}
     needs: build
@@ -127,3 +135,29 @@ jobs:
       - name: Publish to PyPI
         if: github.event.inputs.target != 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Attach the constraints files to the GitHub release of the tag, so
+  #   pip install "ducta[all]==X.Y.Z" -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt
+  # installs what was tested. Only for tag pushes, after PyPI accepted the release.
+  github-release:
+    name: Attach constraints to the GitHub release
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: constraints
+      - name: Create the release or add the file to it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" constraints-py*.txt --clobber
+          else
+            gh release create "$TAG" constraints-py*.txt --title "$TAG" --notes "See CHANGELOG.md."
+          fi

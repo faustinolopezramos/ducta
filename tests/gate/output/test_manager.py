@@ -63,6 +63,11 @@ class TestDataOutputManager:
         p.touch()
         assert path_has_data(str(p)) is False
 
+    def test_a_write_that_never_committed_is_not_data(self, temp_dir):
+        # What a process killed mid-write leaves. It read as materialized.
+        (temp_dir / "t" / "_temporary" / "0").mkdir(parents=True)
+        assert path_has_data(str(temp_dir / "t")) is False
+
     def test_path_has_data_missing(self, temp_dir):
         assert path_has_data(str(temp_dir / "missing")) is False
 
@@ -240,3 +245,30 @@ class TestSkippedFailuresLeaveAGapInTheEvidence:
         dom._save_single_output = MagicMock(side_effect=RuntimeError("disk full"))
         with pytest.raises(RuntimeError, match="disk full"):
             dom.save_output("dev", {"output": ["a.b.c"]}, spark_dataframe)
+
+
+class TestRunWindowReachesTheWriter:
+    """`replaceWhere` replaces the run's slice, so the writer has to be told the window."""
+
+    CONFIG = {
+        "format": "delta",
+        "overwrite_strategy": "replaceWhere",
+        "partition_col": "day",
+    }
+
+    def test_the_run_window_is_added_to_a_replacewhere_output(self):
+        config = DataOutputManager._with_run_window(self.CONFIG, "2026-01-02", "2026-01-02")
+        assert (config["start_date"], config["end_date"]) == ("2026-01-02", "2026-01-02")
+        assert "start_date" not in self.CONFIG  # the dataset's own config is not mutated
+
+    def test_a_window_written_in_the_dataset_wins(self):
+        pinned = {**self.CONFIG, "start_date": "2025-12-01", "end_date": "2025-12-31"}
+        config = DataOutputManager._with_run_window(pinned, "2026-01-02", "2026-01-02")
+        assert (config["start_date"], config["end_date"]) == ("2025-12-01", "2025-12-31")
+
+    def test_other_outputs_are_left_alone(self):
+        plain = {"format": "parquet", "write_mode": "append"}
+        assert DataOutputManager._with_run_window(plain, "2026-01-02", "2026-01-02") is plain
+
+    def test_a_run_without_dates_changes_nothing(self):
+        assert DataOutputManager._with_run_window(self.CONFIG, None, None) is self.CONFIG

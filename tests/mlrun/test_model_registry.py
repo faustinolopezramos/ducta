@@ -326,3 +326,27 @@ class TestGarbageCollectionRetentionDays:
         )
         stats = gc.run(dry_run=False)
         assert stats["versions_removed"] == 3
+
+
+class TestARegistryWrittenByANewerDucta:
+    def test_unknown_keys_are_skipped_not_fatal(self):
+        from ducta.mlrun.model_registry import ModelVersion
+
+        data = {
+            "model_id": "m1",
+            "version": 1,
+            "metadata": {
+                "name": "clf",
+                "framework": "sklearn",
+                "version": 1,
+                "created_at": "2026-11-06T00:00:00+00:00",
+                "a_future_metadata_field": 1,
+            },
+            "artifact_uri": "artifacts/m1/v1/clf.joblib",
+            "artifact_type": "sklearn",
+            "created_at": "2026-11-06T00:00:00+00:00",
+            "updated_at": "2026-11-06T00:00:00+00:00",
+            "a_future_version_field": {"x": 1},
+        }
+        mv = ModelVersion.from_dict(data)
+        assert mv.model_id == "m1" and mv.metadata.framework_versions == {}

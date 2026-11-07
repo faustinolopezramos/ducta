@@ -134,7 +134,7 @@ _TRANSFORM_KEYS = {
     "model": "model",
     "metrics": "metrics",
 }
-_INGEST_KEYS = ("source", "sources", "table", "query", "columns", "where", "options")
+_INGEST_KEYS = ("source", "sources", "table", "query", "columns", "where", "incremental", "options")
 _HANDLED = {
     "module",
     "function",
@@ -302,6 +302,7 @@ def _decompile_dataset(
                 "partition_col": outp.get("partition_col"),
                 "replace_predicate": outp.get("replace_predicate"),
                 "overwrite_schema": outp.get("overwrite_schema"),
+                "partition_overwrite": outp.get("partition_overwrite"),
             }
         )
         if opts_out and opts_out != opts_in:
@@ -329,6 +330,7 @@ def _decompile_dataset(
         "partition_col",
         "replace_predicate",
         "overwrite_schema",
+        "partition_overwrite",
     }
     for side in (inp, outp):
         for key, value in side.items():

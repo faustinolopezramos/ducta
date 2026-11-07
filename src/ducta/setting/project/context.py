@@ -66,8 +66,11 @@ def load_project_context(
     start = Path(base_path) if base_path else Path.cwd()
     root = find_nearest_project(start)
     if root is None:
+        from ducta.setting.project.reader import other_format
+
         raise ConfigurationError(
-            f"No Ducta project found in {start.resolve()} or above it (looked for {PROJECT_FILE})"
+            other_format(start)
+            or f"No Ducta project found in {start.resolve()} or above it (looked for {PROJECT_FILE})"
         )
     if chdir:
         os.chdir(root)

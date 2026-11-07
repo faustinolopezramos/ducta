@@ -18,24 +18,47 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import importlib.util
 import pickle
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 
 from ducta.gate.base import BaseIO
-from ducta.gate.constants import DEFAULT_CSV_OPTIONS, DEFAULT_ENCODING
+from ducta.gate.constants import CSV_READ_DEFAULTS, DEFAULT_ENCODING
 from ducta.gate.exceptions import ConfigurationError, ReadOperationError
 from ducta.gate.sql import checked_predicate
+from ducta.spark_jvm import jvm_has_package, spark_major
+
+
+def xml_format(spark: Any) -> Optional[str]:
+    """The data source that reads XML in this session, or None when there is none.
+
+    Spark 4 reads XML itself (``xml``); Spark 3.5 needs the
+    ``com.databricks:spark-xml`` package on the classpath.
+    """
+    if spark_major(spark) >= 4:
+        return "xml"
+    if jvm_has_package(spark, "com.databricks.spark.xml"):
+        return "com.databricks.spark.xml"
+    return None
 
 
 def spark_xml_available(spark: Any) -> bool:
-    """True when the session's JVM has the ``com.databricks:spark-xml`` package."""
+    """True when this session can read XML."""
+    return xml_format(spark) is not None
+
+
+def _no_spark_error(what: str, source: str) -> ReadOperationError:
+    """The read cannot start without Spark; say how to get it when it is not installed."""
     try:
-        spark._jvm.com.databricks.spark.xml  # noqa: B018 — attribute access is the probe
-        return True
-    except Exception:  # noqa: BLE001 — py4j raises its own errors for a missing class
-        return False
+        missing = importlib.util.find_spec("pyspark") is None
+    except (ImportError, ValueError):  # a module without a spec: it is there
+        missing = False
+    hint = ' PySpark is not installed: pip install "ducta[spark]".' if missing else ""
+    return ReadOperationError(
+        f"Spark session is not available in context; cannot read {what} from {source}.{hint}"
+    )
 
 
 class SparkReaderBase(BaseIO):
@@ -73,9 +96,7 @@ class SparkReaderBase(BaseIO):
         """Read data using Spark with format-specific handling."""
         spark = self._ctx_spark()
         if spark is None:
-            raise ReadOperationError(
-                f"Spark session is not available in context; cannot read {format_name.upper()} from {filepath}"
-            )
+            raise _no_spark_error(format_name.upper(), filepath)
         logger.info("Reading {} data from: {}", format_name.upper(), filepath)
         try:
             reader = spark.read.options(**config.get("options", {})).format(format_name)
@@ -104,7 +125,7 @@ class JSONReader(SparkReaderBase):
 
 class CSVReader(SparkReaderBase):
     def read(self, source: str, config: Dict[str, Any]) -> Any:
-        options = {**DEFAULT_CSV_OPTIONS, **config.get("options", {})}
+        options = {**CSV_READ_DEFAULTS, **config.get("options", {})}
         if "encoding" not in options:
             options["encoding"] = DEFAULT_ENCODING
         config_with_defaults = {**config, "options": options}
@@ -115,9 +136,7 @@ class DeltaReader(SparkReaderBase):
     def read(self, source: str, config: Dict[str, Any]) -> Any:
         spark = self._ctx_spark()
         if spark is None:
-            raise ReadOperationError(
-                f"Spark session is not available in context; cannot read DELTA from {source}"
-            )
+            raise _no_spark_error("DELTA", source)
 
         reader = spark.read.options(**config.get("options", {})).format("delta")
 
@@ -297,13 +316,16 @@ class XMLReader(SparkReaderBase):
             raise ReadOperationError(
                 f"Spark session is not available in context; cannot read XML from {source}"
             )
-        if not spark_xml_available(spark):
+        source_format = xml_format(spark)
+        if source_format is None:
             raise ConfigurationError(
-                "XML reader requires the com.databricks:spark-xml package. Install the jar or add --packages com.databricks:spark-xml:latest_2.12"
+                "Reading XML on Spark 3.5 needs the com.databricks:spark-xml package: add "
+                "'spark.jars.packages: com.databricks:spark-xml_2.12:0.18.0' to "
+                "settings.spark_config (Spark 4 reads XML without it)."
             )
         logger.info("Reading XML file with row tag '{}': {}", row_tag, source)
         return (
-            spark.read.format("com.databricks.spark.xml")
+            spark.read.format(source_format)
             .option("rowTag", row_tag)
             .options(**config.get("options", {}))
             .load(source)

@@ -20,7 +20,8 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
-from typing import Any
+import sys
+from typing import Any, Optional
 
 from loguru import logger  # type: ignore
 
@@ -33,12 +34,6 @@ except ImportError:
     SparkDataFrame = type("SparkDataFrame", (), {})  # type: ignore[misc,assignment]  # no pyspark
 
 try:
-    from pyspark.sql.connect.dataframe import DataFrame as ConnectDataFrame  # type: ignore
-except ImportError:
-    # Spark Connect is optional (`pyspark[connect]`) and unimportable on 3.12+.
-    ConnectDataFrame = type("ConnectDataFrame", (), {})  # type: ignore[misc,assignment]
-
-try:
     import pandas as pd  # type: ignore
 except ImportError:
     pd = None
@@ -47,6 +42,21 @@ try:
     import polars as pl  # type: ignore
 except ImportError:
     pl = None
+
+
+def _connect_dataframe_class() -> Optional[type]:
+    """Spark Connect's DataFrame class, when something has already imported it.
+
+    Never imported here. On Spark 4 without the ``connect`` extra, importing
+    ``pyspark.sql.connect`` runs a dependency check that calls ``sys.exit(0)``
+    when ``__main__`` has no file (``python -c``, ``python -m``, spawned
+    workers): the process ended with success having done nothing. A Connect
+    DataFrame cannot exist before its module is loaded, so looking the class up
+    in ``sys.modules`` misses none.
+    """
+    module = sys.modules.get("pyspark.sql.connect.dataframe")
+    cls = getattr(module, "DataFrame", None)
+    return cls if isinstance(cls, type) else None
 
 
 class _DataFrameManager(BaseIO):
@@ -94,7 +104,10 @@ class _DataFrameManager(BaseIO):
 
     def is_spark_dataframe(self, dataframe: Any) -> bool:
         """Detect Spark DataFrames (classic and Connect)."""
-        if isinstance(dataframe, (SparkDataFrame, ConnectDataFrame)):
+        if isinstance(dataframe, SparkDataFrame):
+            return True
+        connect = _connect_dataframe_class()
+        if connect is not None and isinstance(dataframe, connect):
             return True
 
         module = getattr(type(dataframe), "__module__", "")

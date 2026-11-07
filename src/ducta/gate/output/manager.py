@@ -105,7 +105,11 @@ class DataOutputManager(BaseIO):
         for out_key in output_keys:
             cfg = output_config.get(out_key, {}) or {}
             write_mode = cfg.get("write_mode", WriteMode.OVERWRITE.value)
-            if getattr(write_mode, "value", write_mode) == WriteMode.OVERWRITE.value:
+            replaces_all = (
+                getattr(write_mode, "value", write_mode) == WriteMode.OVERWRITE.value
+                and str(cfg.get("partition_overwrite") or "static").lower() != "dynamic"
+            )
+            if replaces_all:
                 writable.append(out_key)
             else:
                 skipped.append(out_key)
@@ -118,8 +122,10 @@ class DataOutputManager(BaseIO):
             )
         for out_key in skipped:
             reason = (
-                f"output '{out_key}' not written: the node produced 0 rows and its "
-                "write_mode is not 'overwrite', so there was nothing to append"
+                f"output '{out_key}' not written: the node produced 0 rows and its write "
+                "does not replace the whole dataset (write_mode is not 'overwrite', or "
+                "partition_overwrite is 'dynamic'), so there was nothing to write and what "
+                "the dataset already holds stays"
             )
             logger.warning("{}.", reason)
             self._note_evidence_gap(reason)
@@ -211,7 +217,7 @@ class DataOutputManager(BaseIO):
         ):
             self._write_unity_catalog(dataframe, output_config, start_date, end_date, out_key, env)
         else:
-            self._write_traditional(dataframe, output_config, out_key, env)
+            self._write_traditional(dataframe, output_config, out_key, env, start_date, end_date)
 
     def _write_unity_catalog(
         self,
@@ -274,11 +280,39 @@ class DataOutputManager(BaseIO):
 
         self._record_output_fingerprint(out_key, full_table_name, dataframe, "delta")
 
+    @staticmethod
+    def _with_run_window(
+        config: Dict[str, Any], start_date: Optional[str], end_date: Optional[str]
+    ) -> Dict[str, Any]:
+        """The output config with the run's window, for a ``replaceWhere`` that names none.
+
+        ``overwrite_strategy: replaceWhere`` replaces the slice the run produced, so it needs
+        the run's ``--start-date``/``--end-date``. They reached only the Unity Catalog branch;
+        every other Delta output failed with "replaceWhere requires: start_date, end_date".
+        A window written in the dataset itself wins.
+        """
+        if str(config.get("overwrite_strategy") or "").lower() != "replacewhere":
+            return config
+        if not (start_date and end_date):
+            return config
+        return {
+            **config,
+            "start_date": config.get("start_date") or start_date,
+            "end_date": config.get("end_date") or end_date,
+        }
+
     def _write_traditional(
-        self, dataframe: Any, config: Dict[str, Any], out_key: str, env: Optional[str] = None
+        self,
+        dataframe: Any,
+        config: Dict[str, Any],
+        out_key: str,
+        env: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
     ) -> None:
         """Write to traditional storage."""
         path = self.path_manager.resolve_output_path(config, out_key, env)
+        config = self._with_run_window(config, start_date, end_date)
 
         if not is_cloud_path(path):
             self._prepare_local_directory(path)

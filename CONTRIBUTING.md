@@ -74,10 +74,10 @@ macOS (Homebrew) — Linux/Windows: install the equivalents.
 
 | Tool | Needed for | macOS install |
 |---|---|---|
-| **Python 3.10–3.13** | everything | `brew install python@3.11` |
+| **Python 3.11–3.14** | everything | `brew install python@3.13` |
 | **Poetry** | dependency & env manager | `brew install pipx && pipx ensurepath && pipx install poetry` |
 | **Node** | building the web UI (optional) | `brew install node` |
-| **Java 11** | running Spark pipelines (optional) | `brew install openjdk@11` |
+| **Java 17** | running Spark pipelines (optional; Spark 4 needs 17 or 21) | `brew install openjdk@17` |
 
 > Windows: prefer **WSL2** so Spark works without `winutils`. Core/CLI/API work
 > fine on plain Windows too.

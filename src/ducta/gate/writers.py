@@ -23,7 +23,7 @@ from typing import Any, Dict
 from loguru import logger  # type: ignore
 
 from ducta.gate.base import BaseIO
-from ducta.gate.constants import DEFAULT_CSV_OPTIONS, WriteMode
+from ducta.gate.constants import CSV_WRITE_DEFAULTS, WriteMode
 from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 from ducta.gate.sql import checked_predicate, replace_where_clause, validate_predicate
 from ducta.gate.validators import ConfigValidator, DataValidator
@@ -117,6 +117,7 @@ class BaseSparkWriter(BaseIO):
 
         writer = self._apply_partition(writer, dataframe, config)
         writer = self._apply_overwrite_and_replacewhere(writer, config, write_mode)
+        writer = self._apply_partition_overwrite(writer, config, write_mode)
 
         for option_key, option_value in vetted_write_options(config.get("options", {})).items():
             writer = writer.option(option_key, option_value)
@@ -192,6 +193,37 @@ class BaseSparkWriter(BaseIO):
             writer = self._apply_replace_where_strategy(writer, config)
 
         return writer
+
+    def _apply_partition_overwrite(
+        self, writer: Any, config: Dict[str, Any], write_mode: str
+    ) -> Any:
+        """``partition_overwrite: dynamic`` — an overwrite replaces only the partitions it wrote.
+
+        Spark's default (static) deletes the whole dataset first, so a run for one day of a
+        table partitioned by day left that day and nothing else. ``static`` is still the
+        default: replacing everything is a valid choice and Ducta does not make the other one.
+        A partition the run wrote no row for is not touched: it keeps what it had.
+        """
+        choice = str(config.get("partition_overwrite") or "static").lower()
+        if choice == "static":
+            return writer
+        if choice != "dynamic":
+            raise ConfigurationError(
+                f"Invalid partition_overwrite '{choice}'. Valid: static, dynamic"
+            )
+        if self.FORMAT == "delta":
+            raise ConfigurationError(
+                "partition_overwrite 'dynamic' is for file formats; replace a slice of a "
+                "Delta table with overwrite_strategy: replaceWhere or write mode merge"
+            )
+        if write_mode != WriteMode.OVERWRITE.value:
+            raise ConfigurationError(
+                f"partition_overwrite 'dynamic' needs write mode 'overwrite' (got '{write_mode}')"
+            )
+        if not config.get("partition"):
+            raise ConfigurationError("partition_overwrite 'dynamic' needs partition columns")
+        logger.debug("partitionOverwriteMode=dynamic applied")
+        return writer.option("partitionOverwriteMode", "dynamic")
 
     def _apply_replace_where_strategy(self, writer: Any, config: Dict[str, Any]) -> Any:
         """Apply replaceWhere or replace_predicate for Delta format."""
@@ -429,8 +461,7 @@ class CSVWriter(BaseSparkWriter):
 
     def _prepare_write_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
         """Merge CSV-specific default options into config."""
-        csv_defaults = {**DEFAULT_CSV_OPTIONS, "quote": '"', "escape": '"'}
-        merged_options = {**csv_defaults, **config.get("options", {})}
+        merged_options = {**CSV_WRITE_DEFAULTS, **config.get("options", {})}
         return {**config, "options": merged_options}
 
 

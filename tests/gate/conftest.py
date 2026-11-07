@@ -116,10 +116,10 @@ def _install_mocks():
             continue
         sys.modules[name] = mod
 
-    _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame)
+    _adopt_already_imported_modules(SparkDataFrame)
 
 
-def _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame):
+def _adopt_already_imported_modules(SparkDataFrame):
     """Point already-imported ducta modules at the fake Spark classes.
 
     Installing fakes in ``sys.modules`` only affects code that imports *after*
@@ -144,10 +144,9 @@ def _adopt_already_imported_modules(SparkDataFrame, ConnectDataFrame):
     import importlib
 
     targets = {
-        "ducta.gate.output.dataframes": {
-            "SparkDataFrame": SparkDataFrame,
-            "ConnectDataFrame": ConnectDataFrame,
-        },
+        # ConnectDataFrame needs no rebinding: the module looks it up in
+        # sys.modules, where the fake is installed above.
+        "ducta.gate.output.dataframes": {"SparkDataFrame": SparkDataFrame},
     }
 
     for module_name, replacements in targets.items():

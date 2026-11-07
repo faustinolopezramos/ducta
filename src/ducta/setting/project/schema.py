@@ -414,6 +414,30 @@ class WriteSpec(_Strict):
     partition_col: Optional[str] = None
     replace_predicate: Optional[str] = None
     overwrite_schema: Optional[bool] = None
+    partition_overwrite: Optional[Literal["static", "dynamic"]] = Field(
+        default=None,
+        description="With `partition` and mode overwrite: 'static' (default) replaces the whole "
+        "dataset; 'dynamic' replaces only the partitions the run wrote and keeps the rest "
+        "(files formats; Delta uses overwrite_strategy: replaceWhere or mode merge)",
+    )
+
+    @model_validator(mode="after")
+    def _partition_overwrite_needs_partitions(self) -> "WriteSpec":
+        if self.partition_overwrite != "dynamic":
+            return self
+        if not self.partition:
+            raise ValueError("write.partition_overwrite 'dynamic' needs write.partition: [...]")
+        if self.mode not in (None, "overwrite"):
+            raise ValueError(
+                f"write.partition_overwrite 'dynamic' replaces partitions, so it needs mode "
+                f"'overwrite' (got '{self.mode}')"
+            )
+        if self.overwrite_strategy:
+            raise ValueError(
+                "write.partition_overwrite 'dynamic' and overwrite_strategy 'replaceWhere' "
+                "both choose what an overwrite replaces; set one"
+            )
+        return self
 
     @model_validator(mode="after")
     def _merge_needs_spec(self) -> "WriteSpec":
@@ -794,6 +818,12 @@ class IngestSpec(_Strict):
     query: Optional[str] = None
     columns: Optional[List[str]] = None
     where: Optional[str] = None
+    incremental: Optional[Incremental] = Field(
+        default=None,
+        description="{column: …}: read only the run's --start-date/--end-date window of that "
+        "column (the source filters it, so a daily run costs a day). Without dates the run "
+        "reads everything.",
+    )
     options: Dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("options")

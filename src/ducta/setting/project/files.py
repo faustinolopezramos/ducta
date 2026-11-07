@@ -36,15 +36,11 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 import yaml  # type: ignore[import-untyped]
-
-try:  # Python 3.11+
-    import tomllib
-except ImportError:  # pragma: no cover - Python 3.10
-    import tomli as tomllib  # type: ignore[no-redef]
 
 #: Every suffix a project file may have, in the order discovery lists them.
 SUFFIXES: Tuple[str, ...] = (".yaml", ".yml", ".toml", ".json")

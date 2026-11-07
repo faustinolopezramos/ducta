@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional
 from rich.console import Console
 from rich.text import Text
 
+from ducta.core.errors import JVM_GONE_PATTERN
+
 ERROR_PATTERNS = {
     "UNRESOLVED_COLUMN": {
         "pattern": r"\[UNRESOLVED_COLUMN\.WITH_SUGGESTION\] A column.*?`([^`]+)`.*?Did you mean.*?\[([^\]]+)\]",
@@ -99,6 +101,12 @@ ERROR_PATTERNS = {
         "emoji": "💾",
         "color": "bright_red",
     },
+    "JVM_GONE": {
+        "pattern": JVM_GONE_PATTERN.pattern,
+        "type": "Spark JVM Stopped",
+        "emoji": "💾",
+        "color": "bright_red",
+    },
     "NULL_POINTER": {
         "pattern": r"NullPointerException|'NoneType' object",
         "type": "Null Reference Error",
@@ -167,6 +175,13 @@ ERROR_HINTS: Dict[str, Any] = {
     "MEMORY_ERROR": lambda m: {
         "message": "Insufficient memory",
         "suggestions": ["Reduce dataset size", "Increase memory", "Process in batches"],
+    },
+    "JVM_GONE": lambda m: {
+        "message": "The Spark JVM stopped, usually because it ran out of memory",
+        "suggestions": [
+            "Look for java.lang.OutOfMemoryError earlier in the log",
+            "Give it more: settings.spark_config: {spark.driver.memory: 4g}",
+        ],
     },
     "TIMEOUT": lambda m: {
         "message": "Operation exceeded time limit",
@@ -410,7 +425,8 @@ def print_error_report(
     console.print()
     where = f" in {scope} '{node_name}'" if scope else ""
     console.print(f"{sev_emoji.get(severity, '❌')} {etype}{where}", style=f"bold {color}")
-    console.print(f"  ERROR: {message}", style="bold")
+    # Error text is literal: `[/data/x.csv]` read as markup raised MarkupError here.
+    console.print(f"  ERROR: {message}", style="bold", markup=False)
     if location:
         console.print(
             Text.assemble(
@@ -431,7 +447,7 @@ def print_error_report(
     if suggestions:
         console.print("  💡 Suggestions:", style="bold bright_cyan")
         for i, s in enumerate(suggestions[:5], 1):
-            console.print(f"    {i}. {s}", style="bright_green")
+            console.print(f"    {i}. {s}", style="bright_green", markup=False)
     console.print()
 
 

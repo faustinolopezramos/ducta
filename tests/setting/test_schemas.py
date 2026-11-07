@@ -27,6 +27,18 @@ from ducta.setting.schemas import (
 
 
 class TestGlobalConfigSchema:
+    def test_an_unknown_fingerprint_mode_is_rejected(self):
+        # It validated clean, and the run then hashed in full whatever was asked for.
+        with pytest.raises(ValueError, match="fingerprint_mode"):
+            GlobalConfigSchema(input_path="/in", output_path="/out", fingerprint_mode="banana")
+
+    def test_every_fingerprint_mode_the_engine_knows_is_accepted(self):
+        from ducta.mlrun.fingerprint import VALID_MODES
+
+        for mode in VALID_MODES:
+            s = GlobalConfigSchema(input_path="/in", output_path="/out", fingerprint_mode=mode)
+            assert s.fingerprint_mode == mode
+
     def test_required_fields(self):
         s = GlobalConfigSchema(input_path="/in", output_path="/out")
         assert s.input_path == "/in"

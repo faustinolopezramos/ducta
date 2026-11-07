@@ -87,7 +87,11 @@ def _newest_mtime(path: Path) -> Optional[float]:
 
 
 def path_has_data(path: str) -> bool:
-    """True if *path* holds a completed write (file, or non-empty dir)."""
+    """True if *path* holds a completed write (file, or non-empty dir).
+
+    ``_temporary`` is where Spark's committer works: while it exists the write has not
+    been committed, or the process died before it could be.
+    """
     p = Path(path)
     if not p.exists():
         return False
@@ -95,7 +99,7 @@ def path_has_data(path: str) -> bool:
         return p.stat().st_size > 0
     if p.is_dir():
         entries = list(p.iterdir())
-        if not entries:
+        if not entries or (p / "_temporary").exists():
             return False
         has_part_files = any(e.name.startswith("part-") for e in entries)
         if has_part_files:

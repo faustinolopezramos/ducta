@@ -416,3 +416,43 @@ class TestQualityExtensionsMustLoad:
 
         ctx = SimpleNamespace(global_config={"quality": {"extensions": ["my_checks"]}})
         load_context_quality_extensions(ctx, allow_python_config=False)  # no raise
+
+
+class TestOtherProjectFormat:
+    """A ``ducta.yaml`` written for another format is named, not reported as absent."""
+
+    def _write(self, root: Path, version: str) -> Path:
+        (root / "ducta.yaml").write_text(PROJECT.replace("version: 2", f"version: {version}"))
+        return root
+
+    def test_a_newer_format_says_to_upgrade(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        message = other_format(self._write(tmp_path, "3") / "sub")
+        assert message and "project format 3" in message and "pip install -U ducta" in message
+
+    def test_another_declared_version_is_named(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        message = other_format(self._write(tmp_path, "'beta'"))
+        assert message and "`version: beta`" in message
+
+    def test_a_format_2_project_or_none_says_nothing(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        assert other_format(tmp_path) is None
+        assert other_format(self._write(tmp_path, "2")) is None
+
+    def test_loading_reports_it(self, tmp_path):
+        from ducta.setting.exceptions import ConfigurationError
+        from ducta.setting.project.loader import load_project
+
+        with pytest.raises(ConfigurationError, match="upgrade Ducta"):
+            load_project(self._write(tmp_path, "3"))
+
+    def test_the_cli_reports_it(self, tmp_path):
+        from ducta.console.config import ConfigManager
+        from ducta.console.core import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="upgrade Ducta"):
+            ConfigManager(self._write(tmp_path, "3"))

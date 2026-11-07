@@ -2,7 +2,7 @@
 name: ducta
 description: Install, configure, run and troubleshoot Ducta, the configuration-as-code data-pipeline framework (batch, streaming, ML and hybrid pipelines on Spark or pandas). Use when the project has a ducta.yaml, catalog.yaml or catalog/, or pipelines/*.yaml, when the user mentions Ducta or the ducta CLI, or wants to create or fix medallion (bronze/silver/gold) pipelines, catalog datasets, ingestion sources, data quality checks and gates, MLOps training and model serving, streaming jobs, run certificates, or the Ducta web UI and server.
 license: Apache-2.0
-compatibility: Requires the ducta CLI (pip install ducta; Python 3.10-3.13). Works with any agent that can read files and run shell commands.
+compatibility: Requires the ducta CLI (pip install ducta; Python 3.11-3.14). Works with any agent that can read files and run shell commands.
 metadata:
   ducta-version: "0.3"
   skill-version: "1.1.3"
@@ -189,6 +189,10 @@ a parameter that does not match its `inputs` key…) appear per pipeline instead
 `"pipelines": {"etl": {"ok": false, "problems": [...]}}`, with `source: "preflight"`.
 
 - `config_error` non-empty: the project does not load at all — fix these first.
+- `environment`: versions of Python, Spark, Java or pandas known not to work together,
+  and Spark settings left unset that change results (ANSI mode on Spark 4, the session
+  time zone), each sentence with its fix. Not counted in `ok`; tell the user before they
+  run, and let them choose the value — do not set it for them.
 - `fix.replace: [old, new]`: replace `old` with `new` at `file`:`line`; still read the
   line first.
 - `severity: warning` never fails a run; mention it, do not block on it.

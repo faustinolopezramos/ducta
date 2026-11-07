@@ -643,10 +643,7 @@ async def preview_dataset(
     dependencies=[Depends(require_permission("project.read"))],
 )
 async def get_ruff_config(project_id: str, svc: ProjectServiceDep) -> Dict[str, Any]:
-    try:
-        import tomllib
-    except ImportError:  # Python 3.10
-        import tomli as tomllib  # type: ignore[no-redef]
+    import tomllib
 
     root = svc.store(project_id).root
     for candidate in (root / "ruff.toml", root / ".ruff.toml"):

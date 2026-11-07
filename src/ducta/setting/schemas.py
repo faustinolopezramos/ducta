@@ -282,7 +282,7 @@ class GlobalConfigSchema(BaseModel):
     enable_data_fingerprinting: bool = Field(
         default=True, description="Enable data fingerprinting for lineage tracking"
     )
-    fingerprint_mode: str = Field(
+    fingerprint_mode: Literal["auto", "exact", "exact_crypto", "sample", "schema"] = Field(
         default="auto",
         description=(
             "How much of a dataset the fingerprint covers. 'auto' (default): cost "

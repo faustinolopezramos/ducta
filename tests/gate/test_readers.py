@@ -216,7 +216,7 @@ class TestXMLReader:
     def test_read_missing_package(self, spark_session):
         del spark_session._jvm.com.databricks.spark.xml
         reader = XMLReader({"spark": spark_session})
-        with pytest.raises(ConfigurationError, match="XML reader requires"):
+        with pytest.raises(ConfigurationError, match="spark-xml_2.12:0.18.0"):
             reader.read("/path", {})
 
     def test_read_success(self, spark_session, spark_dataframe):
@@ -300,3 +300,21 @@ class TestPartitionFilterIsAPlainPredicate:
             "/data/x", {"partition_filter": "year = 2024 AND month IN (1, 2)"}
         )
         frame.filter.assert_called_once_with("year = 2024 AND month IN (1, 2)")
+
+
+class TestNoSparkSession:
+    def test_says_how_to_install_pyspark_when_it_is_missing(self):
+        from unittest.mock import patch
+
+        from ducta.gate.readers import _no_spark_error
+
+        with patch("importlib.util.find_spec", return_value=None):
+            assert 'pip install "ducta[spark]"' in str(_no_spark_error("CSV", "x.csv"))
+
+    def test_says_nothing_about_installing_when_it_is_there(self):
+        from unittest.mock import MagicMock, patch
+
+        from ducta.gate.readers import _no_spark_error
+
+        with patch("importlib.util.find_spec", return_value=MagicMock()):
+            assert "pip install" not in str(_no_spark_error("CSV", "x.csv"))
