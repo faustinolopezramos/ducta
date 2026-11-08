@@ -202,13 +202,19 @@ FRAMEWORK_DISTRIBUTIONS: Dict[str, tuple] = {
 }
 
 
+#: Under every framework's pickle: a model from numpy 1 does not load on numpy 2.
+#: Serving names them only on another major version (:func:`ducta.mlrun.serving.framework_drift`).
+SUPPORT_DISTRIBUTIONS: tuple = ("numpy", "pandas")
+
+
 def framework_versions(framework: str) -> Dict[str, str]:
     """The installed versions that matter for a *framework* model, by distribution."""
     import platform
     from importlib import metadata
 
     found = {"python": platform.python_version()}
-    for distribution in FRAMEWORK_DISTRIBUTIONS.get(str(framework).lower(), ()):
+    wanted = FRAMEWORK_DISTRIBUTIONS.get(str(framework).lower(), ()) + SUPPORT_DISTRIBUTIONS
+    for distribution in dict.fromkeys(wanted):
         try:
             found[distribution] = metadata.version(distribution)
         except metadata.PackageNotFoundError:

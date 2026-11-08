@@ -220,6 +220,8 @@ def framework_drift(resolved: ResolvedModel) -> List[str]:
     """
     from importlib import metadata
 
+    from ducta.mlrun.model_registry import SUPPORT_DISTRIBUTIONS
+
     found: List[str] = []
     for distribution, trained in sorted(resolved.framework_versions.items()):
         if distribution == "python":
@@ -244,6 +246,8 @@ def framework_drift(resolved: ResolvedModel) -> List[str]:
             )
             continue
         major = str(trained).split(".")[0] != installed.split(".")[0]
+        if distribution in SUPPORT_DISTRIBUTIONS and not major:
+            continue  # numpy/pandas: only another major version breaks a pickle
         found.append(
             f"{model} was registered with {distribution} {trained}; {installed} is installed"
             + (" (another major version: it may not load)" if major else "")

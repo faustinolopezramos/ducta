@@ -95,6 +95,15 @@ refuses to boot otherwise.
       Never `*`: with credentials allowed, that lets any site a user visits
       read authenticated responses. Loopback is no defence — the browser is on
       the loopback host.
+- [ ] **`ALLOWED_HOSTS`** set to the names users type (e.g.
+      `ducta.company.com`) when binding `0.0.0.0`. Unset there, the server
+      answers to any `Host` name, which lets a web page reach it through a DNS
+      name the page controls (DNS rebinding). On loopback only `localhost`,
+      `127.0.0.1` and `::1` are answered.
+- [ ] **The `developer` role only for people you would trust as admin.**
+      Pipelines run inside the API process, so code a developer writes and runs
+      can read the server's settings — `JWT_SECRET_KEY` included — and sign
+      itself any role.
 - [ ] **`RATE_LIMIT_ENABLED=true`** (auto-enabled with auth, but set it
       explicitly), and `RATE_LIMIT_REDIS_URL` if you run more than one worker —
       the in-memory limiter is per-process, so the effective limit otherwise

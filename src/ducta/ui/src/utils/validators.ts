@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+// The API's CSP allows no eval. Zod probes for it with a caught `new Function`,
+// which the browser still reports as a CSP violation; jitless skips the probe
+// (and the JIT it would enable).
+z.config({ jitless: true });
+
 /**
  * Validation schemas using Zod
  * Provides runtime type-checking for all forms and API responses

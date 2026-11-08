@@ -103,4 +103,46 @@ def test_on_windows_lock_and_unlock_name_the_same_byte(tmp_path, monkeypatch):
         monkeypatch.undo()
         importlib.reload(locking)
 
-    assert calls == [(1, 0, 1), (0, 0, 1)]
+    # LK_NBLCK in a loop (LK_LOCK gives up after ten seconds), then LK_UNLCK, both on byte 0.
+    assert calls == [(2, 0, 1), (0, 0, 1)]
+
+
+def test_on_windows_exclusive_lock_keeps_trying_until_the_holder_releases(tmp_path, monkeypatch):
+    import importlib
+    import sys
+    import types
+
+    import ducta.locking as locking
+
+    attempts = []
+
+    def fake_locking(fd, mode, nbytes):
+        attempts.append(mode)
+        if mode == 2 and attempts.count(2) < 4:  # held by someone else three times
+            raise OSError(36, "Resource deadlock avoided")
+
+    fake = types.SimpleNamespace(LK_LOCK=1, LK_UNLCK=0, LK_NBLCK=2, locking=fake_locking)
+    monkeypatch.setitem(sys.modules, "msvcrt", fake)
+    monkeypatch.setattr(sys, "platform", "win32")
+    windows = importlib.reload(locking)
+    monkeypatch.setattr(windows.time, "sleep", lambda seconds: None)
+    try:
+        path = tmp_path / "data.json"
+        path.write_text("x")
+        with open(path, "r+") as f:
+            with windows.exclusive_lock(f):
+                pass
+    finally:
+        monkeypatch.undo()
+        importlib.reload(locking)
+
+    assert attempts == [2, 2, 2, 2, 0]
+
+
+def test_wait_for_retries_until_true():
+    from ducta.locking import _wait_for
+
+    answers = iter([False, False, True])
+    pauses = []
+    _wait_for(lambda: next(answers), sleep=pauses.append)
+    assert pauses == [0.05, 0.05]

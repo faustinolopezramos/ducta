@@ -59,16 +59,21 @@ def jvm(spark: Any) -> Optional[Any]:
         return None
 
 
-def jvm_has_package(spark: Any, dotted: str) -> bool:
-    """Whether a Java package (``com.databricks.spark.xml``) is on the driver's classpath."""
-    node = jvm(spark)
-    if node is None:
+def jvm_has_class(spark: Any, class_name: str) -> bool:
+    """Whether a Java class (``com.databricks.spark.xml.DefaultSource``) can be loaded.
+
+    A class, not a package: py4j answers *any* dotted name with a ``JavaPackage``, so
+    walking ``_jvm.com.databricks.spark.xml`` is truthy whether spark-xml is there or
+    not. The context class loader is the one ``spark.jars.packages`` adds to.
+    """
+    handle = jvm(spark)
+    if handle is None:
         return False
     try:
-        for part in dotted.split("."):
-            node = getattr(node, part)
+        loader = handle.java.lang.Thread.currentThread().getContextClassLoader()
+        handle.java.lang.Class.forName(class_name, False, loader)
         return True
-    except Exception:  # noqa: BLE001 — py4j raises its own errors for a missing class
+    except Exception:  # noqa: BLE001 — py4j raises Py4JJavaError (ClassNotFoundException)
         return False
 
 

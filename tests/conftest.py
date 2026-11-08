@@ -37,6 +37,11 @@ os.environ.setdefault(
     "COVERAGE_RCFILE", str(Path(__file__).resolve().parent.parent / "pyproject.toml")
 )
 
+# Starlette's TestClient sends ``Host: testserver``; the API refuses names it does not
+# answer to (DNS rebinding guard), so the suite declares that one. Set at import, before
+# any test module builds the app. An operator-supplied value wins.
+os.environ.setdefault("ALLOWED_HOSTS", "testserver")
+
 # Spark launches its Python workers with whatever `python3` is first on PATH —
 # on macOS the system 3.9 — and every Python-side operation then dies with
 # PYTHON_VERSION_MISMATCH. Pin them to this interpreter for every test that
@@ -137,6 +142,22 @@ def _forget_project_modules(tmp_path_factory):
         locations += list(getattr(module, "__path__", None) or [])
         if any(loc and os.path.realpath(loc).startswith(base) for loc in locations):
             del sys.modules[name]
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _isolated_user_state(tmp_path_factory):
+    """Keep the suite out of the developer's ``~/.ducta``.
+
+    ``state.user_dir`` (AI settings, evals, the web app's history) and the StorageBackend
+    (certificate copies) default to the home folder: one suite run left a dozen
+    certificates there. Environment variables, so the CLI subprocesses inherit them.
+    """
+    root = tmp_path_factory.mktemp("ducta_user_state")
+    patch = pytest.MonkeyPatch()
+    patch.setenv("DUCTA_HOME", str(root / "home"))
+    patch.setenv("DUCTA_STORAGE_PATH", str(root / "storage"))
+    yield root
+    patch.undo()
 
 
 @pytest.fixture(autouse=True, scope="session")

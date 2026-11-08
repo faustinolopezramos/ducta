@@ -280,11 +280,15 @@ warn_unused_configs = true
 ignore_missing_imports = true
 show_error_codes = true
 
-# Installed packages whose source mypy must not parse: sphinx ships Python
-# 3.12 `type` statements, which stop the whole run under python_version 3.11.
+# Installed packages whose source mypy must not parse: sphinx, and numpy from
+# 2.3 (installed on Python 3.12+), ship Python 3.12 `type` statements, which stop
+# the whole run under python_version 3.11. CI's py3.11 gets numpy 1.26 and passed;
+# a py3.13 environment did not. numpy's are stubs (.pyi), which follow_imports
+# leaves alone unless follow_imports_for_stubs says otherwise.
 [[tool.mypy.overrides]]
-module = ["sphinx.*"]
+module = ["sphinx.*", "numpy", "numpy.*"]
 follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.ruff]
 line-length = 100

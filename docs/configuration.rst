@@ -261,6 +261,10 @@ list; the ones most projects touch:
      - ``off``, ``record`` (default: a Run Certificate per run), ``required``
        (a run without its certificate fails) or ``signed`` (HMAC-signed; needs
        ``DUCTA_CERTIFICATE_KEY``). See :doc:`tutorials/certificates`.
+       Each certificate is written under the environment's output. With
+       ``DUCTA_STORAGE_PATH`` (a folder) or ``DUCTA_STORAGE_BACKEND=s3``
+       (``DUCTA_STORAGE_BUCKET``, ``DUCTA_STORAGE_PREFIX``) set, a copy also goes
+       to that store, which the web app reads back.
    * - ``run_lock``
      - Exclusive lock on each output dataset while a run writes it:
        ``{enabled: true, backend: local|storage, on_conflict: fail|wait}``.

@@ -285,8 +285,16 @@ warnings — and work through this checklist:
        an unset value, or ``admin``, stops the server from starting.
    * - ``CORS_ORIGINS``
      - explicit allow-list
-     - Avoid ``*``. Wildcard origins with credentials are rejected outside
-       development.
+     - Avoid ``*``; wildcard origins with credentials are always refused. A
+       ``POST``, ``PUT``, ``PATCH`` or ``DELETE`` whose ``Origin`` is neither the
+       server's own nor in this list gets a 403.
+   * - ``ALLOWED_HOSTS``
+     - the names users type
+     - Host names the server answers to, besides ``localhost``, ``127.0.0.1`` and
+       ``::1`` (comma-separated or JSON; ``*.company.com`` matches subdomains). Any
+       other ``Host`` gets a 400, so a web page cannot reach the server through a
+       DNS name it controls (DNS rebinding). Bound to ``0.0.0.0`` with no list, no
+       ``Host`` is checked and the server warns at startup.
    * - ``RATE_LIMIT_ENABLED``
      - ``true``
      - Enables the in-process sliding-window limiter. Also put a WAF / proxy
@@ -337,6 +345,14 @@ the permissions regardless.
        ``pipeline.read``, ``node.read``, ``dataset.read``, ``git.read``,
        ``repository.read``, ``execution.read``, ``quality.read``,
        ``ingestion.read``, ``template.read``, ``sentinel.read``.
+
+.. warning::
+
+   Pipelines run inside the API process. A user who can write code and run it
+   (``workspace.write`` and ``pipeline.execute``, which the ``developer`` role
+   has) can read the server's settings, ``JWT_SECRET_KEY`` included, and so sign
+   themselves any role. Give ``developer`` only to people you would trust as
+   ``admin``; the server says so at startup when authentication is on.
 
 Some routes need more than their name suggests:
 

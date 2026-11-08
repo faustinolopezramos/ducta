@@ -176,7 +176,9 @@ class IngestionExecutor:
                 f"Check the 'where' clause."
             ) from error
 
-        return f"({sql}) AS q"
+        # No `AS` before the alias: Oracle refuses it on a table alias, and every other
+        # supported database accepts the alias without it.
+        return f"({sql}) q"
 
     def execute(
         self,
@@ -267,7 +269,7 @@ class IngestionExecutor:
                 ) from error
             if window:
                 # The source filters the window: the declared query becomes its inner select.
-                query = f"SELECT * FROM ({query}) AS q WHERE {window}"
+                query = f"SELECT * FROM ({query}) q WHERE {window}"  # no `AS`: Oracle
                 try:
                     SQLSanitizer.sanitize_query(query)
                 except GateConfigurationError as error:

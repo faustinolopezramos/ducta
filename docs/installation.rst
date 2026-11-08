@@ -28,7 +28,8 @@ while ``settings.spark_config`` does not set them, to either value:
   behaviour; ``"true"`` keeps the error.
 * **The session time zone** (``spark.sql.session.timeZone``), by default the machine's:
   the same pipeline can compute other dates, timestamps and date partitions on a laptop
-  and on a server. Set it, for example to ``UTC``.
+  and on a server. Set it, for example to ``UTC``; the projects ``ducta init project``
+  creates set ``UTC``.
 
 .. code-block:: yaml
 

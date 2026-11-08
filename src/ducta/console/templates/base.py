@@ -149,6 +149,9 @@ class BaseTemplate:
         "  # faster Arrow conversion.\n"
         "  spark_config:\n"
         '    spark.sql.execution.arrow.pyspark.enabled: "false"\n'
+        "    # The same dates, timestamps and date partitions on every machine (the\n"
+        "    # default is the machine's own zone).\n"
+        "    spark.sql.session.timeZone: UTC\n"
     )
 
     def _sandbox_note(self) -> str:

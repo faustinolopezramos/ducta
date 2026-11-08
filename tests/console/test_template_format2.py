@@ -157,3 +157,17 @@ def test_no_marker_is_left_and_arrow_is_off_for_jdk_21(tmp_path, kind):
         assert "@@" not in path.read_text(), path.name
     spark = compile_project(validate_project(root, "dev"))["global_config"]["spark_config"]
     assert spark["spark.sql.execution.arrow.pyspark.enabled"] == "false"
+    # Same results on every machine: the time-zone warning does not fire on a new project.
+    assert spark["spark.sql.session.timeZone"] == "UTC"
+
+
+@pytest.mark.parametrize("kind", _KINDS)
+def test_a_new_project_raises_no_time_zone_warning(tmp_path, kind):
+    from ducta.runtime_check import TIMEZONE_KEY, spark_config_problems
+
+    spark = compile_project(validate_project(_generate(tmp_path, kind), "dev"))["global_config"][
+        "spark_config"
+    ]
+    assert not [p for p in spark_config_problems("3.5.9", spark) if TIMEZONE_KEY in p]
+    unset = {k: v for k, v in spark.items() if k != TIMEZONE_KEY}
+    assert [p for p in spark_config_problems("3.5.9", unset) if TIMEZONE_KEY in p]

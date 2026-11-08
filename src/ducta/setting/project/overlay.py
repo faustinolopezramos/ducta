@@ -125,6 +125,32 @@ def _environment_block(environments: Dict[str, Any], active: str) -> Optional[st
     return None
 
 
+#: (project, environment) already warned about in this process: a run loads the project
+#: more than once, and one warning is enough.
+_WARNED_UNDECLARED: set = set()
+
+
+def undeclared_environment_message(active: str, environments: Dict[str, Any]) -> str:
+    """What to say when ``--env`` names none of the project's ``environments``."""
+    declared = sorted(str(k) for k, v in environments.items() if isinstance(v, dict))
+    close = difflib.get_close_matches(active, declared, n=1)
+    hint = f" Did you mean '{close[0]}'?" if close else ""
+    return (
+        f"Environment '{active}' is not declared in ducta.yaml (declared: "
+        f"{', '.join(declared) or 'none'}): running with the base project, writing under "
+        f"its own folder.{hint}"
+    )
+
+
+def _warn_undeclared(project: Any, active: str, environments: Dict[str, Any]) -> None:
+    """A typo in ``--env`` runs the base project; say so once, where it shows."""
+    key = (str(project), active)
+    if key in _WARNED_UNDECLARED:
+        return
+    _WARNED_UNDECLARED.add(key)
+    logger.warning(undeclared_environment_message(active, environments))
+
+
 def environment_overrides(
     located: _Located, env: Optional[str], tree: Optional[Dict[str, Any]] = None
 ) -> Tuple[Optional[str], Dict[str, Any]]:
@@ -142,7 +168,7 @@ def environment_overrides(
     name = _environment_block(environments, active)
     if name is None:
         if active != "base":
-            logger.info("No overrides for environment '{}' — using the base project", active)
+            _warn_undeclared(located.project.get("project"), active, environments)
         return None, {}
     overrides: Dict[str, Any] = {}
     unreachable: List[str] = []

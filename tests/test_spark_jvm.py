@@ -44,20 +44,26 @@ def test_no_jvm_under_spark_connect():
     assert spark_jvm.jvm(session) is None
     assert spark_jvm.hadoop_configuration(session) is None
     assert spark_jvm.java_version(session) is None
-    assert spark_jvm.jvm_has_package(session, "com.databricks.spark.xml") is False
+    assert spark_jvm.jvm_has_class(session, "com.databricks.spark.xml.DefaultSource") is False
 
 
-def test_a_missing_java_package_is_false():
-    class Gateway:
-        def __getattr__(self, name):
-            if name == "xml":
-                raise AttributeError(name)
-            return self
+def _gateway(loadable):
+    """A py4j gateway whose ``Class.forName`` loads only the names in *loadable*."""
 
-    assert (
-        spark_jvm.jvm_has_package(SimpleNamespace(_jvm=Gateway()), "com.databricks.spark.xml")
-        is False
-    )
+    def for_name(name, initialize, loader):
+        if name not in loadable:
+            raise RuntimeError(f"java.lang.ClassNotFoundException: {name}")
+        return name
+
+    thread = SimpleNamespace(currentThread=lambda: SimpleNamespace(getContextClassLoader=object))
+    lang = SimpleNamespace(Class=SimpleNamespace(forName=for_name), Thread=thread)
+    return SimpleNamespace(java=SimpleNamespace(lang=lang))
+
+
+def test_a_class_is_found_only_when_it_loads():
+    name = "com.databricks.spark.xml.DefaultSource"
+    assert spark_jvm.jvm_has_class(SimpleNamespace(_jvm=_gateway({name})), name) is True
+    assert spark_jvm.jvm_has_class(SimpleNamespace(_jvm=_gateway(set())), name) is False
 
 
 def test_java_version_reads_the_system_property():

@@ -396,3 +396,33 @@ class TestFrameworkVersions:
         mv = _register(registry, tmp_path)
         resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
         assert framework_drift(replace(resolved, framework_versions={})) == []
+
+
+class TestSupportLibraryVersions:
+    """numpy and pandas sit under every pickle: recorded always, named on a major change only."""
+
+    def test_numpy_and_pandas_are_recorded(self):
+        import numpy
+        import pandas
+
+        from ducta.mlrun.model_registry import framework_versions
+
+        found = framework_versions("sklearn")
+        assert found["numpy"] == numpy.__version__ and found["pandas"] == pandas.__version__
+        assert "numpy" in framework_versions("xgboost")
+
+    def test_only_another_major_version_is_named(self, registry, tmp_path):
+        from dataclasses import replace
+
+        import numpy
+
+        from ducta.mlrun.serving import framework_drift
+
+        mv = _register(registry, tmp_path)
+        resolved = resolve_model(_ref(stage=None, version=mv.version), registry=registry)
+        major = int(numpy.__version__.split(".")[0])
+        same_major = replace(resolved, framework_versions={"numpy": f"{major}.0.0"})
+        assert framework_drift(same_major) == []
+        other_major = replace(resolved, framework_versions={"numpy": f"{major - 1}.26.4"})
+        [said] = framework_drift(other_major)
+        assert "numpy" in said and "another major version" in said

@@ -399,8 +399,21 @@ def is_enabled(context: Any) -> bool:
     return CoreSettings.from_context(context).enable_run_certificate
 
 
+def _storage_configured() -> bool:
+    """Whether a StorageBackend was chosen (``DUCTA_STORAGE_BACKEND`` or ``DUCTA_STORAGE_PATH``).
+
+    The copy there is for a shared store (S3, a team folder) the API reads back. Without
+    one it went to ``~/.ducta/storage`` on every run, never pruned: thousands of
+    certificates of every project on the machine, kept nowhere a user looks.
+    """
+    return bool(os.environ.get("DUCTA_STORAGE_BACKEND") or os.environ.get("DUCTA_STORAGE_PATH"))
+
+
 def write_certificate(cert: RunCertificate, run_dir: Path) -> Path:
-    """Atomically write ``certificate.json`` into ``run_dir`` and sync to StorageBackend; return its path."""
+    """Atomically write ``certificate.json`` into ``run_dir``; return its path.
+
+    Also copied to the StorageBackend when one is configured (:func:`_storage_configured`).
+    """
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "certificate.json"
     payload = json.dumps(cert.sealed(), indent=2, default=str)
@@ -413,6 +426,8 @@ def write_certificate(cert: RunCertificate, run_dir: Path) -> Path:
         if os.path.exists(tmp):
             os.remove(tmp)
 
+    if not _storage_configured():
+        return target
     try:
         from ducta.core.storage import get_storage_backend
 

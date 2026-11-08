@@ -46,7 +46,7 @@ class TestTableWindow:
     def test_the_window_is_a_predicate_with_the_end_day_whole(self):
         opts = _harness()({"source": "s", "table": "orders", "incremental": {"column": "order_ts"}})
         assert opts["dbtable"] == (
-            "(SELECT * FROM orders WHERE order_ts >= '2026-01-01' AND order_ts < '2026-01-03') AS q"
+            "(SELECT * FROM orders WHERE order_ts >= '2026-01-01' AND order_ts < '2026-01-03') q"
         )
 
     def test_it_is_added_to_the_declared_where_and_columns(self):
@@ -61,7 +61,7 @@ class TestTableWindow:
         )
         assert opts["dbtable"] == (
             "(SELECT id, order_ts FROM orders WHERE (status = 'paid' OR status = 'shipped') "
-            "AND order_ts >= '2026-01-01' AND order_ts < '2026-01-03') AS q"
+            "AND order_ts >= '2026-01-01' AND order_ts < '2026-01-03') q"
         )
 
     def test_without_incremental_the_table_is_read_whole_as_before(self):
@@ -83,7 +83,7 @@ class TestQueryWindow:
             }
         )
         assert opts["query"] == (
-            "SELECT * FROM (SELECT id, order_ts FROM orders WHERE total > 0) AS q "
+            "SELECT * FROM (SELECT id, order_ts FROM orders WHERE total > 0) q "
             "WHERE order_ts >= '2026-01-01' AND order_ts < '2026-01-03'"
         )
 
@@ -101,6 +101,25 @@ class TestDialect:
             {"source": "s", "table": "orders", "incremental": {"column": "d"}}
         )
         assert "d >= '2026-01-01' AND d < '2026-01-03'" in opts["dbtable"]
+
+
+class TestOracleAlias:
+    """Oracle refuses ``AS`` before a table alias (ORA-00933): no statement may carry it."""
+
+    @pytest.mark.parametrize(
+        "node",
+        [
+            {"source": "s", "table": "orders", "columns": ["id"]},
+            {"source": "s", "table": "orders", "where": "id > 0"},
+            {"source": "s", "table": "orders", "incremental": {"column": "d"}},
+            {"source": "s", "query": "SELECT id, d FROM orders", "incremental": {"column": "d"}},
+        ],
+    )
+    def test_the_alias_has_no_as(self, node):
+        opts = _harness("oracle")(node)
+        statement = opts.get("dbtable") or opts.get("query")
+        assert ") AS q" not in statement
+        assert ") q" in statement
 
 
 class TestRefusals:

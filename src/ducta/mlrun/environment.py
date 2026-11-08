@@ -21,7 +21,6 @@ SPDX-License-Identifier: Apache-2.0
 import hashlib
 import platform
 import subprocess
-import sys
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, Optional, cast
 
@@ -79,18 +78,13 @@ def _capture_git_info(git_root: Optional[str] = None) -> Dict[str, Any]:
 def _capture_pip_packages() -> Dict[str, str]:
     packages: Dict[str, str] = {}
     try:
-        if sys.version_info >= (3, 8):
-            import importlib.metadata
+        import importlib.metadata
 
-            for dist in importlib.metadata.distributions():
-                name = dist.metadata.get("Name")
-                if name:
-                    packages[name] = dist.version
-        else:
-            import pkg_resources
-
-            for dist in pkg_resources.working_set:
-                packages[dist.project_name] = dist.version
+        for dist in importlib.metadata.distributions():
+            # `Distribution.name` (3.10+): PackageMetadata has no typed `.get` before 3.12.
+            name = dist.name
+            if name:
+                packages[name] = dist.version
     except Exception as e:
         logger.debug(f"Pip packages capture skipped: {e}")
     return packages

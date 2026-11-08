@@ -114,9 +114,20 @@ def _fit_functions(functions: List[str], budget: int) -> str:
     return "\n".join(lines)
 
 
+#: Keys whose prefix gives them away, wherever they appear: OpenAI/Anthropic
+#: (``sk-``), AWS access key ids, GitHub, Slack and Databricks tokens.
+_PREFIXED_KEY = (
+    r"(?:sk-[\w-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_\w{30,}|xox[abp]-[\w-]{10,}"
+    r"|dapi[0-9a-f]{32}(?:-\d+)?)"
+)
+_PRIVATE_KEY = r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
+
 #: Credentials that commonly end up in a failed run's error text: a URL's
-#: password, ``password=…``-style settings, and bearer tokens.
+#: password, ``password=…``-style settings, bearer tokens, prefixed keys and
+#: private keys.
 _SECRETS = (
+    (re.compile(_PRIVATE_KEY, re.DOTALL), "***"),
+    (re.compile(rf"\b{_PREFIXED_KEY}"), "***"),
     (re.compile(r"(\b[a-zA-Z][\w+.-]{0,32}://[^/\s:@]+:)[^/\s@]+@"), r"\1***@"),
     (
         # A name that *contains* a credential word (``db_password``, ``PGPASSWORD``,
@@ -211,9 +222,7 @@ _CODE_SECRETS = (
     ("a bearer token", re.compile(r"(?i)\bbearer\s+(?P<v>[\w.~+/-]{16,}=*)")),
     (
         "an API key",
-        re.compile(
-            r"\b(?P<v>(?:sk-[\w-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_\w{30,}|xox[abp]-[\w-]{10,}))"
-        ),
+        re.compile(rf"\b(?P<v>{_PREFIXED_KEY})"),
     ),
 )
 #: The same in YAML, where a value is rarely quoted: ``password: Hunter2`` on
@@ -242,10 +251,7 @@ _INNER_SECRET = re.compile(
 _SHAPED_SECRETS = (
     (
         "a private key",
-        re.compile(
-            r"(?P<v>-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z))",
-            re.DOTALL,
-        ),
+        re.compile(rf"(?P<v>{_PRIVATE_KEY})", re.DOTALL),
     ),
     ("a token", re.compile(r"\b(?P<v>eyJ[\w-]{8,}\.[\w-]{8,}\.[\w-]{8,})")),
 )

@@ -9,13 +9,16 @@ from ducta.gate.readers import XMLReader, spark_xml_available, xml_format
 
 
 def _jvm_with_xml(present: bool):
-    class Gateway:
-        def __getattr__(self, name):
-            if name == "xml" and not present:
-                raise AttributeError(name)
-            return self
+    """A gateway whose ``Class.forName`` loads spark-xml's data source only if *present*."""
 
-    return Gateway()
+    def for_name(name, initialize, loader):
+        if not present or name != "com.databricks.spark.xml.DefaultSource":
+            raise RuntimeError(f"java.lang.ClassNotFoundException: {name}")
+        return name
+
+    thread = SimpleNamespace(currentThread=lambda: SimpleNamespace(getContextClassLoader=object))
+    lang = SimpleNamespace(Class=SimpleNamespace(forName=for_name), Thread=thread)
+    return SimpleNamespace(java=SimpleNamespace(lang=lang))
 
 
 def test_spark_4_reads_xml_without_a_package():

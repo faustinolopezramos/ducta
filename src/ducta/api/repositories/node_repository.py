@@ -54,6 +54,27 @@ def _normalize_node_spec(spec: Dict[str, Any], node_name: Optional[str] = None) 
     return normalized
 
 
+def _denormalize_node_spec(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """Undo ``_normalize_node_spec``: the ``inputs``/``outputs`` a client read back
+    become the ``input``/``output`` the engine's node spec uses.
+
+    Without it, saving a node exactly as ``GET /nodes/{name}`` returned it failed
+    ("key 'inputs' is not a node setting Ducta reads").
+    """
+    restored = dict(spec)
+    for single, plural in (("input", "inputs"), ("output", "outputs")):
+        if plural not in restored or single in restored:
+            continue
+        value = restored.pop(plural)
+        if single == "input" and isinstance(value, list) and len(value) == 1:
+            # Named inputs ({param: dataset}) read back as a one-item list.
+            if isinstance(value[0], dict):
+                value = value[0]
+        if value:
+            restored[single] = value
+    return restored
+
+
 class NodeRepository:
     """Reads and writes node definitions for a workspace root."""
 
@@ -142,7 +163,7 @@ class NodeRepository:
                     detail={"pipeline": pipeline},
                 )
             store = candidates[0]
-        return store.save_node(name, spec, expected_sha, pipeline=pipeline)
+        return store.save_node(name, _denormalize_node_spec(spec), expected_sha, pipeline=pipeline)
 
     def delete(self, name: str, expected_sha: Optional[str] = None) -> str:
         return self._owner(name).delete_node(name, expected_sha)

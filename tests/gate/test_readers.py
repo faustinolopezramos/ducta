@@ -1,5 +1,5 @@
 import sys
-from unittest.mock import MagicMock, PropertyMock, call, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -214,7 +214,7 @@ class TestXMLReader:
             reader.read("/path", {})
 
     def test_read_missing_package(self, spark_session):
-        del spark_session._jvm.com.databricks.spark.xml
+        spark_session._jvm.java.lang.Class.forName.side_effect = Exception("ClassNotFound")
         reader = XMLReader({"spark": spark_session})
         with pytest.raises(ConfigurationError, match="spark-xml_2.12:0.18.0"):
             reader.read("/path", {})
@@ -273,7 +273,7 @@ class TestSparkXmlAvailable:
         from ducta.gate.readers import spark_xml_available
 
         spark = MagicMock()
-        type(spark._jvm.com.databricks.spark).xml = PropertyMock(side_effect=Exception("no class"))
+        spark._jvm.java.lang.Class.forName.side_effect = Exception("ClassNotFoundException")
         assert spark_xml_available(spark) is False
 
     def test_a_successful_xml_read_logs_no_warning(self):

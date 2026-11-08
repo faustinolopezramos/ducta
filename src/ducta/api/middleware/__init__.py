@@ -31,9 +31,35 @@ from loguru import logger  # type: ignore
 from ducta.api.config import get_settings
 from ducta.api.middleware.audit import maybe_write_audit
 from ducta.api.middleware.errors import register_exception_handlers
+from ducta.api.middleware.origin import RequestGuardMiddleware
 from ducta.api.middleware.rate_limit import RateLimitMiddleware
 
 __all__ = ["register_middleware", "RateLimitMiddleware"]
+
+
+def content_security_policy(is_production: bool) -> str:
+    """The CSP sent with every response.
+
+    Everything the UI loads is same-origin (the SPA, its typefaces under /fonts,
+    Monaco through ``loader.config``, never its CDN). Two grants are not
+    "self": ``'wasm-unsafe-eval'`` lets the ruff formatter compile its
+    WebAssembly — and nothing else, unlike ``'unsafe-eval'`` — and ``blob:``
+    workers are how Monaco and monaco-yaml start theirs. Styles keep
+    ``'unsafe-inline'`` for React's style attributes; scripts never get it.
+    """
+    framing = "'none'" if is_production else "'self'"
+    return (
+        "default-src 'self'; "
+        "script-src 'self' 'wasm-unsafe-eval'; "
+        "worker-src 'self' blob:; "
+        "style-src 'self' 'unsafe-inline'; "
+        "font-src 'self' data:; "
+        "img-src 'self' data: blob:; "
+        "connect-src 'self' ws: wss:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        f"frame-ancestors {framing}"
+    )
 
 
 def register_middleware(app: FastAPI) -> None:
@@ -65,6 +91,11 @@ def register_middleware(app: FastAPI) -> None:
         allow_headers=settings.cors_allow_headers,
     )
 
+    # Host + Origin guard. Added after CORS, so it runs first: a request for a
+    # foreign Host (DNS rebinding) or a state change from a foreign Origin never
+    # reaches a route. Preflights (OPTIONS) are not state changes and pass.
+    app.add_middleware(RequestGuardMiddleware)
+
     # Rate Limiting
     if settings.rate_limit_enabled and settings.workers > 1 and not settings.rate_limit_redis_url:
         logger.warning(
@@ -85,29 +116,12 @@ def register_middleware(app: FastAPI) -> None:
         redis_url=settings.rate_limit_redis_url,
     )
 
-    # Security Headers — strict in production, relaxed for local development.
-    if is_production:
-        # Restrict scripts/styles to same-origin (the SPA is served from the API
-        # itself). 'unsafe-inline' for styles keeps inline style attributes working;
-        # scripts stay locked down to mitigate XSS-driven token theft.
-        # `font-src 'self'` is required, not cosmetic: the UI serves its own
-        # typefaces from /fonts. Without the directive they fall through to
-        # default-src — which was fine while the fonts came from Google's CDN
-        # only because that link was *also* blocked, so nobody noticed the app
-        # had silently been rendering in the system stack all along.
-        _csp = (
-            "default-src 'self'; "
-            "script-src 'self'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "font-src 'self'; "
-            "img-src 'self' data: blob:; "
-            "connect-src 'self' ws: wss:; "
-            "frame-ancestors 'none'"
-        )
-        _frame_options = "DENY"
-    else:
-        _csp = "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:;"
-        _frame_options = "SAMEORIGIN"
+    # Security Headers. The packaged SPA is served by this app, so one policy fits
+    # every environment; only framing differs. The local policy used to be
+    # `default-src * 'unsafe-inline' 'unsafe-eval'` — exactly what `ducta ui` users
+    # got, on the one server that can run code.
+    _csp = content_security_policy(is_production)
+    _frame_options = "DENY" if is_production else "SAMEORIGIN"
 
     @app.middleware("http")
     async def add_security_headers(request: Request, call_next) -> Response:

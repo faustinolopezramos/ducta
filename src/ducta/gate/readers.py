@@ -28,7 +28,7 @@ from ducta.gate.base import BaseIO
 from ducta.gate.constants import CSV_READ_DEFAULTS, DEFAULT_ENCODING
 from ducta.gate.exceptions import ConfigurationError, ReadOperationError
 from ducta.gate.sql import checked_predicate
-from ducta.spark_jvm import jvm_has_package, spark_major
+from ducta.spark_jvm import jvm_has_class, spark_major
 
 
 def xml_format(spark: Any) -> Optional[str]:
@@ -39,7 +39,7 @@ def xml_format(spark: Any) -> Optional[str]:
     """
     if spark_major(spark) >= 4:
         return "xml"
-    if jvm_has_package(spark, "com.databricks.spark.xml"):
+    if jvm_has_class(spark, "com.databricks.spark.xml.DefaultSource"):
         return "com.databricks.spark.xml"
     return None
 

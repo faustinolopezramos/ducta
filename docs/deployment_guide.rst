@@ -110,6 +110,7 @@ Compose Configuration
          - DUCTA_ADMIN_PASSWORD=choose_a_strong_admin_password   # required in production; "admin" is refused
          - DATABASE_URL=postgresql+asyncpg://ducta_admin:strong_db_password@postgres:5432/ducta
          - CORS_ORIGINS=https://ducta.company.com   # a list: comma-separated or JSON
+         - ALLOWED_HOSTS=ducta.company.com           # Host names it answers to (DNS rebinding guard)
          - RATE_LIMIT_ENABLED=true
          # Exact host names: Azure DevOps clones over SSH from ssh.dev.azure.com,
          # over HTTPS from dev.azure.com.

@@ -31,8 +31,9 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from contextlib import contextmanager
-from typing import IO, Any, Iterator
+from typing import IO, Any, Callable, Iterator
 
 if sys.platform == "win32":
     import msvcrt
@@ -78,13 +79,20 @@ def unlock_fd(fd: int) -> None:
         pass
 
 
+def _wait_for(try_once: Callable[[], bool], sleep: Callable[[float], None] = time.sleep) -> None:
+    """Call *try_once* until it returns True, pausing briefly between attempts."""
+    while not try_once():
+        sleep(0.05)
+
+
 @contextmanager
 def exclusive_lock(f: "IO[Any]") -> Iterator[None]:
     """Hold an exclusive lock on the open file ``f``, waiting until it is free."""
     fd = f.fileno()
     if sys.platform == "win32":
         f.flush()
-        _msvcrt_at_start(fd, msvcrt.LK_LOCK)
+        # LK_LOCK gives up with OSError after ten one-second tries: wait for real.
+        _wait_for(lambda: try_lock_fd(fd))
     else:
         fcntl.flock(fd, fcntl.LOCK_EX)
     try:

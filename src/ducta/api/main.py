@@ -70,6 +70,44 @@ def warn_if_insecure_exposure(settings: "Settings") -> bool:
     return False
 
 
+def warn_if_hosts_unchecked(settings: "Settings") -> bool:
+    """Warn when the server answers to any ``Host``: bound to every interface, no ALLOWED_HOSTS.
+
+    Then a browser on a machine that reaches this server can be pointed at it
+    through a DNS name a web page controls (DNS rebinding). Returns ``True`` when
+    a warning was emitted.
+    """
+    from ducta.api.middleware.origin import allowed_host_patterns
+
+    if allowed_host_patterns(settings) is not None:
+        return False
+    logger.warning(
+        "SECURITY: the server answers to any Host name (host={host}, ALLOWED_HOSTS unset). "
+        "Set ALLOWED_HOSTS to the names users type (e.g. ALLOWED_HOSTS=ducta.company.com) "
+        "so a web page cannot reach it through a name it controls.",
+        host=settings.host,
+    )
+    return True
+
+
+def warn_about_in_process_runs(settings: "Settings") -> bool:
+    """With accounts on, say what the ``developer`` role really grants.
+
+    Pipelines run inside this process: code a user writes and runs can read the
+    server's settings, ``JWT_SECRET_KEY`` included, and sign itself any role.
+    Returns ``True`` when the note was emitted.
+    """
+    if not settings.auth_enabled:
+        return False
+    logger.warning(
+        "Pipelines run inside the API process: a user who can write and run code "
+        "(workspace.write + pipeline.execute, the 'developer' role) can read this server's "
+        "secrets, JWT_SECRET_KEY included. Give that role only to people you would trust "
+        "as admin. See SECURITY.md."
+    )
+    return True
+
+
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     settings = get_settings()
@@ -86,6 +124,8 @@ def create_app() -> FastAPI:
 
         # ── Security posture warning ────────────────────────────────────────
         warn_if_insecure_exposure(settings)
+        warn_if_hosts_unchecked(settings)
+        warn_about_in_process_runs(settings)
 
         # ── Database persistence (optional) ─────────────────────────────────
         from ducta.api.db.engine import get_engine, is_db_enabled

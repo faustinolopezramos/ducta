@@ -115,7 +115,14 @@ def test_spark_defaults_left_unset_are_listed(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(runtime_check, "stack_warnings", lambda: ())
     monkeypatch.setattr(runtime_check, "_version", lambda name: "4.2.0")
-    code, doc = _validate(monkeypatch, capsys, _project(tmp_path))
+    root = _project(tmp_path)
+    # New projects set the time zone (UTC): take it out to see the warning for a project
+    # that leaves it unset.
+    project = root / "ducta.yaml"
+    text = project.read_text()
+    assert "    spark.sql.session.timeZone: UTC\n" in text
+    project.write_text(text.replace("    spark.sql.session.timeZone: UTC\n", ""))
+    code, doc = _validate(monkeypatch, capsys, root)
     assert code == ExitCode.SUCCESS.value, doc
     assert [w for w in doc["environment"] if runtime_check.ANSI_KEY in w]
     assert [w for w in doc["environment"] if runtime_check.TIMEZONE_KEY in w]
@@ -127,9 +134,8 @@ def test_setting_the_spark_keys_silences_them(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(runtime_check, "stack_warnings", lambda: ())
     monkeypatch.setattr(runtime_check, "_version", lambda name: "4.2.0")
     root = _project(tmp_path)
-    _set_spark_config(
-        root, "    spark.sql.ansi.enabled: 'false'\n    spark.sql.session.timeZone: UTC\n"
-    )
+    # The time zone is already set by the template (UTC); ANSI is the project's to add.
+    _set_spark_config(root, "    spark.sql.ansi.enabled: 'false'\n")
     code, doc = _validate(monkeypatch, capsys, root)
     assert code == ExitCode.SUCCESS.value, doc
     assert doc["environment"] == []

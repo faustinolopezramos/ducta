@@ -40,6 +40,11 @@ headline of everything else; `git log` has the detail.
 
 ### Changed (breaking)
 
+- **A run no longer copies its certificate to `~/.ducta/storage`** unless a StorageBackend is
+  configured (`DUCTA_STORAGE_PATH`, or `DUCTA_STORAGE_BACKEND=s3`). The copy was made on every
+  run of every project and never pruned; the certificate under the environment's output is
+  unchanged, and copies already there still open in the web app.
+
 - **Python 3.14 and Spark 4.2 are supported; Python 3.10 is not** (it reached its end of
   life in October 2026). `ducta[spark]` now installs Spark 4.2, which needs Java 17 or 21; Spark
   3.5 stays supported (`pip install "pyspark>=3.5,<3.6"`), Python 3.14 needs Spark 4. The Docker
@@ -72,6 +77,27 @@ headline of everything else; `git log` has the detail.
 
 ### Security
 
+- **The API answers only to the host names it should** (DNS rebinding): a request whose
+  `Host` is not `localhost`, `127.0.0.1`, `::1`, the bound address or one in the new
+  `ALLOWED_HOSTS` gets a 400 (WebSocket handshakes included). A web page could otherwise
+  point a name it controls at 127.0.0.1 and read and write the workspace of a local
+  `ducta ui`. Bound to `0.0.0.0` with no `ALLOWED_HOSTS`, no host is checked and the
+  server warns at startup.
+- **Cross-site requests cannot change state**: a `POST`, `PUT`, `PATCH` or `DELETE` whose
+  `Origin` is neither the server's own nor in `CORS_ORIGINS` gets a 403. Routes without a
+  JSON body (`git pull`/`push`, cancel, retry, schedule toggle…) used to run from any page.
+- **One strict Content-Security-Policy everywhere**: outside production the UI was served
+  with `default-src * 'unsafe-inline' 'unsafe-eval'`. The policy is now same-origin, with
+  `'wasm-unsafe-eval'` for the ruff formatter and `blob:` workers for the editor; only
+  `frame-ancestors` differs by environment.
+- **UI dependencies**: dompurify 3.4.17 (critical advisory, via monaco-editor), zod 4.6.7
+  and follow-redirects 1.16.2.
+- **The `developer` role is documented for what it grants**: pipelines run inside the API
+  process, so code a developer runs can read `JWT_SECRET_KEY`. The server says so at startup
+  when authentication is on (`docs/server_api.rst`, `SECURITY.md`).
+- **The AI features mask more keys in a failed run's error**: OpenAI/Anthropic (`sk-`), AWS
+  access key ids, GitHub, Slack and Databricks (`dapi…`) tokens and private-key blocks were
+  masked in code but not in the error text sent to the model.
 - **TLS**: SQL Server verifies the server certificate by default, and PostgreSQL, MySQL and
   MariaDB do so unless the host is local. A server with a self-signed certificate needs
   `url_params: {trustServerCertificate: "true"}` (or `sslmode: require`); Ducta warns.
@@ -88,6 +114,26 @@ headline of everything else; `git log` has the detail.
 
 ### Fixed
 
+- **`PUT /api/nodes/{name}` accepts a node exactly as `GET` returned it**: the read side
+  turns `input`/`output` into `inputs`/`outputs` lists for the UI, and saving that back
+  was refused ("key 'inputs' is not a node setting Ducta reads"). The quality block is
+  still written back in its long form, so comments inside it are lost.
+
+- **Declarative ingestion from Oracle**: the statement Ducta composes for `columns`, `where` or
+  `incremental` aliased its subquery `AS q`, which Oracle refuses; the alias no longer has
+  `AS` (accepted by every supported database).
+- **XML on Spark 3.5 without spark-xml** says how to add the package: the check asked py4j for
+  a Java *package*, which py4j answers for any name, so it always passed and Spark's own error
+  came instead.
+- **`--env` naming no declared environment warns**: `-e prodx` ran the base project, writing
+  under `prodx/`, with only an info line. It still runs, now with a warning that lists the
+  declared environments and the closest one.
+- **New projects set `spark.sql.session.timeZone: UTC`**, so they no longer warn about the time
+  zone on every run.
+- **A served model also names a numpy or pandas of another major version** than the one it was
+  registered with (a numpy 1 pickle does not load on numpy 2).
+- **The quality history's file lock waits on Windows** instead of failing after ten seconds.
+- **`mypy` runs with the project's settings on Python 3.12+**: numpy 2.3+ stubs stopped it.
 - **A project, database or model registry from a newer Ducta is named as such**: a
   `ducta.yaml` with `version: 3` said "No Ducta project here"; it now says to upgrade
   Ducta. A UI database migrated by a newer Ducta failed at startup with Alembic's "Can't

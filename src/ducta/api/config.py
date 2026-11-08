@@ -73,6 +73,7 @@ class Settings(BaseSettings):
         "cors_allow_methods",
         "cors_allow_headers",
         "git_clone_allowed_hosts",
+        "allowed_hosts",
         mode="before",
     )
     @classmethod
@@ -117,6 +118,17 @@ class Settings(BaseSettings):
             "Allowed CORS origins. Keep this an explicit allow-list: setting it to "
             "'*' forces credentials off, because wildcard-with-credentials lets any "
             "website read authenticated responses from your local server."
+        ),
+    )
+    allowed_hosts: EnvList = Field(
+        default_factory=list,
+        description=(
+            "Host names (the request's Host header, without the port) this server answers "
+            "to, besides localhost, 127.0.0.1 and ::1. A request for any other name is "
+            "refused, so a web page cannot reach a loopback server through a DNS name it "
+            "controls (DNS rebinding). '*.example.com' matches subdomains. Left empty while "
+            "HOST is a non-local address (0.0.0.0 in Docker), no Host is checked: set it to "
+            "the names users type, e.g. ALLOWED_HOSTS=ducta.company.com."
         ),
     )
     cors_allow_credentials: bool = Field(default=True)
