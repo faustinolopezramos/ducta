@@ -51,8 +51,35 @@ class TestTemporal:
         train, test = split_dataframe(
             df, {"method": "temporal", "time_col": "ts", "test_size": 0.2}
         )
-        assert train["ts"].max() <= test["ts"].min()
+        assert train["ts"].max() < test["ts"].min()
         assert len(test) == 20
+
+    @pytest.mark.parametrize("val_size", [None, 0.2])
+    def test_rows_of_one_instant_stay_together(self, val_size):
+        """A cut by position put 2026-01-02 in train and in test."""
+        days = pd.to_datetime(["2026-01-01"] * 4 + ["2026-01-02"] * 4 + ["2026-01-03"] * 4)
+        d = pd.DataFrame({"ts": days, "x": range(12)})
+        config = {"method": "temporal", "time_col": "ts", "test_size": 0.3}
+        if val_size:
+            config["val_size"] = val_size
+        parts = split_dataframe(d, config)
+        instants = [set(part["ts"]) for part in parts]
+        for earlier, later in zip(parts, parts[1:]):
+            assert earlier["ts"].max() < later["ts"].min()
+        assert sum(len(p) for p in parts) == 12
+        assert all(a.isdisjoint(b) for i, a in enumerate(instants) for b in instants[i + 1 :])
+
+    def test_one_instant_cannot_be_split_in_time(self):
+        d = pd.DataFrame({"ts": pd.to_datetime(["2026-01-01"] * 10), "x": range(10)})
+        with pytest.raises(SplitError, match="empty partition"):
+            split_dataframe(d, {"method": "temporal", "time_col": "ts", "test_size": 0.2})
+
+    def test_rows_without_a_time_are_refused_with_their_count(self, df):
+        """They all went to test."""
+        d = df.copy()
+        d.loc[[3, 50], "ts"] = pd.NaT
+        with pytest.raises(SplitError, match=r"2 row\(s\) have no 'ts'"):
+            split_dataframe(d, {"method": "temporal", "time_col": "ts", "test_size": 0.2})
 
 
 class TestGroup:

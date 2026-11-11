@@ -52,7 +52,13 @@ class MLContextBuilder:
             if self._models is None:
                 from ducta.mlrun.serving import model_cache_for
 
-                self._models = model_cache_for(self.context, self._model_registry)
+                # A redirected run (sample, reproduction) writes its own store, so the
+                # run's MLOps context is not where its models are: model_cache_for
+                # reads them from the real one.
+                redirected = getattr(self.context, "serving_mlops_path", None)
+                self._models = model_cache_for(
+                    self.context, None if redirected else self._model_registry
+                )
             models = self._models
         return models.get(ref)
 
@@ -141,6 +147,7 @@ class MLContextBuilder:
             "input_names": input_names,
             "cli_hyperparams": ml_info.get("cli_hyperparams"),
             "model_ref": self.serving_model(node_config),
+            "sweep_id": ml_info.get("sweep_id"),
         }
 
         if hasattr(self.context, "spark"):

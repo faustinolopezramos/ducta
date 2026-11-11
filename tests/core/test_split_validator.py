@@ -54,3 +54,18 @@ class TestDocumentSplitSemantics:
         doc = document_split_semantics({"method": "temporal", "time_col": "ts", "test_size": 0.2})
         assert isinstance(doc, str)
         assert "temporal" in doc.lower()
+
+
+def test_preflight_names_no_dataset_size_it_does_not_know(capsys):
+    """It logged a made-up dataset_size=10000 (a constant) next to the real config."""
+    from loguru import logger
+
+    lines = []
+    sink = logger.add(lambda m: lines.append(m.record["message"]), level="INFO")
+    logger.enable("ducta")
+    try:
+        validate_split_config({"method": "random", "test_size": 0.2})
+    finally:
+        logger.disable("ducta")
+        logger.remove(sink)
+    assert lines and all("dataset_size" not in line for line in lines)

@@ -224,6 +224,8 @@ metric and model in MLflow (version 3.15 or later):
            }
          }
 
+``DUCTA_MLFLOW_ENABLED=true|false`` in the environment overrides ``mlflow.enabled``.
+
 Use a database or a tracking server for ``tracking_uri``. MLflow 3 keeps the local
 folder store (``tracking_uri: mlruns``, ``file://...``) only in maintenance mode and
 refuses it by default; Ducta still accepts one, so runs already recorded there stay
@@ -516,11 +518,48 @@ What comes from the pipeline file, and what an argument overrides:
 The metrics are ``accuracy``, ``f1``, ``precision``, ``recall`` and, for a binary target
 with ``predict_proba``, ``auc_roc`` (classification), or ``rmse``, ``mae`` and ``r2``
 (regression), measured on the held-out rows. The search's own score is logged as
-``best_cv_score`` and under the objective's ``metric`` name — the name a ``--sweep`` or
-``--search`` reads. A gate that fails raises ``ValueError`` before anything is registered.
+``best_cv_score`` and as ``val_<metric>`` (``val_roc_auc`` for the objective
+``roc_auc``). A ``--sweep`` or ``--search`` reads ``val_<metric>`` first, then the bare
+name, which a node of your own may log. The held-out metrics keep their names, so
+``f1`` is always the test-set f1 and a search never picks a trial on it. A gate that
+fails raises ``ValueError`` before anything is registered.
 
 ``result.partition_frame(frame)`` adds a column saying which rows trained the model and
 which did not; see ``tag_partitions`` below.
+
+The Search Configuration
+------------------------
+
+``ducta start --search`` and ``train_with_search`` read the pipeline's
+``hyperparams_config``: ``{path: hyperparams.yaml, key: churn_model}``, or just the key
+when ``settings.hyperparams_config_path`` names the file. The file is versioned with the
+project; ``ml_basic`` ships one:
+
+.. code-block:: yaml
+
+   # hyperparams.yaml
+   churn_model:
+     algorithm: random                          # grid | random | bayesian
+     n_trials: 6                                # default: grid 1, random 30, bayesian 50
+     cv_folds: 5
+     objective: {metric: val_auc, type: maximize}   # or minimize
+     search_space:
+       max_depth: {min: 3, max: 12}             # a range: whole numbers if min and max are
+       learning_rate: {min: 0.001, max: 0.3, log: true}
+       n_estimators: [50, 100, 200]             # a list of values
+       kernel: [linear, rbf]
+       gamma:                                   # only searched with the parent's value
+         depends_on: {param: kernel, mapping: {linear: [scale], rbf: [0.01, 0.1, 1.0]}}
+
+A ``search_space`` entry is a list of values, a range ``{min, max}`` (with ``step`` and
+``log: true``, whose ``min`` must be above zero), or a ``depends_on`` condition whose
+``mapping`` gives the values for each value of its parent (one level only). Anything else
+is an error that names the parameter. A random search over a space with conditions can
+propose combinations that do not go together, and says so: use ``grid`` or ``bayesian``
+there. ``bayesian`` uses Optuna (in the ``mlops`` extra); ``pruner`` (``median``, ``hyperband`` or ``none``),
+``storage`` and ``study_name`` are passed to its study, so a study kept in ``storage``
+resumes. Point ``objective.metric`` at a validation metric the run logs
+(``val_<metric>``), never a test one.
 
 Which Rows Did the Model See?
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -544,8 +583,10 @@ unique. ``names=`` and ``column=`` rename the labels (default ``train``/``test``
 Where a Model Is Saved
 ----------------------
 
-``persist_model`` registers the model in the registry when the run is tracked. With
-tracking off (``mlops_enabled: false``) it writes a local file instead:
+``persist_model`` registers the model in the registry when the run is tracked; if the
+registration fails, the node fails with the reason (the model is not quietly saved
+elsewhere while serving keeps the previous version). The name follows the registry's rule
+(letters, digits, ``_``, ``-``, ``.``) either way. With tracking off (``mlops_enabled: false``) it writes a local file instead:
 ``models/<name>/<version>/model.pkl``, with ``models/<name>/latest.txt`` pointing at the
 newest. ``<version>`` is the run id; when there is none it is the ``model_version`` label
 followed by a UTC timestamp, or the timestamp alone. Every call gets its own directory, so
@@ -666,7 +707,37 @@ The Ducta registry provides version-controlled model management. Newly registere
    * - ``Archived``
      - Deprecated versions. Eligible for garbage collection.
 
-**Promotion (CLI — the recommended path):**
+**See what is registered:**
+
+.. code-block:: bash
+
+   ducta model list --env prod                 # every model, its versions and stages
+   ducta model show sales_predictor --env prod # the newest: metrics, schema, lineage
+   ducta model show sales_predictor --version 3 --env prod
+
+**The promotion policy.** ``settings.mlops.promotion_policy`` is the gate a version
+passes to reach production, checked when the project loads (a misspelled key is an
+error):
+
+.. code-block:: yaml
+
+   settings:
+     mlops:
+       promotion_policy: {metric: val_auc, compare_to: current_production, min_delta: 0.0}
+
+``compare_to`` is ``current_production`` (beat the model in production by ``min_delta``)
+or ``baseline`` (beat ``baseline_<metric>`` logged with the model);
+``higher_is_better`` and ``require_schema_match`` refine it.
+
+**Promotion from the training node:** ``persist_model(..., promote="production")`` (and
+``train_with_search(..., promote="production")``) promotes through that policy. A
+candidate it refuses stays in staging and the result says why
+(``promoted_to: None``, ``promotion_refused``); the node does not fail unless your code
+decides so. A trial of a ``--sweep`` or ``--search`` is registered, never promoted:
+promote the best one afterwards. The run certificate names every version a node
+registered (``nodes[].ml.registered``).
+
+**Promotion (CLI):**
 
 .. code-block:: bash
 
@@ -685,6 +756,57 @@ applies the base project's policy. ``gc`` keeps what ``settings.mlops.gc`` allow
 Promotion to ``production`` is checked against your promotion policy; use
 ``--force`` to bypass it (the bypass is audit-logged). See :doc:`cli_usage` for
 the full ``ducta model`` and ``ducta experiment`` command reference.
+
+**The audit log.** Every registration, promotion, refused promotion and deletion
+(including the ones ``gc`` makes) is recorded with who did it and why. From the
+web UI, that is the signed-in user, and a forced promotion asks for a reason. The
+Models page shows it under each model's *History*; it also files each model under
+the version that is in Production (a retrain the policy refused stays in Staging,
+with the refusal next to it), checks the policy before you promote, and does not
+offer to delete the version in Production: promote another version first.
+
+Retraining on Drift
+-------------------
+
+A scoring pipeline can name the training pipeline Ducta runs when its checks fail:
+
+.. code-block:: yaml
+
+   # pipelines/score.yaml
+   type: ml
+   retrain: {run: train, when: [prediction_drift], cooldown: 1d}
+
+After a scoring run in which a check named in ``when`` failed — whatever its severity,
+and also when the gate blocked the run — Ducta runs ``train`` in the same environment.
+Its certificate says what started it (``triggered_by``: the scoring run, its pipeline
+and the checks), and the new model reaches production only through the promotion
+policy: a retrain that does not beat production leaves production alone.
+
+* ``run`` must be a ``type: ml`` pipeline of the project, not the pipeline itself, and
+  without a ``retrain`` of its own (no chains of retrains).
+* ``when`` defaults to ``[prediction_drift]``.
+* ``cooldown`` (``90s``, ``30m``, ``6h``, ``2d``): not again until this long after the
+  training pipeline last succeeded, or after the last retrain, whatever its outcome — a
+  retrain whose model the policy refused does not run again on the next scoring run.
+* Never from a ``--reproduce``, a sample run or a sweep/search trial.
+
+``ducta start`` reports what happened, and exits non-zero when the retrain did not
+succeed (failed, gate-blocked or skipped). From Python, the run's result carries it
+(``result.retrain``, also in ``result.to_dict()``); a run started from the web UI logs it
+in the execution log, and the training run has its own certificate.
+
+Continuous Integration
+----------------------
+
+``ducta template --template ml_basic`` (and ``ml_scoring``) write
+``.github/workflows/ml.yml`` and a ``staging`` environment. A pull request runs
+``ducta check -e staging`` and the node tests (``pytest tests`` when there are any) —
+never the training, so an unreviewed branch cannot promote its model. A push to
+``main`` (or a manual run) also runs the training pipeline — whose model is promoted
+only through the policy — and the scoring pipeline, and keeps the run certificates as
+an artifact. Give ``staging`` an
+``mlops_path`` on storage the CI runner shares with production; otherwise every CI run
+starts from an empty registry and each model it trains is "the first".
 
 Serving a Model
 ---------------
@@ -810,10 +932,10 @@ the registry's own storage, so a cluster can read it too.
    score_events:
      kind: stream
      stream:
-       input: {format: kafka, options: {subscribe: events, ...}}
-       output: {format: delta, path: ${paths.output}/${env}/scored_events}
+       input: {format: kafka, options: {subscribe: events, kafka.bootstrap.servers: "broker:9092"}}
+       output: {format: delta, path: "${paths.output}/${env}/scored_events"}
        model: {name: fraud, stage: production, trust_artifact: true, output_type: double}
-       streaming: {trigger: {processing_time: 30 seconds}}
+       streaming: {trigger: 30 seconds}
 
 Without a ``transform`` the built-in scorer applies the model to each
 micro-batch; a transform declared with an ``ml_context`` parameter receives the

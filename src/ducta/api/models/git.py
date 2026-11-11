@@ -23,7 +23,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class CommitInfo(BaseModel):
@@ -99,6 +99,16 @@ class GitIdentityConfig(BaseModel):
         max_length=254,
         description="Git author e-mail (stored in .git/config as user.email)",
     )
+
+    @field_validator("name", "email")
+    @classmethod
+    def _one_plain_line(cls, value: str) -> str:
+        """No control characters: a line break in a value could add a section to
+        .git/config (``core.hooksPath`` runs a program). GitPython refuses CR, LF and
+        NUL today; this does not depend on the version installed."""
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError("must be a single line without control characters")
+        return value.strip()
 
 
 class GitIdentityResponse(BaseModel):

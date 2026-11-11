@@ -1849,17 +1849,6 @@ class StreamingPipelineManager:
             logger.error(f"Error listing running pipelines: {str(e)}")
             return []
 
-    def _calculate_health_score(self, pipeline_info: Dict[str, Any]) -> float:
-        try:
-            total_queries = pipeline_info.get("total_queries", 0)
-            failed_queries = pipeline_info.get("failed_queries", 0)
-            if total_queries == 0:
-                return 100.0
-            healthy_queries = max(0, total_queries - failed_queries)
-            return float(round(max(0.0, min(100.0, (healthy_queries / total_queries) * 100.0)), 2))
-        except Exception:
-            return 0.0
-
     @handle_streaming_error
     def shutdown(self, timeout_seconds: int = 30) -> Dict[str, bool]:
         logger.info("Shutting down StreamingPipelineManager...")

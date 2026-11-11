@@ -60,10 +60,47 @@ export interface ModelServedBy {
 export interface ModelInfo {
   name: string;
   latest_version: number;
+  /** The stage of the *latest* version — not what is serving. */
   stage?: string;
   framework?: string;
   created_at?: string;
   served_by?: ModelServedBy[];
+  /** The version in Production, if any (after a refused retrain it is not the latest). */
+  production_version?: number | null;
+  production_metrics?: Record<string, number> | null;
+  /** Why the promotion policy refused the latest version, when it did. */
+  latest_refusal?: { timestamp?: string; reason?: string | null } | null;
+}
+
+/** settings.mlops.promotion_policy, as GET /mlops/status reports it. */
+export interface PromotionPolicyView {
+  metric?: string;
+  min_delta?: number;
+  compare_to?: string;
+  higher_is_better?: boolean;
+  require_schema_match?: boolean;
+  /** Set when the policy cannot be used: a Production promotion is then refused. */
+  error?: string;
+}
+
+/** GET /mlops/models/{name}/versions/{version}/promotion-check — changes nothing. */
+export interface PromotionCheck {
+  policy: PromotionPolicyView | null;
+  passes: boolean;
+  reason: string | null;
+  production_version: number | null;
+  served_by: ModelServedBy[];
+}
+
+/** One entry of a model's audit log (GET /mlops/models/{name}/history). */
+export interface ModelHistoryEntry {
+  timestamp: string;
+  event: "REGISTER" | "PROMOTE" | "PROMOTE_REFUSED" | "DEMOTE" | "DELETE" | string;
+  model: string;
+  version: number;
+  user: string;
+  reason: string;
+  details: Record<string, unknown>;
 }
 
 /** Mirrors ModelRegistry.list_model_versions. */
@@ -144,6 +181,8 @@ export interface MlopsStatus {
   tracking_present: boolean;
   registry_present: boolean;
   unregistered_models: UnregisteredModel[];
+  /** None when the project has no promotion policy. */
+  promotion_policy?: PromotionPolicyView | null;
 }
 
 type ModelStage = "staging" | "production" | "archived";
@@ -159,17 +198,30 @@ interface PromoteModelVars extends MlopsScope {
   version: number;
   stage: ModelStage;
   force?: boolean;
+  /** Recorded in the audit log; the API requires one with `force`. */
+  reason?: string;
+}
+
+interface PromoteResult {
+  name: string;
+  version: number;
+  stage: string;
+  promoted: boolean;
+  /** The versions this promotion archived (only one version is in Production). */
+  demoted_versions?: number[];
 }
 
 interface GcVars extends MlopsScope {
   dry_run?: boolean;
 }
 
-interface GcResult {
+export interface GcResult {
   models_processed: number;
   versions_removed: number;
   bytes_freed: number;
   dry_run: boolean;
+  /** Removed — or, on a dry run, that would be. */
+  versions?: { name: string; version: number; created_at?: string | null }[];
 }
 
 /** Wire params shared by every /mlops/* request — `pipeline`/`project` are the
@@ -264,28 +316,70 @@ export const useMlopsModelVersions = (
     enabled: !!name && !!pipelineName,
   });
 
+/** Who registered, promoted, refused or deleted which version, newest first. */
+export const useModelHistory = (
+  name: string,
+  env?: string,
+  pipelineName?: string,
+  project?: string
+) =>
+  useQuery<ModelHistoryEntry[]>({
+    queryKey: qk.mlops.modelHistory(name, { env, pipelineName, project }),
+    queryFn: () =>
+      client
+        .get(`/mlops/models/${name}/history`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then((r) => r.data),
+    staleTime: 30 * 1000,
+    enabled: !!name && !!pipelineName,
+  });
+
+/** Would promoting `version` to Production pass the policy? `version` 0 disables it. */
+export const usePromotionCheck = (
+  name: string,
+  version: number,
+  env?: string,
+  pipelineName?: string,
+  project?: string
+) =>
+  useQuery<PromotionCheck>({
+    queryKey: qk.mlops.promotionCheck(name, version, { env, pipelineName, project }),
+    queryFn: () =>
+      client
+        .get(`/mlops/models/${name}/versions/${version}/promotion-check`, {
+          params: scopeParams({ env, pipelineName, project }),
+        })
+        .then((r) => r.data),
+    staleTime: 10 * 1000,
+    enabled: !!name && version > 0 && !!pipelineName,
+  });
+
 // ─── MLOps mutation hooks ─────────────────────────────────────────────────────
 
 export const usePromoteModel = () => {
   const queryClient = useQueryClient();
-  return useMutation<unknown, unknown, PromoteModelVars>({
-    mutationFn: ({ name, version, stage, force = false, env, pipelineName, project }) =>
+  return useMutation<PromoteResult, unknown, PromoteModelVars>({
+    mutationFn: ({ name, version, stage, force = false, reason, env, pipelineName, project }) =>
       client
         .post(
           `/mlops/models/${name}/promote`,
-          { version, stage, force },
+          { version, stage, force, reason },
           { params: scopeParams({ env, pipelineName, project }) }
         )
         .then((r) => r.data),
-    onSuccess: (_data, { name, env, pipelineName, project }) => {
+    onSuccess: (data, { name, version, env, pipelineName, project }) => {
       queryClient.invalidateQueries({
         queryKey: qk.mlops.models({ env, pipelineName, project }),
       });
+      // Versions, history and promotion checks all live under this key.
       queryClient.invalidateQueries({
-        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
+        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }).slice(0, 4),
       });
       queryClient.invalidateQueries({ queryKey: qk.mlops.runTable({ env, pipelineName, project }) });
-      toastStore.getState().show(`Model '${name}' promoted successfully`, "success");
+      const demoted = data?.demoted_versions ?? [];
+      const archived = demoted.length ? `; ${demoted.map((v) => `v${v}`).join(", ")} archived` : "";
+      toastStore.getState().show(`${name} v${version} → ${data?.stage ?? "promoted"}${archived}`, "success");
     },
     onError: defaultOnError,
   });
@@ -349,7 +443,7 @@ export const useDeleteModelVersion = () => {
         queryKey: qk.mlops.models({ env, pipelineName, project }),
       });
       queryClient.invalidateQueries({
-        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }),
+        queryKey: qk.mlops.modelVersions(name, { env, pipelineName, project }).slice(0, 4),
       });
     },
     onError: defaultOnError,

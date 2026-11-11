@@ -733,6 +733,12 @@ Each run writes its reports next to the environment's data:
 Reports are scoped per pipeline, so two pipelines with a node of the same name
 never mix. ``settings.quality.output.base_path`` moves them elsewhere.
 
+``settings.quality.output`` can also keep every report as a dataset, for a dashboard
+or an audit: ``enabled: true`` writes them under that folder as ``format``
+(``parquet`` by default, ``delta``, ``json`` or ``csv``) with ``write_mode`` and
+``partition_by``. ``global_summary: true`` adds one summary per run, at
+``<quality>/global_summary/<pipeline>/<run_id>.json``.
+
 ``ducta quality run`` on a bare file is not part of a pipeline run: it writes to
 ``<workspace>/.quality/_adhoc/`` (``--workspace``, default the current directory). Read them with ``ducta quality report``, ``trend`` and ``score``, or
 in the web app.

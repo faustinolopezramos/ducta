@@ -341,15 +341,46 @@ class BaseExecutor:
             for report_type, outputs in outputs_by_type.items():
                 logger.info(f"  {report_type}: {len(outputs)} reports")
 
-            summary_config = self.settings.quality.get("global_summary", {})
-
-            if summary_config.get("enabled", False):
+            summary_config = self._global_summary_config()
+            if summary_config is not None:
                 self._persist_global_quality_summary(
                     outputs_by_type, outputs_by_node, summary_config
                 )
 
         except Exception as e:
             logger.error(f"Failed to aggregate quality summary: {e}")
+
+    def _global_summary_config(self) -> Optional[Dict[str, Any]]:
+        """The summary's settings when the project asks for one, else None.
+
+        ``quality.output.global_summary: true`` is the documented switch (and the
+        one the schema validates). It used to be read and then ignored: only an
+        undocumented ``quality.global_summary: {enabled: true, output_path: …}``
+        wrote a summary, which is still honoured.
+        """
+        quality = self.settings.quality or {}
+        legacy = quality.get("global_summary")
+        if isinstance(legacy, dict) and legacy.get("enabled", False):
+            return legacy
+        output = quality.get("output")
+        if isinstance(output, dict) and output.get("global_summary", False):
+            return {"format": "json"}
+        return None
+
+    def _default_summary_path(self) -> str:
+        """``<quality reports>/global_summary/<pipeline>/<run id>``, next to the reports.
+
+        It was ``./.quality/global_summary``: relative to wherever the command ran,
+        outside the environment's output, and overwritten by every run.
+        """
+        from ducta.core.ledger import ledger_for
+
+        output = (self.settings.quality or {}).get("output")
+        base_path = output.get("base_path") if isinstance(output, dict) else None
+        run_id = ledger_for(self.context).run_id or f"run_{int(time.time())}"
+        return self.quality_output_manager.summary_path(
+            base_path, self._mlops_pipeline_name or "_adhoc", run_id
+        )
 
     def _persist_global_quality_summary(
         self,
@@ -359,7 +390,7 @@ class BaseExecutor:
     ) -> None:
         """Persist the global quality summary to configured storage."""
         try:
-            output_path = config.get("output_path", "./.quality/global_summary")
+            output_path = config.get("output_path") or self._default_summary_path()
             output_format = config.get("format", "json")
 
             logger.info(f"Persisting global quality summary to {output_path} ({output_format})")

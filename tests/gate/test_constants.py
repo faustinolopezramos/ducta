@@ -107,14 +107,24 @@ class TestIsCloudPath:
 
 
 class TestEnumsMatchTheConfigurationSchema:
-    """``gate`` keeps its own enums (importing ``setting`` here would be a cycle), so the two
+    """``gate`` keeps its own ``ExecutionMode`` (importing ``setting`` here would be a cycle), so the two
     definitions must not drift: a mode the schema accepts but the writer rejects is a runtime
     failure on a project that validated."""
 
     def test_write_modes_are_the_schemas(self):
+        """One class: the schema's mode reaches the writer as the writer's own member."""
+        from ducta.setting import WriteMode as PackageWriteMode
         from ducta.setting.schemas import WriteMode as SchemaWriteMode
 
-        assert {m.value for m in WriteMode} == {m.value for m in SchemaWriteMode}
+        assert SchemaWriteMode is WriteMode
+        assert PackageWriteMode is WriteMode
+
+    def test_a_write_mode_reads_as_its_value(self):
+        """``str()`` gave ``"WriteMode.OVERWRITE"`` on the ``str`` copy (10-29 regression)."""
+        assert str(WriteMode.MERGE) == "merge"
+        assert f"{WriteMode.APPEND}" == "append"
+        assert WriteMode.OVERWRITE == "overwrite"
+        assert WriteMode("append") is WriteMode.APPEND
 
     def test_execution_modes_are_the_schemas(self):
         from ducta.setting.schemas import ExecutionMode as SchemaExecutionMode

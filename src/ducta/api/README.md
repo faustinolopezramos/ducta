@@ -63,6 +63,8 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `RUNS_DIR` | `~/.ducta/runs` | Where the file-based execution store writes `meta.json` + `logs.jsonl` per run. Empty disables file persistence (memory-only) |
 | `RATE_LIMIT_ENABLED` | `false` | Per-IP rate limiting (`RATE_LIMIT_REQUESTS`, `..._WINDOW_SECONDS`, `RATE_LIMIT_REDIS_URL`) |
 | `MAX_CONCURRENT_EXECUTIONS` | `5` | Parallel pipeline runs |
+| `RUN_ISOLATION` | `auto` | `process` (each run in its own process, without the server's secrets), `thread` (inside the server, one at a time) or `auto` (`process` when `AUTH_ENABLED=true`) |
+| `ALLOWED_HOSTS` | `[]` | Host names the server answers to besides `localhost`/`127.0.0.1`/`::1` (DNS-rebinding guard); unset while bound to `0.0.0.0` = no check, with a startup warning |
 | `CORS_ORIGINS` | `localhost`/`127.0.0.1` on ports 5173 and 4173 (the Vite dev/preview servers) | Allowed origins. Keep it an explicit list: `*` forces credentials off |
 | `GIT_CLONE_ALLOWED_HOSTS` | `[]` | Allow-list for Git clone hosts. Empty = the well-known public forges outside `development`, any host in `development` |
 | `LSP_COMMAND` / `LSP_MAX_PROCESSES` | `""` / `4` | Python language server for the code editor, one per open editor over stdio. Empty = the first found of `basedpyright-langserver`, `pyright-langserver`, `pylsp`; `off` disables it |

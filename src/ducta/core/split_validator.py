@@ -18,7 +18,7 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from loguru import logger  # type: ignore
 
@@ -34,8 +34,13 @@ class SplitValidationError(Exception):
 VALID_METHODS = ("random", "stratified", "temporal", "group")
 
 
-def validate_split_config(split_config: Dict[str, Any], dataset_size: int) -> None:
-    """Validate split configuration before execution."""
+def validate_split_config(split_config: Dict[str, Any], dataset_size: Optional[int] = None) -> None:
+    """Validate split configuration before execution.
+
+    *dataset_size* is the number of rows when it is known; preflight does not know it
+    (nothing has been read yet), and used to pass a made-up 10,000 that it then logged
+    as if it were the data's.
+    """
     method = split_config.get("method", "random")
     test_size = split_config.get("test_size", 0.2)
     val_size = split_config.get("val_size")
@@ -54,14 +59,15 @@ def validate_split_config(split_config: Dict[str, Any], dataset_size: int) -> No
                 f"val_size + test_size must be < 1, got {val_size} + {test_size} = {val_size + test_size}"
             )
 
-    min_test_rows = max(1, int(dataset_size * test_size))
-    min_train_rows = max(1, dataset_size - min_test_rows)
-
-    if min_train_rows < 2:
-        logger.warning(
-            f"Split results in {min_train_rows} train rows (test_size={test_size}, "
-            f"dataset_size={dataset_size}). May be too small for model training."
-        )
+    min_train_rows: Optional[int] = None
+    if dataset_size is not None:
+        min_test_rows = max(1, int(dataset_size * test_size))
+        min_train_rows = max(1, dataset_size - min_test_rows)
+        if min_train_rows < 2:
+            logger.warning(
+                f"Split results in {min_train_rows} train rows (test_size={test_size}, "
+                f"dataset_size={dataset_size}). May be too small for model training."
+            )
 
     if method == "stratified":
         stratify_col = split_config.get("stratify_col")
@@ -86,14 +92,17 @@ def validate_split_config(split_config: Dict[str, Any], dataset_size: int) -> No
                 "Each entity will appear in only one of train/test."
             )
 
+    sizes = (
+        f", dataset_size={dataset_size}, min_train_rows={min_train_rows}"
+        if dataset_size is not None
+        else ""
+    )
     logger.info(
-        "Split config validated: method={}, test_size={}, val_size={}, "
-        "dataset_size={}, min_train_rows={}",
+        "Split config validated: method={}, test_size={}, val_size={}{}",
         method,
         test_size,
         val_size,
-        dataset_size,
-        min_train_rows,
+        sizes,
     )
 
 

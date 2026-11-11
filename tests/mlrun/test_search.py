@@ -325,3 +325,73 @@ class TestOptunaSearchStorageAndPruning:
         # algorithms during experimentation.
         config = _config(algorithm="grid", pruner="median")
         assert config.pruner == "median"
+
+
+class TestOptunaSearchTellsEveryTrial:
+    """Two proposals with the same values shared one slot: the first trial was never told."""
+
+    def _search(self, proposals):
+        from types import SimpleNamespace
+
+        from ducta.mlrun.search import OptunaSearch
+
+        told = []
+        numbers = iter(range(100))
+        study = SimpleNamespace(
+            ask=lambda: SimpleNamespace(number=next(numbers)),
+            tell=lambda number, value=None, state=None: told.append((number, value, state)),
+        )
+        values = iter(proposals)
+        search = object.__new__(OptunaSearch)
+        search.direction, search.n_trials, search._history = "maximize", len(proposals), []
+        search._asked, search._pending, search._trial_by_params = 0, {}, {}
+        search._study = study
+        search._config = SimpleNamespace(suggest_params=lambda trial: dict(next(values)))
+        search._optuna = SimpleNamespace(
+            trial=SimpleNamespace(TrialState=SimpleNamespace(FAIL="FAIL"))
+        )
+        return search, told
+
+    def test_identical_proposals_are_each_told_once(self):
+        search, told = self._search([{"depth": 3}, {"depth": 3}, {"depth": 5}])
+        asked = [search.ask() for _ in range(3)]
+        for params, score in zip(asked, (0.7, 0.8, 0.6)):
+            search.tell(params, score)
+
+        assert told == [(0, 0.7, None), (1, 0.8, None), (2, 0.6, None)]
+        assert search._trial_by_params == {}
+
+    def test_a_failed_duplicate_is_told_as_failed(self):
+        search, told = self._search([{"depth": 3}, {"depth": 3}])
+        first, second = search.ask(), search.ask()
+        search.tell(first, 0.5)
+        search.tell(second, None)
+        assert told == [(0, 0.5, None), (1, None, "FAIL")]
+
+
+def test_random_search_does_not_repeat_a_set_while_new_ones_remain():
+    """Seed 42 (the templates' random_seed) proposed (8, 50) and (8, 200) twice in six trials."""
+    config = HyperparamConfig.from_dict(
+        {
+            "algorithm": "random",
+            "n_trials": 6,
+            "objective": {"metric": "val_auc"},
+            "search_space": {"max_depth": {"min": 3, "max": 12}, "n_estimators": [50, 100, 200]},
+        }
+    )
+    proposals = list(iter(build_search_strategy(config, seed=42).ask, None))
+    keys = [tuple(sorted(p.items())) for p in proposals]
+    assert len(keys) == 6 and len(set(keys)) == 6
+
+
+def test_a_space_smaller_than_the_budget_still_runs_every_trial():
+    config = HyperparamConfig.from_dict(
+        {
+            "algorithm": "random",
+            "n_trials": 5,
+            "objective": {"metric": "val_auc"},
+            "search_space": {"depth": [1, 2]},
+        }
+    )
+    proposals = list(iter(build_search_strategy(config, seed=1).ask, None))
+    assert len(proposals) == 5 and {p["depth"] for p in proposals} == {1, 2}

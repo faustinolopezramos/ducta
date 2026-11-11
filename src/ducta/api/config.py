@@ -248,6 +248,17 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing. MUST be overridden in production.",
     )
 
+    run_isolation: Literal["auto", "process", "thread"] = Field(
+        default="auto",
+        description=(
+            "Where pipelines run. 'process': each run in its own process — its code cannot "
+            "read this server's memory (JWT_SECRET_KEY …), cancel/timeout stop it for real, "
+            "and runs go in parallel up to max_concurrent_executions; it pays a Spark start "
+            "per run. 'thread': inside the server (one at a time, Spark kept warm). 'auto': "
+            "process when auth_enabled, thread otherwise. Debug runs always get their own."
+        ),
+    )
+
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(default="HS256")
     jwt_expiration_hours: int = Field(default=24)
     auth_enabled: bool = Field(

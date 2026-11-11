@@ -42,6 +42,15 @@ function httpError(status: number, config: InternalAxiosRequestConfig) {
   });
 }
 
+/** What axios raises when its own `timeout` elapses before the server answers. */
+function timeout(config: InternalAxiosRequestConfig) {
+  return Object.assign(new Error("timeout of 30000ms exceeded"), {
+    isAxiosError: true,
+    code: "ECONNABORTED",
+    config,
+  });
+}
+
 /** Install an adapter for the duration of `fn`, then restore the original. */
 async function withAdapter<T>(adapter: AxiosAdapter, fn: () => Promise<T>): Promise<T> {
   const previous = client.defaults.adapter;
@@ -79,9 +88,18 @@ async function withFakeBackoff<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// zustand copies each action into every new state object, so a spy outlives
+// `vi.restoreAllMocks()`; vitest >= 3 then reuses it (calls pile up across
+// tests). Put the real action back before each test.
+const realRefreshTokenAsync = useAuthStore.getState().refreshTokenAsync;
+
 describe("client.ts interceptors", () => {
   beforeEach(() => {
-    useAuthStore.setState({ token: VALID(), user: null });
+    useAuthStore.setState({
+      token: VALID(),
+      user: null,
+      refreshTokenAsync: realRefreshTokenAsync,
+    });
     localStorage.clear();
     vi.restoreAllMocks();
     // Keep the interceptor's console.error out of the test output.
@@ -253,6 +271,57 @@ describe("client.ts interceptors", () => {
 
       // 1 original + 3 retries (MAX_RETRIES).
       expect(adapter).toHaveBeenCalledTimes(4);
+    });
+
+    it("retries a read that timed out", async () => {
+      let call = 0;
+      const adapter = vi.fn(async (config) => {
+        call += 1;
+        if (call === 1) throw timeout(config);
+        return ok(config);
+      });
+
+      const response = await withFakeBackoff(() =>
+        withAdapter(adapter as unknown as AxiosAdapter, () => client.get("/slow")),
+      );
+
+      expect(response.status).toBe(200);
+      expect(adapter).toHaveBeenCalledTimes(2);
+    });
+
+    it.each(["post", "put", "patch", "delete"] as const)(
+      "never resends a %s that timed out (the server may still be running it)",
+      async (method) => {
+        const adapter = vi.fn(async (config) => {
+          throw timeout(config);
+        });
+
+        await expect(
+          withFakeBackoff(() =>
+            withAdapter(adapter as unknown as AxiosAdapter, () =>
+              client.request({ method, url: "/quality/run", data: {} }),
+            ),
+          ),
+        ).rejects.toBeDefined();
+
+        expect(adapter).toHaveBeenCalledTimes(1);
+      },
+    );
+
+    it("still retries a POST refused with 429 (the server did nothing)", async () => {
+      let call = 0;
+      const adapter = vi.fn(async (config) => {
+        call += 1;
+        if (call === 1) throw httpError(429, config);
+        return ok(config);
+      });
+
+      const response = await withFakeBackoff(() =>
+        withAdapter(adapter as unknown as AxiosAdapter, () => client.post("/git/push")),
+      );
+
+      expect(response.status).toBe(200);
+      expect(adapter).toHaveBeenCalledTimes(2);
     });
 
     it("does not retry other 4xx responses", async () => {

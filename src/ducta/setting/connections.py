@@ -197,6 +197,15 @@ class IngestionService:
             raise IngestionServiceError(
                 f"Connection '{spec.name}' already exists (use overwrite to replace)"
             )
+        from ducta.server_secrets import is_server_secret
+
+        prefix = spec.name.upper()
+        if is_server_secret(f"{prefix}_USER") or is_server_secret(f"{prefix}_PASSWORD"):
+            raise IngestionServiceError(
+                f"Connection '{spec.name}' would keep its credentials under "
+                f"{prefix}_USER / {prefix}_PASSWORD, which are the Ducta server's own. "
+                "Pick another name."
+            )
         # Credentials live under NAME.upper(): names that differ only in case would
         # silently overwrite each other's login.
         clash = next(

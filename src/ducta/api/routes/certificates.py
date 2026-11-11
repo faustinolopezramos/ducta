@@ -283,7 +283,10 @@ async def diff_certificates_endpoint(
     summary="Re-run a certificate's pipeline to test reproducibility",
     description=(
         "Starts an async execution of the certificate's pipeline/environment, the "
-        "same way POST .../pipelines/{name}/execute does. Poll the returned execution "
+        "same way POST .../pipelines/{name}/execute does, over the dates the run used "
+        "(unless the body gives others). Its outputs are written to "
+        "`<output>/<env>/.ducta/reproduce/<run_id>`, never to the real datasets; its "
+        "certificate says `reproduction_of`. Poll the returned execution "
         "(GET /executions/{id}) until it reaches a terminal status, then read its "
         "`certificate_run_id` and call the diff endpoint against the original `run_id` "
         "to compare outputs and quality."
@@ -315,12 +318,16 @@ async def reproduce_certificate(
     # Reproducing is running: a protected environment takes an operator here too.
     check_can_run(current_user, str(cert.get("environment_name") or "base"), exec_source)
 
+    from ducta.core.scratch import reproduction_window
+
+    start_date, end_date = reproduction_window(cert, body.start_date, body.end_date)
     return exec_manager.execute(
         source_path=exec_source,
         pipeline_name=str(pipeline),
         env=str(cert.get("environment_name") or "base"),
-        start_date=body.start_date,
-        end_date=body.end_date,
+        start_date=start_date,
+        end_date=end_date,
         project_id=project_id,
         user_id=current_user.id,
+        reproduce_of=str(cert.get("run_id") or run_id),
     )

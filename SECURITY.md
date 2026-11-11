@@ -100,10 +100,16 @@ refuses to boot otherwise.
       answers to any `Host` name, which lets a web page reach it through a DNS
       name the page controls (DNS rebinding). On loopback only `localhost`,
       `127.0.0.1` and `::1` are answered.
-- [ ] **The `developer` role only for people you would trust as admin.**
-      Pipelines run inside the API process, so code a developer writes and runs
-      can read the server's settings — `JWT_SECRET_KEY` included — and sign
+- [ ] **`RUN_ISOLATION=process`** (the default with `AUTH_ENABLED=true`): each
+      run in its own process, without the server's secrets in its environment
+      and unable to read its memory. With `thread`, code a developer writes and
+      runs can read the server's settings — `JWT_SECRET_KEY` included — and sign
       itself any role.
+- [ ] **Nothing secret the runs can reach as files.** A run is still the
+      server's OS user: pass `JWT_SECRET_KEY` and `DATABASE_URL` as environment
+      variables (not a `.env` next to the server), use PostgreSQL rather than
+      SQLite, or run the server in its own container. On macOS a run can also
+      list the server's environment (`ps eww`); Linux blocks that.
 - [ ] **`RATE_LIMIT_ENABLED=true`** (auto-enabled with auth, but set it
       explicitly), and `RATE_LIMIT_REDIS_URL` if you run more than one worker —
       the in-memory limiter is per-process, so the effective limit otherwise

@@ -69,7 +69,8 @@ silver.sales.daily:
   write: {mode: overwrite, partition: [day], partition_overwrite: dynamic}
 bronze.crm.orders:
   format: delta
-  write: {mode: overwrite, overwrite_strategy: replaceWhere, partition_col: order_day}
+  write: {mode: overwrite, overwrite_strategy: replaceWhere, partition_col: order_day,
+          allow_empty: true, overwrite_schema: false}
 """
 
 WINDOWED_PIPELINE = """\
@@ -105,3 +106,5 @@ def test_windowed_loads_survive_the_round_trip(tmp_path):
     out = after["output_config"]["silver.sales.daily"]
     assert out["partition_overwrite"] == "dynamic"
     assert after["nodes_config"]["pull"]["incremental"] == {"column": "order_day"}
+    orders = after["output_config"]["bronze.crm.orders"]
+    assert (orders["allow_empty"], orders["overwrite_schema"]) == (True, False)

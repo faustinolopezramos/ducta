@@ -330,6 +330,9 @@ def print_run_summary(result: Any, elapsed: float) -> None:
     reused = getattr(result, "reused_pipelines", None) or []
     if reused:
         rows.append(("reused", ", ".join(reused)))
+    retrain = getattr(result, "retrain", None)
+    if isinstance(retrain, dict) and retrain:
+        rows.append(("retrain", _retrain_row(retrain)))
     cert = getattr(result, "certificate_path", None)
     if cert:
         rows.append(("certificate", display_path(cert)))
@@ -341,6 +344,17 @@ def print_run_summary(result: Any, elapsed: float) -> None:
     if is_quiet():
         return
     _print_rows(rows)
+
+
+def _retrain_row(retrain: Dict[str, Any]) -> str:
+    """``retrain`` of a run result, in one line: what ran, or why nothing did."""
+    checks = ", ".join(retrain.get("checks") or [])
+    target = retrain.get("pipeline")
+    if retrain.get("skipped"):
+        return f"{target} not run ({retrain['skipped']}) — {checks} failed"
+    run_id = retrain.get("run_id")
+    run = f" run {_short_id(run_id)}" if run_id else ""
+    return f"{target}{run} {retrain.get('status')} — {checks} failed"
 
 
 def _print_rows(rows: Sequence[Tuple[str, str]], indent: int = 2) -> None:

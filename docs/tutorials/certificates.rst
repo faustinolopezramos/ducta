@@ -26,7 +26,7 @@ A trimmed real certificate, from a batch ingestion run:
 .. code-block:: json
 
    {
-     "schema_version": "1.8",
+     "schema_version": "1.10",
      "run_id": "f9fb815596a74bf2a66d6cf3570b5493",
      "pipeline": "bronze.ingestion",
      "environment_name": "base",
@@ -48,7 +48,7 @@ A trimmed real certificate, from a batch ingestion run:
          "row_count": 395,
          "schema_hash": "b04ea2c3296853c6...",
          "engine": "spark",
-         "algorithm": "xxhash64-multiset/v2",
+         "algorithm": "xxhash64-multiset/v3",
          "mode": "exact",
          "content_hash": "9e1c07d2a4f3...",
          "fingerprint": "ad16e8e5da9e..."
@@ -366,8 +366,20 @@ fingerprint against a fresh one:
 
 .. code-block:: bash
 
-   ducta certify verify --run-id f9fb8155 --reproduce \
-     --start-date 2026-01-01 --end-date 2026-01-31
+   ducta certify verify --run-id f9fb8155 --reproduce
+
+The reproduction never touches the real datasets: it writes them under
+``<paths.output>/<env>/.ducta/reproduce/<run_id>/`` (emptied first), and its
+nodes read what it wrote there. Its own certificate sits with the others and
+says ``reproduction_of: <run_id>``, so ``certify diff`` can compare the two.
+
+It runs over the dates the original run used: since certificate schema 1.9 the
+certificate records them as ``run_window``. ``--start-date``/``--end-date``
+override them (with a warning when they differ — other dates will most likely
+not reproduce the outputs); a certificate written before 1.9 has no window, so
+give the dates yourself. A Delta input is read at the version the original run
+read; a Delta dataset the pipeline produces is read as the reproduction wrote it.
+The web's **Reproduce** button behaves the same way.
 
 Two outcomes beyond plain match/mismatch are worth knowing:
 
@@ -396,7 +408,7 @@ written with ``fingerprint_mode: exact``:
    $ ducta certify diff 19a88fcb7fac f9fb815596a7
 
      bronze.education.student   not comparable
-       (algorithm differs: spark-minhash/v3 vs xxhash64-multiset/v2)
+       (algorithm differs: spark-minhash/v4 vs xxhash64-multiset/v3)
 
    ⚠ Certificates differ — see mismatches above
 

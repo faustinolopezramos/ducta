@@ -140,3 +140,23 @@ class TestRunSearchFailurePaths:
 
         outcome = run_search(_strategy(), "val_f1", run_trial)
         assert outcome.best_score == 0.3
+
+
+class TestWhichScoreATrialReports:
+    """train_with_search logs its CV score as val_<metric>; a held-out metric keeps its name."""
+
+    def test_the_validation_score_wins_over_a_held_out_metric_of_the_same_name(self):
+        def run_trial(params, index):
+            return FakeResult(metrics={"f1": 0.99, "val_f1": 0.70 + index / 100})
+
+        outcome = run_search(_strategy(n_trials=2), "f1", run_trial)
+
+        assert [t.score for t in outcome.trials] == [0.71, 0.72]
+
+    def test_a_node_that_logs_the_exact_name_still_scores(self):
+        outcome = run_search(_strategy(n_trials=1), "f1", lambda p, i: FakeResult({"f1": 0.6}))
+        assert outcome.trials[0].score == 0.6
+
+    def test_neither_name_is_a_failed_trial_naming_what_was_logged(self):
+        outcome = run_search(_strategy(n_trials=1), "f1", lambda p, i: FakeResult({"auc": 0.6}))
+        assert outcome.trials[0].failed and "auc" in outcome.trials[0].reason

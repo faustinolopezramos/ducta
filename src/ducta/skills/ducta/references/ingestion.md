@@ -44,7 +44,9 @@ SHOP_DB_USER=reader
 SHOP_DB_PASSWORD=…
 ```
 
-from the process environment first and then the project's `.env` (never commit it).
+from the process environment first and then the project's `.env` (never commit it). The
+two come as a pair from one place: one in the environment and the other in `.env` is an
+error. A source may not be named after the server's own secrets (`ducta_admin`, `ducta_smtp`).
 
 **As an assistant:** never write the password into a file yourself and never ask the
 user to paste it into the chat. Tell the user which two variable names to set, and

@@ -58,6 +58,12 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
                 max_workers=1,
             )
             node_executor.pipeline_name = payload.get("pipeline_name")
+            # Run the node here: not in yet another worker process.
+            node_executor.in_worker = True
+            if (payload.get("ml_info") or {}).get("mlops_run_id"):
+                node_executor.set_mlops_context(
+                    _worker_mlops_context(context, payload.get("pipeline_name"))
+                )
 
             try:
                 node_executor.execute_single_node(
@@ -88,10 +94,13 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
                 outcome["error_type"] = type(e).__name__
 
             try:
-                details = ledger_for(context).node_details or []
+                ledger = ledger_for(context)
+                details = ledger.node_details or []
                 outcome["node_trace"] = [
                     d for d in details if d.get("name") == payload["node_name"]
                 ]
+                # Fingerprints, code hash, quality: the parent's certificate needs them.
+                outcome["evidence"] = ledger.worker_evidence()
             except Exception:
                 outcome["node_trace"] = None
 
@@ -101,6 +110,25 @@ def run_node_in_process(payload: Dict[str, Any]) -> Dict[str, Any]:
         outcome["error_type"] = type(e).__name__
 
     return outcome
+
+
+def _worker_mlops_context(context: Any, pipeline_name: Optional[str]) -> Any:
+    """The registry and tracker of the parent's run, rebuilt in the worker.
+
+    The parent tracks the run (``mlops_run_id``); the worker had no MLOps context, so
+    ``persist_model`` found no registry, wrote a local pickle and never registered
+    or promoted the model. Built from the worker's Context, which carries the
+    parent's ``mlops_path`` (a reproduction's scratch store included).
+    """
+    from ducta.mlrun.config import MLOpsContext
+
+    mlops = MLOpsContext.from_context(context, pipeline_name=pipeline_name)
+    if mlops is None or mlops.model_registry is None:
+        raise RuntimeError(
+            "the run is tracked, but this worker process could not open its model "
+            "registry and experiment tracker"
+        )
+    return mlops
 
 
 def build_node_payload(
@@ -138,6 +166,9 @@ def build_node_payload(
             "project_name",
             "sweep_id",
             "sweep_index",
+            # The parent's tracked run: the worker logs to it and registers in its
+            # registry (a plain string; the integration object does not pickle).
+            "mlops_run_id",
         }
     }
     return {

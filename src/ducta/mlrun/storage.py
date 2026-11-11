@@ -132,11 +132,6 @@ class StorageBackendRegistry:
             raise ValueError(f"Storage backend '{name}' not found. Available: {available}")
         return backend_cls
 
-    @classmethod
-    def list_available(cls) -> List[str]:
-        """List all available storage backends."""
-        return list(cls._backends.keys())
-
 
 class StorageBackend(ABC):
     """
@@ -196,11 +191,6 @@ class StorageBackend(ABC):
     @abstractmethod
     def exists(self, path: str) -> bool:
         """Check if path exists."""
-        pass
-
-    @abstractmethod
-    def list_paths(self, prefix: str) -> List[str]:
-        """List all paths with given prefix."""
         pass
 
     @abstractmethod
@@ -648,23 +638,6 @@ class LocalStorageBackend(StorageBackend):
         except Exception:
             return False
 
-    def list_paths(self, prefix: str) -> List[str]:
-        """List all paths with given prefix."""
-        try:
-            base = self._get_full_path(prefix)
-            if not base.exists():
-                return []
-
-            paths = []
-            for path in base.rglob("*"):
-                if path.is_file():
-                    paths.append(str(path.relative_to(self.base_path)))
-            return sorted(paths)
-
-        except Exception as e:
-            logger.warning(f"Error listing paths with prefix '{prefix}': {e}")
-            return []
-
     @with_instance_retry(operation_name="delete")
     def delete(self, path: str) -> None:
         """Delete path (file or directory)."""
@@ -709,6 +682,15 @@ class DatabricksStorageBackend(StorageBackend):
         """
         Initialize Databricks storage backend.
         """
+        # It authenticates through the Spark session (databricks-connect or the
+        # runtime); these were accepted and silently dropped.
+        ignored = sorted(k for k in ("workspace_url", "token") if kwargs.get(k))
+        if ignored:
+            logger.warning(
+                "DatabricksStorageBackend ignores {}: it uses the Spark session's own "
+                "authentication (databricks-connect or the Databricks runtime).",
+                ", ".join(ignored),
+            )
         self.catalog = catalog
         self.schema = schema
         self.volume_name = volume_name
@@ -866,7 +848,26 @@ class DatabricksStorageBackend(StorageBackend):
                 if not local_path.suffix:
                     local_path = local_path.with_suffix(PARQUET_EXT)
 
-                df.to_parquet(str(local_path), engine="pyarrow", index=False)
+                # The modes mean what they mean for LocalStorageBackend: an append
+                # used to replace the cached rows with the new ones.
+                if local_path.exists():
+                    if mode == "ignore":
+                        return StorageMetadata(
+                            path=str(local_path),
+                            created_at=now,
+                            updated_at=now,
+                            format="parquet",
+                            size_bytes=local_path.stat().st_size,
+                        )
+                    if mode == "append":
+                        existing = pd.read_parquet(str(local_path), engine="pyarrow")
+                        df = pd.concat([existing, df], ignore_index=True)
+                    elif mode != "overwrite":
+                        raise FileExistsError(f"File {local_path} already exists")
+
+                temp_path = local_path.with_suffix(PARQUET_EXT + TEMP_SUFFIX)
+                with _atomic_replace(local_path, temp_path):
+                    df.to_parquet(str(temp_path), engine="pyarrow", index=False)
 
                 logger.warning(f"Spark unavailable, DataFrame cached locally: {local_path}")
 
@@ -1172,32 +1173,6 @@ class DatabricksStorageBackend(StorageBackend):
 
         except Exception:
             return False
-
-    def list_paths(self, prefix: str) -> List[str]:
-        """List paths in volume or local cache."""
-        paths: List[str] = []
-
-        try:
-            dbutils = self._get_dbutils()
-            if dbutils is not None:
-                volume_path = self._get_volume_path(prefix)
-                try:
-                    for file_info in dbutils.fs.ls(volume_path):
-                        paths.append(file_info.path)
-                except Exception:
-                    pass
-
-            # Also check local cache
-            local_base = self._get_local_cache_path(prefix)
-            if local_base.exists():
-                for p in local_base.rglob("*"):
-                    if p.is_file():
-                        paths.append(str(p.relative_to(self._local_cache_path)))
-
-        except Exception as e:
-            logger.warning(f"Error listing paths: {e}")
-
-        return sorted(set(paths))
 
     def delete(self, path: str) -> None:
         """Delete path from volume and local cache."""

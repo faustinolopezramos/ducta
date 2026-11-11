@@ -27,6 +27,7 @@ from loguru import logger
 
 from ducta.mlrun.baseline import compare_to_baseline, trivial_baseline_metrics
 from ducta.mlrun.persistence import _ctx_get, log_run_metrics, log_run_params, persist_model
+from ducta.mlrun.search import validation_metric_name
 from ducta.mlrun.split import split_dataframe, tag_partitions
 
 _TARGET = "__ducta_target__"
@@ -188,8 +189,13 @@ def train_with_search(
     name: Optional[str] = None,
     framework: str = "sklearn",
     native: bool = False,
+    promote: Optional[str] = None,
 ) -> TrainResult:
-    """Split, search, evaluate, gate, track and (with ``name``) register one model."""
+    """Split, search, evaluate, gate, track and (with ``name``) register one model.
+
+    ``promote="production"`` then promotes it through the project's
+    ``settings.mlops.promotion_policy`` (see :func:`persist_model`).
+    """
     if task not in _TASKS:
         raise ValueError(f"task must be one of {_TASKS}, got {task!r}")
     import pandas as pd
@@ -258,8 +264,10 @@ def train_with_search(
     metrics = _evaluate(model, X_test, y_test, task)
     if cv_score is not None:
         metrics["best_cv_score"] = cv_score
-        if objective.get("metric") and objective["metric"] not in metrics:
-            metrics[objective["metric"]] = cv_score
+        # Under val_<metric>, never the bare name: there a held-out metric of the
+        # same name (f1, accuracy…) won, and --search ranked trials on the test set.
+        if objective.get("metric"):
+            metrics[validation_metric_name(str(objective["metric"]))] = cv_score
 
     if baseline_metric:
         baseline = trivial_baseline_metrics(y_test, task=task)
@@ -294,6 +302,7 @@ def train_with_search(
             y=y_train,
             native=native,
             log_to_run=False,  # logged just above
+            promote=promote,
         )
 
     return TrainResult(

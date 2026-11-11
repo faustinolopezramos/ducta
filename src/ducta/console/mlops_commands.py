@@ -143,15 +143,10 @@ def _resolve_promotion_policy(env: Optional[str] = None) -> Optional[PromotionPo
     never looked at all — so a production promotion skipped the gate exactly
     when nobody could see why.
     """
-    policy_cfg = (_project_mlops_settings(env) or {}).get("promotion_policy")
-    if policy_cfg is None:
-        return None
-    if not isinstance(policy_cfg, dict) or not policy_cfg.get("metric"):
-        raise PolicyUnavailable("mlops.promotion_policy is set but names no metric")
     try:
-        return PromotionPolicy.from_dict(policy_cfg)
-    except Exception as e:  # noqa: BLE001
-        raise PolicyUnavailable(f"mlops.promotion_policy is invalid: {e}") from e
+        return PromotionPolicy.from_settings(_project_mlops_settings(env))
+    except ValueError as e:
+        raise PolicyUnavailable(str(e)) from e
 
 
 def experiment_list(
@@ -312,14 +307,23 @@ def experiment_compare(
     env: Optional[str] = None,
     pipeline_name: Optional[str] = None,
     output_format: str = "rich",
+    show_internal: bool = False,
 ) -> int:
-    """Parameters and final metrics of several runs side by side."""
+    """Parameters and final metrics of several runs side by side.
+
+    The parameters Ducta records itself (``param__code_hash``,
+    ``param__environment_snapshot``, the fingerprints …) are left out unless
+    *show_internal*: one of them runs to thousands of characters, and the table
+    printed rows 11,000 characters wide.
+    """
     if len(run_ids) < 2:
         logger.error("compare needs at least two run ids")
         return ExitCode.VALIDATION_ERROR.value
     tracker, resolved_path = _tracker_for(storage_path, env, pipeline_name)
     try:
         frame = tracker.compare_runs([_resolve_run_id(tracker, r) for r in run_ids])
+        if not show_internal:
+            frame = frame[[c for c in frame.columns if not str(c).startswith("param__")]]
         if output_format == "json":
             print(frame.to_json(orient="records", indent=2))
             return 0
@@ -344,6 +348,89 @@ def _parse_model_version(text: Any) -> int:
             "(1, 2, 3, ... or v1, v2, ...), assigned when the model is registered."
         )
     return int(number)
+
+
+def model_list(
+    storage_path: Optional[str],
+    env: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+) -> int:
+    """Every registered model and its versions: stage, main metric, when."""
+    resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
+    try:
+        registry = _build_registry(_build_storage(resolved_path))
+        models = registry.list_models()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to list models: {e}")
+        return ExitCode.EXECUTION_ERROR.value
+    print(f"\nRegistered models (Storage: {resolved_path})")
+    print("-" * 72)
+    if not models:
+        print("No models registered.")
+        return ExitCode.SUCCESS.value
+    for model in sorted(models, key=lambda m: str(m.get("name"))):
+        name = str(model["name"])
+        print(f"{name}  ({model.get('framework', '?')})")
+        for v in registry.list_model_versions_lite(name):
+            stage = str(v.get("stage") or "?")
+            marker = "  <- production" if stage == ModelStage.PRODUCTION.value else ""
+            print(f"  v{v['version']:<4} {stage:<11} {str(v.get('created_at', ''))[:19]}{marker}")
+    print("-" * 72)
+    print("ducta model show NAME [--version N]  shows one version's metrics and lineage")
+    return ExitCode.SUCCESS.value
+
+
+def model_show(
+    model_name: str,
+    version: Optional[str],
+    storage_path: Optional[str],
+    env: Optional[str] = None,
+    pipeline_name: Optional[str] = None,
+) -> int:
+    """One version (the newest without ``--version``): stage, metrics, schema, lineage."""
+    from ducta.mlrun.exceptions import ModelNotFoundError
+
+    resolved_path = _resolve_storage_path(storage_path, env, pipeline_name)
+    try:
+        number = _parse_model_version(version) if version is not None else None
+    except ValueError as e:
+        logger.error(str(e))
+        return ExitCode.VALIDATION_ERROR.value
+    try:
+        registry = _build_registry(_build_storage(resolved_path))
+        mv = registry.get_model_version(model_name, number)
+    except ModelNotFoundError as e:
+        logger.error(str(e))
+        return ExitCode.VALIDATION_ERROR.value
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Failed to read model '{model_name}': {e}")
+        return ExitCode.EXECUTION_ERROR.value
+    meta = mv.metadata
+    rows = [
+        ("Model", f"{meta.name} v{mv.version}"),
+        ("Stage", getattr(meta.stage, "value", meta.stage)),
+        ("Framework", meta.framework),
+        ("Registered", mv.created_at),
+        ("Updated", mv.updated_at),
+        ("Tracked run", mv.experiment_run_id or "-"),
+        ("Artifact", mv.artifact_uri),
+        ("sha256", mv.artifact_sha256 or "-"),
+    ]
+    width = max(len(k) for k, _ in rows)
+    print()
+    for key, value in rows:
+        print(f"{key:<{width}}  {value}")
+    for title, values in (
+        ("Metrics", meta.metrics),
+        ("Hyperparameters", meta.hyperparameters),
+        ("Input schema", meta.input_schema or {}),
+        ("Library versions", meta.framework_versions),
+    ):
+        if values:
+            print(f"\n{title}")
+            for key, value in sorted(values.items()):
+                print(f"  {key}: {value}")
+    return ExitCode.SUCCESS.value
 
 
 def model_promote(

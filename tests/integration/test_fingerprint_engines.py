@@ -105,6 +105,38 @@ class TestExactModeDetectsContentChange:
         assert with_null.fingerprint != with_empty.fingerprint
 
 
+class TestAValueBelongsToItsColumn:
+    """Swapping two same-typed columns' names left the fingerprint unchanged: the row hash
+    read the columns by position and the schema hash sorts the names."""
+
+    TWO = "a DOUBLE, b DOUBLE"
+    ROWS = [(float(i), float(i * 10)) for i in range(300)]
+
+    def _frame(self, make_df, columns, rows):
+        if make_df.engine == "pandas":
+            import pandas as pd
+
+            return pd.DataFrame(rows, columns=columns)
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession()
+        return spark.createDataFrame(rows, ", ".join(f"{c} DOUBLE" for c in columns))
+
+    @pytest.mark.parametrize("mode", ["exact", "exact_crypto", "sample"])
+    def test_swapped_column_names_are_a_change(self, make_df, mode):
+        original = fp(self._frame(make_df, ["a", "b"], self.ROWS), mode)
+        swapped = fp(self._frame(make_df, ["b", "a"], self.ROWS), mode)
+        assert original.schema_hash == swapped.schema_hash  # same names and types
+        assert original.fingerprint != swapped.fingerprint
+
+    @pytest.mark.parametrize("mode", ["exact", "exact_crypto"])
+    def test_reordered_columns_are_not_a_change(self, make_df, mode):
+        original = fp(self._frame(make_df, ["a", "b"], self.ROWS), mode)
+        reordered_rows = [(b, a) for a, b in self.ROWS]
+        reordered = fp(self._frame(make_df, ["b", "a"], reordered_rows), mode)
+        assert original.fingerprint == reordered.fingerprint
+
+
 class TestSelfDescription:
     """A fingerprint has to say what it measured, or it cannot be trusted later."""
 

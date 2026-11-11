@@ -192,15 +192,6 @@ class MLOpsException(Exception):
             "exception_type": self.__class__.__name__,
         }
 
-    def with_context(self, **kwargs) -> "MLOpsException":
-        """Add context information and return self for chaining."""
-        for key, value in kwargs.items():
-            if hasattr(self.context, key):
-                setattr(self.context, key, value)
-            else:
-                self.context.additional_info[key] = value
-        return self
-
 
 class ModelNotFoundError(MLOpsException):
     """Raised when a requested model is not found in the registry."""
@@ -257,6 +248,8 @@ class PromotionGateError(MLOpsException):
     def __init__(self, model_name: str, version: int, reason: str, **kwargs):
         self.model_name = model_name
         self.version = version
+        #: Why, without the error code and model prefix: what a person reads first.
+        self.reason = reason
 
         context = ErrorContext(
             operation="promote_model",

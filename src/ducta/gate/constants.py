@@ -36,13 +36,17 @@ class SupportedFormats(Enum):
     UNITY_CATALOG = "unity_catalog"
 
 
-class WriteMode(Enum):
-    """Supported write modes.
+# The one definition, also ``ducta.setting.schemas.WriteMode``. It lives here because
+# ``gate`` cannot import ``setting`` (``setting`` imports ``check``, which imports
+# ``gate``). There were two copies, a plain ``Enum`` and a ``str`` one, and a mode
+# handed from one side to the other turned into "WriteMode.OVERWRITE" under ``str()``.
+# The docstring is the description editors show in the configuration's JSON Schema.
+class WriteMode(str, Enum):
+    """Write modes for outputs."""
 
-    Mirrors ``ducta.setting.schemas.WriteMode``: ``gate`` cannot import ``setting`` when it
-    loads (``setting`` imports ``check``, which imports ``gate``), so the two are kept equal
-    by ``tests/gate/test_constants.py`` instead.
-    """
+    def __str__(self) -> str:
+        # The value, so a mode goes into a path, a log or a JSON as is.
+        return str(self.value)
 
     OVERWRITE = "overwrite"
     APPEND = "append"

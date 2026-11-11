@@ -92,6 +92,17 @@ class QualityCheckExecutor:
                 "warnings": int(getattr(report, "warnings_count", 0)),
                 "checks": int(getattr(report, "checks_count", 0)),
             }
+            # Which checks did not pass, whatever their severity: a warning-level
+            # prediction_drift is what a pipeline's `retrain:` reacts to.
+            failed = sorted(
+                {
+                    str(r.check_name)
+                    for r in getattr(report, "results", None) or []
+                    if getattr(r, "passed", True) is False and getattr(r, "check_name", None)
+                }
+            )
+            if failed:
+                entry["failed_checks"] = failed
             if dataset is not None:
                 entry["dataset"] = dataset
             self._ledger.record_quality(entry)
@@ -112,7 +123,18 @@ class QualityCheckExecutor:
                 "aborted": True,
                 "reason": str(error),
             }
+            # A gate that blocks on drift is when a pipeline's `retrain:` matters most.
+            failed = sorted(
+                {
+                    str(r.check_name)
+                    for r in getattr(error, "results", None) or []
+                    if getattr(r, "passed", True) is False and getattr(r, "check_name", None)
+                }
+            )
             gate_result = getattr(error, "gate_result", None)
+            failed = sorted(set(failed) | set(getattr(gate_result, "failed_checks", None) or []))
+            if failed:
+                entry["failed_checks"] = failed
             if gate_result is not None:
                 entry["gate"] = getattr(gate_result, "gate_name", None)
                 entry["triggered_rules"] = list(getattr(gate_result, "triggered_rules", []) or [])

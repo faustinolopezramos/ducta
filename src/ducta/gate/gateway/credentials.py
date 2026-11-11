@@ -17,7 +17,7 @@ under the License.
 
 SPDX-License-Identifier: Apache-2.0
 
-A connection's username and password: from the environment, else from the project's ``.env``.
+A connection's username and password: both from the environment, else both from the project's ``.env``.
 """
 
 import os
@@ -91,22 +91,40 @@ def read_dotenv(path: Path) -> Dict[str, str]:
 def resolve_credentials(source_name: str, project_root: Path) -> Credentials:
     """The source's ``<SOURCE>_USER`` / ``<SOURCE>_PASSWORD``.
 
-    Each variable is looked up in the process environment first and then in
-    ``<project_root>/.env``.
+    Looked up in the process environment first and then in ``<project_root>/.env``.
+    The two come as a pair from one place, the environment or the ``.env``. Taken one
+    by one, a ``.env`` the project writes could supply the username and the server's
+    environment the password: a connection named ``ducta_admin`` logged in to a host
+    of its own choosing with the server's ``DUCTA_ADMIN_PASSWORD``. A name whose
+    variables are the server's own secrets resolves to nothing.
     """
-    dotenv = read_dotenv(Path(project_root) / ".env")
-
-    def lookup(var: str) -> tuple:
-        if os.environ.get(var):
-            return os.environ[var], "environment"
-        if dotenv.get(var):
-            return dotenv[var], ".env"
-        return None, None
+    from ducta.server_secrets import is_server_secret
 
     prefix = source_name.upper()
-    username, user_where = lookup(f"{prefix}_USER")
-    password, password_where = lookup(f"{prefix}_PASSWORD")
-    if username and password:
-        where = "environment" if "environment" in (user_where, password_where) else ".env"
-        return Credentials(username, password, prefix, where)
+    user_var, password_var = f"{prefix}_USER", f"{prefix}_PASSWORD"
+    if is_server_secret(user_var) or is_server_secret(password_var):
+        logger.warning(
+            "Connection '{}' would use the server's own {} / {}; it gets no credentials",
+            source_name,
+            user_var,
+            password_var,
+        )
+        return Credentials(None, None, prefix, None)
+
+    dotenv = read_dotenv(Path(project_root) / ".env")
+    in_env = (os.environ.get(user_var), os.environ.get(password_var))
+    in_file = (dotenv.get(user_var), dotenv.get(password_var))
+    if all(in_env):
+        return Credentials(in_env[0], in_env[1], prefix, "environment")
+    if any(in_env) and any(in_file):
+        # Half here, half there. Not taken silently from either side: the .env pair
+        # would ignore a password just rotated in the environment.
+        env_side = user_var if in_env[0] else password_var
+        raise ValueError(
+            f"Connection '{source_name}': {env_side} is set in the environment but its "
+            f"pair is in {Path(project_root) / '.env'}. Set {user_var} and {password_var} "
+            "together, in one place."
+        )
+    if all(in_file):
+        return Credentials(in_file[0], in_file[1], prefix, ".env")
     return Credentials(None, None, prefix, None)

@@ -405,10 +405,33 @@ Compare the parameters and metrics of runs
 | `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
 | `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path — matches how a real run resolves its own path when no global 'mlops_path' override is set. |
 | `--output-format` | Output format: a text table or JSON (default: rich) — one of `rich`, `json`; default `rich` |
+| `--all` | Also the parameters Ducta records itself (_code_hash, _environment_snapshot …) |
 
 ## ducta model
 
-Promote, garbage collect, and manage registered models
+List, show, promote and garbage collect registered models
+
+### ducta model list
+
+List registered models, versions and stages
+
+| Option | What it does |
+|---|---|
+| `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path, as a run does when no global 'mlops_path' is set. |
+
+### ducta model show
+
+Show one model version: stage, metrics, schema and lineage
+
+| Option | What it does |
+|---|---|
+| `<name>` | Model name — *(required)* |
+| `--version` | Model version (3 or v3); the newest when omitted |
+| `--storage-path` | MLOps storage path (Optional, auto-discovered by default) |
+| `-e`, `--env` | Project environment to resolve the storage path from (e.g. dev, prod) — auto-discovery requires this |
+| `-p`, `--pipeline` | Pipeline name (schema.pipeline) to resolve a per-pipeline storage path, as a run does when no global 'mlops_path' is set. |
 
 ### ducta model promote
 

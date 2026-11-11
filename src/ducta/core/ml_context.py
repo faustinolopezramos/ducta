@@ -51,6 +51,12 @@ class MLNodeContext(Mapping):
     # object, and a ``ducta.mlrun.serving.ServingModel`` saying exactly which one.
     model: Any = None
     model_ref: Any = None
+    # What the node registered (``persist_model`` appends one entry per version): the
+    # run certificate names them, so a training run says which version it produced.
+    registered_models: List[Dict[str, Any]] = field(default_factory=list)
+    # The --sweep/--search this run is a trial of: a trial's model is registered, not
+    # promoted (the best one is, once the search has compared them).
+    sweep_id: Optional[str] = None
 
     def _keys(self) -> List[str]:
         return [f.name for f in fields(self)]

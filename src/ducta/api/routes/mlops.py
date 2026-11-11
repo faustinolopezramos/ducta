@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from ducta.api.dependencies import SourcePathDep, require_permission
 from ducta.api.exceptions import ValidationError
+from ducta.api.models.auth import User
 from ducta.api.utils.git_utils import safe_path
 from ducta.mlrun.config import DEFAULT_REGISTRY_PATH, DEFAULT_TRACKING_PATH
 from ducta.mlrun.experiment_tracking import ExperimentTracker, RunStatus
@@ -53,6 +54,8 @@ class PromoteModelRequest(BaseModel):
     version: int
     stage: Literal["staging", "production", "archived"]
     force: bool = False
+    #: Recorded in the registry's audit log; required with ``force``.
+    reason: Optional[str] = None
 
 
 class GcRequest(BaseModel):
@@ -371,6 +374,20 @@ def unregistered_models(storage_path: str) -> List[Dict[str, Any]]:
     return found
 
 
+def _policy_view(global_config: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """``mlops.promotion_policy`` as the UI shows it: None when there is none, and
+    ``{"error": …}`` when it cannot be used (a Production promotion is then refused)."""
+    try:
+        policy = PromotionPolicy.from_settings(global_config.get("mlops"))
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if policy is None:
+        return None
+    from dataclasses import asdict
+
+    return asdict(policy)
+
+
 @router.get("/status", dependencies=[Depends(require_permission("execution.read"))])
 async def mlops_status(scope: MLOpsScopeDep) -> Dict[str, Any]:
     """Why the experiments / registry views are empty, or that they are not.
@@ -389,6 +406,7 @@ async def mlops_status(scope: MLOpsScopeDep) -> Dict[str, Any]:
             "tracking_present": (storage / DEFAULT_TRACKING_PATH).is_dir(),
             "registry_present": (storage / DEFAULT_REGISTRY_PATH).is_dir(),
             "unregistered_models": unregistered_models(scope.storage),
+            "promotion_policy": _policy_view(gs),
         }
 
     return await run_in_threadpool(_run)
@@ -432,7 +450,7 @@ async def get_experiment(experiment_id: str, scope: MLOpsScopeDep) -> Dict[str, 
 
     def _run() -> Dict[str, Any]:
         tracker = scope.tracker()
-        exp = tracker._get_experiment(experiment_id)
+        exp = tracker.get_experiment(experiment_id)
         return {
             "experiment_id": exp.experiment_id,
             "name": exp.name,
@@ -512,6 +530,47 @@ async def delete_run(experiment_id: str, run_id: str, scope: MLOpsScopeDep) -> N
 # ── Model endpoints ──────────────────────────────────────────────────────────
 
 
+def _production_and_refusal(registry: ModelRegistry, model: Dict[str, Any]) -> Dict[str, Any]:
+    """The version in Production (and its metrics), and why the latest version was
+    refused if it was.
+
+    ``stage`` is the *latest* version's: after a retrain the policy refused, v1 is in
+    Production and v2 in Staging, and the UI filed the model under Staging with no
+    sign of what was serving.
+    """
+    name = str(model.get("name"))
+    out: Dict[str, Any] = {
+        "production_version": None,
+        "production_metrics": None,
+        "latest_refusal": None,
+    }
+    try:
+        production = [
+            v["version"]
+            for v in registry.list_model_versions_lite(name)
+            if str(v.get("stage")) == ModelStage.PRODUCTION.value
+        ]
+        if production:
+            out["production_version"] = max(production)
+            out["production_metrics"] = registry.get_model_version(
+                name, out["production_version"]
+            ).metadata.metrics
+        latest = model.get("latest_version")
+        if model.get("stage") == ModelStage.STAGING.value:
+            for entry in registry.audit_history(name):
+                if entry.get("version") != latest:
+                    continue
+                if entry.get("event") == "PROMOTE_REFUSED":
+                    out["latest_refusal"] = {
+                        "timestamp": entry.get("timestamp"),
+                        "reason": (entry.get("details") or {}).get("refusal"),
+                    }
+                break
+    except Exception as exc:  # noqa: BLE001 — the list renders without the extras
+        logger.debug("Could not read the stages of model {}: {}", name, exc)
+    return out
+
+
 @router.get("/models", dependencies=[Depends(require_permission("execution.read"))])
 async def list_models(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """List all registered models (latest version per model).
@@ -521,9 +580,16 @@ async def list_models(scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
     """
 
     def _run() -> List[Dict[str, Any]]:
-        models = scope.registry().list_models()
+        registry = scope.registry()
         served = scope.serving_references()
-        return [{**m, "served_by": served.get(str(m.get("name")), [])} for m in models]
+        return [
+            {
+                **m,
+                "served_by": served.get(str(m.get("name")), []),
+                **_production_and_refusal(registry, m),
+            }
+            for m in registry.list_models()
+        ]
 
     return await run_in_threadpool(_run)
 
@@ -534,51 +600,146 @@ async def get_model_versions(name: str, scope: MLOpsScopeDep) -> List[Dict[str, 
     return await run_in_threadpool(lambda: scope.registry().list_model_versions(name))
 
 
-@router.post(
-    "/models/{name}/promote",
-    dependencies=[Depends(require_permission("model.promote"))],
-)
-async def promote_model(
-    name: str, body: PromoteModelRequest, scope: MLOpsScopeDep
-) -> Dict[str, Any]:
-    """Promote a model version to a new stage."""
-    target_stage = ModelStage(body.stage.capitalize())
+def _promotion_policy(
+    scope: Any, target_stage: ModelStage, *, force: bool
+) -> Optional[PromotionPolicy]:
+    """``mlops.promotion_policy`` for a promotion, as the CLI reads it.
 
-    policy_cfg = (scope.global_config.get("mlops") or {}).get("promotion_policy")
-    policy: Optional[PromotionPolicy] = None
-    if isinstance(policy_cfg, dict) and policy_cfg.get("metric"):
-        try:
-            policy = PromotionPolicy.from_dict(policy_cfg)
-        except Exception as exc:
-            logger.warning("Invalid mlops.promotion_policy ignored: {}", exc)
+    An invalid policy, or one that names no metric, was ignored with a warning and
+    the version promoted without its gate. It now refuses a Production promotion
+    unless ``force`` (whose bypass the registry audit-logs).
+    """
+    if target_stage != ModelStage.PRODUCTION:
+        return None
+    try:
+        return PromotionPolicy.from_settings(scope.global_config.get("mlops"))
+    except ValueError as exc:
+        if not force:
+            raise ValidationError(
+                f"Cannot check the promotion gate: {exc}. "
+                "Fix it, or promote with force (the bypass is audit-logged).",
+                detail={"promotion_policy": "invalid"},
+            ) from exc
+        logger.warning("Promotion gate not checked (invalid policy: {}); force=true", exc)
+        return None
+
+
+@router.get(
+    "/models/{name}/history",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def model_history(name: str, scope: MLOpsScopeDep) -> List[Dict[str, Any]]:
+    """The model's audit log, newest first: registrations, promotions (and refused
+    ones), deletions, with who did it and why."""
+    return await run_in_threadpool(lambda: scope.registry().audit_history(name))
+
+
+@router.get(
+    "/models/{name}/versions/{version}/promotion-check",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def promotion_check(name: str, version: int, scope: MLOpsScopeDep) -> Dict[str, Any]:
+    """Would promoting *version* to Production pass the project's policy? Changes
+    nothing; the same check the promotion runs."""
 
     def _run() -> Dict[str, Any]:
-        scope.registry().promote_model(
-            name, body.version, target_stage, policy=policy, force=body.force
+        registry = scope.registry()
+        registry.get_model_version(name, version)  # 404 for an unknown version
+        production = [
+            v["version"]
+            for v in registry.list_model_versions_lite(name)
+            if str(v.get("stage")) == ModelStage.PRODUCTION.value
+        ]
+        policy_view = _policy_view(scope.global_config)
+        out: Dict[str, Any] = {
+            "policy": policy_view,
+            "production_version": max(production) if production else None,
+            "served_by": scope.serving_references().get(name, []),
+            "passes": True,
+            "reason": None,
+        }
+        if policy_view and "error" in policy_view:
+            out.update(passes=False, reason=f"the policy cannot be used: {policy_view['error']}")
+        elif policy_view:
+            policy = PromotionPolicy.from_settings(scope.global_config.get("mlops"))
+            assert policy is not None  # _policy_view saw a valid one
+            refusal = registry.check_promotion_gate(name, version, policy)
+            out.update(passes=refusal is None, reason=refusal)
+        return out
+
+    return await run_in_threadpool(_run)
+
+
+@router.post("/models/{name}/promote")
+async def promote_model(
+    name: str,
+    body: PromoteModelRequest,
+    scope: MLOpsScopeDep,
+    user: Annotated[User, Depends(require_permission("model.promote"))],
+) -> Dict[str, Any]:
+    """Promote a model version to a new stage, as the signed-in user (audit-logged)."""
+    target_stage = ModelStage(body.stage.capitalize())
+    reason = (body.reason or "").strip() or None
+    if body.force and not reason:
+        raise ValidationError(
+            "A forced promotion needs a reason: it is recorded in the audit log.",
+            detail={"reason": "required with force"},
+        )
+
+    policy = _promotion_policy(scope, target_stage, force=body.force)
+
+    def _run() -> Dict[str, Any]:
+        registry = scope.registry()
+        demoted: List[int] = []
+        if target_stage == ModelStage.PRODUCTION:
+            demoted = [
+                v["version"]
+                for v in registry.list_model_versions_lite(name)
+                if str(v.get("stage")) == ModelStage.PRODUCTION.value
+                and v["version"] != body.version
+            ]
+        registry.promote_model(
+            name,
+            body.version,
+            target_stage,
+            user=user.username,
+            reason=reason,
+            policy=policy,
+            force=body.force,
         )
         return {
             "name": name,
             "version": body.version,
             "stage": target_stage.value,
             "promoted": True,
+            # Archived by this promotion: only one version is in Production.
+            "demoted_versions": demoted,
         }
 
     return await run_in_threadpool(_run)
 
 
-@router.delete(
-    "/models/{name}/versions/{version}",
-    status_code=204,
-    dependencies=[Depends(require_permission("model.delete"))],
-)
-async def delete_model_version(name: str, version: int, scope: MLOpsScopeDep) -> None:
-    """Delete a specific model version and its artifact."""
-    await run_in_threadpool(lambda: scope.registry().delete_model_version(name, version))
+@router.delete("/models/{name}/versions/{version}", status_code=204)
+async def delete_model_version(
+    name: str,
+    version: int,
+    scope: MLOpsScopeDep,
+    user: Annotated[User, Depends(require_permission("model.delete"))],
+) -> None:
+    """Delete a specific model version and its artifact (audit-logged). A version in
+    Production is refused: archive it first by promoting another."""
+    await run_in_threadpool(
+        lambda: scope.registry().delete_model_version(name, version, user=user.username)
+    )
 
 
 # Garbage collection deletes old model versions: the same right as deleting one.
-@router.post("/gc", dependencies=[Depends(require_permission("model.delete"))])
-async def run_gc(body: GcRequest, scope: MLOpsScopeDep) -> Dict[str, Any]:
+@router.post("/gc")
+async def run_gc(
+    body: GcRequest,
+    scope: MLOpsScopeDep,
+    user: Annotated[User, Depends(require_permission("model.delete"))],
+) -> Dict[str, Any]:
     """Garbage-collect old model versions."""
 
     def _run() -> Dict[str, Any]:
@@ -593,12 +754,15 @@ async def run_gc(body: GcRequest, scope: MLOpsScopeDep) -> Dict[str, Any]:
             storage_path=scope.storage,
             max_versions_per_model=mlops_config.max_versions_per_model,
             model_retention_days=mlops_config.model_retention_days,
-        ).run(dry_run=body.dry_run)
+        ).run(dry_run=body.dry_run, user=user.username)
         return {
             "dry_run": body.dry_run,
             "models_processed": stats.get("models_processed", 0),
             "versions_removed": stats.get("versions_removed", 0),
             "bytes_freed": stats.get("bytes_freed", 0),
+            # Removed (or, on a dry run, that would be): a run that used one of these
+            # can no longer be reproduced.
+            "versions": stats.get("versions", []),
             "storage_path": scope.storage,
         }
 

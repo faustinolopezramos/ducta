@@ -93,4 +93,21 @@ describe("describeSplit", () => {
   it("shows a dash when there is no split", () => {
     expect(describeSplit(null)).toBe("—");
   });
+
+  it("says which version a training node registered, and why the policy refused it", () => {
+    render(
+      <MLSection
+        nodes={[
+          node("train", {
+            registered: [
+              { name: "churn", version: 1, promoted_to: "Production", sha256: "sha256:ab" },
+              { name: "churn", version: 2, promoted_to: null, promotion_refused: "val_auc 0.70 < 0.90" },
+            ],
+          }),
+        ]}
+      />
+    );
+    expect(within(row("train")).getByText("churn v1 → Production")).toBeInTheDocument();
+    expect(within(row("train")).getByText(/churn v2/)).toHaveTextContent("churn v2 · refused: val_auc 0.70 < 0.90");
+  });
 });

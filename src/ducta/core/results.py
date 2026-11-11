@@ -99,6 +99,9 @@ class PipelineRunResult:
     errors: List[str] = field(default_factory=list)
     mlops_run_id: Optional[str] = None
     metrics: Dict[str, float] = field(default_factory=dict)
+    #: The training run this run's ``retrain:`` started (``pipeline``, ``run_id``,
+    #: ``status``, ``checks``), or why it did not (``skipped``); None when none applied.
+    retrain: Optional[Dict[str, Any]] = None
 
     @property
     def ok(self) -> bool:
@@ -175,6 +178,9 @@ class PipelineRunResult:
             "certificate_path": self.certificate_path,
             "certificate_error": self.certificate_error,
             "errors": list(self.errors),
+            # The training run this run's ``retrain:`` started, or why not: the API and
+            # the web UI had no way to see that a scoring run retrained.
+            "retrain": dict(self.retrain) if self.retrain else None,
         }
 
     def summary(self) -> str:

@@ -302,6 +302,7 @@ def _decompile_dataset(
                 "partition_col": outp.get("partition_col"),
                 "replace_predicate": outp.get("replace_predicate"),
                 "overwrite_schema": outp.get("overwrite_schema"),
+                "allow_empty": outp.get("allow_empty"),
                 "partition_overwrite": outp.get("partition_overwrite"),
             }
         )
@@ -330,6 +331,7 @@ def _decompile_dataset(
         "partition_col",
         "replace_predicate",
         "overwrite_schema",
+        "allow_empty",
         "partition_overwrite",
     }
     for side in (inp, outp):
@@ -418,6 +420,7 @@ def decompile(
             "type",
             "requires_dates",
             "depends_on",
+            "retrain",
             "reuse_if_materialized",
             "spark_config",
             "split",

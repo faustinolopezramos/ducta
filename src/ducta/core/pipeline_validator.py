@@ -168,12 +168,14 @@ class PipelineValidator:
                 cross_deps, node_configs, policy
             )
 
+            # The issues stay whole under format_compatibility; errors and warnings
+            # are messages, like every other entry there.
             validation_result["format_compatibility"] = format_issues
             validation_result["errors"].extend(
-                [issue for issue in format_issues if issue["severity"] == "error"]
+                issue["message"] for issue in format_issues if issue["severity"] == "error"
             )
             validation_result["warnings"].extend(
-                [issue for issue in format_issues if issue["severity"] == "warning"]
+                issue["message"] for issue in format_issues if issue["severity"] == "warning"
             )
 
             resource_conflicts = PipelineValidator._validate_resource_conflicts(

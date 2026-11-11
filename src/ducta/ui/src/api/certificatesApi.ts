@@ -106,6 +106,25 @@ export interface CertificateServedModel {
   hash_source: "registry" | "load" | null;
 }
 
+/** A version a training node registered (schema >= 1.10). */
+export interface CertificateRegisteredModel {
+  name: string;
+  version: number;
+  uri?: string;
+  sha256?: string | null;
+  /** The stage the policy let it reach, or null when it stayed in Staging. */
+  promoted_to?: string | null;
+  /** Why the promotion policy refused it. */
+  promotion_refused?: string;
+}
+
+/** The run whose failed checks started this one through its `retrain:` (schema >= 1.10). */
+export interface CertificateTrigger {
+  run_id: string;
+  pipeline: string;
+  checks: string[];
+}
+
 /** What an ML node was given and did — present only on ML nodes. */
 export interface CertificateNodeML {
   stage: string | null;
@@ -119,6 +138,7 @@ export interface CertificateNodeML {
   model_version: string | null;
   hyperparams: Record<string, unknown>;
   model?: CertificateServedModel;
+  registered?: CertificateRegisteredModel[];
 }
 
 export interface CertificateNode {
@@ -219,6 +239,9 @@ export interface RunCertificate {
   certificate_hash: string;
   signature?: string | null;
   key_id?: string | null;
+  /** The run a `--reproduce` re-ran. */
+  reproduction_of?: string | null;
+  triggered_by?: CertificateTrigger | null;
 }
 
 // ── Queries ────────────────────────────────────────────────────────────────────

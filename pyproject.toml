@@ -261,9 +261,9 @@ omit = [
 ]
 
 [tool.coverage.report]
-# A floor, not a target: 69.7% when it was set (2026-10-14). Raise it as
+# A floor, not a target: 78% when it was last raised (2026-11-08). Raise it as
 # coverage grows; a change that drops below it fails CI.
-fail_under = 68
+fail_under = 75
 show_missing = true
 skip_covered = true
 exclude_lines = [

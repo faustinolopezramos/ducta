@@ -108,6 +108,15 @@ class AlertChannel(_Strict):
             raise ValueError(f"a {self.type} channel needs '{need}' (an environment variable name)")
         if self.type == "email" and not self.to:
             raise ValueError("an email channel needs 'to'")
+        from ducta.server_secrets import is_server_secret
+
+        for key in ("webhook_env", "url_env"):
+            name = getattr(self, key)
+            if name and is_server_secret(name):
+                raise ValueError(
+                    f"{key}: {name} is one of the server's own secrets, not a webhook URL; "
+                    "name the variable that holds the URL"
+                )
         return self
 
 
@@ -384,6 +393,10 @@ class ProjectFile(_Strict):
         if gate is not None:
             # The project-wide gate is written like a node's (``on_fail``, strict keys).
             GateSpec.model_validate(gate)
+        mlops = value.get("mlops")
+        policy = mlops.get("promotion_policy") if isinstance(mlops, dict) else None
+        if policy is not None:
+            PromotionPolicySpec.model_validate(policy)
         return value
 
 
@@ -413,7 +426,16 @@ class WriteSpec(_Strict):
     overwrite_strategy: Optional[Literal["replaceWhere"]] = None
     partition_col: Optional[str] = None
     replace_predicate: Optional[str] = None
-    overwrite_schema: Optional[bool] = None
+    overwrite_schema: Optional[bool] = Field(
+        default=None,
+        description="Delta: let an overwrite replace the table's schema (default false: a "
+        "run whose columns differ from the table's fails and writes nothing)",
+    )
+    allow_empty: Optional[bool] = Field(
+        default=None,
+        description="Let a run that produced 0 rows empty this dataset (default false: the "
+        "node fails and the dataset keeps what it holds)",
+    )
     partition_overwrite: Optional[Literal["static", "dynamic"]] = Field(
         default=None,
         description="With `partition` and mode overwrite: 'static' (default) replaces the whole "
@@ -457,6 +479,22 @@ class ReadSpec(_Strict):
 
 class Incremental(_Strict):
     column: str = Field(..., min_length=1)
+
+
+class PromotionPolicySpec(_Strict):
+    """``settings.mlops.promotion_policy``: the gate a model passes to reach production.
+
+    It was read as a free dictionary: a misspelled key (``min_detla``) was dropped
+    and the gate ran without it.
+    """
+
+    metric: str = Field(..., min_length=1, description="The model metric compared (val_auc …)")
+    min_delta: float = Field(default=0.0, description="How much better the candidate must be")
+    compare_to: Literal["current_production", "baseline"] = "current_production"
+    higher_is_better: bool = True
+    require_schema_match: bool = Field(
+        default=False, description="Refuse a candidate whose feature contract differs"
+    )
 
 
 class GateSpec(_Strict):
@@ -1086,6 +1124,48 @@ class StreamNode(_NodeBase):
 Node = Annotated[Union[TransformNode, IngestNode, StreamNode], Field(discriminator="kind")]
 
 
+_DURATION = re.compile(r"^(\d+)([smhd])$")
+
+
+def duration_seconds(text: str) -> int:
+    """``90s``, ``30m``, ``6h``, ``2d`` in seconds."""
+    match = _DURATION.match(str(text).strip().lower())
+    if not match:
+        raise ValueError(f"'{text}' is not a duration (90s, 30m, 6h, 2d)")
+    return int(match.group(1)) * {"s": 1, "m": 60, "h": 3600, "d": 86400}[match.group(2)]
+
+
+class RetrainSpec(_Strict):
+    """``retrain:`` on a scoring pipeline: which pipeline Ducta runs when its checks fail.
+
+    After a successful run whose quality results include a failed check named in
+    ``when`` (``prediction_drift`` by default), Ducta runs ``run`` in the same
+    environment. The new model reaches production only through
+    ``settings.mlops.promotion_policy``.
+    """
+
+    run: str = Field(..., min_length=1, description="The training pipeline to run")
+    when: List[str] = Field(
+        default_factory=lambda: ["prediction_drift"],
+        min_length=1,
+        description="Names of the checks whose failure triggers it",
+    )
+    cooldown: Optional[str] = Field(
+        default=None,
+        description=(
+            "Not again until this long after the last successful run of `run`, or the "
+            "last retrain whatever its outcome (6h, 1d)"
+        ),
+    )
+
+    @field_validator("cooldown")
+    @classmethod
+    def _a_duration(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None:
+            duration_seconds(value)
+        return value
+
+
 class PipelineFile(_Strict):
     """``pipelines/<name>.yaml``. The pipeline's name is the file's stem."""
 
@@ -1107,6 +1187,10 @@ class PipelineFile(_Strict):
     requires_dates: bool = True
     depends_on: List[str] = Field(
         default_factory=list, description="Pipelines to run before this one (chains)"
+    )
+    retrain: Optional[RetrainSpec] = Field(
+        default=None,
+        description="Run a training pipeline when one of these checks fails (scoring pipelines)",
     )
     reuse_if_materialized: Optional[bool] = None
     spark_config: Optional[Dict[str, Any]] = None

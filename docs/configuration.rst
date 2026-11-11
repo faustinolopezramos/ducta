@@ -230,7 +230,9 @@ environment variable, never written in the file:
 
 Channels: ``slack`` and ``teams`` (``webhook_env``), ``webhook`` (``url_env``),
 ``email`` (``to``; the server's ``DUCTA_SMTP_HOST``, ``DUCTA_SMTP_PORT``,
-``DUCTA_SMTP_FROM``, ``DUCTA_SMTP_USER``, ``DUCTA_SMTP_PASSWORD``).
+``DUCTA_SMTP_FROM``, ``DUCTA_SMTP_USER``, ``DUCTA_SMTP_PASSWORD``). With the
+server's ``DUCTA_PUBLIC_URL`` set (``https://ducta.company.com``), each alert links to
+the run's page.
 
 Alerts are sent by the server (``ducta ui`` / ``ducta server start``) for the
 runs it executes; ``ducta start`` on the command line sends none.
@@ -550,6 +552,24 @@ slice when the dataset names none. For a partitioned file output
 partitions the run wrote instead of the whole dataset (the default is
 ``static``). ``write.options`` holds writer options when they differ from the
 reader's ``options``. See :doc:`best_practices` for choosing between them.
+
+Two settings guard what a dataset already holds:
+
+- ``overwrite_schema`` (Delta, default ``false``): an overwrite whose columns differ
+  from the table's — one missing, one added, or a type changed — fails and writes
+  nothing. Set it to ``true`` when the new schema is intended: the overwrite then
+  replaces the table's schema too.
+- ``allow_empty`` (default ``false``): a node that produced 0 rows fails instead of
+  overwriting a dataset that holds data with nothing. Set it to ``true`` when an
+  empty result is a valid answer (for a slice written with ``replaceWhere``, a day
+  with no rows). A dataset that holds nothing yet is written either way; an
+  ``append`` (or a ``dynamic`` partition overwrite) of 0 rows writes nothing and
+  keeps what is there.
+
+When a node has several outputs, all of them are checked before any is written:
+a format the session cannot write, or a path that cannot be created, fails the
+node with none written. If a write still fails halfway, the certificate's
+evidence gaps name the outputs that already hold this run's data.
 
 .. _catalog-folder:
 
@@ -1837,8 +1857,10 @@ that look like secrets — containing ``PASSWORD``, ``SECRET``, ``TOKEN``,
 to Run Certificates. Instead:
 
 - database connections for ``kind: ingest`` nodes read ``<SOURCE>_USER`` and
-  ``<SOURCE>_PASSWORD`` from the environment or a ``.env`` file
-  (``ducta init ingestion setup`` writes them);
+  ``<SOURCE>_PASSWORD`` together from the environment or together from a ``.env``
+  file (``ducta init ingestion setup`` writes them) — one in each is an error, and a
+  source cannot be named after the server's own secrets (``ducta_admin``,
+  ``ducta_smtp``);
 - cloud storage uses the platform's own credentials (instance profiles,
   Databricks secrets, ``AWS_*`` variables);
 - the certificate signing key is ``DUCTA_CERTIFICATE_KEY``.

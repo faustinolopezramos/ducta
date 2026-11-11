@@ -162,3 +162,20 @@
   font-size: var(--text-xs);
   margin-top: var(--space-2);
 }
+
+/* Why this run exists: a retrain another run started, or a reproduction. */
+.cert-origin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: var(--space-2) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--accent, var(--border));
+  background: var(--surface);
+  font-size: var(--text-sm);
+  color: var(--text);
+}
+.cert-origin a { color: var(--accent, var(--text)); }
+
+.cert-registered { display: flex; flex-direction: column; gap: 2px; }
+.cert-registered__refused { color: var(--warning); }

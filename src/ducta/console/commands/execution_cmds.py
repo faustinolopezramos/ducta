@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -544,6 +544,7 @@ class ExecutionCommands:
                 return self._report_sweep_result(sweep_id, len(combos), failures)
 
         failures = 0
+        scored: List[Tuple[int, Dict[str, Any], Dict[str, float]]] = []
         for index, combo in enumerate(combos, start=1):
             hyperparams = self._build_trial_hyperparams(base_hyperparams, combo, sweep_id, index)
             logger.info("Sweep run {}/{}: {}", index, len(combos), combo)
@@ -557,11 +558,63 @@ class ExecutionCommands:
                         len(combos),
                         ", ".join(sorted(run.gate_blocked)),
                     )
+                else:
+                    scored.append((index, combo, dict(getattr(run, "metrics", None) or {})))
             except Exception as e:
                 failures += 1
                 logger.error("Sweep run {}/{} failed: {}", index, len(combos), e)
 
+        self._report_best_trial(exec_obj, scored)
         return self._report_sweep_result(sweep_id, len(combos), failures)
+
+    def _report_best_trial(
+        self, exec_obj, scored: List[Tuple[int, Dict[str, Any], Dict[str, float]]]
+    ) -> None:
+        """Name the sweep's best run, on --search-metric or hyperparams_config's objective.
+
+        It used to end with "compare runs in the experiment tracker": the one answer a
+        sweep is for was left to the reader. Read the way --search reads a trial's
+        score (``val_<metric>`` first, then the bare name).
+        """
+        from ducta.core.sweep import _score_keys
+
+        metric = self.config.search_metric
+        direction = "maximize"
+        hp_config = None
+        try:
+            hp_config = self._resolve_hyperparams_config(exec_obj)
+        except Exception as e:  # noqa: BLE001 — the best trial is a convenience
+            logger.debug("No hyperparams_config to rank the sweep with: {}", e)
+        objective = (getattr(hp_config, "objective", None) or {}) if hp_config else {}
+        metric = metric or (objective.get("metric") or None)
+        direction = str(objective.get("type") or direction).lower()
+        if not metric:
+            if scored:
+                logger.info(
+                    "Name the metric to rank the runs by (--search-metric NAME, or "
+                    "hyperparams_config.objective.metric) and the sweep says which won"
+                )
+            return
+        ranked = []
+        for index, combo, metrics in scored:
+            key = next((k for k in _score_keys(metric) if k in metrics), None)
+            if key is not None:
+                ranked.append((float(metrics[key]), index, combo, key))
+        if not ranked:
+            logger.warning("No sweep run logged '{}' (or val_{}): nothing to rank", metric, metric)
+            return
+        pick = min if direction == "minimize" else max
+        value, index, combo, key = pick(ranked, key=lambda item: item[0])
+        logger.success(
+            "Best sweep run {}: {}={:.6f} with {} ({} of {} runs ranked, {})",
+            index,
+            key,
+            value,
+            combo,
+            len(ranked),
+            len(scored),
+            direction,
+        )
 
     @staticmethod
     def _report_sweep_result(sweep_id: str, total: int, failures: int) -> int:

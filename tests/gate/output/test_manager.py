@@ -92,17 +92,15 @@ class TestDataOutputManager:
         (dl / "000000.json").write_text("{}")
         assert path_has_data(str(d)) is True
 
-    def test_empty_df_is_still_written_when_write_mode_is_overwrite(
-        self, dict_context_with_spark, spark_dataframe_spec
+    def test_an_empty_result_is_written_where_there_is_nothing_to_lose(
+        self, dict_context_with_spark, spark_dataframe_spec, tmp_path
     ):
-        """0 rows is the period's answer, so an overwrite target must be truncated.
-
-        Skipping the write left the previous run's rows in place while the node
-        was recorded as a clean success and the certificate claimed it had
-        produced that dataset.
-        """
+        """0 rows into a dataset that holds nothing yet: written (an empty dataset)."""
         spark_dataframe_spec.isEmpty.return_value = True
-        dict_context_with_spark["output_config"]["sch.sub.tbl"] = {"write_mode": "overwrite"}
+        dict_context_with_spark["output_config"]["sch.sub.tbl"] = {
+            "write_mode": "overwrite",
+            "filepath": str(tmp_path / "tbl"),
+        }
         dom = DataOutputManager(dict_context_with_spark)
         written = []
         dom._save_single_output = lambda key, *a, **k: written.append(key)
@@ -272,3 +270,117 @@ class TestRunWindowReachesTheWriter:
 
     def test_a_run_without_dates_changes_nothing(self):
         assert DataOutputManager._with_run_window(self.CONFIG, None, None) is self.CONFIG
+
+
+def _holding_data(path):
+    path.mkdir(parents=True)
+    (path / "part-00000.parquet").write_text("rows")
+    return str(path)
+
+
+class TestAnEmptyResultDoesNotEmptyADataset:
+    """0 rows + overwrite would delete what the dataset holds: refused unless allowed."""
+
+    def _dom(self, context, **cfg):
+        context["output_config"]["sch.sub.tbl"] = {"write_mode": "overwrite", **cfg}
+        dom = DataOutputManager(context)
+        written = []
+        dom._save_single_output = lambda key, *a, **k: written.append(key)
+        return dom, written
+
+    def test_refused_and_nothing_written(
+        self, dict_context_with_spark, spark_dataframe_spec, tmp_path
+    ):
+        spark_dataframe_spec.isEmpty.return_value = True
+        dom, written = self._dom(dict_context_with_spark, filepath=_holding_data(tmp_path / "t"))
+        with pytest.raises(WriteOperationError, match=r"produced 0 rows.*allow_empty: true"):
+            dom.save_output(
+                "dev", {"output": ["sch.sub.tbl"], "name": "load"}, spark_dataframe_spec
+            )
+        assert written == []
+
+    def test_allow_empty_writes_it(self, dict_context_with_spark, spark_dataframe_spec, tmp_path):
+        spark_dataframe_spec.isEmpty.return_value = True
+        dom, written = self._dom(
+            dict_context_with_spark, filepath=_holding_data(tmp_path / "t"), allow_empty=True
+        )
+        dom.save_output("dev", {"output": ["sch.sub.tbl"], "name": "load"}, spark_dataframe_spec)
+        assert written == ["sch.sub.tbl"]
+
+    def test_a_table_is_assumed_to_hold_data(self, dict_context_with_spark, spark_dataframe_spec):
+        spark_dataframe_spec.isEmpty.return_value = True
+        dom, written = self._dom(
+            dict_context_with_spark, format="unity_catalog", catalog_name="main"
+        )
+        with pytest.raises(WriteOperationError, match="produced 0 rows"):
+            dom.save_output(
+                "dev", {"output": ["sch.sub.tbl"], "name": "load"}, spark_dataframe_spec
+            )
+
+    def test_with_fail_on_error_false_it_is_skipped_and_noted(
+        self, dict_context_with_spark, spark_dataframe_spec, tmp_path
+    ):
+        from ducta.core.ledger import ledger_for
+
+        spark_dataframe_spec.isEmpty.return_value = True
+        dict_context_with_spark["global_config"]["fail_on_error"] = False
+        dom, written = self._dom(dict_context_with_spark, filepath=_holding_data(tmp_path / "t"))
+        dom.save_output("dev", {"output": ["sch.sub.tbl"], "name": "load"}, spark_dataframe_spec)
+        assert written == []
+        gaps = ledger_for(dict_context_with_spark).record_failures
+        assert any("sch.sub.tbl" in gap and "0 rows" in gap for gap in gaps)
+
+
+class TestSeveralOutputs:
+    """A node's outputs are all writable before any is written; a failure halfway is recorded."""
+
+    def _context(self, context, tmp_path, second):
+        context["output_config"]["a.b.first"] = {
+            "format": "parquet",
+            "filepath": str(tmp_path / "first"),
+        }
+        context["output_config"]["a.b.second"] = {"format": "parquet", **second}
+        return context
+
+    def test_an_unwritable_one_stops_them_all_before_any_write(
+        self, dict_context, spark_dataframe, tmp_path
+    ):
+        blocker = tmp_path / "a_file"
+        blocker.write_text("not a directory")
+        context = self._context(dict_context, tmp_path, {"filepath": str(blocker / "second")})
+        dom = DataOutputManager(context)
+        dom.df_manager.is_spark_dataframe = lambda df: True
+        written = []
+        dom._save_single_output = lambda key, *a, **k: written.append(key)
+        with pytest.raises(ConfigurationError, match=r"none was written.*a\.b\.second"):
+            dom.save_output("dev", {"output": ["a.b.first", "a.b.second"]}, spark_dataframe)
+        assert written == []
+
+    def test_an_unsupported_format_is_found_first(self, dict_context, spark_dataframe, tmp_path):
+        context = self._context(
+            dict_context, tmp_path, {"format": "unity_catalog", "catalog_name": "main"}
+        )
+        dom = DataOutputManager(context)
+        dom.df_manager.is_spark_dataframe = lambda df: True
+        dom._save_single_output = lambda *a, **k: pytest.fail("nothing may be written")
+        with pytest.raises(ConfigurationError, match="needs a session with Unity Catalog"):
+            dom.save_output("dev", {"output": ["a.b.first", "a.b.second"]}, spark_dataframe)
+
+    def test_a_failure_halfway_is_recorded_as_a_partial_write(
+        self, dict_context, spark_dataframe, tmp_path
+    ):
+        from ducta.core.ledger import ledger_for
+
+        context = self._context(dict_context, tmp_path, {"filepath": str(tmp_path / "second")})
+        dom = DataOutputManager(context)
+        dom.df_manager.is_spark_dataframe = lambda df: True
+
+        def save(key, *args, **kwargs):
+            if key == "a.b.second":
+                raise RuntimeError("disk full")
+
+        dom._save_single_output = save
+        with pytest.raises(RuntimeError, match="disk full"):
+            dom.save_output("dev", {"output": ["a.b.first", "a.b.second"]}, spark_dataframe)
+        gaps = ledger_for(context).record_failures
+        assert any("partial write" in g and "a.b.first" in g and "a.b.second" in g for g in gaps)

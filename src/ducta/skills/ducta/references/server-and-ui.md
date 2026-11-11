@@ -40,6 +40,8 @@ or SQLite. Before anyone else can reach it:
 | `JWT_SECRET_KEY` | a long random value (never the default) |
 | `DUCTA_ADMIN_PASSWORD` | the `admin` user's password; required in production, `admin` is refused |
 | `CORS_ORIGINS` | an explicit list, not `*` |
+| `ALLOWED_HOSTS` | the host names users type (`ducta.company.com`) |
+| `RUN_ISOLATION` | `process` (the default with auth): each run in its own process, without the server's secrets |
 | `RATE_LIMIT_ENABLED` | `true` |
 | `DATABASE_URL` | `postgresql+asyncpg://…` for shared/persistent history |
 | `HOST` | `127.0.0.1` behind a TLS reverse proxy |

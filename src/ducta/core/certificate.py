@@ -40,7 +40,12 @@ from ducta.core.context_utils import get_context_value as _ctx_get
 # 1.8: a stream node's entry carries ``stream`` (state, totals, batches, rows read,
 # written and quarantined, gate verdicts), and an asynchronous streaming run is
 # certified when it ends.
-SCHEMA_VERSION = "1.8"
+# 1.9: ``run_window`` (the --start-date/--end-date the run used) and
+# ``reproduction_of`` (the run a ``--reproduce`` re-ran), each only when set.
+# 1.10: ``triggered_by`` (the run whose failed checks started this one through its
+# pipeline's ``retrain:``), and an ML node's ``ml.registered`` (the versions it
+# registered), each only when set.
+SCHEMA_VERSION = "1.10"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
 _SIGNING_KEY_ENV = "DUCTA_CERTIFICATE_KEY"
@@ -182,6 +187,9 @@ class RunCertificate:
     code: Dict[str, Any] = field(default_factory=dict)
     error: Optional[str] = None
     mlops_run_id: Optional[str] = None
+    run_window: Optional[Dict[str, Optional[str]]] = None
+    reproduction_of: Optional[str] = None
+    triggered_by: Optional[Dict[str, Any]] = None
     evidence_complete: bool = True
     evidence_gaps: List[str] = field(default_factory=list)
     signed: bool = False
@@ -219,6 +227,12 @@ class RunCertificate:
         # content (and hash) it always had.
         if self.mlops_run_id:
             data["mlops_run_id"] = self.mlops_run_id
+        if self.run_window:
+            data["run_window"] = self.run_window
+        if self.reproduction_of:
+            data["reproduction_of"] = self.reproduction_of
+        if self.triggered_by:
+            data["triggered_by"] = self.triggered_by
         return data
 
     def compute_hash(self) -> str:
@@ -266,6 +280,18 @@ def _evidence_level(context: Any) -> str:
         return "record"
 
 
+def _reproduction_of(context: Any) -> Optional[str]:
+    """The run id a ``--reproduce`` run re-runs (set by ``core.scratch``), else None."""
+    value = getattr(context, "reproduction_of", None)
+    return value if isinstance(value, str) and value else None
+
+
+def _triggered_by(context: Any) -> Optional[Dict[str, Any]]:
+    """The run whose ``retrain:`` started this one (set by the executor), else None."""
+    value = getattr(context, "triggered_by", None)
+    return dict(value) if isinstance(value, dict) and value else None
+
+
 def build_certificate(
     context: Any,
     *,
@@ -278,6 +304,7 @@ def build_certificate(
     ducta_version: str,
     error: Optional[str] = None,
     mlops_run_id: Optional[str] = None,
+    run_window: Optional[Tuple[Optional[str], Optional[str]]] = None,
 ) -> RunCertificate:
     """Assemble a certificate from the evidence the run left on ``context``."""
     try:
@@ -310,6 +337,13 @@ def build_certificate(
         code=_build_code_block(context, ledger),
         error=error,
         mlops_run_id=mlops_run_id or None,
+        run_window=(
+            {"start_date": run_window[0], "end_date": run_window[1]}
+            if run_window and any(run_window)
+            else None
+        ),
+        reproduction_of=_reproduction_of(context),
+        triggered_by=_triggered_by(context),
         evidence_complete=ledger.evidence_complete,
         evidence_gaps=ledger.record_failures,
         evidence_level=_evidence_level(context),
@@ -322,6 +356,11 @@ def certificate_dir(context: Any, run_id: str) -> Path:
     """Resolve the run certificate directory for this run."""
     from ducta.core.settings import CoreSettings
 
+    # A reproduction writes its datasets elsewhere but its certificate with the
+    # real ones (``core.scratch.prepare_reproduction`` pins the directory).
+    pinned = getattr(context, "pinned_certificate_dir", None)
+    if isinstance(pinned, str) and pinned:
+        return Path(pinned) / run_id
     settings = CoreSettings.from_context(context)
     return Path(settings.run_certificate_dir) / run_id
 

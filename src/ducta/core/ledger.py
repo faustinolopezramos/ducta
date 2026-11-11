@@ -50,6 +50,8 @@ from ducta.core.context_utils import get_context_value, set_context_value
 
 #: The context attributes that make up the ledger's wire format.
 RUN_ID_ATTR = "_run_id"
+#: What a run's ``retrain:`` did (``PipelineRunResult.retrain``), for the API.
+RETRAIN_ATTR = "_retrain"
 NODE_DETAILS_ATTR = "_run_node_details"
 QUALITY_RESULTS_ATTR = "_quality_results"
 CODE_FINGERPRINTS_ATTR = "_code_fingerprints"
@@ -133,6 +135,13 @@ class RunLedger:
         self._set(CODE_FINGERPRINTS_ATTR, {})
         self._set(INPUT_FINGERPRINTS_ATTR, {})
         self._set(OUTPUT_FINGERPRINTS_ATTR, {})
+        # The quality reports persisted so far (``Context.quality_output_paths``):
+        # the global quality summary and the certificate's fallback read them, so a
+        # chain's pipeline N+1 listed N's reports as its own. Cleared in place: the
+        # context hands out this list.
+        reports = getattr(self._context, "quality_output_paths", None)
+        if isinstance(reports, list):
+            reports.clear()
 
     # ── Run identity ─────────────────────────────────────────────────────────
 
@@ -251,6 +260,50 @@ class RunLedger:
     @previous_input_fingerprints.setter
     def previous_input_fingerprints(self, value: Dict[str, Any]) -> None:
         self._set(PREVIOUS_INPUT_FINGERPRINTS_ATTR, value)
+
+    # ── A worker process's evidence ──────────────────────────────────────────
+
+    def worker_evidence(self) -> Dict[str, Any]:
+        """What a ``run_in_process`` worker recorded, as plain picklable values."""
+        with self._lock:
+            return {
+                "inputs": dict(self._get(INPUT_FINGERPRINTS_ATTR, {}) or {}),
+                "outputs": dict(self._get(OUTPUT_FINGERPRINTS_ATTR, {}) or {}),
+                "code": dict(self._get(CODE_FINGERPRINTS_ATTR, {}) or {}),
+                "quality": list(self._get(QUALITY_RESULTS_ATTR, []) or []),
+                "gaps": list(self._record_failures),
+            }
+
+    def adopt_worker_evidence(self, evidence: Dict[str, Any]) -> None:
+        """Fold a worker's :meth:`worker_evidence` into this (the parent's) ledger.
+
+        The worker read and wrote the datasets, hashed the code and ran the checks in
+        its own process: without this the certificate had none of it for the node
+        ("records no outputs — nothing to reproduce"), and a scoring node's failed
+        drift check never reached ``retrain:``.
+        """
+        for attr, key in (
+            (INPUT_FINGERPRINTS_ATTR, "inputs"),
+            (OUTPUT_FINGERPRINTS_ATTR, "outputs"),
+        ):
+            found = evidence.get(key) or {}
+            if not found:
+                continue
+            try:
+                with self._lock:
+                    bucket = self._get(attr, None)
+                    if not isinstance(bucket, dict):
+                        bucket = {}
+                        self._write(attr, bucket)
+                    bucket.update(found)
+            except Exception as e:  # noqa: BLE001 — bookkeeping must never break a run
+                self._note_failure(f"worker {key} fingerprints", e)
+        for node, fingerprint in (evidence.get("code") or {}).items():
+            self.record_code(node, fingerprint)
+        for entry in evidence.get("quality") or []:
+            self.record_quality(entry)
+        for gap in evidence.get("gaps") or []:
+            self.note_gap(f"in the worker process: {gap}")
 
     # ── Context access (dict- or attribute-shaped) ───────────────────────────
 

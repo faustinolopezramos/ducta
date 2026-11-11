@@ -25,11 +25,10 @@ import operator
 import threading
 import weakref
 from collections import OrderedDict, defaultdict, deque
-from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Generator, List, Optional, Set, cast
+from typing import Any, Dict, List, Optional, Set, cast
 from uuid import uuid4
 
 import pandas as pd  # type: ignore
@@ -1123,6 +1122,10 @@ class ExperimentTracker:
             raise RunNotActiveError(run_id)
         return self._active_runs[run_id]
 
+    def get_experiment(self, experiment_id: str) -> Experiment:
+        """The experiment *experiment_id*; ``ExperimentNotFoundError`` if there is none."""
+        return self._get_experiment(experiment_id)
+
     def _get_experiment(self, experiment_id: str) -> Experiment:
         """Get experiment by ID."""
         try:
@@ -1314,43 +1317,3 @@ class ExperimentTracker:
         with self._runs_lock:
             run = self._get_active_run(run_id)
             return run.metric_index.get_latest(key)
-
-    @contextmanager
-    def run_context(
-        self,
-        experiment_id: str,
-        name: str = "",
-        parameters: Optional[Dict[str, Any]] = None,
-        tags: Optional[Dict[str, str]] = None,
-        parent_run_id: Optional[str] = None,
-        fail_on_error: bool = True,
-    ) -> Generator[Run, None, None]:
-        """
-        Context manager for experiment runs with automatic cleanup.
-        """
-        run = self.start_run(
-            experiment_id=experiment_id,
-            name=name,
-            parameters=parameters,
-            tags=tags,
-            parent_run_id=parent_run_id,
-        )
-
-        try:
-            yield run
-            self.end_run(run.run_id, RunStatus.COMPLETED)
-            logger.debug(f"Run context completed successfully: {run.run_id}")
-
-        except Exception as e:
-            status = RunStatus.FAILED if fail_on_error else RunStatus.COMPLETED
-
-            try:
-                self.set_tag(run.run_id, "error_type", type(e).__name__)
-                self.set_tag(run.run_id, "error_message", str(e)[:500])  # Truncate long messages
-            except Exception:
-                pass  # Don't fail if we can't log the error
-
-            self.end_run(run.run_id, status)
-            logger.warning(f"Run context ended with error: {run.run_id} - {e}")
-
-            raise

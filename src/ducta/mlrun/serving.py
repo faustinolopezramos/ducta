@@ -308,7 +308,8 @@ def _load_spark_ml(path: str) -> Any:
     module_name, _, class_name = jvm_class.replace("org.apache.spark.ml", "pyspark.ml").rpartition(
         "."
     )
-    if not module_name.startswith("pyspark.ml"):
+    # pyspark.ml itself or a package below it: a bare prefix let "pyspark.mlx…" through.
+    if module_name != "pyspark.ml" and not module_name.startswith("pyspark.ml."):
         raise ServingError(f"'{jvm_class}' is not a Spark ML model class")
     try:
         model_cls = getattr(importlib.import_module(module_name), class_name)
@@ -406,9 +407,12 @@ class ModelCache:
         self,
         registry_factory: Callable[[], Any],
         mlflow_client_factory: Callable[[], Any],
+        pins: Optional[Dict[str, int]] = None,
     ) -> None:
         self._registry_factory = registry_factory
         self._mlflow_client_factory = mlflow_client_factory
+        #: ``{name: version}`` a reproduction serves instead of what a stage names now.
+        self._pins: Dict[str, int] = dict(pins or {})
         self._models: Dict[Tuple[Any, ...], ServingModel] = {}
         self._lock = threading.Lock()
         self._workdir = Path(tempfile.mkdtemp(prefix="ducta-serving-"))
@@ -420,6 +424,7 @@ class ModelCache:
 
     def get(self, raw_ref: Any) -> ServingModel:
         ref = raw_ref if isinstance(raw_ref, ModelRef) else ModelRef.model_validate(raw_ref)
+        ref = pinned_ref(ref, self._pins)
         key = self._key(ref)
         with self._lock:
             cached = self._models.get(key)
@@ -437,19 +442,49 @@ class ModelCache:
         return ServingModel(**{**cached.__dict__, "ref": ref})
 
 
+def serving_registry(context: Any) -> Any:
+    """The registry a run's serving nodes read their models from.
+
+    The project's (``settings.mlops``) — also for a sample run or a reproduction,
+    whose own registry and tracker are redirected to a scratch store
+    (``context.serving_mlops_path`` names the real one).
+    """
+    from ducta.mlrun.config import (
+        MLOpsConfig,
+        MLOpsContext,
+        ModelRegistryFactory,
+        StorageBackendFactory,
+    )
+
+    real = getattr(context, "serving_mlops_path", None)
+    if not real:
+        return MLOpsContext.from_context(context).model_registry
+    storage = StorageBackendFactory.create_from_context(context, base_path=str(real))
+    return ModelRegistryFactory.from_context(
+        context, registry_path=MLOpsConfig.from_env().registry_path, storage=storage
+    )
+
+
+def pinned_ref(ref: ModelRef, pins: Optional[Dict[str, int]]) -> ModelRef:
+    """*ref* at the version a reproduction pins for its model, else unchanged."""
+    pinned = (pins or {}).get(str(ref.name)) if ref.source == "ducta" else None
+    if pinned is None or ref.version is not None:
+        return ref
+    return ref.model_copy(update={"version": pinned, "stage": None})
+
+
 def model_cache_for(
     context: Any, registry_factory: Optional[Callable[[], Any]] = None
 ) -> ModelCache:
     """A :class:`ModelCache` on the project's registry (``settings.mlops``) and MLflow."""
 
     def _registry() -> Any:
-        from ducta.mlrun.config import MLOpsContext
-
-        return MLOpsContext.from_context(context).model_registry
+        return serving_registry(context)
 
     return ModelCache(
         registry_factory=registry_factory or _registry,
         mlflow_client_factory=lambda: mlflow_client_from_context(context),
+        pins=getattr(context, "pinned_models", None),
     )
 
 

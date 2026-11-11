@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 import json
 import time
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from loguru import logger  # type: ignore
 
@@ -37,7 +37,7 @@ try:
 except ImportError:
     _RICH_AVAILABLE = False
 from ducta.core import PipelineExecutor
-from ducta.core.results import PipelineRunResult
+from ducta.core.results import PipelineRunResult, RunStatus
 from ducta.setting.contexts import Context
 from ducta.setting.exceptions import ConfigurationError as SettingConfigurationError
 from ducta.setting.project.loader import load_project_v2
@@ -66,6 +66,31 @@ def report_run_outcome(
         # The same facts, as a summary: blocked and skipped nodes, the certificate.
         view.print_run_summary(result, elapsed or 0.0)
         return code
+
+    retrain = result.retrain or {}
+    if retrain.get("skipped"):
+        logger.info(
+            "Retrain of '{}' not run ({}): {} failed",
+            retrain.get("pipeline"),
+            retrain["skipped"],
+            ", ".join(retrain.get("checks") or []),
+        )
+    elif _retrain_unsuccessful(retrain):
+        logger.error(
+            "{} failed, and the retrain of '{}' did not succeed (run {}, {}){}",
+            ", ".join(retrain.get("checks") or []),
+            retrain.get("pipeline"),
+            retrain.get("run_id"),
+            retrain.get("status"),
+            f": {retrain['error']}" if retrain.get("error") else "",
+        )
+    elif retrain:
+        logger.success(
+            "{} failed: retrained with '{}' (run {})",
+            ", ".join(retrain.get("checks") or []),
+            retrain.get("pipeline"),
+            retrain.get("run_id"),
+        )
 
     if result.reused_pipelines:
         logger.info(
@@ -119,7 +144,22 @@ def _outcome_code(result: PipelineRunResult) -> int:
         return ExitCode.EXECUTION_ERROR.value
     if result.skipped:
         return ExitCode.DEPENDENCY_ERROR.value
+    if _retrain_unsuccessful(result.retrain or {}):
+        # The scoring run did its work, but the retrain its failed checks asked for
+        # did not: production still serves the model that drifted.
+        return ExitCode.EXECUTION_ERROR.value
     return ExitCode.SUCCESS.value
+
+
+def _retrain_unsuccessful(retrain: Dict[str, Any]) -> bool:
+    """A retrain that ran and did not complete — failed, gate-blocked or skipped.
+
+    Only ``failed`` counted: a training run its own gate blocked was reported as
+    "retrained", with exit code 0.
+    """
+    if not retrain or retrain.get("skipped"):
+        return False
+    return retrain.get("status") != RunStatus.SUCCESS.value
 
 
 class ContextInitializer:

@@ -76,6 +76,13 @@ silver.sales.customers:
 - `incremental: {column: …}` reads only the run's window; `--end-date` is the last day,
   whole, on a date or a timestamp column.
 - `write.options` holds writer options that differ from the reader's `options`.
+- `write.overwrite_schema` (Delta, default `false`): an overwrite whose columns differ
+  from the table's (missing, added, retyped) fails and writes nothing; `true` replaces
+  the schema on purpose.
+- `write.allow_empty` (default `false`): 0 rows never overwrite a dataset that holds
+  data — the node fails; set `true` when an empty result is valid.
+- A node with several outputs checks they are all writable before writing any; a
+  failure halfway is listed in the certificate's evidence gaps.
 - **Re-runs must be safe:** `append` duplicates on every retry — prefer `merge` or
   `replaceWhere` for windowed pipelines.
 

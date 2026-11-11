@@ -54,6 +54,9 @@ class GateResult:
     run_id: Optional[str] = None
     behavior: GateBehavior = GateBehavior.SKIP_DOWNSTREAM
     evaluated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    #: The checks of the report that did not pass. A blocked run keeps them after the
+    #: report is gone: a pipeline's ``retrain:`` reacts to them.
+    failed_checks: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -200,4 +203,5 @@ class QualityGateEvaluator:
             dataset_name=report.dataset_name,
             run_id=report.run_id,
             behavior=behavior,
+            failed_checks=sorted({r.check_name for r in report.results if not r.passed}),
         )

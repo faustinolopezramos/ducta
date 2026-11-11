@@ -55,6 +55,13 @@ from ducta.reporting import RunReporter, get_reporter
 QUALITY_DIR_NAME = "quality"
 
 
+def _config_value(config: Any, key: str, default: Any) -> Any:
+    """*key* of a node's quality config, a dict or an object with attributes."""
+    if isinstance(config, dict):
+        return config.get(key, default)
+    return getattr(config, key, default)
+
+
 def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[str] = None) -> None:
     """Apply a failed gate's ``behavior``.
 
@@ -766,6 +773,10 @@ class ValidationPhaseRunner:
         this run under its own bucket (see ``ducta.check.storage
         .StorageBackend``), so two pipelines with a node of the same name
         never mix or overwrite each other's quality history.
+
+        The steps, in this order: run the checks, score them, save the report
+        (and the first run's baseline), evaluate the gate and save its result,
+        append to the history, then raise if the gate blocks or a check failed.
         """
         run_id = run_id or str(uuid.uuid4())[:8]
         start_time = time.perf_counter()
@@ -776,19 +787,10 @@ class ValidationPhaseRunner:
         )
 
         try:
-            # Create adapter
             adapter = DFAdapter(df)
             logger.debug(f"Detected DataFrame engine: {adapter.engine}")
 
-            # Parse config
-            if isinstance(config, dict):
-                enabled = config.get("enabled", True)
-                checks_config = config.get("checks", {})
-            else:
-                enabled = getattr(config, "enabled", True)
-                checks_config = getattr(config, "checks", {})
-
-            if not enabled:
+            if not _config_value(config, "enabled", True):
                 logger.info(f"Validation checks disabled for '{dataset_name}'")
                 return QualityReport(
                     dataset_name=dataset_name,
@@ -797,192 +799,54 @@ class ValidationPhaseRunner:
                     workspace_path=self.workspace_path,
                 )
 
-            # Load baseline and history for temporal checks
+            # Baseline and history feed the temporal checks.
             baseline = self.storage.load_baseline(dataset_name, pipeline_name)
             history = self.storage.load_history(dataset_name, pipeline_name) or []
 
-            # Execute checks
-            results = []
-            raw_checks = checks_config if isinstance(checks_config, dict) else {}
-
-            # Resolve profile: merge profile defaults with node-level checks
-            profile_name = (
-                config.get("profile")
-                if isinstance(config, dict)
-                else getattr(config, "profile", None)
+            raw_checks = _config_value(config, "checks", {})
+            profile_name = _config_value(config, "profile", None)
+            checks_config = resolve_checks_config(
+                raw_checks if isinstance(raw_checks, dict) else {}, profile_name, self._profiles
             )
-            checks_config = resolve_checks_config(raw_checks, profile_name, self._profiles)
+            results = self._run_checks(
+                df,
+                adapter,
+                checks_config,
+                baseline,
+                history,
+                context_datasets,
+                dataset_name=dataset_name,
+                run_id=run_id,
+                pipeline_name=pipeline_name,
+                start_time=start_time,
+            )
 
-            for check_name, check_config_dict in checks_config.items():
-                if not isinstance(check_config_dict, dict):
-                    continue
-
-                check_enabled = check_config_dict.get("enabled", True)
-                if not check_enabled:
-                    logger.debug(f"Check '{check_name}' disabled")
-                    continue
-
-                # Support named instances via ``type`` field
-                registry_key = check_config_dict.get("type") or check_name
-                check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
-                if not check_class:
-                    logger.warning(f"Unknown check type: '{registry_key}' (entry: '{check_name}')")
-                    result = _build_unknown_check_type_result(check_name, registry_key)
-                    results.append(result)
-                    if self.fail_fast:
-                        self._abort_with_failure(
-                            dataset_name, results, result, run_id, pipeline_name, start_time
-                        )
-                    continue
-
-                configured_severity = _configured_severity(check_config_dict, check_name)
-
-                try:
-                    # Create check instance
-                    check = check_class()
-
-                    # Create config object from dict
-                    check_config = type("CheckConfig", (), check_config_dict)()
-
-                    # Inject baseline and history for temporal checks
-                    # Use registry_key for type-based look-up so named instances work too
-                    if registry_key in ("anomaly_detection", "incremental_volume"):
-                        check_config._baseline = baseline
-                        check_config._history = history
-
-                    if registry_key == "drift_detection":
-                        check_config._baseline = baseline
-
-                    # Execute check
-                    logger.debug(f"Executing check: {registry_key} (as '{check_name}')")
-                    result = check.run(df, check_config, adapter, context_datasets)
-                    # Applied before fail_fast is consulted below, so a check the
-                    # config downgraded to a warning does not abort the run.
-                    result = _apply_configured_severity(result, configured_severity)
-                    # Use the node-level alias (check_name) in reports for named instances
-                    if registry_key != check_name:
-                        result = _rename_result(result, check_name)
-                    results.append(result)
-
-                    # Fail-fast mode
-                    if self.fail_fast and not result.passed and result.is_error:
-                        self._abort_with_failure(
-                            dataset_name, results, result, run_id, pipeline_name, start_time
-                        )
-
-                except QualityChecksFailed:
-                    raise
-                except Exception as e:
-                    logger.error(f"Error executing check '{check_name}': {e}")
-                    result = _build_execution_error_result(check_name, e)
-                    results.append(result)
-                    if self.fail_fast:
-                        self._abort_with_failure(
-                            dataset_name, results, result, run_id, pipeline_name, start_time
-                        )
-
-            # Build report
-            elapsed = time.perf_counter() - start_time
             report = QualityReport(
                 dataset_name=dataset_name,
                 passed=all(r.passed for r in results),
                 results=results,
                 run_id=run_id,
                 workspace_path=self.workspace_path,
-                elapsed_seconds=elapsed,
+                elapsed_seconds=time.perf_counter() - start_time,
+            )
+            node_gate_cfg = self._node_gate_config(
+                config, profile_name, dataset_name, pipeline_name
+            )
+            report.score = self._score(report, node_gate_cfg)
+            self._persist_report_and_baseline(
+                report, df, adapter, baseline, run_id, dataset_name, pipeline_name
+            )
+            dq_gate_result = self._evaluate_gate(
+                report, node_gate_cfg, run_id, dataset_name, pipeline_name
             )
 
-            # Extract gate config early so score_weights can be used for pre-gate scoring
-            node_gate_cfg = (
-                config.get("quality_gate")
-                if isinstance(config, dict)
-                else getattr(config, "quality_gate", None)
-            )
-            if node_gate_cfg is not None and hasattr(node_gate_cfg, "model_dump"):
-                node_gate_cfg = node_gate_cfg.model_dump(exclude_none=True)
-
-            node_gate_cfg = apply_auto_tune(
-                self._profiles.get(profile_name) if profile_name else None,
-                node_gate_cfg,
-                dataset_name,
-                self.storage,
-                pipeline_name,
-            )
-
-            # Compute weighted score and assign to report before persisting
+            # Appended AFTER the gate so its action is recorded.
             try:
-                from ducta.check.gate import QualityGateEvaluator  # lazy import
-
-                _weights: Dict[str, float] = {}
-                if node_gate_cfg and isinstance(node_gate_cfg, dict):
-                    _weights = node_gate_cfg.get("score_weights") or {}
-                elif self._global_gate_config:
-                    _weights = self._global_gate_config.get("score_weights") or {}
-                report.score = QualityGateEvaluator.compute_score(report, _weights)
-            except ImportError:
-                logger.debug("Quality gate module not available, using default score")
-                report.score = 1.0
-            except Exception as e:
-                logger.warning(f"Failed to compute quality score: {e}")
-                report.score = 1.0
-
-            # Save report (now includes score)
-            try:
-                self.storage.save_report(report.to_dict(), run_id, dataset_name, pipeline_name)
-                logger.debug(f"Saved validation report {run_id}")
-            except Exception as e:
-                logger.warning(f"Failed to save validation report: {e}")
-                report.persistence_warnings.append(f"Failed to save validation report: {e}")
-
-            # Save/update baseline (first run)
-            if not baseline:
-                try:
-                    self._create_and_save_baseline(df, adapter, dataset_name, pipeline_name)
-                    logger.debug(f"Created baseline for '{dataset_name}'")
-                except Exception as e:
-                    logger.warning(f"Failed to create baseline: {e}")
-                    report.persistence_warnings.append(f"Failed to create baseline: {e}")
-
-            dq_gate_result = None
-            if node_gate_cfg or self._global_gate_config:
-                try:
-                    from ducta.check.gate import QualityGateEvaluator  # lazy import
-
-                    dq_gate_result = QualityGateEvaluator.from_config(
-                        report,
-                        node_gate_cfg=node_gate_cfg,
-                        global_gate_cfg=self._global_gate_config,
-                    )
-                    if dq_gate_result is not None:
-                        # Gate score supersedes the pre-computed uniform score
-                        report.score = dq_gate_result.score
-                        # Persist gate result alongside the quality report
-                        try:
-                            self.storage.save_gate_result(
-                                dq_gate_result.to_dict(), run_id, dataset_name, pipeline_name
-                            )
-                        except Exception as ge:
-                            logger.warning(f"Failed to save gate result: {ge}")
-                            report.persistence_warnings.append(f"Failed to save gate result: {ge}")
-                except ImportError:
-                    logger.debug("Quality gate module not available, skipping gate evaluation")
-                except Exception as e:
-                    # A gate was explicitly configured (node_gate_cfg or
-                    # self._global_gate_config truthy, per the `if` above) — if it
-                    # can't be evaluated, the node must fail closed, not silently
-                    # continue as if the gate had passed.
-                    logger.exception(f"Quality gate evaluation failed: {e}")
-                    raise
-            # ---- end gate --------------------------------------------------
-
-            # Append to history AFTER gate so gate_action can be recorded
-            try:
-                _gate_action = dq_gate_result.action.value if dq_gate_result else None
                 self._append_to_history(
                     dataset_name,
                     adapter,
                     report=report,
-                    gate_action=_gate_action,
+                    gate_action=dq_gate_result.action.value if dq_gate_result else None,
                     pipeline_name=pipeline_name,
                 )
                 logger.debug(f"Updated history for '{dataset_name}'")
@@ -1010,6 +874,182 @@ class ValidationPhaseRunner:
             raise
         except Exception as e:
             logger.exception(f"Validation runner failed: {e}")
+            raise
+
+    def _run_checks(
+        self,
+        df: Any,
+        adapter: DFAdapter,
+        checks_config: Dict[str, Any],
+        baseline: Any,
+        history: List[Any],
+        context_datasets: Optional[Dict[str, Any]],
+        *,
+        dataset_name: str,
+        run_id: str,
+        pipeline_name: str,
+        start_time: float,
+    ) -> List["CheckResult"]:
+        """Run every enabled check; under ``fail_fast`` the first error aborts the run."""
+        results: List["CheckResult"] = []
+
+        def abort(result: "CheckResult") -> None:
+            self._abort_with_failure(
+                dataset_name, results, result, run_id, pipeline_name, start_time
+            )
+
+        for check_name, check_config_dict in checks_config.items():
+            if not isinstance(check_config_dict, dict):
+                continue
+            if not check_config_dict.get("enabled", True):
+                logger.debug(f"Check '{check_name}' disabled")
+                continue
+
+            # Support named instances via ``type`` field
+            registry_key = check_config_dict.get("type") or check_name
+            check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
+            if not check_class:
+                logger.warning(f"Unknown check type: '{registry_key}' (entry: '{check_name}')")
+                result = _build_unknown_check_type_result(check_name, registry_key)
+                results.append(result)
+                if self.fail_fast:
+                    abort(result)
+                continue
+
+            configured_severity = _configured_severity(check_config_dict, check_name)
+
+            try:
+                check = check_class()
+                check_config = type("CheckConfig", (), check_config_dict)()
+                # Temporal checks read the baseline (and the history); looked up by
+                # type, so a named instance of one gets them too.
+                if registry_key in ("anomaly_detection", "incremental_volume"):
+                    check_config._baseline = baseline
+                    check_config._history = history
+                if registry_key == "drift_detection":
+                    check_config._baseline = baseline
+
+                logger.debug(f"Executing check: {registry_key} (as '{check_name}')")
+                result = check.run(df, check_config, adapter, context_datasets)
+                # Applied before fail_fast is consulted below, so a check the
+                # config downgraded to a warning does not abort the run.
+                result = _apply_configured_severity(result, configured_severity)
+                # Use the node-level alias (check_name) in reports for named instances
+                if registry_key != check_name:
+                    result = _rename_result(result, check_name)
+                results.append(result)
+
+                if self.fail_fast and not result.passed and result.is_error:
+                    abort(result)
+
+            except QualityChecksFailed:
+                raise
+            except Exception as e:
+                logger.error(f"Error executing check '{check_name}': {e}")
+                result = _build_execution_error_result(check_name, e)
+                results.append(result)
+                if self.fail_fast:
+                    abort(result)
+        return results
+
+    def _node_gate_config(
+        self, config: Any, profile_name: Optional[str], dataset_name: str, pipeline_name: str
+    ) -> Any:
+        """The node's ``quality_gate`` as a dict, auto-tuned by its profile."""
+        node_gate_cfg = _config_value(config, "quality_gate", None)
+        if node_gate_cfg is not None and hasattr(node_gate_cfg, "model_dump"):
+            node_gate_cfg = node_gate_cfg.model_dump(exclude_none=True)
+        return apply_auto_tune(
+            self._profiles.get(profile_name) if profile_name else None,
+            node_gate_cfg,
+            dataset_name,
+            self.storage,
+            pipeline_name,
+        )
+
+    def _score(self, report: QualityReport, node_gate_cfg: Any) -> float:
+        """The weighted score, with the node's weights or else the global ones (1.0 if it fails)."""
+        try:
+            from ducta.check.gate import QualityGateEvaluator  # lazy import
+
+            weights: Dict[str, float] = {}
+            if node_gate_cfg and isinstance(node_gate_cfg, dict):
+                weights = node_gate_cfg.get("score_weights") or {}
+            elif self._global_gate_config:
+                weights = self._global_gate_config.get("score_weights") or {}
+            return QualityGateEvaluator.compute_score(report, weights)
+        except ImportError:
+            logger.debug("Quality gate module not available, using default score")
+            return 1.0
+        except Exception as e:
+            logger.warning(f"Failed to compute quality score: {e}")
+            return 1.0
+
+    def _persist_report_and_baseline(
+        self,
+        report: QualityReport,
+        df: Any,
+        adapter: DFAdapter,
+        baseline: Any,
+        run_id: str,
+        dataset_name: str,
+        pipeline_name: str,
+    ) -> None:
+        """Save the report; on the first run, the baseline. A failure is a warning on the report."""
+        try:
+            self.storage.save_report(report.to_dict(), run_id, dataset_name, pipeline_name)
+            logger.debug(f"Saved validation report {run_id}")
+        except Exception as e:
+            logger.warning(f"Failed to save validation report: {e}")
+            report.persistence_warnings.append(f"Failed to save validation report: {e}")
+
+        if not baseline:
+            try:
+                self._create_and_save_baseline(df, adapter, dataset_name, pipeline_name)
+                logger.debug(f"Created baseline for '{dataset_name}'")
+            except Exception as e:
+                logger.warning(f"Failed to create baseline: {e}")
+                report.persistence_warnings.append(f"Failed to create baseline: {e}")
+
+    def _evaluate_gate(
+        self,
+        report: QualityReport,
+        node_gate_cfg: Any,
+        run_id: str,
+        dataset_name: str,
+        pipeline_name: str,
+    ) -> Any:
+        """The gate's decision, or None when no gate is configured.
+
+        A configured gate that cannot be evaluated raises: the node fails closed,
+        it does not carry on as if the gate had passed.
+        """
+        if not (node_gate_cfg or self._global_gate_config):
+            return None
+        try:
+            from ducta.check.gate import QualityGateEvaluator  # lazy import
+
+            dq_gate_result = QualityGateEvaluator.from_config(
+                report,
+                node_gate_cfg=node_gate_cfg,
+                global_gate_cfg=self._global_gate_config,
+            )
+            if dq_gate_result is not None:
+                # Gate score supersedes the pre-computed uniform score
+                report.score = dq_gate_result.score
+                try:
+                    self.storage.save_gate_result(
+                        dq_gate_result.to_dict(), run_id, dataset_name, pipeline_name
+                    )
+                except Exception as ge:
+                    logger.warning(f"Failed to save gate result: {ge}")
+                    report.persistence_warnings.append(f"Failed to save gate result: {ge}")
+            return dq_gate_result
+        except ImportError:
+            logger.debug("Quality gate module not available, skipping gate evaluation")
+            return None
+        except Exception as e:
+            logger.exception(f"Quality gate evaluation failed: {e}")
             raise
 
     def _abort_with_failure(

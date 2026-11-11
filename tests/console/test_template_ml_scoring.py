@@ -82,3 +82,37 @@ def test_a_check_reference_missing_from_the_catalog_is_reported(tmp_path):
         assert "gold.churn.validation_scores" in str(e)  # the suggestion
     else:
         raise AssertionError("a misspelt check reference was accepted")
+
+
+def test_a_pull_request_never_trains(tmp_path):
+    """Training promotes, and staging may share production's registry: an unreviewed
+    branch must not put its model there."""
+    import yaml
+
+    TemplateGenerator(tmp_path / "p").generate_project(TemplateType.ML_SCORING, "p")
+    workflow = yaml.safe_load((tmp_path / "p" / ".github" / "workflows" / "ml.yml").read_text())
+    steps = workflow["jobs"]["train"]["steps"]
+    for step in steps:
+        if "ducta start" in str(step.get("run", "")):
+            assert step.get("if") == "github.event_name != 'pull_request'", step
+    checks = [s for s in steps if "ducta check" in str(s.get("run", ""))]
+    assert checks and "if" not in checks[0]
+
+
+def test_it_requires_the_release_that_generated_it():
+    """The nodes use persist_model(promote=...): ">=0.1.1" let pip pick a release
+    without it."""
+    from ducta.console.templates.base import BaseTemplate
+
+    floor = BaseTemplate.this_release()
+    assert MLScoringTemplate.REQUIREMENTS == f"ducta[spark,mlops]>={floor}\n"
+
+
+def test_the_release_floor_drops_dev_and_local_parts(monkeypatch):
+    import ducta
+    from ducta.console.templates.base import BaseTemplate
+
+    monkeypatch.setattr(ducta, "__version__", "0.4.0.dev3+g12ab")
+    assert BaseTemplate.this_release() == "0.4.0"
+    monkeypatch.setattr(ducta, "__version__", "0.0.0+unknown")
+    assert BaseTemplate.this_release() == "0.1.1"

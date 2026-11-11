@@ -87,6 +87,35 @@ def test_a_missing_secret_is_reported_not_raised(monkeypatch):
     assert result["ok"] is False and "NOPE" in result["error"]
 
 
+class TestAnAlertNeverReadsTheServersSecrets:
+    """A test alert's error quoted the variable's value ("unknown url type: '…'"):
+    anyone who could edit the project's alerts read JWT_SECRET_KEY back."""
+
+    EVENT = AlertEvent(kind="failure", project="p", pipeline="x", env="dev", summary="s")
+
+    def test_a_value_that_is_not_a_url_is_never_quoted(self, monkeypatch):
+        monkeypatch.setenv("SOME_TOKEN", "abcdef-not-a-url-0123")
+        [result] = deliver(self.EVENT, [_rule(["failure"], var="SOME_TOKEN")])
+        assert result["ok"] is False
+        assert "abcdef" not in result["error"]
+        assert "SOME_TOKEN is not an http(s) URL" in result["error"]
+
+    def test_the_server_secrets_are_refused_by_the_schema(self):
+        from pydantic import ValidationError
+
+        for var in ("JWT_SECRET_KEY", "ducta_admin_password", "DATABASE_URL"):
+            with pytest.raises(ValidationError, match="one of the server's own secrets"):
+                _rule(["failure"], var=var)
+
+    def test_and_by_delivery_for_a_rule_built_around_the_schema(self, monkeypatch):
+        """A project loaded before this check, or a rule built in code."""
+        monkeypatch.setenv("JWT_SECRET_KEY", "https://looks-like-a-url.example/secret")
+        rule = _rule(["failure"])
+        object.__setattr__(rule.channels[0], "url_env", "JWT_SECRET_KEY")
+        [result] = deliver(self.EVENT, [rule], post=lambda url, body: pytest.fail("sent"))
+        assert result["ok"] is False and "looks-like" not in result["error"]
+
+
 def test_sla_check_alerts_once_per_late_streak(monkeypatch):
     from types import SimpleNamespace
 

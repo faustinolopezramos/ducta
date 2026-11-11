@@ -98,7 +98,16 @@ Key API resources:
        hyperparameters) and, apart, the ``internal_parameters`` Ducta records
        for itself. ``GET /api/mlops/run-table`` is every run of a pipeline in
        one table, joined with the model it registered and its certificate
-       (``sort_by``, ``ascending``, ``verify_certificates``).
+       (``sort_by``, ``ascending``, ``verify_certificates``). Each model also says
+       which version is in Production (``production_version``) and why the
+       policy refused the latest one (``latest_refusal``);
+       ``GET /api/mlops/models/{name}/history`` is its audit log (who, when,
+       why) and ``GET /api/mlops/models/{name}/versions/{version}/promotion-check``
+       says whether a promotion to Production would pass the policy, changing
+       nothing. A promotion is recorded as the signed-in user; with ``force`` it
+       needs a ``reason``. ``GET /api/mlops/status`` carries the
+       ``promotion_policy``. An execution whose pipeline retrained records it in
+       ``retrain``.
    * - ``/api/schedules``
      - Cron schedules for pipelines.
    * - ``/api/ingestion``
@@ -167,7 +176,7 @@ and none commits.
    * - ``GET .../lsp``, ``GET .../debugger``
      - Whether a Python language server is available (``LSP_COMMAND``) and whether
        a run can be debugged. The editor talks to them over WebSockets at
-       ``/api/projects/{id}/lsp`` and ``/api/projects/{id}/debug``.
+       ``/api/ws/projects/{id}/lsp`` and ``/api/ws/projects/{id}/debug``.
    * - ``GET .../pipelines/{name}/nodes/{node}/effective-config``,
        ``GET .../environments/compare``
      - A node's settings per environment and where each comes from; every
@@ -229,8 +238,8 @@ this model is important before you put it behind a load balancer or scale it out
   (``MAX_CONCURRENT_EXECUTIONS``, default 5), the rate-limit counters, and the
   pipeline schedules inside the worker process. There is no distributed queue
   (Celery/RQ) or shared execution broker.
-- **Pipelines run in-process** on the API host (a fresh subprocess is used only
-  for preflight validation). The API host therefore needs the runtime
+- **Pipelines run on the API host**, inside the API process or each in its own
+  process (``RUN_ISOLATION``, below). The API host therefore needs the runtime
   dependencies (Spark, drivers) of the pipelines it runs.
 - **Multiple workers fragment state.** Running ``uvicorn`` with ``WORKERS > 1``
   gives each worker its own in-memory state, so executions, rate limits, and
@@ -295,6 +304,17 @@ warnings — and work through this checklist:
        other ``Host`` gets a 400, so a web page cannot reach the server through a
        DNS name it controls (DNS rebinding). Bound to ``0.0.0.0`` with no list, no
        ``Host`` is checked and the server warns at startup.
+   * - ``RUN_ISOLATION``
+     - ``process`` (``auto`` gives it with auth)
+     - Where pipelines run. ``process``: each run in its own process, whose
+       environment carries none of ``JWT_SECRET_KEY``, ``DUCTA_ADMIN_PASSWORD``,
+       ``DATABASE_URL``; its code cannot read the server's memory; cancelling or a
+       timeout stops it (and its Spark JVM); runs of different pipelines go in
+       parallel up to ``MAX_CONCURRENT_EXECUTIONS`` (runs of one pipeline still
+       wait for each other). It starts Spark once per run. ``thread``: inside the
+       server, one at a time, Spark kept warm. ``auto`` (default): ``process`` when
+       ``AUTH_ENABLED=true``, ``thread`` otherwise. Debug runs always get their own
+       process.
    * - ``RATE_LIMIT_ENABLED``
      - ``true``
      - Enables the in-process sliding-window limiter. Also put a WAF / proxy
@@ -309,6 +329,64 @@ warnings — and work through this checklist:
      - ``127.0.0.1`` behind a proxy
      - Only bind a public interface intentionally, and terminate TLS in a
        reverse proxy in front of the app.
+
+Other server settings, with their defaults:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 15 45
+
+   * - Setting
+     - Default
+     - What it does
+   * - ``EXECUTION_TIMEOUT_SECONDS``
+     - ``3600``
+     - Default timeout of a pipeline run.
+   * - ``MAX_SWEEP_SIZE``
+     - ``50``
+     - The most combinations one sweep may expand to.
+   * - ``MAX_EXECUTIONS_IN_MEMORY`` / ``EXECUTION_RETENTION_SECONDS``
+     - ``500`` / ``21600``
+     - How many run records, and for how long after they finish, stay in memory
+       (the database keeps them all).
+   * - ``EXECUTION_LOG_BUFFER_SIZE`` / ``EXECUTION_LOG_DB_BATCH_SIZE``
+     - ``100000`` / ``50``
+     - Log lines kept per run, and written to the database per insert.
+   * - ``EXECUTION_MAINTENANCE_INTERVAL_SECONDS``
+     - ``300``
+     - How often finished runs are pruned from memory.
+   * - ``RATE_LIMIT_REQUESTS`` / ``RATE_LIMIT_WINDOW_SECONDS``
+     - ``100`` / ``60``
+     - Requests per client within the sliding window (with ``RATE_LIMIT_ENABLED``);
+       ``RATE_LIMIT_REDIS_URL`` shares the counters between workers.
+   * - ``RATE_LIMIT_MAX_KEYS`` / ``RATE_LIMIT_CLEANUP_INTERVAL_SECONDS``
+     - ``10000`` / ``300``
+     - Bound and cleanup interval of the in-memory counters.
+   * - ``REVOCATION_REDIS_URL``
+     - unset
+     - Redis for the list of logged-out tokens, shared between workers and kept
+       across restarts; falls back to ``RATE_LIMIT_REDIS_URL``, then to memory.
+   * - ``JWT_EXPIRATION_HOURS`` / ``JWT_ALGORITHM``
+     - ``24`` / ``HS256``
+     - Access-token lifetime and signature algorithm.
+   * - ``CORS_ALLOW_CREDENTIALS`` / ``CORS_ALLOW_METHODS`` / ``CORS_ALLOW_HEADERS``
+     - ``true`` / ``*`` / ``*``
+     - The rest of the CORS policy for ``CORS_ORIGINS``.
+   * - ``CONFIG_CACHE_TTL_SECONDS``
+     - ``300``
+     - How long a project's resolved configuration is cached.
+   * - ``MAX_GIT_LOG``
+     - ``500``
+     - Commits returned by the Git history endpoints.
+   * - ``LOG_LEVEL`` / ``LOG_FORMAT``
+     - ``INFO`` / ``json``
+     - The server's own log (``text`` for local development).
+   * - ``DUCTA_PUBLIC_URL``
+     - unset
+     - The address users open; alerts link to the run with it.
+   * - ``APP_NAME`` / ``RELOAD``
+     - ``Ducta API`` / ``false``
+     - Name in the OpenAPI page; auto-reload for development only.
 
 .. _roles-and-permissions:
 
@@ -348,11 +426,18 @@ the permissions regardless.
 
 .. warning::
 
-   Pipelines run inside the API process. A user who can write code and run it
-   (``workspace.write`` and ``pipeline.execute``, which the ``developer`` role
-   has) can read the server's settings, ``JWT_SECRET_KEY`` included, and so sign
-   themselves any role. Give ``developer`` only to people you would trust as
-   ``admin``; the server says so at startup when authentication is on.
+   A user who can write code and run it (``workspace.write`` and
+   ``pipeline.execute``, which the ``developer`` role has) runs that code on the
+   server. With ``RUN_ISOLATION=thread`` it runs inside the API process and can
+   read the server's settings, ``JWT_SECRET_KEY`` included, and so sign itself
+   any role. With ``process`` (the default once authentication is on) it cannot
+   read the server's memory, and its environment has none of the server's
+   secrets — but it runs as the same OS user: files the server can read (a
+   ``.env`` next to it, a SQLite database) it can read and write too, and on
+   macOS it can list the server's environment (``ps eww``; on Linux the server
+   closes ``/proc/<pid>/environ``). Pass the server's secrets as environment
+   variables, use PostgreSQL, keep no ``.env`` the runs can reach — or run the
+   server in a container of its own. The server says which applies at startup.
 
 Some routes need more than their name suggests:
 

@@ -118,7 +118,7 @@ class TestSearch:
         assert result.best_params["max_depth"] in (1, 3)
         assert result.model.get_params()["max_depth"] == result.best_params["max_depth"]
         # the search's own score is logged under the name a sweep reads
-        assert result.metrics["roc_auc"] == pytest.approx(result.cv_score)
+        assert result.metrics["val_roc_auc"] == pytest.approx(result.cv_score)
         assert "best_cv_score" in result.metrics
 
     def test_an_explicit_grid_wins_over_the_context(self, data):
@@ -427,7 +427,21 @@ class TestARunThatFixesHyperparameters:
         result = self._train(data, self._grid(max_depth=[1, 6]), {"max_depth": 6})
 
         assert result.cv_score is not None
-        assert result.metrics["roc_auc"] == pytest.approx(result.cv_score)
+        assert result.metrics["val_roc_auc"] == pytest.approx(result.cv_score)
+        assert "roc_auc" not in result.metrics  # never a CV score under a bare name
+
+    def test_the_validation_score_never_takes_a_held_out_metrics_name(self, data):
+        """With objective f1, ``metrics["f1"]`` was the test-set f1 and --search ranked on it."""
+        cfg = HyperparamConfig(
+            algorithm="grid",
+            cv_folds=3,
+            objective={"metric": "f1", "type": "maximize"},
+            search_space={"max_depth": [1, 6]},
+        )
+        result = self._train(data, cfg, {})
+
+        assert result.metrics["val_f1"] == pytest.approx(result.cv_score)
+        assert result.metrics["f1"] != pytest.approx(result.cv_score)  # the held-out f1
 
     def test_a_partial_override_is_fixed_and_the_rest_is_still_searched(self, data):
         cfg = self._grid(max_depth=[1, 2, 3], min_samples_leaf=[1, 20, 60])

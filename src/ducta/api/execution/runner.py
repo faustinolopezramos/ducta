@@ -417,12 +417,16 @@ def _attach_stream_alerts(engine: Any, source_path: Any, project_id: Any, env: s
 def _link_certificate(ctx: Any, manager: Any, execution_id: str) -> None:
     """Attach the Run Certificate this run emitted, if any (best-effort).
 
-    The executor facade stamps its run_id on the context.
+    The executor facade stamps its run_id on the context, and what its ``retrain:``
+    did (the web UI showed a retrain only in the log).
     """
     try:
         cert_run_id = getattr(ctx, "_run_id", None)
         if cert_run_id:
             manager.attach_certificate(execution_id, str(cert_run_id))
+        retrain = getattr(ctx, "_retrain", None)
+        if retrain:
+            manager.attach_retrain(execution_id, retrain)
     except Exception as e:
         logger.debug("Could not attach certificate run_id: {}", e)
 
@@ -461,13 +465,68 @@ class RunSpec:
     node_names: Optional[List[str]] = None
     #: A sample run: this many rows of each input, outputs to the scratch area.
     sample_rows: Optional[int] = None
+    #: The run this one reproduces (``certificates/{run_id}/reproduce``): its
+    #: outputs go to a reproduction folder, never to the real datasets.
+    reproduce_of: Optional[str] = None
     #: Wait for an IDE debugger to attach before running (local only).
     debug: bool = False
     #: Data breakpoints: pause after each of these nodes until resumed.
     pause_after: Optional[List[str]] = None
 
 
-def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
+def print_run_header(spec: RunSpec) -> None:
+    """What a run's log starts with, in this process or a run's own."""
+    logger.info("Starting Ducta pipeline execution")
+    # The run log is what the engine prints: give it the CLI's reporter.
+    from ducta.console.ux.reporter import ConsoleReporter
+    from ducta.reporting import get_reporter, set_reporter
+
+    if not isinstance(get_reporter(), ConsoleReporter):
+        set_reporter(ConsoleReporter())
+    try:
+        from ducta.console.ux.rich_logger import print_execution_header
+
+        print_execution_header(
+            pipeline=spec.pipeline_name,
+            env=spec.env,
+            start_date=spec.start_date,
+            end_date=spec.end_date,
+            node=spec.node_name,
+        )
+    except Exception as exc:
+        logger.debug("Failed to print execution header: {exc}", exc=exc)
+
+
+def print_run_finished(outcome: Optional[Dict[str, Any]], pipeline_name: str) -> None:
+    """What a run's log ends with when the pipeline returned (not raised)."""
+    finished = (outcome or {}).get("status")
+    try:
+        from ducta.console.ux.rich_logger import RichLoggerManager, print_process_separator
+
+        console = RichLoggerManager.get_console()
+        console.print()
+        print_process_separator(
+            "warning" if finished else "success",
+            f"EXECUTION {str(finished).upper()}" if finished else "EXECUTION COMPLETED",
+            f"Pipeline: {pipeline_name}",
+            console,
+        )
+        console.print()
+    except Exception:
+        pass
+    if finished:
+        # gate_blocked / skipped: it finished, but did not do all its work.
+        logger.warning("Ducta pipeline execution finished: {}", finished)
+    else:
+        logger.success("Ducta pipeline execution completed successfully")
+
+
+def run_failure_message(pipeline_name: str, exc: BaseException) -> str:
+    """The run's error message for an exception the engine did not already explain."""
+    return f"Pipeline '{pipeline_name}' execution failed: {exc}"
+
+
+def redirect_to_scratch(ctx: Any, env: str, rows: int, pipeline_name: Optional[str] = None) -> Path:
     """Make this run a sample run: each node reads the first *rows* rows of its
     inputs, and everything the run writes — outputs, quality reports, the run
     certificate, chain state — lands under ``<output>/<env>/.ducta/scratch``.
@@ -475,30 +534,12 @@ def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
     So a sample run cannot overwrite a real dataset, and is never the "last
     successful run" staleness and "what changed" compare against.
     """
+    from ducta.core.scratch import redirect_writes
+
     original = Path(str(getattr(ctx, "output_path", None) or ctx.global_config.get("output_path")))
     scratch = state.scratch_dir(original, env)
-    gs = ctx.global_config
     ctx.sample_rows = rows
-    ctx.output_path = str(scratch)
-    gs["output_path"] = str(scratch)
-    for key, cfg in (getattr(ctx, "output_config", None) or {}).items():
-        declared = cfg.get("filepath") if isinstance(cfg, dict) else None
-        if not declared:
-            continue  # derived from output_path, which now is the scratch
-        try:
-            rel = Path(declared).relative_to(original)
-        except ValueError:
-            # Elsewhere — on another disk, or remote storage (s3://…): a sample
-            # run writes none of it, only a local copy under the scratch.
-            rel = Path(*str(key).split("."))
-        cfg["filepath"] = str(scratch / rel)
-    gs["run_certificate_dir"] = str(state.under(scratch, "runs"))
-    chain = gs.get("chain") if isinstance(gs.get("chain"), dict) else {}
-    gs["chain"] = {**chain, "state_dir": str(state.under(scratch, "chain_state"))}
-    quality = gs.get("quality") if isinstance(gs.get("quality"), dict) else None
-    if quality is not None:
-        output = quality.get("output") if isinstance(quality.get("output"), dict) else {}
-        quality["output"] = {**output, "base_path": str(scratch / "quality")}
+    redirect_writes(ctx, scratch, env, certificates=True, pipeline_name=pipeline_name)
     # Checks still run and report, but a sample is small by design: a gate such
     # as `row_count >= 350` would always block it. Warn instead of blocking.
     for node in (getattr(ctx, "nodes_config", None) or {}).values():
@@ -509,6 +550,36 @@ def redirect_to_scratch(ctx: Any, env: str, rows: int) -> Path:
                     if isinstance(gate, dict):
                         block[gate_key] = {**gate, "behavior": "warn_only"}
     return scratch
+
+
+def redirect_run_writes(ctx: Any, spec: "RunSpec") -> None:
+    """Send a sample run's or a reproduction's writes away from the real datasets."""
+    if spec.sample_rows:
+        scratch = redirect_to_scratch(
+            ctx, spec.env, int(spec.sample_rows), pipeline_name=spec.pipeline_name
+        )
+        logger.info(
+            "Sample run: first {} rows of each input; outputs and evidence "
+            "go to {} — the real datasets are not touched",
+            spec.sample_rows,
+            scratch,
+        )
+    elif spec.reproduce_of:
+        from ducta.core.certificate import certificate_dir, load_certificate
+        from ducta.core.scratch import pin_served_models, prepare_reproduction
+
+        # Read before the run's paths move: it names the model versions to serve.
+        cert_path = certificate_dir(ctx, spec.reproduce_of) / "certificate.json"
+        cert = load_certificate(cert_path) if cert_path.is_file() else {}
+        target = prepare_reproduction(
+            ctx, spec.env, spec.reproduce_of, pipeline_name=spec.pipeline_name
+        )
+        pin_served_models(ctx, cert)
+        logger.info(
+            "Reproducing run {}: outputs go to {} — the real datasets are not touched",
+            spec.reproduce_of,
+            target,
+        )
 
 
 def _gate_blocks(node: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -593,6 +664,8 @@ def _run_debug_child(
         result = json.loads(result_file.read_text(encoding="utf-8")) if result_file.exists() else {}
     if result.get("certificate_run_id"):
         manager.attach_certificate(execution_id, str(result["certificate_run_id"]))
+    if isinstance(result.get("retrain"), dict):
+        manager.attach_retrain(execution_id, result["retrain"])
     if proc.returncode != 0:
         raise RuntimeError(result.get("error") or f"The debug run failed (exit {proc.returncode})")
     logger.success("Debug run finished")
@@ -610,17 +683,23 @@ def run_pipeline_sync(
     (missing upstream inputs) instead of running — ``None`` for a normal
     completion (success/dry-run/sanity-only).
     """
+    from ducta.api.config import get_settings
+    from ducta.api.execution.child_runner import isolation_mode, run_in_child
     from ducta.api.execution.context import execution_id_var
 
-    manager.set_active_execution(execution_id)
     execution_id_var.set(execution_id)
-
     timeout_handler = manager.get_or_create_timeout_handler(execution_id)
 
     # For multi-project workspaces (no top-level environment file), resolve the
     # effective project directory so context loading and CWD work correctly.
     pipeline_name, env = spec.pipeline_name, spec.env
     source_path = resolve_project_source(spec.source_path, pipeline_name)
+
+    if not spec.debug and isolation_mode(get_settings()) == "process":
+        # Its own process: no lock, no shared cwd, sys.path or file descriptors.
+        return run_in_child(execution_id, spec, source_path, manager, timeout_handler)
+
+    manager.set_active_execution(execution_id)
     ws_root_str = str(source_path)
     added_to_sys_path = False
 
@@ -629,33 +708,13 @@ def run_pipeline_sync(
     # process-global. As a result pipeline executions run strictly one-at-a-time
     # regardless of `max_concurrent_executions`; that setting only governs how
     # many runs may sit dequeued/active in the queue, not true parallelism.
-    # Real concurrency would require running each pipeline in its own subprocess.
-    from ducta.api.config import get_settings
-
+    # RUN_ISOLATION=process (above) runs each pipeline in its own process instead.
     with _acquire_stdout_capture_lock(get_settings().execution_timeout_seconds):
         with ProcessOutputCapture(execution_id, manager):
             # Snapshot sys.modules under the lock so the baseline (and the later
             # cleanup) cannot race with another execution's imports.
             with _execution_module_isolation_scope(execution_id, manager):
-                logger.info("Starting Ducta pipeline execution")
-                # The run log is what the engine prints: give it the CLI's reporter.
-                from ducta.console.ux.reporter import ConsoleReporter
-                from ducta.reporting import get_reporter, set_reporter
-
-                if not isinstance(get_reporter(), ConsoleReporter):
-                    set_reporter(ConsoleReporter())
-                try:
-                    from ducta.console.ux.rich_logger import print_execution_header
-
-                    print_execution_header(
-                        pipeline=pipeline_name,
-                        env=env,
-                        start_date=spec.start_date,
-                        end_date=spec.end_date,
-                        node=spec.node_name,
-                    )
-                except Exception as exc:
-                    logger.debug("Failed to print execution header: {exc}", exc=exc)
+                print_run_header(spec)
 
                 if ws_root_str not in sys.path:
                     sys.path.insert(0, ws_root_str)
@@ -688,14 +747,7 @@ def run_pipeline_sync(
                     execution_cwd = select_execution_cwd(source_path, env_dir, ctx)
                     os.chdir(execution_cwd)
                     normalize_execution_context_paths(ctx, execution_cwd)
-                    if spec.sample_rows:
-                        scratch = redirect_to_scratch(ctx, env, int(spec.sample_rows))
-                        logger.info(
-                            "Sample run: first {} rows of each input; outputs and evidence "
-                            "go to {} — the real datasets are not touched",
-                            spec.sample_rows,
-                            scratch,
-                        )
+                    redirect_run_writes(ctx, spec)
 
                     if spec.debug:
                         # Its own process, under debugpy: a breakpoint there can
@@ -730,33 +782,7 @@ def run_pipeline_sync(
                         _link_certificate(ctx, manager, execution_id)
                         _shutdown_engine(engine, manager, execution_id)
 
-                    try:
-                        from ducta.console.ux.rich_logger import (
-                            RichLoggerManager,
-                            print_process_separator,
-                        )
-
-                        console = RichLoggerManager.get_console()
-                        console.print()
-                        finished = (outcome or {}).get("status")
-                        print_process_separator(
-                            "warning" if finished else "success",
-                            f"EXECUTION {str(finished).upper()}"
-                            if finished
-                            else "EXECUTION COMPLETED",
-                            f"Pipeline: {pipeline_name}",
-                            console,
-                        )
-                        console.print()
-                    except Exception:
-                        pass
-
-                    status = (outcome or {}).get("status")
-                    if status:
-                        # gate_blocked / skipped: it finished, but did not do all its work.
-                        logger.warning("Ducta pipeline execution finished: {}", status)
-                    else:
-                        logger.success("Ducta pipeline execution completed successfully")
+                    print_run_finished(outcome, pipeline_name)
                     return outcome
                 except DuctaError:
                     # Engine errors already carry the pipeline, the failed nodes and
@@ -764,9 +790,7 @@ def run_pipeline_sync(
                     # that away and left the caller with a string to parse.
                     raise
                 except Exception as exc:
-                    raise RuntimeError(
-                        f"Pipeline '{pipeline_name}' execution failed: {exc}"
-                    ) from exc
+                    raise RuntimeError(run_failure_message(pipeline_name, exc)) from exc
                 finally:
                     try:
                         os.chdir(original_cwd)

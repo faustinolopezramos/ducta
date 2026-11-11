@@ -34,8 +34,6 @@ from ducta.core.split_validator import SplitValidationError, validate_split_conf
 from ducta.core.utils import extract_pipeline_nodes, get_node_dependencies
 from ducta.gate.validators import ConfigValidator
 
-_PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL = 10_000
-
 _INJECTED_KWARGS = ("start_date", "end_date", "ml_context")
 
 
@@ -114,7 +112,7 @@ def _check_ml_contract(
         own = node_split(cfg)
         if own:
             try:
-                validate_split_config(own, _PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL)
+                validate_split_config(own)
             except SplitValidationError as e:
                 report.error(f"Node '{name}': invalid split config — {e}")
 
@@ -597,7 +595,13 @@ def _check_serving_models(
     is not there yet is a warning, not an error: a chain may register it in an
     earlier pipeline of the same run.
     """
-    from ducta.mlrun.serving import ServingError, mlflow_client_from_context, resolve_model
+    from ducta.mlrun.serving import (
+        ServingError,
+        mlflow_client_from_context,
+        pinned_ref,
+        resolve_model,
+        serving_registry,
+    )
     from ducta.setting.project.schema import ModelRef
 
     registry: Any = None
@@ -606,15 +610,13 @@ def _check_serving_models(
         if not raw:
             continue
         try:
-            ref = ModelRef.model_validate(raw)
+            ref = pinned_ref(ModelRef.model_validate(raw), getattr(context, "pinned_models", None))
         except Exception as e:  # noqa: BLE001 — pydantic's message names the field
             report.error(f"Node '{name}': invalid model — {e}")
             continue
         try:
             if ref.source == "ducta" and registry is None:
-                from ducta.mlrun.config import MLOpsContext
-
-                registry = MLOpsContext.from_context(context).model_registry
+                registry = serving_registry(context)
             resolved = resolve_model(
                 ref,
                 registry=registry,
@@ -907,7 +909,7 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
         split_config = split_config.model_dump(exclude_none=True)
     if split_config:
         try:
-            validate_split_config(split_config, _PREFLIGHT_SPLIT_DATASET_SIZE_SENTINEL)
+            validate_split_config(split_config)
         except SplitValidationError as e:
             report.error(f"Pipeline '{pipeline_name}': invalid split config — {e}")
 

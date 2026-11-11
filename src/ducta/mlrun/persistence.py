@@ -27,7 +27,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 from loguru import logger  # type: ignore
 
-from ducta.mlrun.validators import plain_number
+from ducta.mlrun.validators import plain_number, validate_model_name
 
 
 def _serialize(model: Any, path: Path) -> str:
@@ -181,6 +181,70 @@ def infer_schema(data: Any) -> Optional[Dict[str, str]]:
     return None
 
 
+def _promote(
+    registry: Any, mlops_context: Any, name: str, version: int, stage_name: str
+) -> Dict[str, Any]:
+    """Promote *version* through the project's policy: ``{promoted_to, promotion_refused?}``."""
+    from ducta.mlrun.exceptions import PromotionGateError
+    from ducta.mlrun.model_registry import ModelStage
+
+    stage = _promotion_stage(stage_name)
+    policy = getattr(mlops_context, "promotion_policy", None)
+    if stage == ModelStage.PRODUCTION and policy is None:
+        logger.warning(
+            "Model '{}' v{} goes to production without a gate: settings.mlops has no "
+            "promotion_policy",
+            name,
+            version,
+        )
+    try:
+        registry.promote_model(
+            name,
+            version,
+            stage,
+            policy=policy if stage == ModelStage.PRODUCTION else None,
+            reason="persist_model(promote=...)",
+        )
+    except PromotionGateError as e:
+        logger.warning("Model '{}' v{} is not promoted to {}: {}", name, version, stage.value, e)
+        return {"promoted_to": None, "promotion_refused": str(e)}
+    logger.info("Model '{}' v{} promoted to {}", name, version, stage.value)
+    return {"promoted_to": stage.value}
+
+
+def _promotion_stage(stage_name: str) -> Any:
+    """The ``ModelStage`` *stage_name* names; ``ValueError`` for anything else."""
+    from ducta.mlrun.model_registry import ModelStage
+
+    try:
+        return ModelStage(str(stage_name).strip().capitalize())
+    except ValueError as e:
+        raise ValueError(
+            f"promote must be one of {[s.value.lower() for s in ModelStage]}, got {stage_name!r}"
+        ) from e
+
+
+def _record_registration(ml_context: Any, name: str, version: Any, result: Dict[str, Any]) -> None:
+    """Note the registered version on the node's ml_context, for the run certificate."""
+    registered = _ctx_get(ml_context, "registered_models")
+    if not isinstance(registered, list):
+        return
+    registered.append(
+        {
+            "name": name,
+            "version": int(version.version),
+            "uri": version.artifact_uri,
+            "sha256": getattr(version, "artifact_sha256", None),
+            "promoted_to": result.get("promoted_to"),
+            **(
+                {"promotion_refused": result["promotion_refused"]}
+                if result.get("promotion_refused")
+                else {}
+            ),
+        }
+    )
+
+
 def persist_model(
     model: Any,
     ml_context: Any,
@@ -197,8 +261,15 @@ def persist_model(
     output_schema: Optional[Dict[str, str]] = None,
     native: bool = False,
     log_to_run: bool = True,
+    promote: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Persist a trained model reproducibly and return ``{"artifact_uri": ...}``.
+
+    ``promote="production"`` (or ``"staging"``) promotes the registered version through
+    the project's ``settings.mlops.promotion_policy``: a candidate the gate refuses
+    stays where it is, and the result says why (``promoted_to: None``,
+    ``promotion_refused``) — the node does not fail, so a retrain that is no better
+    than production leaves production alone.
 
     ``metrics`` go to the model version *and*, with ``log_to_run`` (the default), to the
     tracked run, so ``ducta experiment show`` and a run summary can rank runs by them.
@@ -210,6 +281,13 @@ def persist_model(
     ``binary:logistic`` its ``predict`` returns probabilities, not the labels an sklearn
     wrapper's ``predict`` returns. Hence it is opt-in; any other model is pickled as before.
     """
+    # The registry's own rule, checked before anything is written: the local copy
+    # used the name as a folder unchecked, so "../x" wrote outside base_dir.
+    name = validate_model_name(name)
+    if promote:
+        # Before registering: a misspelled stage left a version registered and the
+        # node failed.
+        _promotion_stage(promote)
     mlops_context = _ctx_get(ml_context, "mlops_context")
     run_id = _ctx_get(ml_context, "mlops_run_id")
     model_version = _ctx_get(ml_context, "model_version")
@@ -233,35 +311,55 @@ def persist_model(
     if registry is not None:
         import tempfile
 
+        # A registration that fails fails the node. It used to fall back to a local
+        # pickle and succeed: the registry never got the model, and a serving node
+        # kept scoring with the previous Production version. The local copy below is
+        # for projects without a registry.
         with tempfile.TemporaryDirectory() as tmp:
             artifact, artifact_type, _ = _write_artifact(model, framework, native, Path(tmp), name)
-            try:
-                version = registry.register_model(
-                    name=name,
-                    artifact_path=str(artifact),
-                    artifact_type=artifact_type,
-                    framework=framework,
-                    description=description,
-                    hyperparameters=hyperparameters,
-                    metrics=metrics,
-                    input_schema=resolved_input_schema,
-                    output_schema=resolved_output_schema,
-                    experiment_run_id=run_id,
-                )
+            version = registry.register_model(
+                name=name,
+                artifact_path=str(artifact),
+                artifact_type=artifact_type,
+                framework=framework,
+                description=description,
+                hyperparameters=hyperparameters,
+                metrics=metrics,
+                input_schema=resolved_input_schema,
+                output_schema=resolved_output_schema,
+                experiment_run_id=run_id,
+            )
+            logger.info(
+                "Registered model '{}' v{} in registry (uri={})",
+                name,
+                version.version,
+                version.artifact_uri,
+            )
+            result: Dict[str, Any] = {
+                "artifact_uri": version.artifact_uri,
+                "version": version.version,
+            }
+            trial = _ctx_get(ml_context, "sweep_id")
+            if promote and trial:
                 logger.info(
-                    "Registered model '{}' v{} in registry (uri={})",
+                    "Model '{}' v{} is a trial of {}: registered, not promoted — promote "
+                    "the best one with `ducta model promote`",
                     name,
                     version.version,
-                    version.artifact_uri,
+                    trial,
                 )
-                return {"artifact_uri": version.artifact_uri, "version": version.version}
-            except Exception as error:
-                logger.warning(
-                    "Model registry registration failed ({}); falling back to local "
-                    "versioned file.",
-                    error,
-                )
+                result.update({"promoted_to": None, "promotion_skipped": f"trial of {trial}"})
+            elif promote:
+                result.update(_promote(registry, mlops_context, name, version.version, promote))
+            _record_registration(ml_context, name, version, result)
+            return result
 
+    if promote:
+        logger.warning(
+            "Model '{}' is not promoted to {}: there is no model registry (tracking is off)",
+            name,
+            promote,
+        )
     dest_dir = Path(base_dir) / name / stamp
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest, _, serializer = _write_artifact(model, framework, native, dest_dir, "model")

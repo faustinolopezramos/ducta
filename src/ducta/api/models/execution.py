@@ -101,6 +101,14 @@ class ExecutionResponse(BaseModel):
             "(fetch it via /projects/{project_id}/certificates/{run_id})"
         ),
     )
+    retrain: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "What the pipeline's `retrain:` did after this run: the training pipeline, "
+            "the checks that triggered it, and its run_id and status, or why it was "
+            "skipped. None when the run did not retrain."
+        ),
+    )
     workspace: Optional[str] = Field(
         default=None,
         description=(

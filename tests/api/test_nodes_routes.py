@@ -195,8 +195,9 @@ class TestNodeRoutes:
     def test_saving_each_node_as_read_changes_nothing_the_engine_sees(self, api, project):
         """GET returns ``inputs``/``outputs`` lists; PUT used to refuse exactly that (400).
 
-        What the engine compiles must not change. (The quality block is written
-        back in its long form, so its comments do not survive: a known limit.)
+        Neither what the engine compiles nor the file changes: the quality blocks
+        come back compiled (long form) and used to overwrite the short form the
+        template wrote, comments and all.
         """
         from ducta.api.repositories.v2_store import V2ProjectStore
         from ducta.setting.project import compile_project
@@ -204,6 +205,8 @@ class TestNodeRoutes:
         def compiled():
             return compile_project(V2ProjectStore(project).project(None))
 
+        files = sorted((project / "pipelines").glob("*.yaml"))
+        text_before = [f.read_text(encoding="utf-8") for f in files]
         before = compiled()
         for name in ("extract", "transform", "load"):
             current = api.get(f"/api/nodes/{name}").json()
@@ -213,3 +216,16 @@ class TestNodeRoutes:
             )
             assert saved.status_code == 200, (name, saved.json())
         assert compiled() == before
+        assert [f.read_text(encoding="utf-8") for f in files] == text_before
+
+    def test_a_changed_check_is_written(self, api, project):
+        current = api.get("/api/nodes/transform").json()
+        spec = current["spec"]
+        spec["data_quality"]["checks"]["row_count"] = {"min": 7}
+        saved = api.put(
+            "/api/nodes/transform",
+            json={"spec": spec, "expected_commit_sha": current["commit_sha"]},
+        )
+        assert saved.status_code == 200, saved.json()
+        again = api.get("/api/nodes/transform").json()["spec"]
+        assert again["data_quality"]["checks"]["row_count"] == {"min": 7}

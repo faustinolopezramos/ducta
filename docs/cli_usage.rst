@@ -31,7 +31,10 @@ A run logs every step as it happens: each node, its quality checks, the schema
 of what it wrote, and an execution summary. ``-v`` / ``--verbose`` (before or
 after the command) adds debug lines; ``-q`` / ``--quiet`` keeps only errors.
 Everything is always in ``<project>/logs/ducta.log``, at debug level. Colour only
-on a terminal; ``FORCE_COLOR=1`` keeps it in a pipe.
+on a terminal; ``FORCE_COLOR=1`` keeps it in a pipe. Spark's own console lines come
+from its JVM: ``DUCTA_SPARK_QUIET=known`` hides the few warnings every local run
+prints (loopback hostname, native Hadoop and the like) and keeps the rest, ``1``
+silences them all (the compact view below does that); errors still reach you.
 
 ``DUCTA_CONSOLE=compact`` is an optional short view — a header, one line per node
 (rows written, time, checks), a summary, and for a failure one block with the
@@ -132,9 +135,11 @@ ML pipelines add ``--model-version`` and ``--hyperparams JSON`` (shown in
      - The trial budget of ``--search`` (random and Bayesian), overriding
        ``n_trials``.
    * - ``--no-sweep-reuse``
-     - Recompute every node on each sweep or search trial. By default the
-       trial-invariant upstream nodes are materialized once and reused, since
-       trials differ only in hyperparameters.
+     - Recompute every upstream pipeline on each sweep or search trial. By default
+       the pipelines a trial's pipeline depends on (``depends_on``) are materialized
+       once and reused, since trials differ only in hyperparameters. Reuse is by
+       pipeline: the nodes of the trial's own pipeline run in every trial, so keep
+       feature preparation in a pipeline of its own when it is the slow part.
    * - ``--sweep-parallel N``
      - Run N trials concurrently, each in its own process and its own output
        directory. Mutually exclusive with upstream reuse (an isolated trial has
@@ -290,6 +295,7 @@ comments).
 
    ducta stream plan --pipeline events [--env ENV] [--output-format table|json]
    ducta stream run --pipeline events [--env ENV] [--mode async|sync]
+                    [--model-version V] [--hyperparams JSON]
    ducta stream status [--env ENV] [--execution-id ID] [--output-format table|json]
    ducta stream stop --execution-id ID [--env ENV] [--timeout SECONDS]
 
@@ -327,9 +333,12 @@ and output fingerprints, quality outcomes — to
    ducta certify list [--env ENV]
    ducta certify show --run-id ID [--json]           # a unique prefix of the id is enough
    ducta certify verify --run-id ID                  # tamper check (and signature, if signed)
-   ducta certify verify --run-id ID --reproduce \
-     --start-date 2026-01-01 --end-date 2026-01-31   # re-run and compare every output
+   ducta certify verify --run-id ID --reproduce      # re-run (over the run's dates, into
+                                                     # .ducta/reproduce/) and compare outputs
    ducta certify diff RUN_A RUN_B                    # what changed between two runs
+
+Each takes ``--env`` to find the environment's runs, or ``--dir`` for a runs
+directory of your own.
 
 See :doc:`tutorials/certificates`.
 
@@ -340,17 +349,20 @@ See :doc:`tutorials/certificates`.
 
    ducta quality list                                # every registered check
    ducta quality validate-config --node clean --env prod
-   ducta quality run --input data.parquet --config checks.yaml
+   ducta quality run --input data.parquet --config checks.yaml [--fail-fast]
    ducta quality report --dataset silver.sales.orders --env dev [--all | --run-id ID]
    ducta quality trend --dataset silver.sales.orders --env dev [--last 20]
    ducta quality score --run-id ID --env dev
    ducta profile --input data.parquet [--strictness strict|balanced|lax] [--output checks.yaml]
+                 [--sample-rows N] [--dataset-name NAME] [--format parquet|csv|json]
 
 - ``validate-config`` checks a node's checks and profiles as an environment
   configures them, without reading data.
 - ``run`` applies a checks file to a data file, outside any project.
 - ``profile`` reads a dataset and proposes the checks it already satisfies — a
-  starting point for a contract.
+  starting point for a contract. ``--sample-rows`` measures the columns on a sample
+  (the row count stays exact); ``--fail-fast`` makes ``run`` stop at the first
+  failing check.
 
 See :doc:`quality`.
 
@@ -362,7 +374,9 @@ See :doc:`quality`.
    ducta experiment list --env dev [--pipeline NAME] [--limit 20]
    ducta experiment runs <experiment_id> --env dev [--status completed] [--limit 10]
    ducta experiment show <run_id> --env dev
-   ducta experiment compare <run_id> <run_id> [<run_id> ...] --env dev
+   ducta experiment compare <run_id> <run_id> [<run_id> ...] --env dev [--all]
+   ducta model list --env dev [--pipeline NAME]
+   ducta model show churn_model --env dev [--version 3]
    ducta model promote churn_model 3 production --env prod
    ducta model gc --env prod --dry-run
 
@@ -377,6 +391,14 @@ schema.name`` (the name of the pipeline that ran) or ``--storage-path`` when the
 project does not set ``mlops_path``; without them the default directory is
 ``./mlops_data``, which is rarely where a pipeline wrote. A run id that does not
 exist is a validation error (exit code 3) and names the directory it searched.
+
+``model list`` shows every registered model, its versions and their stages, and
+``model show NAME [--version N]`` one version: stage, metrics, hyperparameters, input
+schema, library versions, the tracked run and the artifact's hash. ``experiment compare``
+leaves out the parameters Ducta records itself (``_code_hash``,
+``_environment_snapshot``, the fingerprints …); ``--all`` shows them. A ``--sweep``
+ends naming its best run when it has a metric to rank by (``--search-metric`` or the
+pipeline's ``hyperparams_config`` objective).
 
 Promotion to ``production`` goes through the promotion policy
 (``settings.mlops.promotion_policy`` of ``--env``, or of the base project without
@@ -412,7 +434,10 @@ run that uses it. ``setup`` asks before saving a connection that failed.
    ducta server start [--port 8000] [--host 127.0.0.1] [--source PATH_OR_GIT_URL]
 
 Both serve the web app and its REST API. ``--db PATH`` moves the execution
-history (default ``~/.ducta/executions.db``). See :doc:`server_api`.
+history (default ``~/.ducta/executions.db``). A non-local ``--host`` (``0.0.0.0``) is
+refused without authentication: set ``AUTH_ENABLED=true``, or pass
+``--allow-unauthenticated`` to accept that anyone who reaches the address can run
+pipelines. See :doc:`server_api`.
 
 ``ducta skill`` — the skill for AI assistants
 ---------------------------------------------

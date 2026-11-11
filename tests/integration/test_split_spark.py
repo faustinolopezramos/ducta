@@ -62,6 +62,17 @@ def test_temporal_trains_on_the_past(rows):
     assert test.count() == pytest.approx(400, abs=5)
 
 
+def test_temporal_refuses_rows_without_a_time(spark):
+    """They all landed in test (``ts < cut`` is null for them)."""
+    day = dt.datetime(2026, 1, 1)
+    df = spark.createDataFrame(
+        [(i, day + dt.timedelta(days=i)) for i in range(20)] + [(98, None), (99, None)],
+        "id INT, ts TIMESTAMP",
+    )
+    with pytest.raises(SplitError, match=r"2 row\(s\) have no 'ts'"):
+        split_dataframe(df, {"method": "temporal", "time_col": "ts", "test_size": 0.2})
+
+
 def test_the_node_is_marked_as_having_applied_it(rows):
     ctx = {"split_applied": False}
     split_dataframe(rows, {"method": "random", "seed": 1}, ml_context=ctx)

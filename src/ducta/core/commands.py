@@ -249,11 +249,14 @@ class MLNodeCommand(NodeCommand):
         input_names: Optional[List[str]] = None,
         cli_hyperparams: Optional[Dict[str, Any]] = None,
         model_ref: Optional[Any] = None,
+        sweep_id: Optional[str] = None,
     ):
         super().__init__(
             function, input_dfs, start_date, end_date, node_name, input_names=input_names
         )
         self.model_ref = model_ref
+        #: Set when this run is one trial of a --sweep or --search.
+        self.sweep_id = sweep_id
 
         self.model_version = model_version or "unknown"
         self.hyperparams = hyperparams or {}
@@ -353,6 +356,14 @@ class MLNodeCommand(NodeCommand):
             logger.error(f"Error executing ML node '{self.node_name}': {str(e)}")
             raise
 
+    def registered_models(self) -> List[Dict[str, Any]]:
+        """The model versions the node registered through ``persist_model``."""
+        ctx = self._last_ml_context
+        if ctx is None:
+            return []
+        found = ctx.get("registered_models") if isinstance(ctx, Mapping) else None
+        return list(found or [])
+
     def split_was_applied(self) -> bool:
         """Whether the node called split_dataframe/kfold_splits with this ml_context."""
         ctx = self._last_ml_context
@@ -388,6 +399,7 @@ class MLNodeCommand(NodeCommand):
             spark=self.spark,
             model=getattr(self.model_ref, "model", None),
             model_ref=self.model_ref,
+            sweep_id=self.sweep_id,
         )
         self._last_ml_context = ml_context
 

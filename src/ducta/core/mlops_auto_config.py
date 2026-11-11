@@ -91,17 +91,6 @@ class MLOpsAutoConfigurator:
         return ""
 
     @classmethod
-    def get_logging_strategy(cls, ml_stage: str) -> Dict[str, bool]:
-        """Return logging strategies based on ml_stage."""
-        stage = (ml_stage or "").lower()
-        if "feature" in stage or "data" in stage:
-            return {"log_metrics": False, "log_schema": True, "log_artifacts": False}
-        elif "train" in stage or "eval" in stage or "test" in stage:
-            return {"log_metrics": True, "log_schema": False, "log_artifacts": True}
-        else:
-            return {"log_metrics": True, "log_schema": True, "log_artifacts": True}
-
-    @classmethod
     def should_enable_mlops(cls, node_config: Dict[str, Any], node_name: str = "") -> bool:
         """
         Detect if a node needs MLOps automatically.

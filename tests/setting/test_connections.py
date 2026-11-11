@@ -157,6 +157,15 @@ class TestIngestionService:
         with pytest.raises(IngestionServiceError, match="already exists"):
             svc.create_connection(spec)
 
+    @pytest.mark.parametrize("name", ["ducta_admin", "ducta_smtp"])
+    def test_a_name_on_the_servers_own_secrets_is_refused(self, temp_dir, name):
+        """Its credentials would be DUCTA_ADMIN_PASSWORD — the server's admin login."""
+        (temp_dir / "config").mkdir()
+        spec = ConnectionSpec(name, "postgresql", "attacker.example", 5432, "d", "u", "p")
+        with pytest.raises(IngestionServiceError, match="the Ducta server's own"):
+            IngestionService(str(temp_dir)).create_connection(spec)
+        assert not (temp_dir / ".env").exists()
+
     def test_create_connection_overwrite(self, temp_dir):
         config_dir = temp_dir / "config"
         config_dir.mkdir()

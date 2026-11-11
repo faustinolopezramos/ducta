@@ -105,6 +105,7 @@ def _compile_dataset(name: str, entry: CatalogEntry, *, as_input: bool) -> Dict[
                     "partition_col": w.partition_col,
                     "replace_predicate": w.replace_predicate,
                     "overwrite_schema": w.overwrite_schema,
+                    "allow_empty": w.allow_empty,
                     "partition_overwrite": w.partition_overwrite,
                 }
             )
@@ -236,6 +237,9 @@ def compile_project(project: Project) -> Dict[str, Dict[str, Any]]:
                 "nodes": list(pipeline.nodes),
                 "requires_dates": pipeline.requires_dates,
                 "depends_on": list(pipeline.depends_on) or None,
+                "retrain": pipeline.retrain.model_dump(exclude_none=True)
+                if pipeline.retrain
+                else None,
                 "reuse_if_materialized": pipeline.reuse_if_materialized,
                 "spark_config": pipeline.spark_config,
                 "split": pipeline.split,

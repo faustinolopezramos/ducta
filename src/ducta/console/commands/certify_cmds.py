@@ -22,7 +22,7 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 
@@ -537,16 +537,24 @@ def _warn_degraded_fingerprints(path: Path) -> None:
         )
 
 
-def _pin_delta_inputs(context: Any, recorded_inputs: Dict[str, Any]) -> None:
+def _pin_delta_inputs(
+    context: Any, recorded_inputs: Dict[str, Any], produced: Iterable[str] = ()
+) -> None:
     """Read each Delta input at the version the certificate recorded.
 
     Without this a reproduction reads the *current* table, so any commit since
     the original run makes the outputs differ and the verdict says nothing
     about the pipeline. Delta keeps old versions (until VACUUM removes their
     files), so the original input can be read back exactly.
+
+    A dataset the pipeline itself *produced* is not pinned: the reproduction
+    writes it again (in its own folder) and its nodes read that.
     """
     input_config = getattr(context, "input_config", None) or {}
+    skip = set(produced)
     for key, fingerprint in recorded_inputs.items():
+        if key in skip:
+            continue
         if (fingerprint or {}).get("algorithm") != "delta-version/v1":
             continue
         version = (fingerprint.get("details") or {}).get("delta_version")
@@ -574,20 +582,34 @@ def _reproduce(parsed_args, cert_path: Path) -> int:
         logger.warning("Certificate records no outputs — nothing to reproduce")
         return ExitCode.SUCCESS.value
 
+    from ducta.core.scratch import reproduction_window
+
+    start_date, end_date = reproduction_window(
+        cert, getattr(parsed_args, "start_date", None), getattr(parsed_args, "end_date", None)
+    )
     logger.info("Reproducing pipeline '{}' (env={}) to compare against certificate…", pipeline, env)
     try:
         from ducta.console import execution
         from ducta.console.commands.config_cmds import _init_config_manager
         from ducta.core import PipelineExecutor
+        from ducta.core.scratch import pin_served_models, prepare_reproduction
 
         config_manager = _init_config_manager(parsed_args)
         context = execution.ContextInitializer(config_manager).initialize(env)
-        _pin_delta_inputs(context, cert.get("inputs") or {})
+        from ducta.core.run_lock import output_keys
+
+        produced = output_keys(context, (context.pipelines_config or {}).get(pipeline) or {})
+        _pin_delta_inputs(context, cert.get("inputs") or {}, produced)
+        target = prepare_reproduction(
+            context, env, str(cert.get("run_id") or cert_path.parent.name), pipeline_name=pipeline
+        )
+        pin_served_models(context, cert)
+        logger.info("The reproduction writes to {}; the real datasets are not touched", target)
         executor = PipelineExecutor(context)
         run = executor.run_pipeline(
             pipeline_name=pipeline,
-            start_date=getattr(parsed_args, "start_date", None),
-            end_date=getattr(parsed_args, "end_date", None),
+            start_date=start_date,
+            end_date=end_date,
             execution_mode="sync",
         )
     except Exception as e:  # noqa: BLE001

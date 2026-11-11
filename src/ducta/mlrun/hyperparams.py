@@ -122,8 +122,43 @@ class HyperparamConfig:
                     "Bayesian search requires 'optuna'. Install with: pip install optuna"
                 )
 
+        self._validate_specs()
         self._validate_dependencies()
         self._validate_ranges()
+
+    #: The keys a range may carry besides ``min`` and ``max``.
+    _RANGE_KEYS = frozenset({"min", "max", "step", "log"})
+
+    def _validate_specs(self) -> None:
+        """Every search_space entry is a list of values, a ``{min, max}`` range or a
+        ``depends_on`` condition.
+
+        Anything else was read as a list of values: a mistyped range such as
+        ``{min: 1, maximum: 10}`` searched over its key names ('min', 'maximum'),
+        and a string over its letters.
+        """
+        shapes = "a list of values, a range {min, max[, step, log]}, or {depends_on: …}"
+        for name, spec in self.search_space.items():
+            if isinstance(spec, (list, tuple)):
+                if not spec:
+                    raise HyperparamConfigError(f"Param '{name}': the list of values is empty")
+                continue
+            if not isinstance(spec, dict):
+                raise HyperparamConfigError(f"Param '{name}' is {spec!r}: it must be {shapes}")
+            if "depends_on" in spec:
+                extra = sorted(set(spec) - {"depends_on"})
+            elif "min" in spec and "max" in spec:
+                extra = sorted(set(spec) - self._RANGE_KEYS)
+            else:
+                missing = [k for k in ("min", "max") if k not in spec]
+                raise HyperparamConfigError(
+                    f"Param '{name}' has keys {sorted(spec)}: a range needs "
+                    f"{' and '.join(repr(k) for k in missing)}; it must be {shapes}"
+                )
+            if extra:
+                raise HyperparamConfigError(
+                    f"Param '{name}': unknown key(s) {extra}; it must be {shapes}"
+                )
 
     @classmethod
     def from_dict(cls, data: dict) -> "HyperparamConfig":

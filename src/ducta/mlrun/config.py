@@ -337,7 +337,9 @@ class StorageBackendFactory:
                     f"Creating {backend_cls.__name__} (UC: {catalog_to_use}.{schema_to_use})"
                 )
 
-                databricks_kwargs: Dict[str, Any] = {}
+                databricks_kwargs: Dict[str, Any] = {
+                    key: kwargs[key] for key in ("workspace_url", "token") if kwargs.get(key)
+                }
                 if "retry_config" in kwargs:
                     databricks_kwargs["retry_config"] = kwargs["retry_config"]
                 if "enable_circuit_breaker" in kwargs:
@@ -347,8 +349,6 @@ class StorageBackendFactory:
                     catalog=catalog_to_use,
                     schema=schema_to_use,
                     volume_name=volume_to_use,
-                    workspace_url=kwargs.get("workspace_url"),
-                    token=kwargs.get("token"),
                     **databricks_kwargs,
                 )
                 return storage
@@ -539,6 +539,20 @@ create_experiment_tracker = ExperimentTrackerFactory.from_context
 create_model_registry = ModelRegistryFactory.from_context
 
 
+def _promotion_policy_of(context: Any) -> Optional[Any]:
+    """``settings.mlops.promotion_policy`` as a ``PromotionPolicy`` (validated at load)."""
+    from ducta.mlrun.model_registry import PromotionPolicy
+
+    gs = getattr(context, "global_config", None) or {}
+    try:
+        return PromotionPolicy.from_settings(gs.get("mlops") if isinstance(gs, dict) else None)
+    except ValueError as e:
+        # The project loader refuses such a policy; a context built another way is
+        # told, and persist_model warns that its promotion has no gate.
+        logger.error("{}; promotions from the training node are not gated", e)
+        return None
+
+
 class MLOpsContext:
     """
     Centralized MLOps context for managing Model Registry and Experiment Tracking.
@@ -551,6 +565,7 @@ class MLOpsContext:
         model_registry: Optional[ModelRegistry] = None,
         experiment_tracker: Optional[ExperimentTracker] = None,
         config: Optional[MLOpsConfig] = None,
+        promotion_policy: Optional[Any] = None,
     ):
         """
         Initialize MLOps context.
@@ -558,6 +573,9 @@ class MLOpsContext:
         self.model_registry = model_registry
         self.experiment_tracker = experiment_tracker
         self.config = config
+        #: ``settings.mlops.promotion_policy`` (a ``PromotionPolicy``), or None: what a
+        #: node's ``persist_model(promote="production")`` must pass.
+        self.promotion_policy = promotion_policy
 
         logger.info("MLOpsContext initialized")
 
@@ -714,6 +732,7 @@ class MLOpsContext:
             model_registry=model_registry,
             experiment_tracker=experiment_tracker,
             config=self_config,
+            promotion_policy=_promotion_policy_of(context),
         )
 
     @classmethod

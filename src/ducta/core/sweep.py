@@ -113,6 +113,14 @@ def new_search_id() -> str:
     return _new_id("search")
 
 
+def _score_keys(metric: str) -> List[str]:
+    """Where a trial's score is read: ``val_<metric>`` first, then ``<metric>``."""
+    from ducta.mlrun.search import validation_metric_name
+
+    preferred = validation_metric_name(metric)
+    return [preferred] if preferred == metric else [preferred, metric]
+
+
 def run_search(
     strategy: Any,
     metric: str,
@@ -143,8 +151,12 @@ def run_search(
                 reason = f"blocked by quality gate: {', '.join(sorted(gate_blocked))}"
             else:
                 metrics = getattr(result, "metrics", None) or {}
-                if metric in metrics:
-                    score = float(metrics[metric])
+                # The validation score first (train_with_search logs it as
+                # val_<metric>, apart from the held-out metrics); a node of its own
+                # may log the objective under its exact name.
+                found = next((k for k in _score_keys(metric) if k in metrics), None)
+                if found is not None:
+                    score = float(metrics[found])
                 else:
                     failed = True
                     reason = (

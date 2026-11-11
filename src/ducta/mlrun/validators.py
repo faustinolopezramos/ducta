@@ -202,17 +202,6 @@ class MetricValidator:
             validated[key] = MetricValidator.validate_metric_value(key, value)
         return validated
 
-    @staticmethod
-    def validate_step(step: Any) -> int:
-        """Validate step value"""
-        if not isinstance(step, int):
-            raise ValidationError(f"Step must be integer, got {type(step).__name__}")
-
-        if step < 0:
-            raise ValidationError(f"Step must be non-negative, got {step}")
-
-        return step
-
 
 class ParameterValidator:
     """Validator for hyperparameters"""
@@ -375,12 +364,6 @@ class FrameworkValidator:
             )
 
         return framework_lower
-
-    @staticmethod
-    def add_supported_framework(framework: str):
-        """Add a new supported framework"""
-        with FrameworkValidator._frameworks_lock:
-            FrameworkValidator.SUPPORTED_FRAMEWORKS.add(framework.lower())
 
 
 # Convenience functions

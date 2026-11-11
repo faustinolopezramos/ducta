@@ -29,38 +29,17 @@ certificate run id to *result.json*; exits non-zero when the run fails.
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 
 def main(argv: list) -> int:
-    from ducta.api.execution.runner import (
-        RunSpec,
-        _dispatch_pipeline_type,
-        _resolve_execution_context,
-        normalize_execution_context_paths,
-        redirect_to_scratch,
-        select_execution_cwd,
-    )
+    from ducta.api.execution.child import prepare
+    from ducta.api.execution.runner import _dispatch_pipeline_type
 
     raw = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
     result_path = Path(argv[2])
-    spec = RunSpec(**{**raw, "source_path": Path(raw["source_path"]), "debug": False})
-    source_path = spec.source_path
-    if str(source_path) not in sys.path:
-        sys.path.insert(0, str(source_path))
-    ctx, env_dir = _resolve_execution_context(source_path, spec.env, spec.pipeline_name, None)
-    gs = getattr(ctx, "global_config", None)
-    if isinstance(gs, dict):
-        gs["pipeline_name"] = spec.pipeline_name
-        if spec.project_id:
-            gs["project_id"] = spec.project_id
-    cwd = select_execution_cwd(source_path, env_dir, ctx)
-    os.chdir(cwd)
-    normalize_execution_context_paths(ctx, cwd)
-    if spec.sample_rows:
-        redirect_to_scratch(ctx, spec.env, int(spec.sample_rows))
+    spec, ctx = prepare(raw)
 
     from ducta.console.ux.reporter import ConsoleReporter
     from ducta.core.executors import PipelineExecutor
@@ -86,6 +65,7 @@ def main(argv: list) -> int:
                     "outcome": outcome,
                     "error": error,
                     "certificate_run_id": getattr(ctx, "_run_id", None),
+                    "retrain": getattr(ctx, "_retrain", None),
                 },
                 default=str,
             ),

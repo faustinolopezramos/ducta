@@ -116,7 +116,7 @@ COMMAND_GROUPS = (
         "MLOps",
         (
             ("experiment", "List and compare tracked experiments and runs"),
-            ("model", "Promote and clean up registered models"),
+            ("model", "List, show, promote and clean up registered models"),
         ),
     ),
     (
@@ -1058,16 +1058,42 @@ class UnifiedArgumentParser:
         UnifiedArgumentParser._add_output_format_arg(
             cmp_p, "Output format: a text table or JSON (default: rich)"
         )
+        cmp_p.add_argument(
+            "--all",
+            action="store_true",
+            dest="show_internal",
+            help="Also the parameters Ducta records itself (_code_hash, _environment_snapshot …)",
+        )
 
     @staticmethod
     def _add_model_subcommand(subparsers):
         mod_parser = subparsers.add_parser(
             "model",
             help="Manage MLOps model registry",
-            description="Promote, garbage collect, and manage registered models",
+            description="List, show, promote and garbage collect registered models",
         )
         mod_sub = mod_parser.add_subparsers(
             dest="model_command", help="Model commands", required=True
+        )
+
+        list_p = mod_sub.add_parser("list", help="List registered models, versions and stages")
+        UnifiedArgumentParser._add_mlops_resolution_args(
+            list_p,
+            pipeline_help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+            "storage path, as a run does when no global 'mlops_path' is set.",
+        )
+
+        show_p = mod_sub.add_parser(
+            "show", help="Show one model version: stage, metrics, schema and lineage"
+        )
+        show_p.add_argument("name", help="Model name")
+        show_p.add_argument(
+            "--version", help="Model version (3 or v3); the newest when omitted", default=None
+        )
+        UnifiedArgumentParser._add_mlops_resolution_args(
+            show_p,
+            pipeline_help="Pipeline name (schema.pipeline) to resolve a per-pipeline "
+            "storage path, as a run does when no global 'mlops_path' is set.",
         )
 
         prom_p = mod_sub.add_parser("promote", help="Promote a model version to a new stage")

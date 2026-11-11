@@ -20,6 +20,7 @@ import { ProofLadder, type ReproduceState } from "../../components/Certificate/P
 import { CopyButton } from "../../components/Certificate/CopyButton";
 import { CertificateDiffView } from "../../components/Certificate/CertificateDiffView";
 import {
+  CertificateOrigin,
   MLSection,
   NodesSection,
   DatasetsSection,
@@ -156,6 +157,7 @@ export function CertificateDetailPage() {
             </span>
           </div>
 
+          <CertificateOrigin cert={cert} projectId={projectId} />
           {cert.error && <div className="cert-detail__error">{cert.error}</div>}
           {cert.evidence_complete === false && (
             <div className="cert-detail__evidence-gap">

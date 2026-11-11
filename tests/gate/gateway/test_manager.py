@@ -336,9 +336,16 @@ class TestEnvFileOnlyYieldsCredentials:
         with pytest.raises(ValueError, match="Missing credentials"):
             self._connect(project)
 
-    def test_a_real_environment_variable_still_wins(self, project):
-        connector, _ = self._connect(project, {"CRM_PASSWORD": "from-the-environment"})
-        assert (connector.username, connector.password) == ("alice", "from-the-environment")
+    def test_a_real_environment_pair_still_wins(self, project):
+        connector, _ = self._connect(
+            project, {"CRM_USER": "bob", "CRM_PASSWORD": "from-the-environment"}
+        )
+        assert (connector.username, connector.password) == ("bob", "from-the-environment")
+
+    def test_half_a_pair_in_the_environment_is_refused(self, project):
+        """The .env's user with the environment's password: never mixed (see credentials)."""
+        with pytest.raises(ValueError, match="its pair is in"):
+            self._connect(project, {"CRM_PASSWORD": "from-the-environment"})
 
     def test_an_env_file_outside_the_project_is_not_read(self, project, tmp_path):
         """The parent folder's and the home folder's ``.env`` belong to something else."""

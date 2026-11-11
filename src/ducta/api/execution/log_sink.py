@@ -27,7 +27,7 @@ from ducta.api.execution.context import execution_id_var, node_id_var
 from ducta.api.execution.output_capture import node_status_re
 from ducta.api.models.execution import LogEntry
 
-__all__ = ["make_log_filter", "make_log_sink"]
+__all__ = ["log_entry", "make_log_filter", "make_log_sink"]
 
 _internal_logger = logging.getLogger("ducta.api.execution.log_sink")
 
@@ -37,6 +37,21 @@ _SERVER_LOGGERS = ("ducta.api.middleware",)
 
 def _current_execution_id(get_active_id: Any) -> Optional[str]:  # noqa: ANN001
     return execution_id_var.get() or get_active_id()
+
+
+def log_entry(timestamp: Any, level: str, message: str, node_id: Optional[str]) -> LogEntry:
+    """One structured run-log row: a ``[node_status]`` line, or a message tagged with its node.
+
+    Shared by the in-process sink below and the reader of a run in its own
+    process (``child_runner``), so both give the UI the same rows.
+    """
+    entry = LogEntry(timestamp=timestamp, level=level, message=message)
+    m = node_status_re.match(message)
+    if m:
+        entry.extra.update({"type": "node_status", "node_id": m.group(1), "status": m.group(2)})
+    elif node_id:
+        entry.extra["node_id"] = node_id
+    return entry
 
 
 def make_log_filter(get_active_id: Any, log_manager: Any):  # noqa: ANN001
@@ -76,25 +91,7 @@ def make_log_sink(get_active_id: Any, log_manager: Any, on_append: Any = None): 
         # contain arbitrary formatting we can't structure) still opts into
         # `render: "cli"` itself in manager_streaming.py; this sink no longer
         # does it on that path's behalf.
-        entry = LogEntry(
-            timestamp=record["time"],
-            level=record["level"].name,
-            message=msg,
-        )
-
-        m = node_status_re.match(msg)
-        if m:
-            entry.extra.update(
-                {
-                    "type": "node_status",
-                    "node_id": m.group(1),
-                    "status": m.group(2),
-                }
-            )
-        else:
-            node_id = node_id_var.get()
-            if node_id:
-                entry.extra["node_id"] = node_id
+        entry = log_entry(record["time"], record["level"].name, msg, node_id_var.get())
 
         near_capacity = log_manager.append_log(exec_id, entry)
         if on_append is not None:

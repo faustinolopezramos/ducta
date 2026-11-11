@@ -13,6 +13,34 @@ headline of everything else; `git log` has the detail.
 
 ### Added
 
+- **Model registry in the web UI**: each model is filed under the version in Production, with
+  the latest version and the policy's refusal beside it; the promotion dialog checks the policy
+  first (`GET /api/mlops/models/{name}/versions/{version}/promotion-check`) and says which nodes
+  will serve the new version; each version links to the run (and certificate) that trained it;
+  a model's *History* is its audit log (`GET /api/mlops/models/{name}/history`); the GC lists the
+  versions it removes. A certificate says what started its run (`triggered_by`,
+  `reproduction_of`) and which versions its training node registered; a run's page shows its
+  retrain (`retrain` on the execution record).
+
+- **Retraining on drift**: a scoring pipeline's `retrain: {run: train, when: [prediction_drift],
+  cooldown: 1d}` makes Ducta run the training pipeline after a run in which one of those checks
+  failed (also when the gate blocked it), at most once per `cooldown` (a refused or failed
+  retrain counts), never from a reproduction, a sample run or a sweep/search trial. The training
+  run's certificate says what started it (`triggered_by`, certificate schema 1.10); `ducta start`
+  reports it and exits non-zero when the retrain did not succeed; `PipelineRunResult.retrain`
+  (and `to_dict()`) carries it.
+- **Promotion from the training node through the policy**: `persist_model(..., promote="production")`
+  and `train_with_search(..., promote=…)` promote through `settings.mlops.promotion_policy`; a
+  refused candidate stays in staging (`promotion_refused`), a sweep/search trial is registered
+  and never promoted. The run certificate names the versions a node registered
+  (`nodes[].ml.registered`).
+- **`ducta model list` and `ducta model show NAME [--version N]`**: the registry's models,
+  versions and stages, and one version's metrics, schema, library versions and lineage.
+- **CI for ML projects**: `ml_basic` and `ml_scoring` write `.github/workflows/ml.yml` (check,
+  node tests, train through the promotion gate, score, keep the certificates) and a `staging`
+  environment. `ml_basic` ships a `hyperparams.yaml` so `--search` works as generated.
+- A `--sweep` names its best run when it has a metric to rank by (`--search-metric` or the
+  `hyperparams_config` objective); `experiment compare --all` shows Ducta's own parameters.
 - **Streaming nodes can merge, quarantine and check every micro-batch**: `stream.output.mode:
   merge` upserts into a Delta sink, `stream.quarantine.reject_when` sets rows aside, and a
   node's `quality:` block now runs on every batch (it used to be ignored).
@@ -39,6 +67,19 @@ headline of everything else; `git log` has the detail.
 - **The UI database is backed up before a migration** (SQLite: `<file>.bak-<revision>`).
 
 ### Changed (breaking)
+
+- **An overwrite no longer changes a Delta table's schema by itself**: `write.overwrite_schema`
+  is now `false` by default, and an overwrite whose columns differ from the table's (one
+  missing, added or retyped) fails and writes nothing. A missing column used to be kept as
+  nulls with the run reporting success. Set `write: {overwrite_schema: true}` where the new
+  schema is intended (Unity Catalog outputs too).
+- **0 rows no longer empty a dataset**: a node that produced no rows fails instead of
+  overwriting a dataset that holds data, unless the dataset sets `write: {allow_empty: true}`.
+  A dataset that holds nothing yet is still written.
+- **`certify verify --reproduce` (and the web's Reproduce) no longer rewrites the real
+  datasets**: the reproduction writes under `<output>/<env>/.ducta/reproduce/<run_id>/` and
+  runs over the dates the original run used. Certificates (schema 1.9) record them as
+  `run_window`; a reproduction's certificate says `reproduction_of`.
 
 - **A run no longer copies its certificate to `~/.ducta/storage`** unless a StorageBackend is
   configured (`DUCTA_STORAGE_PATH`, or `DUCTA_STORAGE_BACKEND=s3`). The copy was made on every
@@ -74,9 +115,58 @@ headline of everything else; `git log` has the detail.
   `mlrun.mlflow` helpers, `api.core.file_watcher`, the `watchdog` dependency, and about 60
   other methods nothing called. `checkpointLocation` in a stream's `output.options` is
   rejected (use `streaming.checkpoint_location`).
+- **Removed methods nothing called** (no caller in Ducta, its tests or docs):
+  `QualityReportSerializer.to_pandas_dataframe`/`to_json_lines`,
+  `GateResultSerializer.to_json_string`/`to_pandas_dataframe`,
+  `MLOpsAutoConfigurator.get_logging_strategy`, `MLOpsException.with_context`,
+  `ExperimentTracker.run_context`, `MLflowConfig.from_yaml`,
+  `StorageBackendRegistry.list_available`, `StorageBackend.list_paths` (and its two
+  implementations), `MetricValidator.validate_step` and
+  `FrameworkValidator.add_supported_framework`.
+- **A model registration that fails fails the training node.** `persist_model` (and so
+  `train_with_search(name=…)`) used to warn and save a pickle under `./models`, and the node
+  succeeded: the registry never got the model and serving kept the previous Production
+  version. The local copy is now only for projects without a registry, and a model name
+  follows the registry's rule (letters, digits, `_`, `-`, `.`) in both cases.
+- **A search's cross-validated score is logged as `val_<metric>`** (`val_f1`,
+  `val_roc_auc`), no longer under the bare objective name; `--sweep`/`--search` read
+  `val_<metric>` first, then the bare name. With an objective that is also a held-out
+  metric (`f1`, `accuracy`, `precision`, `recall`, `r2`), the held-out value used to win, so
+  `--search` picked hyperparameters on the test set.
+- **Dataset fingerprints bind each value to its column name** (algorithms
+  `pandas-sha256/v3`, `xxhash64-multiset/v3`, `sha256-multiset/v4`, `spark-minhash/v4`):
+  swapping the names of two same-typed columns left the fingerprint unchanged. Fingerprints
+  in earlier certificates are reported as "not comparable" (algorithm differs), not as
+  changed.
+
+- **`settings.mlops.promotion_policy` is validated when the project loads**: a misspelled key
+  (`min_detla`) or an unknown `compare_to` is an error; it used to be dropped and the gate ran
+  without it. The `ml_scoring` template promotes through the policy instead of in node code,
+  and its train run fails when the new model stays in staging (the drift reference is kept).
+- `experiment compare` leaves out Ducta's own parameters (`_code_hash`,
+  `_environment_snapshot`, the fingerprints) unless `--all`: one of them made rows 11,000
+  characters wide.
 
 ### Security
 
+- **A project can no longer read the server's secrets through an alert or a connection.**
+  An alert's `url_env`/`webhook_env` named any environment variable, and a test alert's
+  error quoted its value: whoever could edit the project's alerts (the `developer` role)
+  read `JWT_SECRET_KEY` and could sign an admin's session. A connection's
+  `<NAME>_USER`/`<NAME>_PASSWORD` were taken one by one from the environment or the
+  project's `.env`: a connection named `ducta_admin` used the server's
+  `DUCTA_ADMIN_PASSWORD` against a host of its choosing. The server's own secrets
+  (`ducta.server_secrets`) are refused in both places, alert errors never quote a value,
+  and a connection's user and password must come together, from the environment or from
+  the `.env` (half in each is an error that says which). Runs' processes also lose the
+  SMTP credentials and the Redis URLs.
+- `PUT /api/git/config` refuses a name or e-mail with control characters (a line break
+  could add a section to `.git/config`), whatever GitPython version is installed.
+- **`certify verify --reproduce` empties only its own folder.** The run id it cleared
+  `.ducta/reproduce/<id>` with came from the certificate's JSON, which an unsigned
+  certificate does not protect: an id such as `/home/me` or `../../..` deleted that folder
+  instead. An id that is not a plain name, or a folder outside `.ducta/reproduce`, is now
+  refused before anything is deleted (the API's reproduce runs share the fix).
 - **The API answers only to the host names it should** (DNS rebinding): a request whose
   `Host` is not `localhost`, `127.0.0.1`, `::1`, the bound address or one in the new
   `ALLOWED_HOSTS` gets a 400 (WebSocket handshakes included). A web page could otherwise
@@ -92,9 +182,10 @@ headline of everything else; `git log` has the detail.
   `frame-ancestors` differs by environment.
 - **UI dependencies**: dompurify 3.4.17 (critical advisory, via monaco-editor), zod 4.6.7
   and follow-redirects 1.16.2.
-- **The `developer` role is documented for what it grants**: pipelines run inside the API
-  process, so code a developer runs can read `JWT_SECRET_KEY`. The server says so at startup
-  when authentication is on (`docs/server_api.rst`, `SECURITY.md`).
+- **The `developer` role is documented for what it grants**: with `RUN_ISOLATION=thread`,
+  pipelines run inside the API process, so code a developer runs can read `JWT_SECRET_KEY`
+  (see "Runs in their own process" below). The server says which applies at startup when
+  authentication is on (`docs/server_api.rst`, `SECURITY.md`).
 - **The AI features mask more keys in a failed run's error**: OpenAI/Anthropic (`sk-`), AWS
   access key ids, GitHub, Slack and Databricks (`dapi…`) tokens and private-key blocks were
   masked in code but not in the error text sent to the model.
@@ -111,13 +202,54 @@ headline of everything else; `git log` has the detail.
 - **A connection's `host` and `database` can no longer add parameters to the JDBC URL.**
 - **No secrets in logs** (option and setting values are logged by name), and `env` cannot
   point outside the output folder.
+- **Runs in their own process** (`RUN_ISOLATION=process`, the default once `AUTH_ENABLED=true`;
+  `auto` keeps in-process runs for a personal `ducta ui`). A run's code can no longer read the
+  server's memory — its settings, `JWT_SECRET_KEY` — and its environment carries none of
+  `JWT_SECRET_KEY`, `DUCTA_ADMIN_PASSWORD`, `DATABASE_URL`; on Linux the server also closes
+  `/proc/<pid>/environ` to it (`PR_SET_DUMPABLE`). Logs, node status, data breakpoints, the live
+  streaming status, restarting a stream's node, certificates and error diagnosis work as before.
+  Cancelling or a timeout now stops the run's process and its Spark JVM, which a thread could not;
+  runs of different pipelines go in parallel up to `MAX_CONCURRENT_EXECUTIONS` (runs of one
+  pipeline still wait for each other). Each run starts its own Spark. Not a sandbox: a run is the
+  server's OS user and can read the files it can (see SECURITY.md).
 
 ### Fixed
 
+- **The registry's audit log names who did it**: a promotion from the web UI was recorded as the
+  server's operating-system user with no reason; it is now the signed-in user, and a forced
+  promotion requires a reason. Deleting a version (also by `gc`) and a promotion the policy
+  refused are now audit-logged too.
+- **Deleting the version in Production from the web UI** asked to type the version and then
+  always failed (the registry protects it); the button is now disabled with the way out.
+- **A scoring run that retrained linked the training run's certificate** in the web UI: the
+  training run left its own run id on the shared context. The scoring run's id is put back.
+
+- **`run_in_process: true` nodes work**: the worker read the same flag and tried to start a
+  worker of its own ("daemonic processes are not allowed to have children"), so every such node
+  failed. Its evidence now reaches the run certificate (input/output fingerprints, code hash,
+  quality results, `nodes[].ml`), so it can be reproduced and its failed checks trigger
+  `retrain:`; a tracked run's worker registers and promotes in the run's registry instead of
+  writing a local pickle; and in a `--reproduce` or a sample run the worker uses the scratch
+  registry and the pinned model versions, as an in-process node does.
+- **`persist_model(promote=…)` checks the stage before registering**: a misspelled one left a
+  version registered and failed the node.
+- **A sample run's nodes read the datasets the run wrote**, not the real ones: a downstream
+  node read the real intermediate dataset (or was skipped when there was none). A single node
+  of a sample run still reads its real upstream.
+- **A node with several outputs checks they are all writable before writing any**; a write
+  that still fails halfway is listed in the certificate's evidence gaps (`partial write`).
+- **A server run from a source tree runs its runs' processes with the same Ducta**
+  (`RUN_ISOLATION=process` started whatever Ducta the interpreter had installed, or none).
+
 - **`PUT /api/nodes/{name}` accepts a node exactly as `GET` returned it**: the read side
   turns `input`/`output` into `inputs`/`outputs` lists for the UI, and saving that back
-  was refused ("key 'inputs' is not a node setting Ducta reads"). The quality block is
-  still written back in its long form, so comments inside it are lost.
+  was refused ("key 'inputs' is not a node setting Ducta reads"). A `quality` or
+  `input_checks` block sent back with the same meaning now keeps the form it was written
+  in (`empty_dataset: true`, checks listed inline) and its comments; before, it was
+  rewritten in its long form (`checks: {empty_dataset: {}}`) and the comments were lost.
+- **UI dev dependencies**: vitest 2 → 4.1.12 and scoped overrides for glob, minimatch and
+  uuid (under Storybook and typescript-eslint); `npm audit` reports 0 vulnerabilities,
+  dev tooling included.
 
 - **Declarative ingestion from Oracle**: the statement Ducta composes for `columns`, `where` or
   `incremental` aliased its subquery `AS q`, which Oracle refuses; the alias no longer has
@@ -164,6 +296,44 @@ headline of everything else; `git log` has the detail.
   `ducta.setting` fixed data-loss and false-pass cases: an unreadable quality history, a model
   registration swallowed while the node reported success, a dead lock owner blocking runs,
   a driver JAR used without checking its `sha256`, and trailing newlines accepted in names.
+- **A hybrid pipeline that does not validate says why**: the run failed with "Hybrid pipeline
+  validation failed" alone; the error now lists every reason (a batch node waiting on a stream,
+  incompatible formats, a missing checkpoint…), and the warnings are logged.
+- **`quality.output.global_summary: true` writes the run's quality summary**: the switch was
+  validated and then ignored. The summary goes next to the quality reports
+  (`<quality>/global_summary/<pipeline>/<run_id>.json`), one file per run, instead of
+  `./.quality/global_summary` in the working directory. A chain's next pipeline no longer
+  lists the previous one's quality reports (in the summary or in the certificate).
+- **The Databricks experiment store honours `append` when it falls back to its local cache**:
+  an append replaced the cached rows with the new ones (`ignore` and `error` now apply too).
+- **A temporal split keeps one instant on one side**: rows sharing the boundary's time were
+  split between train and test on pandas (Spark already cut by value). Rows without a time
+  (null, or not a time) now stop the split with their count instead of all going to test.
+- **A mistyped `search_space` entry is an error**: `{min: 1, maximum: 10}` was searched over
+  its key names, and a string over its letters. An entry is a list of values, a
+  `{min, max[, step, log]}` range or a `depends_on` condition.
+- **Bayesian search tells Optuna about every trial**, even when it proposes the same values
+  twice (the first one stayed RUNNING in the study).
+- **The API refuses a Production promotion when `mlops.promotion_policy` is invalid** (or names
+  no metric), unless forced, as `ducta model promote` does; it used to promote without the
+  gate. The Databricks experiment store says it ignores `workspace_url`/`token` (it
+  authenticates through the Spark session), and a Spark ML model's class must come from
+  `pyspark.ml` itself or a package below it.
+- **The web app no longer sends a POST again after a client timeout**: a quality run, a
+  git commit/push/pull, an AI job or a draft's apply that took over 30 seconds was sent up
+  to three more times while the server was still running the first. Only reads are
+  retried after a timeout; a 429 is still retried for any request.
+- **`--reproduce` no longer changes the model registry**: reproducing a training run
+  registered a new version and promoted it to production (and opened a tracking run). A
+  reproduction's — and a sample run's — registry and tracker now go to a scratch store, and a
+  serving node reads the real registry, at the version the reproduced run used (not today's
+  production).
+- `ducta check` no longer logs a made-up `dataset_size=10000` next to the split it validates.
+- A random search no longer proposes the same values twice while new ones remain (with the
+  templates' seed, two of six trials were repeats).
+- **`WriteMode` is one class**, shared by `ducta.gate` and `ducta.setting`, and `str()` of a
+  member is its value (`"merge"`). The two copies differed (a plain `Enum` and a `str` one), and
+  a mode handed from one side to the other read as `WriteMode.MERGE`.
 
 ### Dependencies
 

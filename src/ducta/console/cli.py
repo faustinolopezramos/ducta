@@ -422,15 +422,30 @@ class UnifiedCLI:
                 parsed_args.run_ids,
                 parsed_args.storage_path,
                 output_format=output_format,
+                show_internal=getattr(parsed_args, "show_internal", False),
                 **where,
             )
         logger.error("Unknown experiment command: {}", cmd)
         return ExitCode.GENERAL_ERROR.value
 
     def _handle_model_command(self, parsed_args: argparse.Namespace) -> int:
-        from ducta.console.mlops_commands import model_gc, model_promote
+        from ducta.console.mlops_commands import model_gc, model_list, model_promote, model_show
 
         cmd = getattr(parsed_args, "model_command", None)
+        if cmd == "list":
+            return model_list(
+                parsed_args.storage_path,
+                env=getattr(parsed_args, "env", None),
+                pipeline_name=getattr(parsed_args, "pipeline", None),
+            )
+        if cmd == "show":
+            return model_show(
+                parsed_args.name,
+                getattr(parsed_args, "version", None),
+                parsed_args.storage_path,
+                env=getattr(parsed_args, "env", None),
+                pipeline_name=getattr(parsed_args, "pipeline", None),
+            )
         if cmd == "promote":
             return model_promote(
                 parsed_args.name,

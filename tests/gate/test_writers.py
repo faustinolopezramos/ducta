@@ -94,19 +94,13 @@ class TestWriteConfiguration:
         with pytest.raises(ConfigurationError, match="only for format 'delta'"):
             _writer()._determine_write_mode({"write_mode": "merge"})
 
-    @pytest.mark.parametrize(
-        "cls, fmt, expected",
-        [
-            (DeltaWriter, "delta", True),
-            (ParquetWriter, "parquet", False),
-            (CSVWriter, "csv", False),
-        ],
-    )
-    def test_overwrite_schema_defaults_on_for_delta_only(self, cls, fmt, expected):
+    @pytest.mark.parametrize("cls", [DeltaWriter, ParquetWriter, CSVWriter])
+    def test_overwrite_schema_is_off_unless_asked_for(self, cls):
+        # Replacing a Delta table's schema is the dataset's decision
+        # (`write.overwrite_schema: true`), not a side effect of every overwrite.
         writer = MagicMock()
         _writer(cls)._apply_overwrite_and_replacewhere(writer, {}, "overwrite")
-        applied = call("overwriteSchema", "true") in writer.option.call_args_list
-        assert applied is expected
+        assert call("overwriteSchema", "true") not in writer.option.call_args_list
 
     @pytest.mark.parametrize(
         "cls, supported", [(DeltaWriter, True), (ParquetWriter, True), (CSVWriter, False)]

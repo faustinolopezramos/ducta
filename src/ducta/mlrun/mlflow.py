@@ -169,16 +169,6 @@ class MLflowConfig:
         )
 
     @classmethod
-    def from_yaml(cls, config_path: str) -> "MLflowConfig":
-        """Load configuration from YAML file."""
-        import yaml
-
-        with open(config_path, encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-
-        return cls.from_dict(data.get("mlflow", {}))
-
-    @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "MLflowConfig":
         """Create configuration from dictionary."""
         return cls(

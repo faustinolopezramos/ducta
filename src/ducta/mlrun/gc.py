@@ -60,12 +60,14 @@ class ModelGarbageCollector:
             return False
         return (now - created) < timedelta(days=self.model_retention_days)
 
-    def run(self, dry_run: bool = False) -> Dict[str, Any]:
-        """Run garbage collection process."""
+    def run(self, dry_run: bool = False, user: Optional[str] = None) -> Dict[str, Any]:
+        """Run garbage collection process; *user* is recorded in the registry's audit log."""
         stats: Dict[str, Any] = {
             "models_processed": 0,
             "versions_removed": 0,
             "bytes_freed": 0,
+            # Which versions: a count alone could not be checked before running it.
+            "versions": [],
         }
 
         try:
@@ -105,7 +107,9 @@ class ModelGarbageCollector:
                         )
                     else:
                         try:
-                            self.registry.delete_model_version(name, version_number)
+                            self.registry.delete_model_version(
+                                name, version_number, user=user, reason="gc"
+                            )
                             logger.info(f"Deleted old model version {name} v{version_number}")
                         except ProtectedVersionError:
                             logger.info(
@@ -115,6 +119,9 @@ class ModelGarbageCollector:
                             continue
 
                     stats["versions_removed"] += 1
+                    stats["versions"].append(
+                        {"name": name, "version": version_number, "created_at": v.get("created_at")}
+                    )
                     stats["bytes_freed"] += size_bytes
 
             except Exception as e:

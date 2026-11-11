@@ -67,7 +67,8 @@ Stored at `<paths.output>/<env>/.ducta/runs/<run_id>/certificate.json`.
 ducta certify list --env dev
 ducta certify show --run-id 3f9a            # a unique prefix is enough; --json for raw
 ducta certify verify --run-id 3f9a          # tamper check (and signature if signed)
-ducta certify verify --run-id 3f9a --reproduce --start-date 2026-01-01 --end-date 2026-01-31
+ducta certify verify --run-id 3f9a --reproduce   # over the run's own dates; writes only
+                                                # to <output>/<env>/.ducta/reproduce/<id>
 ducta certify diff RUN_A RUN_B              # what changed: config, outputs, quality, models
 ```
 

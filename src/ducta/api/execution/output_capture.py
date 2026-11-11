@@ -157,16 +157,17 @@ class ProcessOutputCapture:
             self._append_line(pending.rstrip("\r\n"))
 
     def _append_line(self, line: str) -> None:
-        clean = strip_ansi(line)
-        if looks_like_loguru_serialized(clean) or is_server_access_log(clean):
-            return
+        append_output_line(self.manager, self.execution_id, line)
 
-        # `clean` (ANSI-stripped) was only ever used to classify the line —
-        # the raw line, ANSI codes and all, was what actually got persisted
-        # to logs.jsonl/returned by the API, leaking terminal escape
-        # sequences into any consumer that isn't itself a terminal.
-        self.manager._append_process_output(
-            self.execution_id,
-            clean,
-            level=infer_process_output_level(clean),
-        )
+
+def append_output_line(manager: Any, execution_id: str, line: str) -> None:
+    """Add one line a run printed to its log (this process's output, or a run's own)."""
+    clean = strip_ansi(line)
+    if looks_like_loguru_serialized(clean) or is_server_access_log(clean):
+        return
+
+    # `clean` (ANSI-stripped) was only ever used to classify the line —
+    # the raw line, ANSI codes and all, was what actually got persisted
+    # to logs.jsonl/returned by the API, leaking terminal escape
+    # sequences into any consumer that isn't itself a terminal.
+    manager._append_process_output(execution_id, clean, level=infer_process_output_level(clean))

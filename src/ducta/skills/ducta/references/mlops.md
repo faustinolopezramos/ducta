@@ -111,12 +111,17 @@ What each option does (`ducta start --help` keeps them to one line):
   product; one run per combination, all tagged with one `sweep_id`.
 - `--search`: a real strategy from `hyperparams_config` instead of that flat product.
   Each trial's objective value is fed back, so Bayesian search learns between trials.
+  The value read is `val_<metric>` (the CV score `train_with_search` logs), else the bare
+  metric name; held-out metrics (`f1`, `accuracy`…) keep their names and are never read.
   Each trial is a whole run with its values as `--hyperparams`; `train_with_search` fits
   exactly those values (it searches only what the run left free). `hyperparams_config` is a
   key in the file at `hyperparams_config_path` (or `{path, key}`), never the search itself.
   `--search-metric` overrides `objective.metric`; `--search-trials` overrides `n_trials`.
-- By default the trial-invariant upstream nodes run once and are reused;
-  `--no-sweep-reuse` recomputes them on every trial.
+- By default the upstream *pipelines* (`depends_on`) run once and are reused;
+  `--no-sweep-reuse` recomputes them on every trial. The nodes of the trial's own pipeline
+  run every trial: put slow feature preparation in a pipeline of its own.
+- A sweep ends naming its best run when it has a metric (`--search-metric`, or the
+  objective of `hyperparams_config`). Trials register their models, never promote them.
 - `--sweep-parallel N` runs N trials at once, each in its own process and output
   directory. It excludes upstream reuse and does not apply to Bayesian search (each
   trial needs the previous result). Use it when training dominates the runtime.
@@ -144,6 +149,13 @@ ducta experiment compare RUN_A RUN_B --env dev --pipeline ml.churn
 ducta model promote churn_model 3 production --env dev --pipeline ml.churn
 ducta model gc --dry-run --env dev --pipeline ml.churn
 ```
+
+`ducta model list` / `ducta model show NAME [--version N]` read the registry (stages,
+metrics, schema, lineage). In code, `persist_model(..., promote="production")` promotes
+through `settings.mlops.promotion_policy` (validated at load); a refused candidate stays
+in staging (`promotion_refused` in the result). A scoring pipeline's
+`retrain: {run: train, when: [prediction_drift], cooldown: 1d}` makes Ducta run the
+training pipeline when those checks fail (not from a reproduction, a sample or a trial).
 
 Pass `--env` and `--pipeline` (or `--storage-path`): without them the commands look in
 `./mlops_data`, rarely where a run wrote. Stages: `staging` (new versions), `production`,

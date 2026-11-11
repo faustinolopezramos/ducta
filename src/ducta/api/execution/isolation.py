@@ -43,10 +43,9 @@ class ModuleIsolationManager:
     process", so every run after the first one that imported it failed). It is
     NOT a security sandbox: node code still runs with the
     server's full privileges, in the server's own process, with access to
-    every module already importable there (including this one). Real
-    isolation would require running each pipeline in its own OS process (or
-    container), which is a separate, larger change — see the execution
-    module's docs for the accepted-risk note on this.
+    every module already importable there (including this one). Only used
+    with ``RUN_ISOLATION=thread``; ``process`` runs each pipeline in its own
+    OS process (see :mod:`ducta.api.execution.child_runner`).
     """
 
     # Built-in/core modules that should never be removed

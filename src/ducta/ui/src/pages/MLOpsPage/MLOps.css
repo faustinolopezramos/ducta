@@ -40,3 +40,35 @@
 .mlops-evidence-raw summary { cursor: pointer; color: var(--text-muted); }
 
 .mlops-nowrap { white-space: nowrap; }
+
+/* Model registry: what is serving, what is waiting, and why it was refused. */
+.mlops-model-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.mlops-mono { font-family: var(--font-mono); }
+.mlops-refusal { color: var(--warning); }
+
+.mlops-promote-check {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 4px 0 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--text);
+}
+.mlops-promote-check--ok { color: var(--success); font-weight: 600; }
+.mlops-promote-check--bad { color: var(--danger); font-weight: 600; }
+
+.mlops-history { margin-top: var(--space-3); font-size: var(--text-xs); }
+.mlops-history summary { cursor: pointer; color: var(--text-muted); }
+.mlops-history ol { margin: 8px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.mlops-history__when { color: var(--text-muted); font-family: var(--font-mono); }
+.mlops-history__refused { color: var(--warning); }
+.mlops-history__empty { margin: 8px 0 0; color: var(--text-muted); }

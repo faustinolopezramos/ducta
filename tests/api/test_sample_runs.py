@@ -63,3 +63,22 @@ def test_everything_a_sample_run_writes_goes_to_the_scratch(tmp_path):
     node = ctx.nodes_config["n"]
     assert node["data_quality"]["quality_gate"] == {"max_errors": 0, "behavior": "warn_only"}
     assert node["sanity_checks"]["inputs"]["raw"]["quality_gate"]["behavior"] == "warn_only"
+
+
+def test_a_reproduction_from_the_api_writes_to_its_own_folder(tmp_path):
+    from ducta.api.execution.runner import RunSpec, redirect_run_writes
+
+    out = tmp_path / "data"
+    ctx = SimpleNamespace(
+        execution_mode="local",
+        output_path=str(out),
+        global_config={"output_path": str(out)},
+        output_config={},
+        input_config={},
+        nodes_config={},
+    )
+    spec = RunSpec(source_path=tmp_path, pipeline_name="etl", env="dev", reproduce_of="r1")
+    redirect_run_writes(ctx, spec)
+    assert ctx.output_path == str(out / "dev" / ".ducta" / "reproduce" / "r1")
+    assert ctx.reproduction_of == "r1"
+    assert getattr(ctx, "sample_rows", None) is None  # every row, unlike a sample

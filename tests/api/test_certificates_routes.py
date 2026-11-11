@@ -197,3 +197,50 @@ class TestMirroredCertificate:
         self._mirror(mirror, env="dev")
 
         assert client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=prod").status_code == 404
+
+
+class TestReproduce:
+    """The web's "Reproduce" re-runs over the run's dates, into a folder of its own."""
+
+    def _start(self, client: TestClient, project: Path, body: dict, window: dict | None):
+        from ducta.api.dependencies import get_execution_manager
+
+        run_dir = _write_certificate(project / "data" / "dev" / ".ducta" / "runs", RUN_ID, "dev")
+        cert = json.loads((run_dir / "certificate.json").read_text())
+        if window:
+            cert["run_window"] = window
+        (run_dir / "certificate.json").write_text(json.dumps(cert))
+        calls: list = []
+
+        class _Manager:
+            def execute(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "id": "e1",
+                    "pipeline_name": kwargs["pipeline_name"],
+                    "user_id": "test-user",
+                    "env": kwargs["env"],
+                    "status": "pending",
+                    "started_at": "2026-11-08T00:00:00+00:00",
+                }
+
+        client.app.dependency_overrides[get_execution_manager] = lambda: _Manager()  # type: ignore[attr-defined]
+        resp = client.post(f"/api/projects/batch/certificates/{RUN_ID}/reproduce", json=body)
+        assert resp.status_code == 202, resp.text
+        return calls[0]
+
+    def test_it_reproduces_into_its_own_folder_over_the_recorded_dates(self, client, project):
+        call = self._start(
+            client, project, {}, {"start_date": "2026-01-01", "end_date": "2026-01-31"}
+        )
+        assert call["reproduce_of"] == RUN_ID
+        assert (call["start_date"], call["end_date"]) == ("2026-01-01", "2026-01-31")
+
+    def test_dates_in_the_body_win(self, client, project):
+        call = self._start(
+            client,
+            project,
+            {"start_date": "2026-02-01", "end_date": "2026-02-28"},
+            {"start_date": "2026-01-01", "end_date": "2026-01-31"},
+        )
+        assert (call["start_date"], call["end_date"]) == ("2026-02-01", "2026-02-28")

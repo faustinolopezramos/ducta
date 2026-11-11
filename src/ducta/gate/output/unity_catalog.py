@@ -34,7 +34,7 @@ from ducta.gate.constants import (
 from ducta.gate.exceptions import ConfigurationError, WriteOperationError
 from ducta.gate.factories import WriterFactory
 from ducta.gate.sql import SqlSafetyMixin, UnityCatalogDDL
-from ducta.gate.writers import vetted_write_options
+from ducta.gate.writers import refuse_schema_change, vetted_write_options
 
 
 @dataclass
@@ -49,7 +49,7 @@ class UnityCatalogConfig:
     vacuum: bool = False
     vacuum_retention_hours: Optional[int] = None
     write_mode: str = WriteMode.OVERWRITE.value
-    overwrite_schema: bool = True
+    overwrite_schema: bool = False
     partition_col: Optional[str] = None
     description: Optional[str] = None
     options: Dict[str, Any] = field(default_factory=dict)
@@ -79,7 +79,7 @@ class UnityCatalogConfig:
             table_name=named(config.get("table_name", parsed_key["table_name"])),
             uc_table_mode=config.get("uc_table_mode", "external"),
             write_mode=config.get("write_mode", WriteMode.OVERWRITE.value),
-            overwrite_schema=config.get("overwrite_schema", True),
+            overwrite_schema=config.get("overwrite_schema", False),
             partition_col=config.get("partition_col"),
             description=config.get("description"),
             optimize=config.get("optimize", True),
@@ -197,6 +197,16 @@ class UnityCatalogManager(BaseIO, SqlSafetyMixin):
     ) -> None:
         """Write as managed UC table."""
         quoted_name = self.quote_table_name(full_table_name)
+        if (
+            str(getattr(config.write_mode, "value", config.write_mode)).lower()
+            == WriteMode.OVERWRITE.value
+        ):
+            refuse_schema_change(
+                self._ctx_spark(),
+                dataframe,
+                full_table_name,
+                {"overwrite_schema": config.overwrite_schema},
+            )
 
         writer = (
             dataframe.write.format("delta")

@@ -53,6 +53,10 @@ class BaseFactory(ABC):
             self._cache_context[format_key] = self.context
         return self._instances[format_key]
 
+    def supports(self, format_name: str) -> bool:
+        """Whether a handler is registered for ``format_name``."""
+        return str(format_name).lower() in self._registry
+
     def register(self, name: str, handler_cls: Any) -> None:
         """Register (or override) a handler class for `name` on this factory instance."""
         key = name.lower()

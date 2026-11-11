@@ -23,7 +23,32 @@ import { formatDuration } from "../../utils/formatDuration";
 import { formatRelative } from "../../utils/timeLabels";
 import { routes } from "../../utils/routes";
 import { toLogEntry } from "../../utils/logEntries";
+import type { RunRetrain } from "../../types/execution";
 import "./RunPage.css";
+
+/** "train · prediction_drift → success", or why no training ran. The training run has
+ *  its own certificate (its `triggered_by` names this run). */
+export function RetrainFact({ retrain, projectId }: { retrain: RunRetrain; projectId: string }) {
+  const why = retrain.checks.join(", ");
+  const outcome = retrain.skipped
+    ? `skipped: ${retrain.skipped}`
+    : retrain.status === "success"
+      ? "completed"
+      : `${retrain.status ?? "failed"}${retrain.error ? `: ${retrain.error}` : ""}`;
+  return (
+    <span className={retrain.skipped || retrain.status === "success" ? undefined : "run-page__retrain-failed"}>
+      <strong>{retrain.pipeline}</strong> · {why} → {outcome}
+      {retrain.run_id && (
+        <>
+          {" "}
+          <Link className="mono" to={routes.certificate(projectId, retrain.run_id)}>
+            {retrain.run_id.slice(0, 8)}
+          </Link>
+        </>
+      )}
+    </span>
+  );
+}
 
 /**
  * `/p/:projectId/runs/:runId` — one run: how it went, why it failed (when it
@@ -174,6 +199,12 @@ export function RunPage() {
           <div>
             <dt>Certificate</dt>
             <dd><Link to={`/workspace/certificates/${projectId}/${run.certificate_run_id}`} className="mono">{run.certificate_run_id.slice(0, 8)}</Link></dd>
+          </div>
+        )}
+        {run.retrain && (
+          <div>
+            <dt>Retrain</dt>
+            <dd><RetrainFact retrain={run.retrain} projectId={projectId} /></dd>
           </div>
         )}
       </dl>

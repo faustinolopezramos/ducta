@@ -108,6 +108,8 @@ class NodeExecutor:
         self._trace_lock = threading.Lock()
         #: Live `run_in_process` worker processes, so shutdown can reap them.
         self._children: Set[Any] = set()
+        #: True in a `run_in_process` worker: the node runs here, not in another worker.
+        self.in_worker = False
         self._ingestion_executor = IngestionExecutor(
             context=context,
             output_writer=self._output_writer,
@@ -145,6 +147,8 @@ class NodeExecutor:
         node_status = "success"
         node_error: Optional[str] = None
         command: Any = None
+        # What a run_in_process worker reports of the node (its ``ml`` evidence).
+        child_evidence: Dict[str, Any] = {}
         resource_manager = get_resource_manager()
         # Every run mode reaches a node through here (the coordinator, `--node`, a
         # worker process), so this is where the node's own split, model_version and
@@ -165,7 +169,7 @@ class NodeExecutor:
 
                 if self._should_run_in_process(node_config):
                     self._run_node_in_subprocess(
-                        node_name, node_config, start_date, end_date, ml_info
+                        node_name, node_config, start_date, end_date, ml_info, child_evidence
                     )
                     logger.info("[node_status] node_id={} status=success", node_name)
                     return
@@ -340,7 +344,7 @@ class NodeExecutor:
                     node_status,
                     duration,
                     node_error,
-                    ml=self._ml_evidence(command, node_name, ml_info),
+                    ml=self._ml_evidence(command, node_name, ml_info) or child_evidence.get("ml"),
                 )
 
     def _execute_with_retries(self, command: Any, node_name: str, retries: int) -> Any:
@@ -470,6 +474,11 @@ class NodeExecutor:
             "model_version": getattr(command, "model_version", None),
             "hyperparams": dict(getattr(command, "merged_hyperparams", None) or {}),
         }
+        registered = getattr(command, "registered_models", None)
+        if callable(registered) and registered():
+            # The versions a training node produced: which model a later run serves
+            # is traceable back to the run that trained it.
+            evidence["registered"] = registered()
         served = getattr(command, "model_ref", None)
         if served is not None:
             # The exact model the node scored with — the version the run pinned,
@@ -480,6 +489,11 @@ class NodeExecutor:
     def _should_run_in_process(self, node_config: Dict[str, Any]) -> bool:
         """Whether this node opts into process isolation for CPU-bound work."""
         if not node_config.get("run_in_process", False):
+            return False
+        if getattr(self, "in_worker", False):
+            # This *is* the node's worker process. It read the same node config and
+            # started a worker of its own, which a daemonic process may not have:
+            # every run_in_process node failed.
             return False
         if not self.settings.env:
             logger.warning(
@@ -502,8 +516,14 @@ class NodeExecutor:
         start_date: Optional[str],
         end_date: Optional[str],
         ml_info: Dict[str, Any],
+        evidence: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Run one node in a worker process; re-raise its failure here."""
+        """Run one node in a worker process; re-raise its failure here.
+
+        *evidence* receives the worker's ``ml`` record of the node (the split it
+        applied, the model it served or registered): the parent's certificate has no
+        command object to read it from.
+        """
         from ducta.check.core import QualityGateBlocked
         from ducta.core.node_worker import (
             OUTCOME_GATE_BLOCKED,
@@ -528,6 +548,12 @@ class NodeExecutor:
 
         logger.debug("Running node '{}' in a worker process (run_in_process)", node_name)
         outcome = self._run_child(node_name, payload)
+        if isinstance(outcome.get("evidence"), dict):
+            self._ledger.adopt_worker_evidence(outcome["evidence"])
+        if evidence is not None:
+            for record in outcome.get("node_trace") or []:
+                if isinstance(record, dict) and record.get("ml"):
+                    evidence["ml"] = record["ml"]
         status = outcome.get("status")
         if status == OUTCOME_SUCCESS:
             return

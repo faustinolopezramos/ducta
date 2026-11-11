@@ -180,8 +180,13 @@ class BaseSparkWriter(BaseIO):
     def _apply_overwrite_and_replacewhere(
         self, writer: Any, config: Dict[str, Any], write_mode: str
     ) -> Any:
-        """Apply overwriteSchema and replaceWhere when appropriate."""
-        overwrite_schema = bool(config.get("overwrite_schema", self.FORMAT == "delta"))
+        """Apply overwriteSchema and replaceWhere when appropriate.
+
+        ``overwrite_schema`` is off unless the dataset asks for it: replacing a Delta
+        table's schema is a decision, not a side effect of an overwrite (see
+        :func:`refuse_schema_change`).
+        """
+        overwrite_schema = bool(config.get("overwrite_schema", False))
         if overwrite_schema and self.FORMAT in ("delta", "parquet"):
             writer = writer.option("overwriteSchema", "true")
             logger.debug("overwriteSchema=true applied")
@@ -278,6 +283,13 @@ class DeltaWriter(BaseSparkWriter):
 
     def write(self, dataframe: Any, destination: str, config: Dict[str, Any]) -> None:
         if config.get("write_mode") != WriteMode.MERGE.value:
+            if self._determine_write_mode(config) == WriteMode.OVERWRITE.value:
+                refuse_schema_change(
+                    getattr(dataframe, "sparkSession", None) or self._ctx_spark(),
+                    dataframe,
+                    destination,
+                    config,
+                )
             super().write(dataframe, destination, config)
             return
         if not destination or not str(destination).strip():
@@ -419,6 +431,62 @@ class DeltaMerge:
                 f"the incoming batch, so the merge is ambiguous — e.g. {shown}. "
                 "Deduplicate the node's output by its merge keys."
             )
+
+
+def _existing_delta_schema(spark: Any, target: str) -> Any:
+    """The schema of the Delta table at *target* (a path or a table name), or None.
+
+    None when there is no table there yet, or it cannot be read: the write then
+    goes ahead and Delta's own checks apply.
+    """
+    if spark is None or not target:
+        return None
+    try:
+        if "/" in target or ":" in target or "\\" in target:
+            from delta.tables import DeltaTable  # type: ignore
+
+            if not DeltaTable.isDeltaTable(spark, target):
+                return None
+            return spark.read.format("delta").load(target).schema
+        if not spark.catalog.tableExists(target):
+            return None
+        return spark.table(target).schema
+    except Exception as error:  # noqa: BLE001
+        logger.debug("Could not read the schema of {}: {}", target, error)
+        return None
+
+
+def _columns(schema: Any) -> Dict[str, str]:
+    # Delta matches columns by name, case-insensitively, and ignores nullability.
+    return {field.name.lower(): field.dataType.simpleString() for field in schema.fields}
+
+
+def refuse_schema_change(spark: Any, dataframe: Any, target: str, config: Dict[str, Any]) -> None:
+    """Refuse an overwrite that would change an existing Delta table's columns.
+
+    Without ``overwriteSchema`` Delta rejects a new column or a changed type, but
+    accepts an output that lacks a column: the table keeps it, filled with nulls,
+    and the run succeeds. With ``overwriteSchema`` every change goes through
+    silently. Both hide a schema change from whoever reads the table, so a change
+    is an error unless the dataset says ``write.overwrite_schema: true``.
+    """
+    if bool(config.get("overwrite_schema", False)):
+        return
+    existing = _existing_delta_schema(spark, target)
+    if existing is None:
+        return
+    from ducta.gate.fingerprinting import diff_schema_columns
+
+    change = diff_schema_columns(_columns(existing), _columns(dataframe.schema))
+    if change is None:
+        return
+    raise WriteOperationError(
+        f"The output's columns differ from the Delta table at {target} ({change}); "
+        "nothing was written. An overwrite keeps the table's schema: a missing column "
+        "would be left as nulls, and a new column or a changed type is rejected. If the "
+        "new schema is intended, set `write: {overwrite_schema: true}` on the dataset; "
+        "otherwise fix the node so it produces the table's columns."
+    )
 
 
 def _quote(column: str) -> str:

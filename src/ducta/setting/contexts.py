@@ -72,6 +72,8 @@ class PipelineManager:
             "type": contents.get("type", "batch"),
             "spark_config": contents.get("spark_config", {}),
             "requires_dates": contents.get("requires_dates", True),
+            # Read by the executor once the run ends (core.executors.facade._maybe_retrain).
+            "retrain": contents.get("retrain"),
         }
 
     def get_pipeline(self, name: str) -> Optional[Dict[str, Any]]:

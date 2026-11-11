@@ -210,7 +210,7 @@ class TestStartupWarnings:
     def messages(self):
         captured: list = []
         logger.enable("ducta")
-        sink = logger.add(lambda m: captured.append(str(m)), level="WARNING")
+        sink = logger.add(lambda m: captured.append(str(m)), level="INFO")
         yield captured
         logger.remove(sink)
         logger.disable("ducta")
@@ -233,10 +233,21 @@ class TestStartupWarnings:
 
         assert not warn_about_in_process_runs(Settings(auth_enabled=False))
         assert messages == []
-        settings = Settings(auth_enabled=False)
+        settings = Settings(auth_enabled=False, run_isolation="thread")
         monkeypatch.setattr(settings, "auth_enabled", True)
         assert warn_about_in_process_runs(settings)
         assert any("JWT_SECRET_KEY" in m and "developer" in m for m in messages)
+
+    def test_runs_in_their_own_process_get_a_different_note(self, messages, monkeypatch):
+        from ducta.api.execution import child_runner
+        from ducta.api.main import warn_about_in_process_runs
+
+        monkeypatch.setattr(child_runner, "protect_server_process", lambda: False)
+        settings = Settings(auth_enabled=False)  # auto: process once accounts are on
+        monkeypatch.setattr(settings, "auth_enabled", True)
+        assert warn_about_in_process_runs(settings)
+        assert not any("developer" in m for m in messages)
+        assert any("own process" in m and "same OS user" in m for m in messages)
 
 
 class TestContentSecurityPolicy:

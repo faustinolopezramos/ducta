@@ -151,6 +151,32 @@ class ExecutionErrorLog:
             msg=str(exception)[:80],
         )
 
+    def log_error_details(self, details: Dict[str, Any], context: ErrorContext) -> None:
+        """Record an error analysed elsewhere (a run in its own process sends
+        :meth:`ErrorAnalyzer.get_error_details` of its exception, not the exception)."""
+        try:
+            category = ErrorCategory(details.get("category"))
+        except ValueError:
+            category = ErrorCategory.UNKNOWN
+        error_details = {
+            "type": str(details.get("type") or "Exception"),
+            "message": str(details.get("message") or ""),
+            "category": category.value,
+            "traceback": str(details.get("traceback") or ""),
+            "traceback_lines": [str(x) for x in details.get("traceback_lines") or []],
+        }
+        self.errors.append(
+            {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "execution_id": self.execution_id,
+                "node_id": context.node_id,
+                "node_type": context.node_type,
+                "attempt": context.attempt,
+                "error": error_details,
+                "hint": ErrorAnalyzer.hint_for(category),
+            }
+        )
+
     def log_warning(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
         self.warnings.append(
             {

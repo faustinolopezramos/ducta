@@ -147,9 +147,15 @@ async function handleTransientError(
   instance: AxiosInstance,
 ): Promise<AxiosResponse | null> {
   const MAX_RETRIES = 3;
+  // A 429 was refused before the server did anything: any request may be sent
+  // again. A timeout is only the client giving up — the server may still be
+  // running a POST (a quality run, a git push, an AI job), and sending it again
+  // ran it up to four times. Only a read is retried after one.
+  const method = (config?.method ?? "get").toLowerCase();
+  const idempotentRead = method === "get" || method === "head";
   if (
     retryCount < MAX_RETRIES &&
-    (error.response?.status === 429 || error.code === "ECONNABORTED")
+    (error.response?.status === 429 || (error.code === "ECONNABORTED" && idempotentRead))
   ) {
     const delay = Math.pow(2, retryCount) * 1000;
     if (config) {

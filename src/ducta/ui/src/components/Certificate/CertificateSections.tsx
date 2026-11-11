@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { IconBox, IconChecklist, IconChevronDown, IconChevronRight, IconCode, IconDatabase, IconServer, IconAlertTriangle } from "@tabler/icons-react";
 import { Panel } from "../ui/Panel";
 import { DataTable, type DataTableColumn } from "../ui/DataTable";
@@ -14,6 +15,7 @@ import type {
   CertificateQualityEntry,
   RunCertificate,
 } from "../../api/certificatesApi";
+import { routes } from "../../utils/routes";
 import "./Certificate.css";
 
 function truncatedHash(value: string | null | undefined, len = 16): string {
@@ -129,6 +131,36 @@ interface MLRow extends CertificateNodeML {
  * What each ML node was given and did. Shown only when the certificate has ML
  * evidence; certificates written before Ducta recorded it simply omit the panel.
  */
+/** Why this run exists, when something other than a person started it: another run's
+ *  `retrain:`, or a `--reproduce` of an earlier run. */
+export function CertificateOrigin({ cert, projectId }: { cert: RunCertificate; projectId: string }) {
+  const trigger = cert.triggered_by;
+  if (!trigger && !cert.reproduction_of) return null;
+  return (
+    <div className="cert-origin" aria-label="Run origin">
+      {trigger && (
+        <span>
+          Retrain started by run{" "}
+          <Link className="cert-hash" to={routes.certificate(projectId, trigger.run_id)}>
+            {trigger.run_id.slice(0, 8)}
+          </Link>{" "}
+          of <strong>{trigger.pipeline}</strong>, whose {trigger.checks.join(", ")}{" "}
+          {trigger.checks.length === 1 ? "check" : "checks"} failed.
+        </span>
+      )}
+      {cert.reproduction_of && (
+        <span>
+          Reproduction of run{" "}
+          <Link className="cert-hash" to={routes.certificate(projectId, cert.reproduction_of)}>
+            {cert.reproduction_of.slice(0, 8)}
+          </Link>
+          .
+        </span>
+      )}
+    </div>
+  );
+}
+
 export function MLSection({ nodes }: { nodes: CertificateNode[] }) {
   const rows: MLRow[] = nodes.filter((n) => n.ml).map((n) => ({ name: n.name, ...(n.ml as CertificateNodeML) }));
   if (rows.length === 0) return null;
@@ -154,6 +186,31 @@ export function MLSection({ nodes }: { nodes: CertificateNode[] }) {
                 </span>
               ) : (
                 "—"
+              ),
+          } as DataTableColumn<MLRow>,
+        ]
+      : []),
+    ...(rows.some((r) => (r.registered ?? []).length > 0)
+      ? [
+          {
+            key: "registered",
+            header: "Registered",
+            mono: true,
+            cell: (r: MLRow) =>
+              (r.registered ?? []).length === 0 ? (
+                "—"
+              ) : (
+                <span className="cert-registered">
+                  {(r.registered ?? []).map((m) => (
+                    <span key={`${m.name}/${m.version}`} title={m.sha256 ?? undefined}>
+                      {m.name} v{m.version}
+                      {m.promoted_to ? ` → ${m.promoted_to}` : ""}
+                      {m.promotion_refused && (
+                        <span className="cert-registered__refused"> · refused: {m.promotion_refused}</span>
+                      )}
+                    </span>
+                  ))}
+                </span>
               ),
           } as DataTableColumn<MLRow>,
         ]

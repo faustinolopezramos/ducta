@@ -252,3 +252,146 @@ class TestWorkerSeesWhatTheParentRunChanged:
         )
         _, worker = bootstrap_worker_context(payload)
         assert worker.allow_python_config is False
+
+
+class TestAReproductionWorkerKeepsItsIsolation:
+    """A run_in_process node rebuilt its Context from the project files: a reproduction's
+    scratch registry and its pinned models did not reach it, and with ``mlops_path``
+    in ducta.yaml its training node registered and promoted in the real registry."""
+
+    PROJECT = {
+        **TestWorkerSeesWhatTheParentRunChanged.PROJECT,
+        "ducta.yaml": (
+            "version: 2\nproject: demo\npaths: {input: data, output: out}\n"
+            "settings: {mlops_path: models}\n"
+        ),
+    }
+
+    def test_the_worker_registers_in_the_scratch_and_serves_the_pinned_version(
+        self, tmp_path, monkeypatch
+    ):
+        from ducta.core.node_worker import build_node_payload
+        from ducta.core.scratch import pin_served_models, prepare_reproduction
+        from ducta.core.worker_bootstrap import bootstrap_worker_context, capture_run_overrides
+        from ducta.setting.project.context import load_project_context
+
+        for name, text in self.PROJECT.items():
+            path = tmp_path / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        monkeypatch.chdir(tmp_path)
+        _, parent = load_project_context(tmp_path, "dev")
+        real = parent.global_config["mlops_path"]
+        target = prepare_reproduction(parent, "dev", "r1", "etl")
+        pin_served_models(parent, {"nodes": [{"ml": {"model": {"name": "m", "version": 1}}}]})
+
+        payload = build_node_payload(
+            "totals",
+            env="dev",
+            ml_info={},
+            base_path=str(tmp_path),
+            output_path=str(parent.output_path),
+            overrides=capture_run_overrides(parent),
+        )
+        _, worker = bootstrap_worker_context(pickle.loads(pickle.dumps(payload)))
+
+        assert worker.global_config["mlops_path"] == str(target / ".ducta" / "mlops")
+        assert worker.serving_mlops_path == parent.serving_mlops_path
+        assert real in worker.serving_mlops_path
+        assert worker.pinned_models == {"m": 1}
+
+
+class TestTheWorkersMlEvidenceReachesTheParent:
+    """The certificate of a run_in_process ML node had no ``ml`` record: no split, no
+    served model, no registered version."""
+
+    def test_it_is_handed_back(self):
+        from types import SimpleNamespace
+
+        from ducta.core.execution.runner import NodeExecutor
+
+        executor = NodeExecutor.__new__(NodeExecutor)
+        executor.settings = SimpleNamespace(env="dev")
+        executor.pipeline_name = "p"
+        executor.context = SimpleNamespace()
+        ml = {"stage": "training", "registered": [{"name": "m", "version": 2}]}
+        executor._run_child = lambda node_name, payload: {
+            "status": "success",
+            "node_trace": [{"name": "fit", "status": "success", "ml": ml}],
+        }
+        evidence: dict = {}
+        executor._run_node_in_subprocess("fit", {}, "", "", {}, evidence)
+        assert evidence == {"ml": ml}
+
+
+def test_the_worker_runs_the_node_itself():
+    """The worker read ``run_in_process: true`` too and started a worker of its own,
+    which a daemonic process may not: every run_in_process node failed."""
+    from types import SimpleNamespace
+
+    from ducta.core.execution.runner import NodeExecutor
+
+    executor = NodeExecutor.__new__(NodeExecutor)
+    executor.settings = SimpleNamespace(env="dev")
+    assert executor._should_run_in_process({"run_in_process": True}) is True
+    executor.in_worker = True
+    assert executor._should_run_in_process({"run_in_process": True}) is False
+
+
+class TestTheWorkersEvidenceReachesTheCertificate:
+    """The worker read, wrote, hashed and checked in its own process: the parent's
+    certificate had none of it ("records no outputs — nothing to reproduce")."""
+
+    def test_the_parent_ledger_adopts_it(self):
+        from types import SimpleNamespace
+
+        from ducta.core.ledger import RunLedger
+
+        child = RunLedger.start(SimpleNamespace(), "child")
+        child._write("_output_fingerprints", {"gold.a": {"value": "h1"}})
+        child._write("_input_fingerprints", {"raw": {"value": "h0"}})
+        child.record_code("fit", {"sha256": "c"})
+        child.record_quality({"node": "fit", "failed_checks": ["prediction_drift"]})
+        evidence = pickle.loads(pickle.dumps(child.worker_evidence()))
+
+        parent = RunLedger.start(SimpleNamespace(), "parent")
+        parent.adopt_worker_evidence(evidence)
+        assert parent.output_fingerprints == {"gold.a": {"value": "h1"}}
+        assert parent.input_fingerprints == {"raw": {"value": "h0"}}
+        assert parent.code_fingerprints == {"fit": {"sha256": "c"}}
+        assert parent.quality_results[0]["failed_checks"] == ["prediction_drift"]
+        assert parent.evidence_complete
+
+    def test_a_gap_in_the_worker_is_a_gap_in_the_run(self):
+        from types import SimpleNamespace
+
+        from ducta.core.ledger import RunLedger
+
+        parent = RunLedger.start(SimpleNamespace(), "parent")
+        parent.adopt_worker_evidence({"gaps": ["output skipped"]})
+        assert not parent.evidence_complete
+
+
+class TestATrackedRunsWorkerRegistersItsModel:
+    """The worker had no MLOps context: persist_model found no registry, wrote a local
+    pickle and never registered or promoted the model."""
+
+    def test_the_tracked_run_id_travels(self):
+        from ducta.core.node_worker import build_node_payload
+
+        payload = build_node_payload("fit", env="dev", ml_info={"mlops_run_id": "r1", "x": 1})
+        assert payload["ml_info"] == {"mlops_run_id": "r1"}
+
+    def test_a_worker_that_cannot_open_the_registry_fails(self, monkeypatch):
+        import pytest
+
+        from ducta.core import node_worker
+        from ducta.mlrun import config
+
+        monkeypatch.setattr(
+            config.MLOpsContext,
+            "from_context",
+            classmethod(lambda cls, context, pipeline_name=None: None),
+        )
+        with pytest.raises(RuntimeError, match="could not open its model registry"):
+            node_worker._worker_mlops_context(object(), "train")

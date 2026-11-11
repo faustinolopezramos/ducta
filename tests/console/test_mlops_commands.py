@@ -258,6 +258,81 @@ class TestExperimentRunsShowCompare:
 
         assert rc == ExitCode.VALIDATION_ERROR.value
 
+    def test_compare_leaves_out_ductas_own_parameters_unless_asked(self, tracked, capsys):
+        """`_environment_snapshot` and the fingerprints made rows 11,000 characters wide."""
+        tracker = mlops_commands._tracker_for(tracked.path, None, None)[0]
+        run = tracker.start_run(
+            tracked.exp_id,
+            name="snap",
+            parameters={"max_depth": 4, "_environment_snapshot": "x" * 5000},
+        )
+        run_id = run.run_id if hasattr(run, "run_id") else run
+        tracker.end_run(run_id)
+        runs = [tracked.run_ids[0], run_id]
+
+        mlops_commands.experiment_compare(runs, tracked.path)
+        out = capsys.readouterr().out
+        assert "_environment_snapshot" not in out
+        assert max(len(line) for line in out.splitlines()) < 200
+
+        mlops_commands.experiment_compare(runs, tracked.path, show_internal=True)
+        assert "_environment_snapshot" in capsys.readouterr().out
+
+
+class TestModelListShow:
+    """`ducta model` only promoted and garbage-collected: the registry had no CLI view."""
+
+    @pytest.fixture
+    def registry_path(self, tmp_path):
+        from ducta.mlrun.model_registry import ModelRegistry, ModelStage
+        from ducta.mlrun.storage import LocalStorageBackend
+
+        registry = ModelRegistry(
+            storage=LocalStorageBackend(base_path=str(tmp_path)),
+            registry_path="model_registry",
+            validate_artifacts=False,
+        )
+        artifact = tmp_path / "m.bin"
+        artifact.write_bytes(b"model")
+        for auc in (0.7, 0.8):
+            registry.register_model(
+                name="churn",
+                artifact_path=str(artifact),
+                artifact_type="pickle",
+                framework="sklearn",
+                metrics={"val_auc": auc},
+                hyperparameters={"max_depth": 3},
+            )
+        registry.promote_model("churn", 2, ModelStage.PRODUCTION)
+        return str(tmp_path)
+
+    def test_list_shows_every_version_and_which_serves(self, registry_path, capsys):
+        assert mlops_commands.model_list(registry_path) == 0
+        out = capsys.readouterr().out
+        assert "churn" in out and "v2" in out and "v1" in out
+        assert "<- production" in [line for line in out.splitlines() if "v2" in line][0]
+
+    def test_show_the_newest_or_one_version(self, registry_path, capsys):
+        assert mlops_commands.model_show("churn", None, registry_path) == 0
+        assert "churn v2" in capsys.readouterr().out
+        assert mlops_commands.model_show("churn", "v1", registry_path) == 0
+        out = capsys.readouterr().out
+        assert "churn v1" in out and "val_auc: 0.7" in out and "max_depth: 3" in out
+
+    def test_an_unknown_model_or_version_is_a_validation_error(self, registry_path):
+        assert (
+            mlops_commands.model_show("ghost", None, registry_path)
+            == ExitCode.VALIDATION_ERROR.value
+        )
+        assert (
+            mlops_commands.model_show("churn", "9", registry_path)
+            == ExitCode.VALIDATION_ERROR.value
+        )
+        assert (
+            mlops_commands.model_show("churn", "1.2.0", registry_path)
+            == ExitCode.VALIDATION_ERROR.value
+        )
+
 
 class TestExperimentCliWiring:
     """The parser and the dispatcher know the three new subcommands."""

@@ -158,6 +158,42 @@ class TestTheCachePinsOneVersionPerRun:
         assert a.model is b.model and b.ref.output_col == "p"
 
 
+class TestAReproductionServesThePinnedVersion:
+    """Reproduced after a promotion, a scoring run scored with today's production model."""
+
+    def test_the_pin_wins_over_the_stage(self, registry, tmp_path):
+        v1 = _register(registry, tmp_path, c=1.0)
+        registry.promote_model("clf", v1.version, ModelStage.PRODUCTION)
+        v2 = _register(registry, tmp_path, c=2.0)
+        registry.promote_model("clf", v2.version, ModelStage.PRODUCTION)
+
+        pinned = ModelCache(lambda: registry, lambda: None, pins={"clf": 1})
+        assert pinned.get(_ref()).resolved.version == 1
+        assert ModelCache(lambda: registry, lambda: None).get(_ref()).resolved.version == 2
+
+    def test_an_exact_version_is_left_as_written(self):
+        from ducta.mlrun.serving import pinned_ref
+
+        assert pinned_ref(_ref(stage=None, version=2), {"clf": 1}).version == 2
+        assert pinned_ref(_ref(), {"other": 1}).stage == "production"
+
+    def test_a_redirected_run_reads_the_real_registry(self, registry, tmp_path):
+        from types import SimpleNamespace
+
+        from ducta.mlrun.serving import serving_registry
+
+        v1 = _register(registry, tmp_path)
+        registry.promote_model("clf", v1.version, ModelStage.PRODUCTION)
+        context = SimpleNamespace(
+            execution_mode="local",
+            global_config={"mlops_path": str(tmp_path / "scratch" / "mlops")},
+            serving_mlops_path=str(tmp_path / "mlops"),
+            output_path=str(tmp_path / "scratch"),
+        )
+        found = serving_registry(context).get_model_by_stage("clf", ModelStage.PRODUCTION)
+        assert found.version == 1
+
+
 class TestScoring:
     @pytest.fixture
     def served(self, registry, tmp_path):
@@ -426,3 +462,33 @@ class TestSupportLibraryVersions:
         other_major = replace(resolved, framework_versions={"numpy": f"{major - 1}.26.4"})
         [said] = framework_drift(other_major)
         assert "numpy" in said and "another major version" in said
+
+
+class TestSparkMlClassComesFromPysparkMl:
+    """The class a saved Spark ML model names is imported: only pyspark.ml may provide it."""
+
+    @staticmethod
+    def _with_metadata(monkeypatch, jvm_class):
+        import json
+        from types import SimpleNamespace
+
+        pytest.importorskip("pyspark")
+        from pyspark.sql import SparkSession
+
+        first = json.dumps({"class": jvm_class})
+        context = SimpleNamespace(textFile=lambda path: SimpleNamespace(first=lambda: first))
+        monkeypatch.setattr(
+            SparkSession,
+            "getActiveSession",
+            staticmethod(lambda: SimpleNamespace(sparkContext=context)),
+        )
+
+    @pytest.mark.parametrize(
+        "jvm_class", ["org.apache.spark.mlx.Evil", "pyspark.mlevil.Model", "os.system"]
+    )
+    def test_a_class_outside_pyspark_ml_is_refused(self, monkeypatch, jvm_class):
+        from ducta.mlrun.serving import ServingError, _load_spark_ml
+
+        self._with_metadata(monkeypatch, jvm_class)
+        with pytest.raises(ServingError, match="is not a Spark ML model class"):
+            _load_spark_ml("/models/m")

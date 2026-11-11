@@ -135,15 +135,30 @@ class RandomSearch(SearchStrategy):
             )
         self._distributions = config.build_distributions()
         self._asked = 0
+        self._proposed: set = set()
         import random
 
         self._rng = random.Random(seed)
+
+    #: Draws tried for a set not proposed yet before one is repeated (a small space).
+    _FRESH_DRAWS = 50
 
     def ask(self) -> Optional[Dict[str, Any]]:
         if self._asked >= self.n_trials:
             return None
         self._asked += 1
 
+        # A set already proposed is drawn again: with six trials over a small space a
+        # search ran the same values twice and wasted the trial.
+        for _ in range(self._FRESH_DRAWS):
+            params = self._draw()
+            key = tuple(sorted(params.items()))
+            if key not in self._proposed:
+                break
+        self._proposed.add(key)
+        return params
+
+    def _draw(self) -> Dict[str, Any]:
         params: Dict[str, Any] = {}
         for name, dist in self._distributions.items():
             if hasattr(dist, "rvs"):
@@ -190,7 +205,9 @@ class OptunaSearch(SearchStrategy):
         )
         self._asked = 0
         self._pending: Dict[int, Any] = {}
-        self._trial_by_params: Dict[str, int] = {}
+        # A list per key: TPE can propose the same values twice, and each trial must
+        # be told once. One number per key lost the first trial (left RUNNING).
+        self._trial_by_params: Dict[str, List[int]] = {}
 
     @staticmethod
     def _build_pruner(optuna: Any, pruner_name: Optional[str]) -> Optional[Any]:
@@ -216,12 +233,15 @@ class OptunaSearch(SearchStrategy):
         trial = self._study.ask()
         params = self._config.suggest_params(trial)
         self._pending[trial.number] = trial
-        self._trial_by_params[self._key(params)] = trial.number
+        self._trial_by_params.setdefault(self._key(params), []).append(trial.number)
         return params
 
     def tell(self, params: Dict[str, Any], score: Optional[float]) -> None:
         super().tell(params, score)
-        number = self._trial_by_params.pop(self._key(params), None)
+        waiting = self._trial_by_params.get(self._key(params))
+        number = waiting.pop(0) if waiting else None
+        if waiting == []:
+            del self._trial_by_params[self._key(params)]
         if number is None:
             logger.debug("OptunaSearch.tell called with params it never proposed: {}", params)
             return
@@ -256,6 +276,17 @@ def build_search_strategy(
     raise SearchError(
         f"Unknown algorithm '{algorithm}'. Valid: {HyperparamConfig.VALID_ALGORITHMS}"
     )
+
+
+def validation_metric_name(metric: str) -> str:
+    """The name a search's validation score is logged under: ``val_<metric>``.
+
+    ``train_with_search`` logs its cross-validated score there, apart from the
+    held-out metrics (``f1``, ``accuracy``…): under the bare name, a held-out
+    value of the same name used to win, and ``--search`` picked trials on the
+    test set.
+    """
+    return metric if metric.startswith("val_") else f"val_{metric}"
 
 
 def resolve_objective(config: HyperparamConfig) -> Tuple[str, str]:

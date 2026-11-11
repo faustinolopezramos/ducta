@@ -49,13 +49,6 @@ class QualityReportSerializer:
         return records
 
     @staticmethod
-    def to_pandas_dataframe(report: QualityReport):
-        import pandas as pd
-
-        records = QualityReportSerializer.to_dict_records(report)
-        return pd.DataFrame(records)
-
-    @staticmethod
     def to_spark_dataframe(report: QualityReport, context: Any):
         try:
             spark = context.spark
@@ -67,10 +60,6 @@ class QualityReportSerializer:
                 [], schema="run_id STRING, dataset_name STRING, check_name STRING, passed BOOLEAN"
             )
         return spark.createDataFrame(records)
-
-    @staticmethod
-    def to_json_lines(report: QualityReport) -> List[str]:
-        return [json.dumps(r, default=str) for r in QualityReportSerializer.to_dict_records(report)]
 
     @staticmethod
     def to_parquet_metadata(report: QualityReport) -> Dict[str, str]:
@@ -101,18 +90,6 @@ class GateResultSerializer:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         )
-
-    @staticmethod
-    def to_json_string(gate_result: Any) -> str:
-        return json.dumps(GateResultSerializer.to_dict(gate_result), indent=2, default=str)
-
-    @staticmethod
-    def to_pandas_dataframe(gate_result: Any):
-        import pandas as pd
-
-        data = GateResultSerializer.to_dict(gate_result)
-        data["triggered_rules"] = json.dumps(data.get("triggered_rules", []))
-        return pd.DataFrame([data])
 
     @staticmethod
     def to_spark_dataframe(gate_result: Any, context: Any):

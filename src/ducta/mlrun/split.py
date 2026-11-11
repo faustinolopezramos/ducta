@@ -188,11 +188,21 @@ def _split_dataframe_impl(
 
     if method == "temporal":
         time_col = _require_column(df, cfg.get("time_col"), method, "time_col")
+        _refuse_undated_rows(int(df[time_col].isna().sum()), time_col)
         ordered = df.sort_values(time_col, kind="mergesort")
         n = len(ordered)
-        cut_train = int(round(n * (1 - holdout)))
+        times = ordered[time_col]
+
+        def _cut_at_a_new_time(position: int) -> int:
+            # Rows that share the boundary's time go to the later partition, as on
+            # Spark: a cut by position split them, so one instant was in train and test.
+            if position >= n:
+                return n
+            return int((times < times.iloc[position]).sum())
+
+        cut_train = _cut_at_a_new_time(int(round(n * (1 - holdout))))
         if val_size is not None:
-            cut_val = int(round(n * (1 - test_size)))
+            cut_val = _cut_at_a_new_time(int(round(n * (1 - test_size))))
             parts: Tuple[Any, ...] = (
                 ordered.iloc[:cut_train],
                 ordered.iloc[cut_train:cut_val],
@@ -263,6 +273,8 @@ def _split_spark(
             if dtype in ("date", "timestamp", "timestamp_ntz")
             else F.col(time_col).cast("double")
         )
+        # A null, or a value that is not a time, has no place on the time line.
+        _refuse_undated_rows(df.filter(as_number.isNull()).count(), time_col)
         probs = [1 - holdout] + ([1 - test_size] if val_size is not None else [])
         cuts = df.select(as_number.alias(_FRACTION)).approxQuantile(_FRACTION, probs, 1e-4)
         if len(cuts) < len(probs):
@@ -306,6 +318,15 @@ def _split_spark(
             "merge/drop rare groups."
         )
     return tuple(labeled.filter(F.col(_PART) == name).drop(_PART) for name in names)
+
+
+def _refuse_undated_rows(count: int, time_col: str) -> None:
+    """A temporal split cannot place a row without a time; they all went to test."""
+    if count:
+        raise SplitError(
+            f"split.method='temporal': {count} row(s) have no '{time_col}' (null or not a "
+            "time). Filter or fill them in the node before the split."
+        )
 
 
 def _check_non_degenerate(parts: Tuple[Any, ...], n: int, method: str) -> None:

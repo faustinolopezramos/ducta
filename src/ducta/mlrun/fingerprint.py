@@ -27,10 +27,13 @@ from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
-ALGO_SPARK_EXACT = "xxhash64-multiset/v2"
-ALGO_SPARK_EXACT_CRYPTO = "sha256-multiset/v3"
-ALGO_SPARK_SAMPLE = "spark-minhash/v3"
-ALGO_PANDAS_EXACT = "pandas-sha256/v2"
+# v3/v4/v3 (2026-11): the content hashes take the columns in name order, so a value
+# belongs to its column: swapping two same-typed columns' names left the fingerprint
+# unchanged. Older fingerprints are "not comparable" with these, never "different".
+ALGO_SPARK_EXACT = "xxhash64-multiset/v3"
+ALGO_SPARK_EXACT_CRYPTO = "sha256-multiset/v4"
+ALGO_SPARK_SAMPLE = "spark-minhash/v4"
+ALGO_PANDAS_EXACT = "pandas-sha256/v3"
 ALGO_PANDAS_SAMPLE = "pandas-systematic/v2"
 ALGO_SCHEMA_ONLY = "schema-only/v2"
 #: A Delta table's identity at a commit: (table id, version). Reads only the
@@ -201,7 +204,7 @@ class DataFingerprint:
             self.algorithm = ALGO_SCHEMA_ONLY
             return
 
-        columns = [F.col(c) for c in df.columns]
+        columns = [F.col(c) for c in _by_name(df.columns)]
         if not columns:
             self.algorithm = ALGO_SCHEMA_ONLY
             self.degraded_reason = "dataframe has no columns"
@@ -220,7 +223,7 @@ class DataFingerprint:
             return
 
     def _compute_spark_full(self, df: Any, F: Any) -> None:
-        columns = [F.col(c) for c in df.columns]
+        columns = [F.col(c) for c in _by_name(df.columns)]
         if not columns:
             self.row_count = df.count()
             self.algorithm = ALGO_SCHEMA_ONLY
@@ -302,7 +305,7 @@ class DataFingerprint:
         try:
             import pandas as pd  # local import: no hard pandas dependency here
 
-            hashed = pd.util.hash_pandas_object(df, index=False)
+            hashed = pd.util.hash_pandas_object(df[_by_name(df.columns)], index=False)
             digest = hashlib.sha256()
             for value in sorted(int(v) for v in hashed):
                 digest.update(str(value).encode())
@@ -424,6 +427,16 @@ class DataFingerprint:
         ]
         combined = "|".join(parts)
         self.fingerprint = hashlib.sha256(combined.encode()).hexdigest()
+
+
+def _by_name(columns: Any) -> list:
+    """The columns in name order: the order the content hashes read them in.
+
+    A row hash over the frame's own order bound each value to a position, not to a
+    column, and the schema hash sorts the names: two same-typed columns whose names
+    were swapped hashed the same. Reordering the columns still changes nothing.
+    """
+    return sorted(columns, key=str)
 
 
 def comparable(a: Dict[str, Any], b: Dict[str, Any]) -> Tuple[bool, Optional[str]]:

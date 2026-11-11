@@ -392,151 +392,202 @@ def check_blueprint(root: Path, bp: Blueprint, existing: Existing) -> Tuple[List
     for pname, pipe in bp.pipelines.items():
         transforms = [n for n in pipe.nodes.values() if n.kind == "transform"]
         if transforms:
-            # One module per pipeline, one function per node: two names that
-            # come out the same would make two nodes run one function.
-            if pipe.module in modules:
-                errors.append(
-                    f"pipelines {modules[pipe.module]} and {pname} would share the module "
-                    f"{pipe.module}.py: rename one"
-                )
-            modules.setdefault(pipe.module, pname)
             folder = folder or _code_folder(root)
-            if folder and (Path(root) / folder / f"{pipe.module}.py").exists():
-                errors.append(
-                    f"pipeline {pname}: {folder}/{pipe.module}.py already exists; a blueprint "
-                    "only adds new modules — rename the pipeline"
-                )
-            functions: Dict[str, str] = {}
-            for node in transforms:
-                if node.function in functions:
-                    errors.append(
-                        f"nodes {functions[node.function]} and {node.name} would both run "
-                        f"{node.function}() in {pipe.module}.py: rename one so the last part "
-                        "of their names differs"
-                    )
-                functions.setdefault(node.function, node.name)
-                if keyword.iskeyword(node.function):
-                    errors.append(
-                        f"node {node.name}: `{node.function}` is a Python keyword and cannot "
-                        "name its function"
-                    )
-                reserved = {"kwargs"} | (
-                    {"start_date", "end_date"} if pipe.requires_dates else set()
-                )
-                for param in node.inputs:
-                    if keyword.iskeyword(param) or param in reserved:
-                        errors.append(
-                            f"node {node.name}: input `{param}` cannot be a parameter name "
-                            f"(a Python keyword, or one Ducta passes itself)"
-                        )
-        if not _NAME.match(pname):
-            errors.append(
-                f"pipeline {pname}: use letters, digits, `_`, `-` and dots (layer.domain)"
-            )
-        if pname in existing.pipelines or (Path(root) / "pipelines" / f"{pname}.yaml").exists():
-            errors.append(f"pipeline {pname} already exists: a blueprint only adds new pipelines")
+            errors += _check_pipeline_code(root, folder, pname, pipe, transforms, modules)
+        errors += _check_pipeline_name(root, pname, existing)
         for nname, node in pipe.nodes.items():
-            if not _NAME.match(nname):
-                errors.append(f"node {nname}: use letters, digits, `_`, `-` and dots")
-            if nname in existing.nodes or nname in seen_nodes:
-                errors.append(
-                    f"node {nname}: the name is taken (node names are unique in the project)"
-                )
+            node_errors, node_warnings = _check_node(nname, node, bp, existing, seen_nodes)
+            errors += node_errors
+            warnings += node_warnings
             seen_nodes.add(nname)
             for out in node.outputs:
                 writers.setdefault(out, []).append(f"{pname}.{nname}")
-            if node.kind == "ingest":
-                source = str(node.ingest.get("source") or "")
-                if not source:
-                    errors.append(
-                        f"node {nname}: an ingest node needs `ingest: {{source: …, table: …}}`"
-                    )
-                elif existing.sources and source not in existing.sources:
-                    errors.append(
-                        f"node {nname}: no source '{source}' in sources.yaml "
-                        f"(declared: {', '.join(sorted(existing.sources))})"
-                    )
-                elif not existing.sources:
-                    errors.append(
-                        f"node {nname}: the project declares no ingestion sources; add the "
-                        "connection to sources.yaml first"
-                    )
-                if not (node.ingest.get("table") or node.ingest.get("query")):
-                    errors.append(f"node {nname}: an ingest node reads a `table` or a `query`")
-                if node.inputs:
-                    errors.append(f"node {nname}: an ingest node has no `inputs`")
-            elif node.kind == "transform":
-                if not node.inputs:
-                    errors.append(
-                        f"node {nname}: a transform node reads at least one dataset (`inputs`)"
-                    )
-                for param in node.inputs:
-                    if not param.isidentifier():
-                        errors.append(
-                            f"node {nname}: input `{param}` must be a Python parameter name"
-                        )
-                if not node.logic:
-                    warnings.append(
-                        f"node {nname}: no `logic`; the code will be written from its description"
-                    )
-            else:
-                errors.append(f"node {nname}: kind is `transform` or `ingest`, not `{node.kind}`")
-            if len(node.outputs) != 1:
-                errors.append(
-                    f"node {nname}: a node writes exactly one dataset (`outputs: [name]`)"
-                )
-            for param, source in node.inputs.items():
-                if source not in existing.datasets and source not in bp.datasets:
-                    errors.append(
-                        f"node {nname}: input {source} is neither in the catalog nor in the blueprint's datasets"
-                    )
-                out_layers = [n for n in (_layer(o) for o in node.outputs) if n is not None]
-                out_layer = min(out_layers) if out_layers else None
-                in_layer = _layer(source)
-                if out_layer is not None and in_layer is not None and in_layer > out_layer:
-                    errors.append(
-                        f"node {nname}: reads {source} ({source.split('.')[0]}) to write a lower layer; "
-                        "data flows bronze → silver → gold"
-                    )
 
     for name, ds in bp.datasets.items():
-        if name in existing.datasets:
+        dataset_errors, dataset_warnings = _check_dataset(name, ds, existing, writers)
+        errors += dataset_errors
+        warnings += dataset_warnings
+    errors += _check_writers(bp, existing, writers)
+    return errors, warnings
+
+
+def _check_pipeline_code(
+    root: Path,
+    folder: Optional[str],
+    pname: str,
+    pipe: PipelineSpec,
+    transforms: List[NodeSpec],
+    modules: Dict[str, str],
+) -> List[str]:
+    """The module a pipeline's transform nodes go in, and the functions they become.
+
+    One module per pipeline, one function per node: two names that come out the
+    same would make two nodes run one function. *modules* collects the modules
+    of the pipelines checked so far.
+    """
+    errors: List[str] = []
+    if pipe.module in modules:
+        errors.append(
+            f"pipelines {modules[pipe.module]} and {pname} would share the module "
+            f"{pipe.module}.py: rename one"
+        )
+    modules.setdefault(pipe.module, pname)
+    if folder and (Path(root) / folder / f"{pipe.module}.py").exists():
+        errors.append(
+            f"pipeline {pname}: {folder}/{pipe.module}.py already exists; a blueprint "
+            "only adds new modules — rename the pipeline"
+        )
+    functions: Dict[str, str] = {}
+    reserved = {"kwargs"} | ({"start_date", "end_date"} if pipe.requires_dates else set())
+    for node in transforms:
+        if node.function in functions:
             errors.append(
-                f"dataset {name} is already in the catalog: reuse it as an input, do not redeclare it"
+                f"nodes {functions[node.function]} and {node.name} would both run "
+                f"{node.function}() in {pipe.module}.py: rename one so the last part "
+                "of their names differs"
             )
-        if len(name.split(".")) != 3 or not _NAME.match(name):
-            errors.append(f"dataset {name}: name new datasets <layer>.<domain>.<table>")
-        if name not in writers:
-            errors.append(f"dataset {name}: no node of the blueprint writes it")
-        if ds.write not in WRITE_MODES:
-            errors.append(f"dataset {name}: write is one of {', '.join(WRITE_MODES)}")
-        if ds.write == "merge" and not ds.keys:
-            errors.append(f"dataset {name}: write merge needs `keys`")
-        fmt = ds.format or existing.default_format(name) or "parquet"
-        if ds.write == "merge" and fmt != "delta":
+        functions.setdefault(node.function, node.name)
+        if keyword.iskeyword(node.function):
             errors.append(
-                f"dataset {name}: Ducta merges only Delta tables — set `format: delta` "
-                f"(it is {fmt}), or write it with overwrite"
+                f"node {node.name}: `{node.function}` is a Python keyword and cannot "
+                "name its function"
             )
-        if ds.write == "append":
+        for param in node.inputs:
+            if keyword.iskeyword(param) or param in reserved:
+                errors.append(
+                    f"node {node.name}: input `{param}` cannot be a parameter name "
+                    f"(a Python keyword, or one Ducta passes itself)"
+                )
+    return errors
+
+
+def _check_pipeline_name(root: Path, pname: str, existing: Existing) -> List[str]:
+    errors: List[str] = []
+    if not _NAME.match(pname):
+        errors.append(f"pipeline {pname}: use letters, digits, `_`, `-` and dots (layer.domain)")
+    if pname in existing.pipelines or (Path(root) / "pipelines" / f"{pname}.yaml").exists():
+        errors.append(f"pipeline {pname} already exists: a blueprint only adds new pipelines")
+    return errors
+
+
+def _check_node(
+    nname: str, node: NodeSpec, bp: Blueprint, existing: Existing, seen_nodes: Set[str]
+) -> Tuple[List[str], List[str]]:
+    """One node: its name, its kind's requirements, its output and the layers it reads."""
+    errors: List[str] = []
+    warnings: List[str] = []
+    if not _NAME.match(nname):
+        errors.append(f"node {nname}: use letters, digits, `_`, `-` and dots")
+    if nname in existing.nodes or nname in seen_nodes:
+        errors.append(f"node {nname}: the name is taken (node names are unique in the project)")
+    if node.kind == "ingest":
+        errors += _check_ingest_node(nname, node, existing)
+    elif node.kind == "transform":
+        if not node.inputs:
+            errors.append(f"node {nname}: a transform node reads at least one dataset (`inputs`)")
+        for param in node.inputs:
+            if not param.isidentifier():
+                errors.append(f"node {nname}: input `{param}` must be a Python parameter name")
+        if not node.logic:
             warnings.append(
-                f"dataset {name}: appended — a retried run writes its rows twice, so Sentinel "
-                "never retries it; prefer merge with keys"
+                f"node {nname}: no `logic`; the code will be written from its description"
             )
-        if ds.columns:
-            for label, cols in (
-                ("keys", ds.keys),
-                ("not_null", ds.not_null),
-                ("unique", ds.unique),
-                ("pii", ds.pii),
-            ):
-                missing = [c for c in cols if c not in ds.columns]
-                if missing:
-                    errors.append(
-                        f"dataset {name}: {label} {', '.join(missing)} not in its columns"
-                    )
-        if not ds.description:
-            warnings.append(f"dataset {name}: no description")
+    else:
+        errors.append(f"node {nname}: kind is `transform` or `ingest`, not `{node.kind}`")
+    if len(node.outputs) != 1:
+        errors.append(f"node {nname}: a node writes exactly one dataset (`outputs: [name]`)")
+    errors += _check_node_inputs(nname, node, bp, existing)
+    return errors, warnings
+
+
+def _check_ingest_node(nname: str, node: NodeSpec, existing: Existing) -> List[str]:
+    errors: List[str] = []
+    source = str(node.ingest.get("source") or "")
+    if not source:
+        errors.append(f"node {nname}: an ingest node needs `ingest: {{source: …, table: …}}`")
+    elif existing.sources and source not in existing.sources:
+        errors.append(
+            f"node {nname}: no source '{source}' in sources.yaml "
+            f"(declared: {', '.join(sorted(existing.sources))})"
+        )
+    elif not existing.sources:
+        errors.append(
+            f"node {nname}: the project declares no ingestion sources; add the "
+            "connection to sources.yaml first"
+        )
+    if not (node.ingest.get("table") or node.ingest.get("query")):
+        errors.append(f"node {nname}: an ingest node reads a `table` or a `query`")
+    if node.inputs:
+        errors.append(f"node {nname}: an ingest node has no `inputs`")
+    return errors
+
+
+def _check_node_inputs(nname: str, node: NodeSpec, bp: Blueprint, existing: Existing) -> List[str]:
+    """Every input is a known dataset, and data flows bronze → silver → gold."""
+    errors: List[str] = []
+    out_layers = [n for n in (_layer(o) for o in node.outputs) if n is not None]
+    out_layer = min(out_layers) if out_layers else None
+    for source in node.inputs.values():
+        if source not in existing.datasets and source not in bp.datasets:
+            errors.append(
+                f"node {nname}: input {source} is neither in the catalog nor in the blueprint's datasets"
+            )
+        in_layer = _layer(source)
+        if out_layer is not None and in_layer is not None and in_layer > out_layer:
+            errors.append(
+                f"node {nname}: reads {source} ({source.split('.')[0]}) to write a lower layer; "
+                "data flows bronze → silver → gold"
+            )
+    return errors
+
+
+def _check_dataset(
+    name: str, ds: DatasetSpec, existing: Existing, writers: Dict[str, List[str]]
+) -> Tuple[List[str], List[str]]:
+    """One new dataset: its name, its writer, its write mode and its column lists."""
+    errors: List[str] = []
+    warnings: List[str] = []
+    if name in existing.datasets:
+        errors.append(
+            f"dataset {name} is already in the catalog: reuse it as an input, do not redeclare it"
+        )
+    if len(name.split(".")) != 3 or not _NAME.match(name):
+        errors.append(f"dataset {name}: name new datasets <layer>.<domain>.<table>")
+    if name not in writers:
+        errors.append(f"dataset {name}: no node of the blueprint writes it")
+    if ds.write not in WRITE_MODES:
+        errors.append(f"dataset {name}: write is one of {', '.join(WRITE_MODES)}")
+    if ds.write == "merge" and not ds.keys:
+        errors.append(f"dataset {name}: write merge needs `keys`")
+    fmt = ds.format or existing.default_format(name) or "parquet"
+    if ds.write == "merge" and fmt != "delta":
+        errors.append(
+            f"dataset {name}: Ducta merges only Delta tables — set `format: delta` "
+            f"(it is {fmt}), or write it with overwrite"
+        )
+    if ds.write == "append":
+        warnings.append(
+            f"dataset {name}: appended — a retried run writes its rows twice, so Sentinel "
+            "never retries it; prefer merge with keys"
+        )
+    if ds.columns:
+        for label, cols in (
+            ("keys", ds.keys),
+            ("not_null", ds.not_null),
+            ("unique", ds.unique),
+            ("pii", ds.pii),
+        ):
+            missing = [c for c in cols if c not in ds.columns]
+            if missing:
+                errors.append(f"dataset {name}: {label} {', '.join(missing)} not in its columns")
+    if not ds.description:
+        warnings.append(f"dataset {name}: no description")
+    return errors, warnings
+
+
+def _check_writers(bp: Blueprint, existing: Existing, writers: Dict[str, List[str]]) -> List[str]:
+    """Each dataset the blueprint's nodes write is declared, new, and has one writer."""
+    errors: List[str] = []
     for written, who in writers.items():
         if written not in bp.datasets:
             errors.append(f"{who[0]}: output {written} must be declared under `datasets`")
@@ -548,7 +599,7 @@ def check_blueprint(root: Path, bp: Blueprint, existing: Existing) -> Tuple[List
             errors.append(
                 f"{who[0]}: {written} already exists and has its writer; write a new dataset"
             )
-    return errors, warnings
+    return errors
 
 
 # ── rendering ───────────────────────────────────────────────────────────────

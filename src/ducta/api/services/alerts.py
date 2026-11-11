@@ -30,6 +30,7 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import smtplib
 import urllib.request
 from dataclasses import dataclass
@@ -124,6 +125,28 @@ def _send_email(to: List[str], subject: str, text: str) -> None:
         smtp.send_message(msg)
 
 
+def _webhook_url(var: Optional[str]) -> str:
+    """The http(s) URL held by the environment variable *var*.
+
+    Errors name the variable, never its value: the result of a test alert goes
+    back to whoever sent it, and an error that quoted the value ("unknown url
+    type: '…'") read any variable of the server's — ``JWT_SECRET_KEY`` included —
+    to anyone who could edit the project's alerts.
+    """
+    from ducta.server_secrets import is_server_secret
+
+    if not var:
+        raise RuntimeError("the channel names no environment variable")
+    if is_server_secret(var):
+        raise RuntimeError(f"{var} is one of the server's own secrets, not a webhook URL")
+    url = os.environ.get(var)
+    if not url:
+        raise RuntimeError(f"environment variable {var} is not set")
+    if not re.match(r"^https?://", url.strip(), re.IGNORECASE):
+        raise RuntimeError(f"the value of {var} is not an http(s) URL")
+    return url.strip()
+
+
 def deliver(event: AlertEvent, rules: List[Any], post: Poster = _post_json) -> List[Dict[str, Any]]:
     """Send *event* through every matching rule's channels; returns what happened per channel."""
     text = _text(event)
@@ -137,10 +160,7 @@ def deliver(event: AlertEvent, rules: List[Any], post: Poster = _post_json) -> L
             sent.add(key)
             try:
                 if channel.type in ("slack", "teams", "webhook"):
-                    var = channel.webhook_env or channel.url_env
-                    url = os.environ.get(var or "")
-                    if not url:
-                        raise RuntimeError(f"environment variable {var} is not set")
+                    url = _webhook_url(channel.webhook_env or channel.url_env)
                     body: Dict[str, Any] = {"text": text}
                     if channel.type == "webhook":
                         body = {"text": text, **{k: v for k, v in event.__dict__.items()}}

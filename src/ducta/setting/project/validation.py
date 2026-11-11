@@ -317,8 +317,36 @@ def _cross_checks(
                     f"{where.get(('pipelines', pname), 'pipelines/' + pname)} pipeline "
                     f"'{pname}': depends_on '{dep}' is not a pipeline" + _suggest(dep, pipelines)
                 )
+        problems += _retrain_checks(pname, pipeline, pipelines, where)
     problems += _cycle_checks(pipelines, producers, where)
     problems += _path_checks(catalog, pipelines, where)
+    return problems
+
+
+def _retrain_checks(
+    pname: str,
+    pipeline: PipelineFile,
+    pipelines: Dict[str, PipelineFile],
+    where: Dict[Tuple[str, ...], str],
+) -> List[str]:
+    """``retrain.run`` is another ML pipeline of the project, with no ``retrain`` of its own."""
+    spec = pipeline.retrain
+    if spec is None:
+        return []
+    at = f"{where.get(('pipelines', pname), 'pipelines/' + pname)} pipeline '{pname}': retrain"
+    target = pipelines.get(spec.run)
+    if target is None:
+        return [f"{at} runs '{spec.run}', which is not a pipeline" + _suggest(spec.run, pipelines)]
+    if spec.run == pname:
+        return [f"{at} cannot run the pipeline itself"]
+    problems: List[str] = []
+    if target.type != "ml":
+        problems.append(f"{at} runs '{spec.run}', a {target.type} pipeline; it must be type: ml")
+    if target.retrain is not None:
+        problems.append(
+            f"{at} runs '{spec.run}', which has a retrain of its own: one retrain may not "
+            "trigger another"
+        )
     return problems
 
 

@@ -36,6 +36,13 @@ class TestLifecycle:
         assert second.node_details == []
         assert second.run_id == "run-2"
 
+    def test_start_clears_the_previous_runs_quality_reports(self):
+        """The summary and the certificate's fallback listed pipeline N's reports for N+1."""
+        reports = ["validation report of run-1"]
+        context = _ctx(quality_output_paths=reports)
+        RunLedger.start(context, "run-2")
+        assert context.quality_output_paths == [] and context.quality_output_paths is reports
+
     def test_start_clears_the_previous_runs_fingerprints(self):
         # Regression: these used to survive a reset because ducta.gate writes
         # them. One executor drives every pipeline in a chain and the gate

@@ -97,6 +97,7 @@ class _DispatchMixin(_Base):
         sample_rows: Optional[int] = None,
         debug: bool = False,
         pause_after: Optional[List[str]] = None,
+        reproduce_of: Optional[str] = None,
     ) -> ExecutionResponse:
         # Absolute from here on: the run resolves data paths against the project
         # root, and a relative root (`Path("./my_project")`, as the FastAPI
@@ -164,6 +165,7 @@ class _DispatchMixin(_Base):
             sample_rows=sample_rows,
             debug=debug,
             pause_after=pause_after,
+            reproduce_of=reproduce_of,
         )
         task = asyncio.create_task(self._run_execution(execution_id, spec))
         with self._task_lock:
@@ -538,6 +540,12 @@ class _DispatchMixin(_Base):
     def get_or_create_timeout_handler(self, execution_id: str) -> Any:
         self._timeout_manager.create_handler(execution_id)
         return self._timeout_manager.get_handler(execution_id)
+
+    def attach_retrain(self, execution_id: str, retrain: Dict[str, Any]) -> None:
+        """Record what the run's ``retrain:`` did on its record."""
+        record = self._store.peek(execution_id)
+        if record is not None:
+            record.retrain = dict(retrain)
 
     def attach_certificate(self, execution_id: str, certificate_run_id: str) -> None:
         """Link the Run Certificate emitted by an execution to its record."""

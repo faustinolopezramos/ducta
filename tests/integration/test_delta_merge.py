@@ -178,3 +178,56 @@ class TestTimeTravel:
         reader = DeltaReader({"spark": spark})
         assert reader.read(path, {"versionAsOf": 0}).count() == 3
         assert reader.read(path, {}).count() == 5
+
+
+class TestAnOverwriteKeepsTheTablesSchema:
+    """Without `overwrite_schema`, an overwrite that changes the columns writes nothing.
+
+    Delta alone rejects a new column or a changed type, but accepts an output
+    without a column: the table keeps it, as nulls, and the run succeeds.
+    """
+
+    def _table_of(self, spark, path):
+        spark.createDataFrame([(1, "a", 2.0)], "id INT, name STRING, amount DOUBLE").write.format(
+            "delta"
+        ).save(str(path))
+
+    @pytest.mark.parametrize(
+        "schema, change",
+        [
+            ("id INT, name STRING", "removed=['amount']"),
+            ("id INT, name STRING, amount STRING", "type_changed=['amount']"),
+            ("id INT, name STRING, amount DOUBLE, extra INT", "added=['extra']"),
+        ],
+    )
+    def test_a_changed_schema_is_refused_and_the_table_kept(self, spark, tmp_path, schema, change):
+        path = tmp_path / "t"
+        self._table_of(spark, path)
+        row = {"id INT, name STRING": (5, "b")}.get(schema) or (
+            (5, "b", "3") if "amount STRING" in schema else (5, "b", 3.0, 1)
+        )
+        df = spark.createDataFrame([row], schema)
+        with pytest.raises(WriteOperationError, match=r"overwrite_schema: true") as raised:
+            _writer().write(df, str(path), {"write_mode": "overwrite"})
+        assert change in str(raised.value)
+        kept = spark.read.format("delta").load(str(path))
+        assert kept.columns == ["id", "name", "amount"] and kept.collect()[0]["id"] == 1
+
+    def test_overwrite_schema_true_replaces_it(self, spark, tmp_path):
+        path = tmp_path / "t"
+        self._table_of(spark, path)
+        df = spark.createDataFrame([(5, "b")], "id INT, name STRING")
+        _writer().write(df, str(path), {"write_mode": "overwrite", "overwrite_schema": True})
+        assert spark.read.format("delta").load(str(path)).columns == ["id", "name"]
+
+    def test_the_same_columns_in_another_order_and_case_are_the_same_schema(self, spark, tmp_path):
+        path = tmp_path / "t"
+        self._table_of(spark, path)
+        df = spark.createDataFrame([(9.0, "c", 7)], "AMOUNT DOUBLE, name STRING, id INT")
+        _writer().write(df, str(path), {"write_mode": "overwrite"})
+        assert [r["id"] for r in spark.read.format("delta").load(str(path)).collect()] == [7]
+
+    def test_a_new_table_is_written(self, spark, tmp_path):
+        df = spark.createDataFrame([(1,)], "id INT")
+        _writer().write(df, str(tmp_path / "new"), {"write_mode": "overwrite"})
+        assert spark.read.format("delta").load(str(tmp_path / "new")).count() == 1

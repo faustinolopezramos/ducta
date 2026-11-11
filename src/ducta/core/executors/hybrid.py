@@ -83,8 +83,13 @@ class HybridExecutor(BaseExecutor):
             pipeline, node_configs, self.context.format_policy
         )
 
+        for warning in validation_result["warnings"]:
+            logger.warning("Hybrid pipeline '{}': {}", pipeline_name, warning)
         if not validation_result["is_valid"]:
-            raise ValueError("Hybrid pipeline validation failed")
+            # The reasons are the message: "validation failed" alone left the
+            # user to guess which node and which rule.
+            reasons = "\n".join(f"  - {error}" for error in validation_result["errors"])
+            raise ValueError(f"Hybrid pipeline '{pipeline_name}' is not valid:\n{reasons}")
 
         self._apply_global_seed()
 

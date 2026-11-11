@@ -159,14 +159,8 @@ class QualityOutputManager:
         )
         return rows
 
-    def _resolve_output_path(
-        self,
-        base_path: Optional[str],
-        node_name: str,
-        run_id: str,
-        report_type: str,
-        pipeline_name: str = DEFAULT_PIPELINE_NAME,
-    ) -> str:
+    def _resolve_base_path(self, base_path: Optional[str]) -> str:
+        """The folder quality reports go under: ``base_path`` interpolated, or the default."""
         if not base_path:
             base_path = str(
                 Path(getattr(self.context, "workspace_path", state.under(".", "quality")))
@@ -178,6 +172,30 @@ class QualityOutputManager:
                 from ducta.setting.interpolator import VariableInterpolator
 
                 base_path = VariableInterpolator.interpolate(base_path, global_config)
+        return base_path
+
+    def summary_path(self, base_path: Optional[str], pipeline_name: str, run_id: str) -> str:
+        """Where a run's global quality summary goes, next to its reports (no extension).
+
+        ``<base>/global_summary/<pipeline>/<run_id>``: one file per run, so a run
+        never overwrites another's summary.
+        """
+        return str(
+            Path(self._resolve_base_path(base_path))
+            / "global_summary"
+            / _sanitize_dataset_name(pipeline_name)
+            / _sanitize_run_id(run_id)
+        )
+
+    def _resolve_output_path(
+        self,
+        base_path: Optional[str],
+        node_name: str,
+        run_id: str,
+        report_type: str,
+        pipeline_name: str = DEFAULT_PIPELINE_NAME,
+    ) -> str:
+        base_path = self._resolve_base_path(base_path)
         # Sanitize each identifier-derived path component (defense in depth,
         # matching check/storage.py and stream/checkpoints.py) so none of them
         # can escape base_path via "/" or "..". pipeline_name scopes reports

@@ -26,6 +26,7 @@ from loguru import logger  # type: ignore
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ducta import state
+from ducta.gate.constants import WriteMode  # noqa: F401 — one definition, re-exported here
 
 
 class ExecutionMode(str, Enum):
@@ -83,16 +84,6 @@ class OutputFormat(str, Enum):
     XML = "xml"
     QUERY = "query"
     UNITY_CATALOG = "unity_catalog"
-
-
-class WriteMode(str, Enum):
-    """Write modes for outputs."""
-
-    OVERWRITE = "overwrite"
-    APPEND = "append"
-    IGNORE = "ignore"
-    ERROR = "error"
-    MERGE = "merge"
 
 
 class LogLevel(str, Enum):
@@ -965,6 +956,13 @@ class PipelineSchema(BaseModel):
             "even if the global default is off. false: always re-run this pipeline "
             "(e.g. ingestion that must refresh), overriding --reuse-upstream. "
             "None: follow the global [chain].reuse_materialized setting."
+        ),
+    )
+    retrain: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "{run, when, cooldown}: the training pipeline Ducta runs after this one when "
+            "one of the named checks failed (validated by the project format)."
         ),
     )
 

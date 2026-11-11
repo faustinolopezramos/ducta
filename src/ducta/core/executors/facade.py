@@ -26,10 +26,11 @@ import gc
 import json
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
 from loguru import logger  # type: ignore
 
+from ducta.core.context_utils import get_context_value, set_context_value
 from ducta.core.errors import (
     ChainExecutionError,
     ChainStepNotRefreshedError,
@@ -39,7 +40,7 @@ from ducta.core.errors import (
 from ducta.core.executors.batch import BatchExecutor
 from ducta.core.executors.hybrid import HybridExecutor
 from ducta.core.executors.streaming import StreamingExecutor
-from ducta.core.ledger import RunLedger
+from ducta.core.ledger import RETRAIN_ATTR, RUN_ID_ATTR, RunLedger
 from ducta.core.pipeline_validator import PipelineValidator
 from ducta.core.results import PipelineRunResult, RunStatus
 from ducta.core.run_lock import RunLock, RunLockSettings, output_keys
@@ -244,6 +245,7 @@ class PipelineExecutor:
                 status=result.status.value,
                 error=result.primary_error,
                 mlops_run_id=result.mlops_run_id,
+                run_window=self._effective_dates(start_date, end_date),
             )
             result.certificate_path = cert_path
             result.certificate_error = cert_error
@@ -264,7 +266,128 @@ class PipelineExecutor:
             )
             failure.run_result = result  # type: ignore[attr-defined]
             raise failure
+        if node_name is None and not node_names:
+            # Read before the training run starts: it resets the ledger.
+            failed_checks = {
+                check
+                for entry in ledger.quality_results
+                for check in entry.get("failed_checks") or []
+            }
+            result.retrain = self._maybe_retrain(
+                pipeline_name, pipeline, run_id, failed_checks, hyperparams, start_date, end_date
+            )
+        # For the API, which reads what a run did off its context (like ``_run_id``).
+        set_context_value(self.context, RETRAIN_ATTR, result.retrain)
         return result
+
+    def _maybe_retrain(
+        self,
+        pipeline_name: str,
+        pipeline: Dict[str, Any],
+        run_id: str,
+        failed_checks: Set[str],
+        hyperparams: Optional[Dict[str, Any]],
+        start_date: Optional[str],
+        end_date: Optional[str],
+    ) -> Optional[Dict[str, Any]]:
+        """Run the pipeline's ``retrain:`` target when one of its ``when`` checks failed.
+
+        Not for a reproduction, a sample run or a sweep/search trial (they must not
+        change the models in production), nor within ``cooldown`` of the target's last
+        successful run. The new model reaches production only through
+        ``settings.mlops.promotion_policy``.
+        """
+        spec = pipeline.get("retrain")
+        if not isinstance(spec, dict) or not spec.get("run"):
+            return None
+        target = str(spec["run"])
+        due = sorted(failed_checks & set(spec.get("when") or ["prediction_drift"]))
+        if not due:
+            return None
+        trial = isinstance(hyperparams, dict) and "sweep_index" in hyperparams
+        if (
+            getattr(self.context, "reproduction_of", None)
+            or getattr(self.context, "sample_rows", None)
+            or trial
+        ):
+            logger.info("'{}' failed {}; no retrain from this run", pipeline_name, due)
+            return {"pipeline": target, "checks": due, "skipped": "not a production run"}
+        cooldown = spec.get("cooldown")
+        if cooldown:
+            from ducta.setting.project.schema import duration_seconds
+
+            last = self._last_training_age_seconds(target)
+            if last is not None and last < duration_seconds(cooldown):
+                logger.info(
+                    "'{}' failed {}; '{}' last trained {:.0f}s ago, within its {} "
+                    "cooldown — not retraining",
+                    pipeline_name,
+                    due,
+                    target,
+                    last,
+                    cooldown,
+                )
+                return {"pipeline": target, "checks": due, "skipped": f"cooldown {cooldown}"}
+        logger.warning("'{}' failed {} — running '{}' (retrain)", pipeline_name, due, target)
+        # Read by the certificate of the run it starts (core.certificate._triggered_by).
+        setattr(
+            self.context,
+            "triggered_by",
+            {"run_id": run_id, "pipeline": pipeline_name, "checks": due},
+        )
+        # The training run stamps its own run id on the shared context; the API links
+        # the execution's certificate from it, so the scoring run's id is put back after.
+        own_run_id = get_context_value(self.context, RUN_ID_ATTR)
+        try:
+            run = self.run_pipeline(pipeline_name=target, start_date=start_date, end_date=end_date)
+            outcome: Dict[str, Any] = {"run_id": run.run_id, "status": run.status.value}
+        except Exception as error:  # noqa: BLE001 — reported on the scoring run's result
+            failed_run = getattr(error, "run_result", None)
+            outcome = {
+                "run_id": getattr(failed_run, "run_id", None),
+                "status": "failed",
+                "error": str(error),
+            }
+            logger.error("The retrain of '{}' failed: {}", target, error)
+        finally:
+            setattr(self.context, "triggered_by", None)
+            set_context_value(self.context, RUN_ID_ATTR, own_run_id)
+        return {"pipeline": target, "checks": due, **outcome}
+
+    def _last_training_age_seconds(self, pipeline_name: str) -> Optional[float]:
+        """Seconds since *pipeline_name* last trained, from its certificates.
+
+        A successful run counts, and so does any run a retrain started, whatever its
+        outcome: a retrain whose model the promotion policy refused (or that failed)
+        counted for nothing, and every scoring run after it retrained again.
+        """
+        from datetime import datetime, timezone
+
+        from ducta.core.certificate import iter_certificate_dirs, load_certificate
+
+        newest: Optional[datetime] = None
+        base = Path(self.settings.run_certificate_dir)
+        for _run_id, run_dir in iter_certificate_dirs(base):
+            try:
+                cert = load_certificate(run_dir / "certificate.json")
+            except Exception:  # noqa: BLE001 — an unreadable certificate is not a run
+                continue
+            if cert.get("pipeline") != pipeline_name:
+                continue
+            if cert.get("status") != "success" and not cert.get("triggered_by"):
+                continue
+            if cert.get("reproduction_of"):
+                continue
+            try:
+                ended = datetime.fromisoformat(str(cert.get("ended_at")))
+            except ValueError:
+                continue
+            if ended.tzinfo is None:
+                ended = ended.replace(tzinfo=timezone.utc)
+            newest = ended if newest is None or ended > newest else newest
+        if newest is None:
+            return None
+        return (datetime.now(timezone.utc) - newest).total_seconds()
 
     def _acquire_run_lock(
         self,
@@ -374,6 +497,7 @@ class PipelineExecutor:
         status: str,
         error: Optional[str],
         mlops_run_id: Optional[str] = None,
+        run_window: Optional[Tuple[Optional[str], Optional[str]]] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """Assemble and persist the Run Certificate."""
         try:
@@ -406,6 +530,7 @@ class PipelineExecutor:
                 ducta_version=ducta_version,
                 error=error,
                 mlops_run_id=mlops_run_id,
+                run_window=run_window,
             )
             signing_key = cert_mod.resolve_signing_key(self.context)
             if signing_key is not None:

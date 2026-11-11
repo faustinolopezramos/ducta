@@ -46,7 +46,8 @@ class MLBasicTemplate(BaseTemplate):
     SAMPLE_MODULE = "pipelines.churn"
     SAMPLE_MODULE_PATH = ("pipelines", "churn.py")
     DEFAULT_PIPELINE = "churn_model"
-    REQUIREMENTS = "ducta[spark,mlops]>=0.1.1\n"
+    # The release that generated it: the nodes use persist_model(promote=...).
+    REQUIREMENTS = f"ducta[spark,mlops]>={BaseTemplate.this_release()}\n"
     GITIGNORE_EXTRA = "\n# Models and experiment tracking\nmodels/\nmlops_data/\n"
 
     def quick_start(self) -> List[str]:
@@ -104,6 +105,9 @@ defaults:
 environments:
   dev:
     settings: {log_level: DEBUG}
+  staging:
+    # What CI runs (.github/workflows/ml.yml): tracked, like production.
+    settings: {mlops_required: true}
   prod:
     # In production a model that cannot be tracked must not be shipped.
     settings: {mlops_required: true}
@@ -162,6 +166,10 @@ requires_dates: false
 model_version: "1.0.0"
 
 hyperparams: {n_estimators: 100, max_depth: 6}
+
+# What `ducta start -p churn_model --search` explores: the `churn_model` key of
+# hyperparams.yaml (versioned with the project, like everything else).
+hyperparams_config: {path: hyperparams.yaml, key: churn_model}
 
 # Applied by the training node with ducta.mlrun.split_dataframe. Model selection
 # happens on `val`; `test` is scored once, at the end, for an honest estimate.
@@ -236,7 +244,23 @@ nodes:
         by_id = {int(r.split(",", 1)[0]): r for r in rows}
         rows.extend(by_id[i] for i in self._DUPLICATED)
         header = "customer_id,tenure_months,monthly_spend,support_calls,plan,churned"
-        return {"data/customers.csv": "\n".join([header, *rows]) + "\n"}
+        return {
+            "data/customers.csv": "\n".join([header, *rows]) + "\n",
+            "hyperparams.yaml": self._HYPERPARAMS,
+            ".github/workflows/ml.yml": self._ml_ci_workflow("churn_model"),
+        }
+
+    #: The search `--search` runs. Each trial is a run of its own; the objective is the
+    #: validation AUC the training node logs — never a test metric.
+    _HYPERPARAMS = """\
+churn_model:
+  algorithm: random
+  n_trials: 6
+  objective: {metric: val_auc, type: maximize}
+  search_space:
+    max_depth: {min: 3, max: 12}
+    n_estimators: [50, 100, 200]
+"""
 
     def generate_sample_code(self) -> Optional[str]:
         return '''"""
@@ -409,6 +433,17 @@ gold runs            1 row per run   (after `churn_runs`) hyperparameters, metri
 | Random seed | `ducta.yaml` (`random_seed`) | one number makes a run repeatable |
 | Experiment tracking, model registry | `ducta.yaml` (`mlops_*`) | `type: ml` pipelines are tracked automatically |
 | Baseline gate | `pipelines/churn.py` | the model is registered only if it beats the trivial one |
+
+## Search the hyperparameters
+
+```bash
+ducta start --env dev --pipeline churn_model --search
+```
+
+Six runs, each with values drawn from `hyperparams.yaml` (named by `hyperparams_config`
+in `pipelines/churn_model.yaml`); it ends with the best one and its `val_auc`. Every trial's
+model is registered, none promoted: promote the best with `ducta model promote`
+(`ducta model list` shows the versions).
 
 ## Compare your runs in one table
 

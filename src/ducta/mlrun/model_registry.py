@@ -37,6 +37,7 @@ from ducta.mlrun.exceptions import (
     ArtifactValidationError,
     ModelNotFoundError,
     ModelRegistrationError,
+    PromotionGateError,
     ProtectedVersionError,
 )
 from ducta.mlrun.storage import StorageBackend
@@ -75,6 +76,24 @@ class PromotionPolicy:
     def from_dict(cls, data: Dict[str, Any]) -> "PromotionPolicy":
         valid = {f.name for f in fields(cls)}
         return cls(**{k: v for k, v in data.items() if k in valid})
+
+    @classmethod
+    def from_settings(cls, mlops: Any) -> Optional["PromotionPolicy"]:
+        """``settings.mlops.promotion_policy`` as a policy; ``None`` when there is none.
+
+        ``ValueError`` when it is set but unusable (not a mapping, no ``metric``, a bad
+        value). The one reader for the CLI, the API and the training node, which each
+        had their own copy.
+        """
+        raw = mlops.get("promotion_policy") if isinstance(mlops, dict) else None
+        if raw is None:
+            return None
+        if not isinstance(raw, dict) or not raw.get("metric"):
+            raise ValueError("mlops.promotion_policy is set but names no metric")
+        try:
+            return cls.from_dict(raw)
+        except Exception as e:  # noqa: BLE001 — any unusable value is reported the same way
+            raise ValueError(f"mlops.promotion_policy is invalid: {e}") from e
 
 
 @dataclass
@@ -475,7 +494,7 @@ class ModelRegistry:
                 metadata_path = self._metadata_path(model_id, version)
                 self.storage.write_json(model_version.to_dict(), metadata_path, mode="overwrite")
 
-                self._update_models_index(model_version, skip_lock=True)
+                self._update_models_index(model_version)
                 self._save_counter(name, model_id, version)
 
                 logger.info(
@@ -676,7 +695,24 @@ class ModelRegistry:
                         f"recording bypass in audit log"
                     )
                 else:
-                    self._check_promotion_gate(name, model_version, policy)
+                    try:
+                        self._check_promotion_gate(name, model_version, policy)
+                    except PromotionGateError as refusal:
+                        # Recorded where the history reads it: a refusal otherwise
+                        # left a trace only in the certificate of the run that tried.
+                        self._audit_log(
+                            "PROMOTE_REFUSED",
+                            name,
+                            version,
+                            user,
+                            reason,
+                            {
+                                "target_stage": stage.value,
+                                "policy_metric": policy.metric,
+                                "refusal": refusal.reason,
+                            },
+                        )
+                        raise
 
             old_stage = model_version.metadata.stage
             model_version.metadata.stage = stage
@@ -689,7 +725,7 @@ class ModelRegistry:
             if stage == ModelStage.PRODUCTION:
                 demoted_versions = self._demote_other_production_versions(name, version, user=user)
 
-            self._update_models_index(model_version, skip_lock=True)
+            self._update_models_index(model_version)
 
             logger.info(f"Model {name} v{version} promoted to {stage.value}")
 
@@ -742,7 +778,7 @@ class ModelRegistry:
             other.updated_at = datetime.now(tz=timezone.utc).isoformat()
             other_metadata_path = self._metadata_path(other.model_id, other_version)
             self.storage.write_json(other.to_dict(), other_metadata_path, mode="overwrite")
-            self._update_models_index(other, skip_lock=True)
+            self._update_models_index(other)
             self._audit_log(
                 "DEMOTE",
                 name,
@@ -913,8 +949,15 @@ class ModelRegistry:
         self.storage.read_artifact(model_version.artifact_uri, local_destination)
         logger.info(f"Downloaded {name} v{model_version.version} to {local_destination}")
 
-    def delete_model_version(self, name: str, version: int, force: bool = False) -> None:
-        """Delete specific model version and remove it from the index."""
+    def delete_model_version(
+        self,
+        name: str,
+        version: int,
+        force: bool = False,
+        user: Optional[str] = None,
+        reason: Optional[str] = None,
+    ) -> None:
+        """Delete specific model version and remove it from the index (audit-logged)."""
         with self._registry_lock():
             model_version = self.get_model_version(name, version)
 
@@ -950,7 +993,55 @@ class ModelRegistry:
                 index_path = str(Path(self.registry_path) / "models" / self._INDEX_FILENAME)
                 self.storage.write_dataframe(df, index_path, mode="overwrite")
 
+            # A deletion left no trace: the history showed a version that was simply gone.
+            self._audit_log(
+                "DELETE",
+                name,
+                version,
+                user,
+                reason,
+                {"stage": model_version.metadata.stage.value, "forced": bool(force)},
+            )
+
         logger.info(f"Deleted {name} v{version}")
+
+    def audit_history(self, name: str) -> List[Dict[str, Any]]:
+        """Every audit entry of model *name*, newest first: registrations, promotions,
+        refused promotions, deletions — who, when, why.
+
+        Entries are one JSON file each (``metadata/audit_<name>_<version>_<uuid>.json``);
+        the storage interface cannot list files, so only a local registry can answer,
+        and any other backend returns ``[]``. Filtered on the entry's own ``model``:
+        a name can be the prefix of another one.
+        """
+        import json
+
+        from ducta.mlrun.storage import LocalStorageBackend
+
+        if not isinstance(self.storage, LocalStorageBackend):
+            return []
+        folder = self.storage._get_full_path(str(Path(self.registry_path) / "metadata"))
+        entries: List[Dict[str, Any]] = []
+        for path in folder.glob(f"audit_{name}_*.json"):
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                logger.debug(f"Unreadable audit entry {path.name}: {e}")
+                continue
+            if isinstance(entry, dict) and entry.get("model") == name:
+                entries.append(entry)
+        return sorted(entries, key=lambda e: str(e.get("timestamp", "")), reverse=True)
+
+    def check_promotion_gate(
+        self, name: str, version: int, policy: PromotionPolicy
+    ) -> Optional[str]:
+        """Why *policy* would refuse promoting *version* to Production, or None if it
+        would pass. Changes nothing: the same check ``promote_model`` runs."""
+        try:
+            self._check_promotion_gate(name, self.get_model_version(name, version), policy)
+        except PromotionGateError as refusal:
+            return refusal.reason
+        return None
 
     def _load_models_index(self) -> pd.DataFrame:
         """Load models index."""
@@ -962,40 +1053,31 @@ class ModelRegistry:
                 columns=["model_id", "name", "version", "created_at", "stage", "size_bytes"]
             )
 
-    def _update_models_index(self, model_version: ModelVersion, skip_lock: bool = False) -> None:
+    def _update_models_index(self, model_version: ModelVersion) -> None:
+        """Write *model_version*'s row (with its stage) into the models index.
+
+        The stage is there so that get_model_by_stage can filter without reading every
+        JSON metadata file. Callers hold ``_registry_lock``: every write to the index
+        happens under it. (It had a second lock of its own, ``models/.index.lock``,
+        that no caller used and that would not have excluded a registration.)
         """
-        Update models index.
-        Includes the current stage so that get_model_by_stage can filter
-        without reading every JSON metadata file (N-01 optimisation).
-        """
-        lock_path = str(Path(self.registry_path) / "models" / ".index.lock")
+        df = self._load_models_index()
 
-        def _do_update():
-            df = self._load_models_index()
+        new_row = pd.DataFrame(
+            [
+                {
+                    "model_id": model_version.model_id,
+                    "name": model_version.metadata.name,
+                    "version": model_version.version,
+                    "created_at": model_version.created_at,
+                    "stage": model_version.metadata.stage.value,
+                    "size_bytes": model_version.size_bytes,
+                }
+            ]
+        )
 
-            new_row = pd.DataFrame(
-                [
-                    {
-                        "model_id": model_version.model_id,
-                        "name": model_version.metadata.name,
-                        "version": model_version.version,
-                        "created_at": model_version.created_at,
-                        "stage": model_version.metadata.stage.value,
-                        "size_bytes": model_version.size_bytes,
-                    }
-                ]
-            )
+        df = pd.concat([df, new_row], ignore_index=True)
+        df = df.drop_duplicates(subset=["model_id", "version"], keep="last")
 
-            df = pd.concat([df, new_row], ignore_index=True)
-            df = df.drop_duplicates(subset=["model_id", "version"], keep="last")
-
-            index_path = str(Path(self.registry_path) / "models" / self._INDEX_FILENAME)
-            self.storage.write_dataframe(df, index_path, mode="overwrite")
-
-        if skip_lock:
-            _do_update()
-        else:
-            with file_lock(
-                lock_path, timeout=30.0, base_path=getattr(self.storage, "base_path", None)
-            ):
-                _do_update()
+        index_path = str(Path(self.registry_path) / "models" / self._INDEX_FILENAME)
+        self.storage.write_dataframe(df, index_path, mode="overwrite")

@@ -47,7 +47,8 @@ class MLScoringTemplate(BaseTemplate):
     SAMPLE_MODULE = "pipelines.churn"
     SAMPLE_MODULE_PATH = ("pipelines", "churn.py")
     DEFAULT_PIPELINE = "train"
-    REQUIREMENTS = "ducta[spark,mlops]>=0.1.1\n"
+    # The release that generated it: the nodes use persist_model(promote=...).
+    REQUIREMENTS = f"ducta[spark,mlops]>={BaseTemplate.this_release()}\n"
     GITIGNORE_EXTRA = "\n# Models and experiment tracking\nmodels/\nmlops_data/\n"
 
     def quick_start(self) -> List[str]:
@@ -87,6 +88,10 @@ settings:
   mlops_enabled: true
   mlops_required: false
   mlops_path: mlops_data
+  mlops:
+    # The gate a new model passes to reach production: train's persist_model
+    # promotes through it, and so does `ducta model promote`.
+    promotion_policy: {metric: val_auc, compare_to: current_production, min_delta: 0.0}
 
 defaults:
   catalog:
@@ -95,6 +100,9 @@ defaults:
 environments:
   dev:
     settings: {log_level: DEBUG}
+  staging:
+    # What CI runs (.github/workflows/ml.yml): tracked, like production.
+    settings: {mlops_required: true}
   prod:
     settings: {mlops_required: true}
 """
@@ -175,6 +183,11 @@ description: "Churn: score new customers with the production model"
 type: ml
 requires_dates: false
 
+# When the scores drift from the validation reference, Ducta runs `train` right after
+# this run. The new model reaches production only if it passes
+# settings.mlops.promotion_policy; at most once a day.
+retrain: {run: train, when: [prediction_drift], cooldown: 1d}
+
 nodes:
   score:
     description: "Add churn_score to every new customer"
@@ -229,6 +242,7 @@ nodes:
         return {
             "data/customers.csv": "\n".join(customers) + "\n",
             "data/new_customers.csv": "\n".join(new) + "\n",
+            ".github/workflows/ml.yml": self._ml_ci_workflow("train", "score"),
         }
 
     def generate_sample_code(self) -> Optional[str]:
@@ -249,13 +263,17 @@ TARGET = "churned"
 
 
 def train(customers: Any, ml_context: Any = None) -> Any:
-    """Fit, gate on the baseline, register, promote; return the validation scores."""
+    """Fit, gate on the baseline, register, promote; return the validation scores.
+
+    Promotion goes through settings.mlops.promotion_policy: a model no better than
+    the one in production is registered but stays in staging, and the node fails so
+    the drift reference (its output) keeps describing the model in production.
+    """
     import pandas as pd
     from sklearn.ensemble import RandomForestClassifier
     from sklearn.metrics import roc_auc_score
 
     from ducta.mlrun import persist_model, split_dataframe
-    from ducta.mlrun.model_registry import ModelStage
 
     params = {"n_estimators": 100, "max_depth": 6, **(ml_context.get("hyperparams") or {})}
     seed = ml_context.get("node_seed", 42)
@@ -282,10 +300,13 @@ def train(customers: Any, ml_context: Any = None) -> Any:
         metrics={"val_auc": float(auc)},
         hyperparameters=params,
         X=train_df[FEATURES],  # the feature contract the scorer reads its columns from
+        promote="production",  # through settings.mlops.promotion_policy
     )
-    registry = ml_context.mlops_context.model_registry
-    registry.promote_model("churn-model", registered["version"], ModelStage.PRODUCTION)
-    logger.info("churn-model v{} is now in production", registered["version"])
+    if registered.get("promotion_refused"):
+        raise ValueError(
+            f"churn-model v{registered['version']} stays in staging: "
+            f"{registered.get('promotion_refused')}"
+        )
 
     # The reference prediction_drift compares every scoring run against.
     return pd.DataFrame({"churn_score": val_scores})
@@ -332,11 +353,26 @@ The score node's checks run before the scores are written:
 | `prediction_rate` | a model that suddenly flags everyone, or no one |
 | `prediction_drift` | scores no longer distributed as on the validation set (`gold.churn.validation_scores`) |
 
-## Retrain
+## Promotion
 
-Run `train` again: it registers a new version and promotes it. The next `score`
-run picks it up, and `ducta certify diff` between two score runs shows the model
-changed.
+`train` registers every model, and promotes it through
+`settings.mlops.promotion_policy` (in `ducta.yaml`): the first one goes to production,
+a later one only if its `val_auc` beats the model in production. One that does not
+stays in staging, and the train run fails saying so — production, and the drift
+reference, are left alone. `ducta model list` shows the versions and their stages.
+
+## Retrain on drift
+
+`score` declares `retrain: {{run: train, when: [prediction_drift], cooldown: 1d}}`.
+When its scores drift from the validation reference, Ducta runs `train` right after
+the scoring run — at most once a day. The training run's certificate says what
+started it (`triggered_by`); the next `score` serves the new model if it was promoted.
+
+To see it, score customers unlike the training ones, e.g. double every
+`monthly_spend` in `data/new_customers.csv`, then `ducta start -e dev -p score`.
+
+Run `train` by hand at any time; `ducta certify diff` between two score runs shows
+when the model changed.
 
 Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 """

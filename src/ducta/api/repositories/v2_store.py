@@ -232,6 +232,37 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _same_checks(written: Any, sent: Any) -> bool:
+    """True when two checks blocks mean the same to the engine, whatever their form."""
+    from pydantic import ValidationError as SchemaError
+
+    from ducta.setting.project.schema import ChecksBlock
+
+    if not isinstance(written, dict) or not isinstance(sent, dict):
+        return False
+    try:
+        return ChecksBlock.model_validate(_plain(written)) == ChecksBlock.model_validate(sent)
+    except SchemaError:
+        return False
+
+
+def _keep_written_checks(stored: Any, node: Dict[str, Any]) -> None:
+    """Keep a node's checks blocks as written when the client sent them back unchanged.
+
+    A read returns them compiled (``empty_dataset: true`` comes back as
+    ``checks: {empty_dataset: {}}``); writing that long form over the short one
+    the person wrote dropped their comments without changing a thing the engine
+    does. ``node`` is edited in place, so the sync that follows leaves them alone.
+    """
+    if _same_checks(stored.get("quality"), node.get("quality")):
+        node["quality"] = _plain(stored["quality"])
+    written, sent = stored.get("input_checks"), node.get("input_checks")
+    if isinstance(written, dict) and isinstance(sent, dict):
+        for dataset, block in sent.items():
+            if _same_checks(written.get(dataset), block):
+                sent[dataset] = _plain(written[dataset])
+
+
 def _sync(target: Any, desired: Dict[str, Any]) -> None:
     """Make mapping ``target`` equal ``desired``, keeping untouched subtrees as they are.
 
@@ -399,6 +430,7 @@ class V2ProjectStore:
 
             nodes = doc.setdefault("nodes", CommentedMap())
             if name in nodes and isinstance(nodes[name], dict):
+                _keep_written_checks(nodes[name], node)
                 _sync(nodes[name], node)
             else:
                 nodes[name] = node

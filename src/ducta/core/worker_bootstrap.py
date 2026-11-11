@@ -55,7 +55,9 @@ def capture_run_overrides(context: Any) -> Dict[str, Any]:
     settings = settings if isinstance(settings, dict) else {}
     global_config = {
         key: copy.deepcopy(settings[key])
-        for key in ("output_path", "run_certificate_dir", "chain")
+        # mlops_path: a reproduction's (and a sample run's) registry and tracker are a
+        # scratch store; without it a worker registered and promoted in the real one.
+        for key in ("output_path", "run_certificate_dir", "chain", "mlops_path")
         if key in settings
     }
     quality = settings.get("quality")
@@ -64,6 +66,9 @@ def capture_run_overrides(context: Any) -> Dict[str, Any]:
     outputs = getattr(context, "output_config", None) or {}
     return {
         "sample_rows": getattr(context, "sample_rows", None),
+        # Where a reproduction's serving nodes read their models, and which versions.
+        "serving_mlops_path": getattr(context, "serving_mlops_path", None),
+        "pinned_models": dict(getattr(context, "pinned_models", None) or {}),
         "allow_python_config": bool(getattr(context, "allow_python_config", True)),
         "global_config": global_config,
         "output_filepaths": {
@@ -80,6 +85,10 @@ def apply_run_overrides(context: Any, overrides: Dict[str, Any]) -> None:
         return
     if overrides.get("sample_rows"):
         context.sample_rows = overrides["sample_rows"]
+    if overrides.get("serving_mlops_path"):
+        context.serving_mlops_path = overrides["serving_mlops_path"]
+    if overrides.get("pinned_models"):
+        context.pinned_models = dict(overrides["pinned_models"])
     settings = getattr(context, "global_config", None)
     if isinstance(settings, dict):
         captured = dict(overrides.get("global_config") or {})

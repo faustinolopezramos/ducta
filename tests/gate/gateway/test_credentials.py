@@ -28,12 +28,31 @@ class TestReadDotenv:
 
 
 class TestResolveCredentials:
-    def test_the_environment_beats_the_env_file(self, tmp_path, monkeypatch):
+    def test_the_environment_pair_beats_the_env_file(self, tmp_path, monkeypatch):
         (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=from-file\n")
+        monkeypatch.setenv("CRM_USER", "bob")
         monkeypatch.setenv("CRM_PASSWORD", "from-env")
         creds = resolve_credentials("crm", tmp_path)
-        assert (creds.username, creds.password, creds.prefix) == ("alice", "from-env", "CRM")
+        assert (creds.username, creds.password, creds.prefix) == ("bob", "from-env", "CRM")
         assert creds.where == "environment"
+
+    def test_half_in_the_environment_and_half_in_the_file_is_an_error(self, tmp_path, monkeypatch):
+        """One by one, the project's .env supplied the user and the server's environment the
+        password; neither side is taken silently (the file's would ignore a rotated password)."""
+        (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=from-file\n")
+        monkeypatch.setenv("CRM_PASSWORD", "from-env")
+        with pytest.raises(ValueError, match="CRM_PASSWORD is set in the environment") as caught:
+            resolve_credentials("crm", tmp_path)
+        assert "from-env" not in str(caught.value) and "from-file" not in str(caught.value)
+
+    @pytest.mark.parametrize("name", ["ducta_admin", "DUCTA_SMTP"])
+    def test_a_name_on_the_servers_own_secrets_gets_nothing(self, tmp_path, monkeypatch, name):
+        """A connection named ducta_admin sent DUCTA_ADMIN_PASSWORD to a host of its choosing."""
+        prefix = name.upper()
+        monkeypatch.setenv(f"{prefix}_USER", "admin")
+        monkeypatch.setenv(f"{prefix}_PASSWORD", "real-admin-password")
+        creds = resolve_credentials(name, tmp_path)
+        assert (creds.username, creds.password) == (None, None)
 
     def test_the_env_file_alone(self, tmp_path):
         (tmp_path / ".env").write_text("CRM_USER=alice\nCRM_PASSWORD=pw\n")

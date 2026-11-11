@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -54,6 +55,24 @@ def validate_date_range(start_date: str, end_date: str) -> tuple[datetime, datet
     if start > end:
         raise ConfigurationError("start_date must be <= end_date")
     return start, end
+
+
+def _local_target_problem(path: Path) -> Optional[str]:
+    """Why a local output path cannot be written, or None.
+
+    Spark writes a dataset as a directory: an existing file in its place, or a
+    parent that is a file or not writable, fails only once the write starts.
+    """
+    if path.exists() and not path.is_dir():
+        return f"{path} is a file, not a dataset directory"
+    probe = path if path.exists() else path.parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    if not probe.is_dir():
+        return f"{probe} is not a directory, so {path} cannot be created"
+    if not os.access(probe, os.W_OK | os.X_OK):
+        return f"no permission to write in {probe}"
+    return None
 
 
 class DataOutputManager(BaseIO):
@@ -97,11 +116,39 @@ class DataOutputManager(BaseIO):
             logger.debug("Could not compute output mtime for '{}': {}", out_key, error)
             return None
 
-    def _output_keys_for_empty_result(self, output_keys: List[str]) -> List[str]:
-        """Which of *output_keys* still get written when the node produced no rows."""
+    def _may_hold_data(self, out_key: str, config: Dict[str, Any], env: str) -> bool:
+        """Whether writing an empty result to *out_key* could delete rows.
+
+        Only a local path can be looked at; a table or a remote path is assumed
+        to hold data.
+        """
+        if config.get("format") == SupportedFormats.UNITY_CATALOG.value:
+            return True
+        try:
+            path = self.path_manager.resolve_output_path(config, out_key, env)
+        except Exception:  # noqa: BLE001
+            return True
+        if is_cloud_path(path):
+            return True
+        # Not path_has_data: that counts only a completed write, and a dataset
+        # written without a _SUCCESS marker still holds rows an overwrite deletes.
+        target = Path(path)
+        if target.is_file():
+            return target.stat().st_size > 0
+        return target.is_dir() and any(target.iterdir())
+
+    def _output_keys_for_empty_result(
+        self, output_keys: List[str], env: str, node_name: str, fail_on_error: bool
+    ) -> List[str]:
+        """Which of *output_keys* still get written when the node produced no rows.
+
+        An overwrite of 0 rows would empty the dataset, so it is refused unless the
+        dataset declares ``write: {allow_empty: true}`` or holds nothing yet. A write
+        that does not replace the whole dataset has nothing to do and is skipped.
+        """
         output_config = self._ctx_get("output_config", {}) or {}
         writable: List[str] = []
-        skipped: List[str] = []
+        refused: List[str] = []
         for out_key in output_keys:
             cfg = output_config.get(out_key, {}) or {}
             write_mode = cfg.get("write_mode", WriteMode.OVERWRITE.value)
@@ -109,27 +156,80 @@ class DataOutputManager(BaseIO):
                 getattr(write_mode, "value", write_mode) == WriteMode.OVERWRITE.value
                 and str(cfg.get("partition_overwrite") or "static").lower() != "dynamic"
             )
-            if replaces_all:
+            if not replaces_all:
+                reason = (
+                    f"output '{out_key}' not written: the node produced 0 rows and its write "
+                    "does not replace the whole dataset (write_mode is not 'overwrite', or "
+                    "partition_overwrite is 'dynamic'), so there was nothing to write and what "
+                    "the dataset already holds stays"
+                )
+                logger.warning("{}.", reason)
+                self._note_evidence_gap(reason)
+            elif cfg.get("allow_empty") is True:
+                logger.warning(
+                    "Node produced 0 rows; writing the empty result to '{}' "
+                    "(write.allow_empty is true, so the dataset is emptied).",
+                    out_key,
+                )
+                writable.append(out_key)
+            elif not self._may_hold_data(out_key, cfg, env):
                 writable.append(out_key)
             else:
-                skipped.append(out_key)
+                refused.append(out_key)
 
-        if writable:
-            logger.warning(
-                "Node produced 0 rows; writing the empty result to {} (write_mode=overwrite, "
-                "so the target is truncated rather than left holding a previous run's data).",
-                writable,
+        if refused:
+            message = (
+                f"Node '{node_name}' produced 0 rows, and overwriting {refused} with them "
+                "would empty what they hold; nothing was written to them. If an empty "
+                "result is valid for a dataset, set `write: {allow_empty: true}` on it; "
+                "otherwise check the node's inputs and filters."
             )
-        for out_key in skipped:
-            reason = (
-                f"output '{out_key}' not written: the node produced 0 rows and its write "
-                "does not replace the whole dataset (write_mode is not 'overwrite', or "
-                "partition_overwrite is 'dynamic'), so there was nothing to write and what "
-                "the dataset already holds stays"
-            )
-            logger.warning("{}.", reason)
-            self._note_evidence_gap(reason)
+            if fail_on_error:
+                raise WriteOperationError(message)
+            logger.error("{}", message)
+            for out_key in refused:
+                self._note_evidence_gap(
+                    f"output '{out_key}' was not written (fail_on_error=false): the node "
+                    "produced 0 rows and the dataset does not allow an empty result"
+                )
         return writable
+
+    def _unwritable_targets(self, output_keys: List[str], env: str) -> Dict[str, str]:
+        """``{out_key: problem}`` for each output that cannot be written as configured.
+
+        Checked before any output is written: a node with several outputs would
+        otherwise write the first ones and then fail on a later one, leaving the
+        datasets out of step with each other.
+        """
+        output_config = self._ctx_get("output_config", {}) or {}
+        problems: Dict[str, str] = {}
+        for out_key in output_keys:
+            cfg = output_config.get(out_key)
+            if not cfg:
+                problems[out_key] = f"Output configuration '{out_key}' not found"
+                continue
+            format_name = str(getattr(cfg.get("format"), "value", cfg.get("format")) or "")
+            if format_name.lower() == SupportedFormats.UNITY_CATALOG.value:
+                if not self.uc_manager.is_enabled():
+                    problems[out_key] = (
+                        "format 'unity_catalog' needs a session with Unity Catalog "
+                        "(mode: databricks); this session has none"
+                    )
+                continue
+            if not self.writer_factory.supports(format_name):
+                problems[out_key] = f"Unsupported format: '{format_name}'"
+                continue
+            try:
+                path = self.path_manager.resolve_output_path(cfg, out_key, env)
+            except Exception as error:  # noqa: BLE001
+                problems[out_key] = str(error)
+                continue
+            if is_cloud_path(path) or "://" in path:
+                continue
+            problem = _local_target_problem(Path(path))
+            if problem:
+                problems[out_key] = problem
+        return problems
 
     def save_output(
         self,
@@ -150,7 +250,27 @@ class DataOutputManager(BaseIO):
         fail_on_error = self._ctx_get("global_config", {}).get("fail_on_error", True)
 
         if hasattr(dataframe, "isEmpty") and dataframe.isEmpty():
-            output_keys = self._output_keys_for_empty_result(output_keys)
+            output_keys = self._output_keys_for_empty_result(
+                output_keys, env, str(node.get("name") or "?"), fail_on_error
+            )
+            if not output_keys:
+                return
+
+        # One output fails on its own write; several must all be writable before any
+        # is written, or the first ones would hold this run's data and the rest not.
+        problems = self._unwritable_targets(output_keys, env) if len(output_keys) > 1 else {}
+        if problems:
+            listed = "; ".join(f"'{key}': {why}" for key, why in problems.items())
+            if fail_on_error:
+                raise ConfigurationError(
+                    f"Cannot write the node's outputs, so none was written — {listed}"
+                )
+            for key, why in problems.items():
+                logger.error("Error saving output '{}': {}", key, why)
+                self._note_evidence_gap(
+                    f"output '{key}' was not written (fail_on_error=false): {why}"
+                )
+            output_keys = [key for key in output_keys if key not in problems]
             if not output_keys:
                 return
 
@@ -169,11 +289,18 @@ class DataOutputManager(BaseIO):
                 logger.debug("Could not persist DataFrame for multi-output save: {}", error)
 
         try:
+            written: List[str] = []
             for out_key in output_keys:
                 try:
                     self._save_single_output(out_key, dataframe, start_date, end_date, env)
+                    written.append(out_key)
                 except Exception as error:
                     logger.error("Error saving output '{}': {}", out_key, error)
+                    if written:
+                        self._note_evidence_gap(
+                            f"partial write: {written} already hold this run's data, but "
+                            f"output '{out_key}' failed and does not"
+                        )
                     if fail_on_error:
                         raise
                     self._note_evidence_gap(

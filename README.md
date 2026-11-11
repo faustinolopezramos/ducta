@@ -400,7 +400,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.8",
+  "schema_version": "1.10",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -422,7 +422,7 @@ flowchart LR
   ],
   "inputs": {                                // which data went in
     "raw_sales": { "filepath": "data/sales.csv", "file_size_bytes": 48213904,
-                   "engine": "spark", "algorithm": "xxhash64-multiset/v2",
+                   "engine": "spark", "algorithm": "xxhash64-multiset/v3",
                    "mode": "exact", "row_count": 1204331,
                    "schema_hash": "sha256:9ab0…",
                    "content_hash": "sha256:31de…",
@@ -430,7 +430,7 @@ flowchart LR
   },
   "outputs": {                               // which data came out
     "core.analytics.sales_clean": { "engine": "spark",
-                                    "algorithm": "xxhash64-multiset/v2",
+                                    "algorithm": "xxhash64-multiset/v3",
                                     "mode": "exact", "row_count": 1198677,
                                     "content_hash": "sha256:7c42…",
                                     "fingerprint": "sha256:7c42…" }
@@ -592,7 +592,7 @@ flowchart TD
 | [`setting`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/setting/README.md) | Loads, interpolates and validates every config source into one typed, environment-aware `Context`. | Foundation |
 | [`gate`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/gate/README.md) | Secure read/write: Spark for every file format and table (pandas for pickle datasets), plus a sanitized JDBC gateway. | Physical I/O |
 | [`check`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/check/README.md) | Engine-agnostic checks before and after each node; quality gates that block, warn or skip. | Data quality |
-| [`mlrun`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/mlrun/README.md) | Experiment tracking, versioned model registry, data fingerprinting, hyperparameter search, reproducible splits. | MLOps |
+| [`mlrun`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/mlrun/README.md) | Experiment tracking, versioned model registry with a promotion policy, retraining on drift, data fingerprinting, hyperparameter search, reproducible splits. | MLOps |
 | [`stream`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/stream/README.md) | Declarative Spark Structured Streaming: readers, sinks, checkpoints, query supervision; per-batch merge, quarantine and quality checks, a run journal and live alerts. | Streaming |
 | [`core`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md) | Turns a `Context` into running work — dependency graph, parallel nodes, gates, run certificate. | Execution engine |
 | [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
@@ -642,6 +642,10 @@ Direction, not commitments — Ducta is alpha and priorities move. The
   the node's quality checks on every batch, a run journal that outlives the
   process, a certificate for every streaming run, and alerts while it runs.
 - Showing a stream node's quarantine and gate verdicts in the web app.
+- A model reaches production only through the project's promotion policy (from the
+  training node, the CLI or the web app, every decision audit-logged), a scoring
+  pipeline's `retrain:` runs the training when its drift checks fail, and the ML
+  templates ship a CI workflow that trains through that gate.
 
 **Next**
 

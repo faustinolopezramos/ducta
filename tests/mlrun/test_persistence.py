@@ -87,7 +87,10 @@ class TestPersistModel:
         assert registry.kwargs["name"] == "my_model"
         assert registry.kwargs["experiment_run_id"] == "run456"
 
-    def test_registry_failure_falls_back_to_local_file(self, tmp_path):
+    def test_a_registry_failure_fails_the_node(self, tmp_path):
+        """It fell back to a local pickle and the node succeeded: the registry never got
+        the model, and serving kept the previous Production version."""
+
         class _FailingRegistry:
             def register_model(self, **kwargs):
                 raise RuntimeError("registry unavailable")
@@ -98,16 +101,21 @@ class TestPersistModel:
         )
         base_dir = tmp_path / "models"
 
-        result = persist_model(
-            {"weights": [1, 2, 3]},
-            ml_context,
-            "my_model",
-            base_dir=str(base_dir),
-        )
+        with pytest.raises(RuntimeError, match="registry unavailable"):
+            persist_model({"weights": [1, 2, 3]}, ml_context, "my_model", base_dir=str(base_dir))
 
-        dest_dir = base_dir / "my_model" / "run789"
-        assert (dest_dir / "model.pkl").exists()
-        assert result["version"] == "run789"
+        assert not base_dir.exists()
+
+    @pytest.mark.parametrize("name", ["../escaped", "a/b", "", "-x"])
+    def test_a_name_that_is_not_a_model_name_is_refused_before_writing(self, tmp_path, name):
+        from ducta.mlrun.validators import ValidationError
+
+        base_dir = tmp_path / "models"
+        with pytest.raises(ValidationError):
+            persist_model(
+                {"w": 1}, SimpleNamespace(mlops_context=None), name, base_dir=str(base_dir)
+            )
+        assert list(tmp_path.iterdir()) == []
 
 
 class TestLocalVersionIsUnique:

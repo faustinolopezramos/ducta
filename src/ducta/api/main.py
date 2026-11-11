@@ -91,19 +91,37 @@ def warn_if_hosts_unchecked(settings: "Settings") -> bool:
 
 
 def warn_about_in_process_runs(settings: "Settings") -> bool:
-    """With accounts on, say what the ``developer`` role really grants.
+    """With accounts on, say what running code can reach, for this ``RUN_ISOLATION``.
 
-    Pipelines run inside this process: code a user writes and runs can read the
-    server's settings, ``JWT_SECRET_KEY`` included, and sign itself any role.
-    Returns ``True`` when the note was emitted.
+    In-process runs can read the server's settings, ``JWT_SECRET_KEY`` included,
+    and sign themselves any role. Runs in their own process cannot read its
+    memory (on Linux this also closes ``/proc/<pid>/environ``), but they run as
+    the same OS user. Returns ``True`` when a note was emitted.
     """
+    from ducta.api.execution.child_runner import isolation_mode, protect_server_process
+
+    if isolation_mode(settings) == "process":
+        protected = protect_server_process()
+        if not settings.auth_enabled:
+            return False
+        logger.info(
+            "Pipelines run in their own process, without this server's secrets in their "
+            "environment{}. They run as the same OS user: files the server can read (a .env "
+            "next to it, a SQLite database) they can read too — keep those out of their reach "
+            "or use a separate user/container. See SECURITY.md.",
+            ""
+            if protected
+            else " (its memory and environment are still readable by "
+            "processes of this user on this OS — e.g. `ps eww` on macOS)",
+        )
+        return True
     if not settings.auth_enabled:
         return False
     logger.warning(
-        "Pipelines run inside the API process: a user who can write and run code "
-        "(workspace.write + pipeline.execute, the 'developer' role) can read this server's "
-        "secrets, JWT_SECRET_KEY included. Give that role only to people you would trust "
-        "as admin. See SECURITY.md."
+        "Pipelines run inside the API process (RUN_ISOLATION=thread): a user who can write "
+        "and run code (workspace.write + pipeline.execute, the 'developer' role) can read "
+        "this server's secrets, JWT_SECRET_KEY included. Give that role only to people you "
+        "would trust as admin, or set RUN_ISOLATION=process. See SECURITY.md."
     )
     return True
 

@@ -148,3 +148,39 @@ class TestLoadHyperparamsConfig:
 
     def test_empty_returns_none(self):
         assert load_hyperparams_config({}) is None
+
+
+class TestSearchSpaceShapes:
+    """A mistyped entry was searched over its key names, or a string over its letters."""
+
+    @pytest.mark.parametrize(
+        "spec, says",
+        [
+            ({"min": 1, "maximum": 10}, "'max'"),
+            ({"low": 1, "high": 10}, "'min' and 'max'"),
+            ({"min": 1, "max": 10, "setp": 2}, "unknown key(s) ['setp']"),
+            ("gini", "it must be"),
+            (5, "it must be"),
+            ([], "empty"),
+        ],
+    )
+    @pytest.mark.parametrize("algorithm", ["grid", "random"])
+    def test_an_entry_of_another_shape_is_refused(self, spec, says, algorithm):
+        with pytest.raises(HyperparamConfigError) as caught:
+            HyperparamConfig(algorithm=algorithm, search_space={"n_estimators": spec})
+        assert "n_estimators" in str(caught.value) and says in str(caught.value)
+
+    def test_the_valid_shapes_still_pass(self):
+        cfg = HyperparamConfig(
+            algorithm="grid",
+            search_space={
+                "criterion": ["gini", "entropy"],
+                "depth": (2, 4),
+                "lr": {"min": 0.01, "max": 0.3, "step": 0.1, "log": False},
+                "solver": ["lbfgs", "saga"],
+                "penalty": {
+                    "depends_on": {"param": "solver", "mapping": {"lbfgs": ["l2"], "saga": ["l1"]}}
+                },
+            },
+        )
+        assert cfg.search_space["criterion"] == ["gini", "entropy"]

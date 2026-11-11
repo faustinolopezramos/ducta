@@ -106,9 +106,13 @@ class _StreamingMixin(_Base):
         try:
             from ducta.api.execution.error_recovery import ErrorContext
 
-            get_error_log(execution_id).log_error(
-                exception, ErrorContext(execution_id=execution_id)
-            )
+            context = ErrorContext(execution_id=execution_id)
+            # A run in its own process sends its exception already analysed.
+            details = getattr(exception, "error_details", None)
+            if isinstance(details, dict):
+                get_error_log(execution_id).log_error_details(details, context)
+            else:
+                get_error_log(execution_id).log_error(exception, context)
         except Exception as exc:  # noqa: BLE001
             from loguru import logger  # type: ignore
 

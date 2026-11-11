@@ -27,6 +27,19 @@ export interface Execution {
   sweep_id?: string;
   sweep_index?: number;
   certificate_run_id?: string;
+  /** What the pipeline's `retrain:` did after this run; absent when it did not retrain. */
+  retrain?: RunRetrain | null;
+}
+
+/** The training run a scoring run's `retrain:` started, or why it did not. */
+export interface RunRetrain {
+  pipeline: string;
+  checks: string[];
+  run_id?: string | null;
+  status?: string;
+  error?: string;
+  /** Why no training ran: "cooldown 1d", "not a production run". */
+  skipped?: string;
 }
 
 export interface NodeExecution {
