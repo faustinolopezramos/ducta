@@ -80,8 +80,11 @@ class AnomalyDetectionCheck(BaseQualityCheck):
 
         for column in columns:
             try:
-                mean, std = adapter.mean_std(column)
-                if mean is None or std is None or std == 0:
+                # The z-score compares today's mean with the baseline's spread: today's
+                # own spread does not enter it. Skipping a column whose std is 0 let a
+                # column collapsed to one constant (all 0, all 1e6) pass unchecked.
+                mean, _std = adapter.mean_std(column)
+                if mean is None:
                     continue
 
                 baseline_mean = baseline.get(column, {}).get("mean")
@@ -214,6 +217,10 @@ class IncrementalVolumeCheck(BaseQualityCheck):
         )
 
 
+#: How far ahead of this machine's clock the latest timestamp may be (clock skew).
+_FUTURE_TOLERANCE_HOURS = 1.0
+
+
 @register_check("freshness")
 class FreshnessCheck(BaseQualityCheck):
     """Validates data freshness (simple or business calendar mode)."""
@@ -254,6 +261,18 @@ class FreshnessCheck(BaseQualityCheck):
         max_date = self._get_max_date_value(adapter, column)
         if max_date is None:
             return self._create_result(False, f"Column '{column}' has no dates", {})
+
+        # A date in the future is not fresh data, it is wrong data (a unit or time-zone
+        # bug, a placeholder like 9999-12-31): its negative age passed any threshold.
+        latest_utc = max_date.replace(tzinfo=timezone.utc) if max_date.tzinfo is None else max_date
+        ahead_hours = (latest_utc - datetime.now(timezone.utc)).total_seconds() / 3600
+        if ahead_hours > _FUTURE_TOLERANCE_HOURS:
+            return self._create_result(
+                False,
+                f"Latest value in '{column}' ({max_date.isoformat()}) is {ahead_hours:.1f}h "
+                "in the future",
+                {"max_date": max_date.isoformat(), "hours_in_future": float(ahead_hours)},
+            )
 
         # Simple mode: max_age_hours
         if hasattr(config, "max_age_hours"):

@@ -39,7 +39,7 @@ class BusinessRulesCheck(BaseQualityCheck):
     """Validates custom business rules on data (SQL WHERE clauses or Python lambdas)."""
 
     CONFIG_PARAMS: ClassVar[FrozenSet[str]] = frozenset(
-        {"max_failures_allowed", "rule_type", "rules"}
+        {"max_failures_allowed", "max_rows", "rule_type", "rules"}
     )
 
     def __init__(self) -> None:
@@ -80,12 +80,19 @@ class BusinessRulesCheck(BaseQualityCheck):
         rule_errors = {}
         total_violations = 0
 
+        rows = None
+        if rule_type == "python":
+            # Collected once for every rule, and only when the driver can hold it.
+            rows = self._rows_for_python_rules(adapter, getattr(config, "max_rows", None))
+            if isinstance(rows, CheckResult):
+                return rows
+
         for rule in rules:
             try:
                 if rule_type == "sql":
                     violations = self._execute_sql_rule(adapter, rule)
                 else:
-                    violations = self._execute_python_rule(adapter, rule)
+                    violations = self._execute_python_rule(adapter, rule, pdf=rows)
 
                 violations_by_rule[rule] = violations
                 total_violations += int(violations)
@@ -190,8 +197,36 @@ class BusinessRulesCheck(BaseQualityCheck):
         )
     }
 
+    def _rows_for_python_rules(self, adapter: DFAdapter, max_rows: Any) -> Any:
+        """The data as pandas for Python rules, or a failed result when it is too big.
+
+        A Python rule runs row by row on the driver, so a Spark frame is collected
+        whole: with no guard a large table took the driver down (an OOM, not a
+        failed check). The limit is the one vectorized nodes use.
+        """
+        from ducta.core.commands import DEFAULT_VECTORIZED_MAX_ROWS
+
+        try:
+            limit = int(max_rows) if max_rows else DEFAULT_VECTORIZED_MAX_ROWS
+        except (TypeError, ValueError):
+            limit = DEFAULT_VECTORIZED_MAX_ROWS
+        if adapter.engine == "spark" and adapter.df.limit(limit + 1).count() > limit:
+            return self._create_result(
+                False,
+                f"Python rules need the whole dataset on the driver, and it has more than "
+                f"{limit:,} rows: no rule was checked. Use rule_type: sql, or raise "
+                "max_rows if the driver can hold it.",
+                {"max_rows": limit},
+                severity=CheckSeverity.ERROR,
+            )
+        try:
+            return adapter.to_pandas()
+        except Exception as e:  # noqa: BLE001 — each rule then reports the failure itself
+            logger.debug("Could not collect the data for Python rules: {}", e)
+            return None
+
     @staticmethod
-    def _execute_python_rule(adapter: DFAdapter, rule: str) -> int:
+    def _execute_python_rule(adapter: DFAdapter, rule: str, pdf: Any = None) -> int:
         """Execute a Python lambda rule and count violations.
 
         The lambda receives each DataFrame row (as a pandas Series) so rules can
@@ -199,7 +234,8 @@ class BusinessRulesCheck(BaseQualityCheck):
         """
         try:
             BusinessRulesCheck._validate_lambda_expression(rule)
-            pdf = adapter.to_pandas()
+            if pdf is None:
+                pdf = adapter.to_pandas()
             if pdf.empty:
                 return 0
 

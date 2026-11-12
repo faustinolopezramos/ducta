@@ -127,6 +127,10 @@ CHECK_PARAMS: Dict[str, Dict[str, Dict[str, Any]]] = {
         "rules": _p({"type": "array", "items": {"type": "string"}}, "One expression per rule"),
         "rule_type": _p({"type": "string", "enum": ["sql", "python"]}, "How rules are evaluated"),
         "max_failures_allowed": _p({"type": "integer", "minimum": 0}, "Violating rows tolerated"),
+        "max_rows": _p(
+            {"type": "integer", "minimum": 1},
+            "Python rules: most rows collected to the driver (default 5,000,000)",
+        ),
     },
     "dataset_completeness": {
         "column": _p({"type": "string"}, "Column in this dataset"),

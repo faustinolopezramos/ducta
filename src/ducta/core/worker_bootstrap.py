@@ -64,8 +64,10 @@ def capture_run_overrides(context: Any) -> Dict[str, Any]:
     if isinstance(quality, dict) and isinstance(quality.get("output"), dict):
         global_config["quality_output"] = copy.deepcopy(quality["output"])
     outputs = getattr(context, "output_config", None) or {}
+    inputs = getattr(context, "input_config", None) or {}
     return {
         "sample_rows": getattr(context, "sample_rows", None),
+        "reproduction_of": getattr(context, "reproduction_of", None),
         # Where a reproduction's serving nodes read their models, and which versions.
         "serving_mlops_path": getattr(context, "serving_mlops_path", None),
         "pinned_models": dict(getattr(context, "pinned_models", None) or {}),
@@ -76,6 +78,15 @@ def capture_run_overrides(context: Any) -> Dict[str, Any]:
             for key, cfg in outputs.items()
             if isinstance(cfg, dict) and cfg.get("filepath")
         },
+        # A sample run or a reproduction reads what it wrote itself (redirect_writes
+        # repoints the inputs), and the real data where it wrote nothing: without
+        # these a worker read the real datasets.
+        "input_filepaths": {
+            key: cfg["filepath"]
+            for key, cfg in inputs.items()
+            if isinstance(cfg, dict) and cfg.get("filepath")
+        },
+        "read_fallback_paths": list(getattr(context, "_read_fallback_paths", None) or []),
     }
 
 
@@ -89,6 +100,8 @@ def apply_run_overrides(context: Any, overrides: Dict[str, Any]) -> None:
         context.serving_mlops_path = overrides["serving_mlops_path"]
     if overrides.get("pinned_models"):
         context.pinned_models = dict(overrides["pinned_models"])
+    if overrides.get("reproduction_of"):
+        context.reproduction_of = overrides["reproduction_of"]
     settings = getattr(context, "global_config", None)
     if isinstance(settings, dict):
         captured = dict(overrides.get("global_config") or {})
@@ -100,6 +113,15 @@ def apply_run_overrides(context: Any, overrides: Dict[str, Any]) -> None:
     for key, filepath in (overrides.get("output_filepaths") or {}).items():
         if isinstance(outputs.get(key), dict):
             outputs[key]["filepath"] = filepath
+    inputs = getattr(context, "input_config", None) or {}
+    for key, filepath in (overrides.get("input_filepaths") or {}).items():
+        if isinstance(inputs.get(key), dict):
+            inputs[key]["filepath"] = filepath
+    fallbacks = list(overrides.get("read_fallback_paths") or [])
+    if fallbacks:
+        context._read_fallback_paths = fallbacks
+        if isinstance(settings, dict):
+            settings["_read_fallback_paths"] = fallbacks
 
 
 def bootstrap_worker_context(

@@ -72,6 +72,16 @@ AUDIT_LOG = f"{DIR_NAME}/audit.log"
 PathLike = Union[str, Path]
 
 
+def local_env_dir(template: str, env: str) -> str:
+    """``.ducta/<env>/<kind>``, relative to the project root, for an ``_ENV_ROOT`` template.
+
+    Where the per-environment state goes when the environment's output is cloud
+    storage: certificates, chain state, locks and journals are local files, and
+    ``Path`` folded ``s3://bucket/out`` into a local folder named ``s3:``.
+    """
+    return f"{DIR_NAME}/{env}/{template.rsplit('/', 1)[-1]}"
+
+
 def under(root: PathLike, *parts: str) -> Path:
     """``<root>/.ducta/<parts…>``: framework state below any folder."""
     return Path(root).joinpath(DIR_NAME, *parts)

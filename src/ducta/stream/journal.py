@@ -43,6 +43,7 @@ from typing import Any, Dict, Iterator, List, Optional
 from loguru import logger  # type: ignore
 
 from ducta import state
+from ducta.setting.environments import sanitize_env_for_path
 from ducta.stream.checkpoints import CheckpointManager
 from ducta.stream.context_utils import get_active_env, get_context_value
 
@@ -66,12 +67,12 @@ def journal_base(context: Any) -> Optional[str]:
     output_path = get_context_value(context, "output_path", None) or gs.get("output_path")
     if not output_path:
         return None
-    base = CheckpointManager._scope_by_environment(
-        str(gs.get("stream_journal_dir") or JOURNAL_DIR_TEMPLATE),
-        gs,
-        str(output_path),
-        get_active_env(context),
-    )
+    template = str(gs.get("stream_journal_dir") or JOURNAL_DIR_TEMPLATE)
+    env = get_active_env(context)
+    base = CheckpointManager._scope_by_environment(template, gs, str(output_path), env)
+    if template == JOURNAL_DIR_TEMPLATE and CheckpointManager.is_cloud_path(base):
+        # The default sits under a cloud output: kept locally, like the certificates.
+        return state.local_env_dir(JOURNAL_DIR_TEMPLATE, sanitize_env_for_path(env))
     if CheckpointManager.is_cloud_path(base):
         # Appends to object storage are not what a journal can afford per batch.
         logger.debug("Stream journal disabled: {} is not a local path", base)

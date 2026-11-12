@@ -44,6 +44,15 @@ from ducta.core.settings import CoreSettings
 from ducta.reporting import get_reporter
 
 
+def node_timeout_for(node_config: Optional[Dict[str, Any]], default: int) -> int:
+    """A node's time limit: its own ``timeout_seconds`` when it declares one, else *default*."""
+    own = (node_config or {}).get("timeout")
+    try:
+        return int(own) if own else default
+    except (TypeError, ValueError):
+        return default
+
+
 class ParallelCoordinator:
     """Coordinates parallel execution of nodes respecting DAG dependencies."""
 
@@ -297,11 +306,7 @@ class ParallelCoordinator:
         `timeout` was a declared, validated node key that nothing read: a node
         configured with `timeout: 60` ran under the global limit, silently.
         """
-        own = (node_info.get("config") or {}).get("timeout")
-        try:
-            return int(own) if own else self.node_timeout
-        except (TypeError, ValueError):
-            return self.node_timeout
+        return node_timeout_for(node_info.get("config"), self.node_timeout)
 
     def _fail_timed_out_nodes(self, execution_state: ThreadSafeExecutionState) -> None:
         """Mark any running node that exceeded its timeout as failed."""

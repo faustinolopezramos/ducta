@@ -76,7 +76,7 @@ class ConsoleReporter(RunReporter):
             from ducta.console.ux.error_analyzer import format_error_for_developer
             from ducta.console.ux.rich_logger import RichLoggerManager
 
-            format_error_for_developer(error, node, RichLoggerManager.get_console())
+            format_error_for_developer(error, node, RichLoggerManager.get_error_console())
         except Exception:  # noqa: BLE001
             super().node_failed(node, error)
 
@@ -134,11 +134,22 @@ class ConsoleReporter(RunReporter):
         except Exception:  # noqa: BLE001
             super().output_saved(node)
 
+    @staticmethod
+    def _quiet() -> bool:
+        """``-q`` on the classic log: errors only."""
+        try:
+            from ducta.console.ux.rich_logger import RichLoggerManager
+
+            return bool(RichLoggerManager.get_console().quiet)
+        except Exception:  # noqa: BLE001
+            return False
+
     def quality_report(self, report: Any) -> bool:
         # The compact view counts passing checks on the node's line and prints
         # only the ones that fail or warn; the classic view keeps the engine's table.
         if not self.is_compact():
-            return False
+            # Under -q a passing report is not shown; a failing one is an error.
+            return self._quiet() and bool(getattr(report, "passed", False))
         from ducta.console.ux import view
 
         view.quality_report(report)
@@ -146,7 +157,7 @@ class ConsoleReporter(RunReporter):
 
     def quality_summary(self, reports: Sequence[Any]) -> bool:
         if not self.is_compact():
-            return False
+            return self._quiet()
         from ducta.console.ux import view
 
         view.quality_summary(reports)

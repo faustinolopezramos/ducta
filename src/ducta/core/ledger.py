@@ -47,6 +47,7 @@ from typing import Any, Dict, List, Optional, cast
 from loguru import logger  # type: ignore
 
 from ducta.core.context_utils import get_context_value, set_context_value
+from ducta.redaction import redact_text
 
 #: The context attributes that make up the ledger's wire format.
 RUN_ID_ATTR = "_run_id"
@@ -185,7 +186,9 @@ class RunLedger:
             # When it finished (start = this − duration): a run's timeline.
             "ended_at": datetime.now(timezone.utc).isoformat(),
             "outputs": list(outputs or []),
-            "error": error,
+            # The certificate outlives the run: a driver error echoing a password
+            # used to be kept there verbatim.
+            "error": redact_text(error),
         }
         if ml is not None:
             record["ml"] = ml

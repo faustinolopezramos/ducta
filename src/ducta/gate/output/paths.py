@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ducta.gate.base import BaseIO
-from ducta.gate.constants import is_cloud_path
+from ducta.gate.constants import is_cloud_path, join_cloud_path  # noqa: F401 — re-exported
 from ducta.gate.exceptions import ConfigurationError
 from ducta.gate.validators import VALID_NAME_PATTERN, ConfigValidator
 
@@ -56,24 +56,6 @@ class _PathComponents:
                     f"Invalid characters in '{field_name}': '{value}'. "
                     "Use only alphanumeric, underscores, and hyphens."
                 )
-
-
-def join_cloud_path(*parts: str) -> str:
-    """Join cloud storage paths properly."""
-    cleaned = [p.strip() for p in parts if p and str(p).strip()]
-    if not cleaned:
-        return ""
-
-    head = cleaned[0]
-    if "://" in head:
-        scheme, rest = head.split("://", 1)
-        head = scheme + "://" + rest.rstrip("/")
-    else:
-        head = head.rstrip("/")
-
-    tail = [p.strip("/") for p in cleaned[1:] if p.strip("/")]
-
-    return head + ("/" + "/".join(tail) if tail else "")
 
 
 def _newest_mtime(path: Path) -> Optional[float]:

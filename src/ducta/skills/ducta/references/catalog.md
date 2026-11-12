@@ -49,6 +49,10 @@ lives at `<paths.output>/<env>/<schema>/<sub_folder>/<table>`: `silver.sales.ord
 Environments can then never overwrite each other's data. Any other name needs a
 `path` (or `table`, or `format: query`).
 
+`paths.output` may be a cloud URI (`s3://`, `s3a://`, `gs://`, `abfss://`, `wasbs://`,
+`hdfs://`, `dbfs:/`…). Ducta's own state (certificates, chain state, locks) then stays
+local in `.ducta/<env>/…`; `run_lock: {backend: storage}` keeps the lock on the bucket.
+
 ## Writing
 
 ```yaml

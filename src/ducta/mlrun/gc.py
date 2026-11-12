@@ -38,10 +38,14 @@ class ModelGarbageCollector:
         max_versions_per_model: int = 5,
         registry_path: str = "model_registry",
         model_retention_days: Optional[int] = None,
+        certificate_dir: Optional[str] = None,
     ):
         self.storage_path = Path(storage_path)
         self.max_versions_per_model = max_versions_per_model
         self.model_retention_days = model_retention_days
+        #: Where the run certificates are: a version one of them served is reported,
+        #: since `certify verify --reproduce` of that run can no longer pin it.
+        self.certificate_dir = certificate_dir
         storage = LocalStorageBackend(base_path=str(self.storage_path))
         self.registry = ModelRegistry(storage=storage, registry_path=registry_path)
 
@@ -60,6 +64,26 @@ class ModelGarbageCollector:
             return False
         return (now - created) < timedelta(days=self.model_retention_days)
 
+    def _served_by_runs(self) -> Dict[tuple, list]:
+        """``{(model, version): [run_id, ...]}`` from the certificates' ``nodes[].ml.model``."""
+        served: Dict[tuple, list] = {}
+        if not self.certificate_dir:
+            return served
+        from ducta.core.certificate import iter_certificate_dirs, load_certificate
+
+        for run_id, run_dir in iter_certificate_dirs(Path(self.certificate_dir)):
+            try:
+                cert = load_certificate(run_dir / "certificate.json")
+            except Exception:  # noqa: BLE001 — an unreadable certificate pins nothing
+                continue
+            for node in cert.get("nodes") or []:
+                model = ((node or {}).get("ml") or {}).get("model") or {}
+                if model.get("source", "ducta") != "ducta" or model.get("version") is None:
+                    continue
+                key = (model.get("name"), int(model["version"]))
+                served.setdefault(key, []).append(run_id)
+        return served
+
     def run(self, dry_run: bool = False, user: Optional[str] = None) -> Dict[str, Any]:
         """Run garbage collection process; *user* is recorded in the registry's audit log."""
         stats: Dict[str, Any] = {
@@ -77,6 +101,7 @@ class ModelGarbageCollector:
             return stats
 
         now = datetime.now(timezone.utc)
+        served = self._served_by_runs()
 
         for model in models:
             name = model.get("name")
@@ -119,9 +144,20 @@ class ModelGarbageCollector:
                             continue
 
                     stats["versions_removed"] += 1
-                    stats["versions"].append(
-                        {"name": name, "version": version_number, "created_at": v.get("created_at")}
-                    )
+                    entry = {
+                        "name": name,
+                        "version": version_number,
+                        "created_at": v.get("created_at"),
+                    }
+                    runs = served.get((name, version_number))
+                    if runs:
+                        entry["served_in"] = runs
+                        logger.warning(
+                            f"{name} v{version_number} served run(s) "
+                            f"{', '.join(r[:8] for r in runs)}; `certify verify --reproduce` "
+                            "cannot pin it once it is deleted"
+                        )
+                    stats["versions"].append(entry)
                     stats["bytes_freed"] += size_bytes
 
             except Exception as e:

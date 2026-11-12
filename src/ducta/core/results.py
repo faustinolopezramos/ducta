@@ -24,6 +24,8 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ducta.redaction import redact_text
+
 
 class RunStatus(str, Enum):
     """Terminal state of a pipeline run."""
@@ -130,8 +132,8 @@ class PipelineRunResult:
         return None
 
     def add_error(self, message: str) -> "PipelineRunResult":
-        """Record an error and mark the run failed."""
-        self.errors.append(message)
+        """Record an error and mark the run failed (credentials in it masked)."""
+        self.errors.append(redact_text(message))
         self.status = RunStatus.FAILED
         return self
 

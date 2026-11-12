@@ -303,7 +303,7 @@ class UnifiedCLI:
         compact = _wants_compact(parsed_args)
         quiet = bool(getattr(parsed_args, "quiet", False))
         view.set_mode(compact=compact, quiet=quiet)
-        if compact and "DUCTA_SPARK_QUIET" not in os.environ:
+        if (compact or quiet) and "DUCTA_SPARK_QUIET" not in os.environ:
             # The JVM writes to the terminal on its own; only its own logging
             # configuration quiets it (see setting.session._quiet_log4j_file).
             os.environ["DUCTA_SPARK_QUIET"] = "1"

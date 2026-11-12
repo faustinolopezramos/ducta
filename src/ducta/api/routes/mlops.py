@@ -240,6 +240,21 @@ class MLOpsScope:
     def global_config(self) -> Dict[str, Any]:
         return _resolve_global_config(self._source_path, self._env, self._project)
 
+    def certificate_dir(self) -> Optional[str]:
+        """The run-certificate directory of this scope (the GC reports the runs it
+        makes unreproducible), or None when it cannot be resolved."""
+        try:
+            from pathlib import Path
+
+            from ducta.core.settings import CoreSettings
+
+            runs = Path(CoreSettings.from_context(self.global_config).run_certificate_dir)
+            if not runs.is_absolute() and self._source_path:
+                runs = Path(str(self._source_path)) / runs
+            return str(runs)
+        except Exception:  # noqa: BLE001 — the GC still runs, without the warning
+            return None
+
     def certificate_check(self) -> Callable[[str], Optional[bool]]:
         """Whether a run's certificate is on disk (or mirrored) and unaltered.
 
@@ -754,6 +769,7 @@ async def run_gc(
             storage_path=scope.storage,
             max_versions_per_model=mlops_config.max_versions_per_model,
             model_retention_days=mlops_config.model_retention_days,
+            certificate_dir=scope.certificate_dir(),
         ).run(dry_run=body.dry_run, user=user.username)
         return {
             "dry_run": body.dry_run,

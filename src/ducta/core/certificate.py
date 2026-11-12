@@ -33,6 +33,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tupl
 from loguru import logger  # type: ignore
 
 from ducta.core.context_utils import get_context_value as _ctx_get
+from ducta.redaction import redact_text
 
 # 1.6: an ML node that scored with a registered model records it under ``ml.model``
 # (source, name, the version the run pinned, artifact hash).
@@ -335,7 +336,7 @@ def build_certificate(
         outputs=ledger.output_fingerprints,
         quality=_quality_summary(context),
         code=_build_code_block(context, ledger),
-        error=error,
+        error=redact_text(error),
         mlops_run_id=mlops_run_id or None,
         run_window=(
             {"start_date": run_window[0], "end_date": run_window[1]}

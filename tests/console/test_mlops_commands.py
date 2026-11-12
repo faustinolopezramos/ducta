@@ -457,7 +457,14 @@ class TestModelGcHonorsProjectRetention:
         seen = {}
 
         class _GC:
-            def __init__(self, storage_path, max_versions_per_model, model_retention_days):
+            def __init__(
+                self,
+                storage_path,
+                max_versions_per_model,
+                model_retention_days,
+                certificate_dir=None,
+            ):
+                # certificate_dir: where the GC finds the runs a version served (2026-11-11).
                 seen.update(max_versions=max_versions_per_model, days=model_retention_days)
 
             def run(self, dry_run=False):

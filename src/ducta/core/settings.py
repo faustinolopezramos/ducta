@@ -211,6 +211,10 @@ class CoreSettings:
     run_lock_wait_timeout_seconds: int = 600
     run_lock_dir: str = DEFAULT_RUN_LOCK_DIR
 
+    #: Why a state directory is not where its default template points (the output is
+    #: cloud storage, so it was kept locally). Logged once per run, by preflight.
+    state_dir_notes: Tuple[str, ...] = ()
+
     quality: Dict[str, Any] = field(default_factory=dict)
     ingestion: Dict[str, Any] = field(default_factory=dict)
 
@@ -245,6 +249,16 @@ class CoreSettings:
         evidence_level, enable_certificate, require_certificate, evidence_problems = (
             cls._resolve_evidence(gs)
         )
+        notes: List[str] = []
+        lock_backend = coerce_choice(
+            "run_lock.backend",
+            run_lock_section.get("backend"),
+            choices=("local", "storage"),
+            default="local",
+        )
+
+        def state_dir(raw: Any, default: str, label: str) -> str:
+            return cls._resolve_state_dir(raw, default, gs, resolved_env, label, notes)
 
         return cls(
             max_parallel_nodes=coerce_int(
@@ -288,15 +302,15 @@ class CoreSettings:
             evidence_problems=evidence_problems,
             enable_run_certificate=enable_certificate,
             require_run_certificate=require_certificate,
-            run_certificate_dir=cls._resolve_scoped_dir(
-                str(gs.get("run_certificate_dir") or DEFAULT_CERTIFICATE_DIR), gs, resolved_env
+            run_certificate_dir=state_dir(
+                gs.get("run_certificate_dir"), DEFAULT_CERTIFICATE_DIR, "run certificates"
             ),
             certificate_signing_key=_optional_str(gs.get("certificate_signing_key")),
             chain_reuse_materialized=coerce_bool(
                 "chain.reuse_materialized", chain_section.get("reuse_materialized"), default=False
             ),
-            chain_state_dir=cls._resolve_scoped_dir(
-                str(chain_section.get("state_dir") or DEFAULT_CHAIN_STATE_DIR), gs, resolved_env
+            chain_state_dir=state_dir(
+                chain_section.get("state_dir"), DEFAULT_CHAIN_STATE_DIR, "chain-state markers"
             ),
             chain_staleness_check=coerce_bool(
                 "chain.staleness_check", chain_section.get("staleness_check"), default=True
@@ -310,12 +324,7 @@ class CoreSettings:
             run_lock_enabled=coerce_bool(
                 "run_lock.enabled", run_lock_section.get("enabled"), default=True
             ),
-            run_lock_backend=coerce_choice(
-                "run_lock.backend",
-                run_lock_section.get("backend"),
-                choices=("local", "storage"),
-                default="local",
-            ),
+            run_lock_backend=lock_backend,
             run_lock_ttl_seconds=coerce_int(
                 "run_lock.ttl_seconds", run_lock_section.get("ttl_seconds"), default=300, minimum=10
             ),
@@ -331,12 +340,55 @@ class CoreSettings:
                 default=600,
                 minimum=0,
             ),
-            run_lock_dir=cls._resolve_scoped_dir(
-                str(run_lock_section.get("dir") or DEFAULT_RUN_LOCK_DIR), gs, resolved_env
+            run_lock_dir=(
+                # A storage lease is made for object storage: it stays next to the data.
+                cls._resolve_scoped_dir(
+                    str(run_lock_section.get("dir") or DEFAULT_RUN_LOCK_DIR), gs, resolved_env
+                )
+                if lock_backend == "storage"
+                else state_dir(run_lock_section.get("dir"), DEFAULT_RUN_LOCK_DIR, "run locks")
             ),
+            state_dir_notes=tuple(notes),
             quality=_as_mapping(gs.get("quality")),
             ingestion=_as_mapping(gs.get("ingestion")),
         )
+
+    @classmethod
+    def _resolve_state_dir(
+        cls,
+        raw: Any,
+        default: str,
+        gs: Mapping[str, Any],
+        env: Optional[str],
+        label: str,
+        notes: List[str],
+    ) -> str:
+        """A state directory; the default one stays local when the output is cloud storage.
+
+        Certificates, chain state and locks are local files. Their default sits under
+        ``${output_path}``, and with ``s3://bucket/out`` that became a local folder
+        named ``s3:``. A directory set by hand is kept as given: preflight refuses a
+        cloud one (see ``ducta.core.preflight``).
+        """
+        from ducta.gate.constants import is_cloud_path
+
+        template = str(raw or default)
+        resolved = cls._resolve_scoped_dir(template, gs, env)
+        if template == default and is_cloud_path(resolved):
+            local = state.local_env_dir(default, sanitize_env_for_path(env))
+            why = (
+                "they guard this host only; run_lock: {backend: storage, dir: s3://...} "
+                "guards every host"
+                if default == DEFAULT_RUN_LOCK_DIR
+                else "DUCTA_STORAGE_BACKEND keeps a shared copy of the certificates"
+                if default == DEFAULT_CERTIFICATE_DIR
+                else "they record what this machine ran"
+            )
+            notes.append(
+                f"output_path is cloud storage, so {label} are kept locally in {local} ({why})"
+            )
+            return local
+        return resolved
 
     @staticmethod
     def _resolve_scoped_dir(template: str, gs: Mapping[str, Any], env: Optional[str]) -> str:

@@ -128,14 +128,33 @@ def report_run_outcome(
     if _RICH_AVAILABLE:
         try:
             console = RichLoggerManager.get_console()
-            console.print()
-            print_process_separator("success", "EXECUTION COMPLETED", f"Pipeline: {name}", console)
-            console.print()
+            if console.quiet:
+                # `-q`: one line says the run did its work, and where its evidence is.
+                RichLoggerManager.get_error_console().print(
+                    _quiet_success_line(name, result), markup=False, highlight=False
+                )
+            else:
+                console.print()
+                print_process_separator(
+                    "success", "EXECUTION COMPLETED", f"Pipeline: {name}", console
+                )
+                console.print()
         except Exception:  # noqa: BLE001 — decoration must never change the outcome
             pass
 
     logger.success("Ducta pipeline execution completed successfully")
     return ExitCode.SUCCESS.value
+
+
+def _quiet_success_line(name: str, result: PipelineRunResult) -> str:
+    """``✓ etl completed · 3 nodes · certificate <path>`` for ``-q``."""
+    parts = [f"✓ {name} completed"]
+    nodes = getattr(result, "nodes", None) or []
+    if nodes:
+        parts.append(f"{len(nodes)} nodes")
+    if result.certificate_path:
+        parts.append(f"certificate {result.certificate_path}")
+    return " · ".join(parts)
 
 
 def _outcome_code(result: PipelineRunResult) -> int:

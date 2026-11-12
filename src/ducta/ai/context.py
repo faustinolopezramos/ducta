@@ -139,6 +139,17 @@ _SECRETS = (
         ),
         r"\1***",
     ),
+    # A dotted configuration name printed with a space before its value, as Spark and
+    # Hadoop list their settings: ``spark.hadoop.fs.s3a.secret.key wJalr…``.
+    (
+        re.compile(
+            # Anchored on the credential part of the name, not on its dotted prefix:
+            # a repeated `(?:[\w-]+\.)*` backtracked quadratically on `ab.c-ab.c-…`.
+            r"(?i)\b([\w-]*(?:secret|password|passwd|token|access|api)[\w-]*"
+            r"\.(?:key|secret|password|token)[ \t]+)[^\s\"';,&]+"
+        ),
+        r"\1***",
+    ),
     # An Azure SAS signature: ``sig`` as a word of its own (not ``assigned``, ``design``).
     (re.compile(r"(?i)(?<![A-Za-z0-9])(sig\s*=\s*)[^\s\"';,&]+"), r"\1***"),
     (re.compile(r"(?i)\b(bearer\s+)[\w.~+/=-]+"), r"\1***"),

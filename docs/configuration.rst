@@ -175,7 +175,14 @@ ducta.yaml
    * - ``paths``
      - ``input`` and ``output``: the base directories or URIs your datasets
        live under. Required. Referenced from the catalog as ``${paths.input}``
-       and ``${paths.output}``.
+       and ``${paths.output}``. Cloud URIs: ``s3://``, ``s3a://``, ``s3n://``,
+       ``gs://``, ``abfs://``, ``abfss://``, ``wasb://``, ``wasbs://``,
+       ``hdfs://`` and ``dbfs:/``. With a cloud ``output``, Ducta's own state
+       (run certificates, chain state, run locks, stream journals) stays local in
+       ``.ducta/<env>/…`` under the project, and ``ducta check`` says so;
+       ``DUCTA_STORAGE_BACKEND`` keeps a shared copy of the certificates, and
+       ``run_lock: {backend: storage}`` keeps the lock next to the data. Setting
+       ``run_certificate_dir`` or ``chain.state_dir`` to a cloud URI is an error.
    * - ``settings``
      - Engine settings — see below.
    * - ``environments``

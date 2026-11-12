@@ -27,6 +27,7 @@ from rich.console import Console
 from rich.text import Text
 
 from ducta.core.errors import JVM_GONE_PATTERN
+from ducta.redaction import redact_text
 
 ERROR_PATTERNS = {
     "UNRESOLVED_COLUMN": {
@@ -414,7 +415,7 @@ def print_error_report(
         console = Console()
     etype = analysis["error_type"]
     color = analysis["color"]
-    message = analysis["message"]
+    message = redact_text(analysis["message"])
     suggestions = analysis.get("suggestions", [])
     location = analysis.get("python_location")
     frames = analysis.get("all_frames", [])

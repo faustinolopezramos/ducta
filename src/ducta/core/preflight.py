@@ -807,6 +807,34 @@ def _check_windowed_overwrite(
         )
 
 
+def _check_state_dirs(report: PreflightReport, settings: Any) -> None:
+    """Ducta's own state directories must be local, except a storage run-lock lease.
+
+    The defaults already stay local under a cloud output (``CoreSettings.state_dir_notes``
+    says where); a directory set by hand to cloud storage would be written as a local
+    folder named ``s3:``.
+    """
+    from ducta.gate.constants import is_cloud_path
+
+    for note in settings.state_dir_notes:
+        report.warn(note)
+    for setting, value in (
+        ("run_certificate_dir", settings.run_certificate_dir),
+        ("chain.state_dir", settings.chain_state_dir),
+    ):
+        if is_cloud_path(value):
+            report.error(
+                f"{setting} is {value}, but it must be a local folder: Ducta writes "
+                "it as files. Point it at a local path (or remove it to use the default); "
+                "DUCTA_STORAGE_BACKEND keeps a shared copy of the certificates."
+            )
+    if settings.run_lock_backend == "local" and "://" in settings.run_lock_dir:
+        report.error(
+            f"run_lock.dir is {settings.run_lock_dir}, but backend 'local' needs a local "
+            "folder; use run_lock: {backend: storage} for a lock on object storage."
+        )
+
+
 def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
     """Fail before running when the project's evidence policy cannot be met."""
     from ducta.core.settings import EVIDENCE_SIGNED, CoreSettings
@@ -818,6 +846,7 @@ def _check_evidence_policy(report: PreflightReport, context: Any) -> None:
         return
     for problem in settings.evidence_problems:
         report.error(f"Evidence policy: {problem}")
+    _check_state_dirs(report, settings)
     if settings.evidence_level == EVIDENCE_SIGNED:
         from ducta.core.certificate import resolve_signing_key
 

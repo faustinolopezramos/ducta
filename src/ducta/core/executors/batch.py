@@ -146,7 +146,7 @@ class BatchExecutor(BaseExecutor):
             from ducta.gate.exceptions import MissingDependencyError
 
             try:
-                self.node_executor.execute_single_node(node_name, start_date, end_date, ml_info)
+                self._execute_atomic_node(node_name, start_date, end_date, ml_info)
             except MissingDependencyError as e:
                 logger.warning("Node '{}' skipped (missing dependencies): {}", node_name, e)
                 self._skipped_atomic_node = {"node": node_name, "reason": str(e)}
@@ -163,6 +163,52 @@ class BatchExecutor(BaseExecutor):
                     ", ".join(pipeline_nodes),
                 )
             self._execute_pipeline_nodes(pipeline_nodes, start_date, end_date, ml_info)
+
+    def _execute_atomic_node(
+        self,
+        node_name: str,
+        start_date: Optional[str],
+        end_date: Optional[str],
+        ml_info: Dict[str, Any],
+    ) -> None:
+        """Run one node (``--node``) under its time limit, as a whole-pipeline run does.
+
+        The node ran unbounded here: ``timeout_seconds: 2`` on a node that took 6s
+        ended with exit 0. Past its limit the node is cancelled the coordinator's way
+        (its Spark jobs and its writes refused) and the run fails with NodeTimeoutError.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        from concurrent.futures import TimeoutError as FutureTimeout
+
+        from ducta.core.errors import NodeTimeoutError
+        from ducta.core.execution.cancellation import cancel_node
+        from ducta.core.execution.coordinator import node_timeout_for
+        from ducta.core.ledger import ledger_for
+
+        executor = self.node_executor
+        limit = node_timeout_for(
+            (self.context.nodes_config or {}).get(node_name), executor.node_timeout
+        )
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"ducta-node-{node_name}")
+        try:
+            future = pool.submit(
+                executor.execute_single_node, node_name, start_date, end_date, ml_info
+            )
+            try:
+                future.result(timeout=limit)
+            except FutureTimeout:
+                logger.error("Node '{}' exceeded its timeout of {}s — aborting", node_name, limit)
+                cancel_node(self.context, node_name)
+                ledger_for(self.context).note_gap(
+                    f"node '{node_name}' exceeded its timeout of {limit}s; its Spark jobs were "
+                    "cancelled and its writes refused, but work already committed before the "
+                    "timeout is not rolled back"
+                )
+                raise NodeTimeoutError(node_name, limit) from None
+        finally:
+            # Never wait for a timed-out thread: it cannot be killed, only refused.
+            pool.shutdown(wait=False)
+            executor.shutdown()
 
     def _execute_pipeline_nodes(
         self,

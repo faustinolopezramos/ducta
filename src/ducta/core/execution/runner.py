@@ -241,6 +241,14 @@ class NodeExecutor:
                     result_df = self._execute_with_retries(command, node_name, node_retries)
                 else:
                     result_df = command.execute()
+                if isinstance(result_df, (tuple, list)):
+                    # Read further down as "Unsupported DataFrame type: <class 'tuple'>".
+                    raise TypeError(
+                        f"Node '{node_name}' returned a {type(result_df).__name__} of "
+                        f"{len(result_df)}; a node returns one DataFrame, and each of its "
+                        "outputs receives that same DataFrame. Split the work into one node "
+                        "per output."
+                    )
 
                 self._enforce_split(command, node_name, node_config, ml_info)
 

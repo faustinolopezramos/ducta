@@ -29,17 +29,12 @@ logger setup uses it too.
 from __future__ import annotations
 
 import os
-import re
 import traceback
 import zipfile
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
-#: Cheap test before the real patterns: most messages mention none of these.
-_MAY_HOLD_SECRET = re.compile(
-    r"://|pass|pwd|secret|token|key|sig|bearer|authoriz|credential", re.IGNORECASE
-)
-
-_redact: Optional[Callable[[str], str]] = None
+from ducta.redaction import redact_secrets as _redacted
+from ducta.redaction import redact_text  # noqa: F401 — re-exported
 
 
 def private_file_opener(path: str, flags: int) -> int:
@@ -57,17 +52,6 @@ def private_zip(path: str) -> None:
     with os.fdopen(fd, "wb") as raw, zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as archive:
         archive.write(path, os.path.basename(path))
     os.remove(path)
-
-
-def _redacted(text: str) -> str:
-    global _redact
-    if not _MAY_HOLD_SECRET.search(text):
-        return text
-    if _redact is None:
-        from ducta.ai.context import redact  # imported on first use: it is not light
-
-        _redact = redact
-    return _redact(text)
 
 
 def redacting_filter(record: Any) -> bool:

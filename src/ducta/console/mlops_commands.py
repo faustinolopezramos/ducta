@@ -500,6 +500,20 @@ def model_promote(
         return ExitCode.GENERAL_ERROR.value
 
 
+def _certificate_dir(env: Optional[str]) -> Optional[str]:
+    """The environment's run-certificate directory, or None when the project cannot load."""
+    context = _discover_context(env)
+    if context is None:
+        return None
+    try:
+        from ducta.core.settings import CoreSettings
+
+        return CoreSettings.from_context(context).run_certificate_dir
+    except Exception as e:  # noqa: BLE001 — the GC still runs, without the warning
+        logger.debug(f"Run certificate directory not resolved: {e}")
+        return None
+
+
 def model_gc(
     storage_path: Optional[str],
     dry_run: bool = False,
@@ -537,6 +551,7 @@ def model_gc(
             storage_path=resolved_path,
             max_versions_per_model=mlops_config.max_versions_per_model,
             model_retention_days=mlops_config.model_retention_days,
+            certificate_dir=_certificate_dir(env),
         )
         stats = gc.run(dry_run=dry_run)
 
@@ -546,6 +561,13 @@ def model_gc(
         print(f"Models processed: {stats.get('models_processed', 0)}")
         print(f"Versions removed: {stats.get('versions_removed', 0)}")
         print(f"Space freed (bytes): {stats.get('bytes_freed', 0)}")
+        unreproducible = [v for v in stats.get("versions") or [] if v.get("served_in")]
+        if unreproducible:
+            verb = "would no longer reproduce" if dry_run else "no longer reproduce"
+            print(f"Certified runs that {verb} (their model version is gone):")
+            for v in unreproducible:
+                runs = ", ".join(r[:8] for r in v["served_in"])
+                print(f"  {v['name']} v{v['version']}: {runs}")
         print("-" * 60)
         return 0
     except Exception as e:

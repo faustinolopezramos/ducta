@@ -215,6 +215,31 @@ headline of everything else; `git log` has the detail.
 
 ### Fixed
 
+- **Cloud output paths** (review 2026-11-11): `s3a://`, `s3n://`, `abfs://`, `wasb(s)://` and
+  `hdfs://` are cloud URIs everywhere (one list, `ducta.gate.constants.CLOUD_URI_PREFIXES`); a
+  derived dataset path or a streaming checkpoint on them was written as a local folder named
+  `s3a:`. With a cloud `paths.output`, run certificates, chain state, run locks and stream
+  journals default to `.ducta/<env>/…` locally (they went to a local folder `s3:`), and a cloud
+  `run_certificate_dir`/`chain.state_dir` set by hand is a preflight error. A cloud output with
+  the default local run lock no longer fails at `ducta start`.
+- **Credentials in run evidence**: a node error holding a password or a URL login is masked in
+  the run certificate, the run result and on the terminal, as it already was in the log file
+  (`ducta.redaction`); `spark.…secret.key <value>` listings are masked too.
+- **`--node` honours `timeout_seconds`**, like a whole-pipeline run (it ran unbounded).
+- **`anomaly_detection`** no longer skips a column collapsed to a constant; **`freshness`**
+  fails on a timestamp more than an hour in the future.
+- **`run_in_process` in a reproduction or sample run** reads what the run wrote, not the real
+  upstream dataset.
+- **Python `business_rules`** collect the data once, and refuse above `max_rows` (new optional
+  parameter, default 5,000,000) instead of taking the driver down.
+- A node returning a tuple or list gets a clear error (one DataFrame per node, written to each
+  output).
+- **`-q`** prints errors only (and one final line) on the classic log: banner, passing quality
+  tables, schema and sections are gone.
+- **`ducta model gc`** (and `POST /api/mlops/gc`) lists the certified runs whose model version
+  it removes (`served_in`): `certify verify --reproduce` cannot pin it afterwards. What it
+  deletes is unchanged.
+
 - **The registry's audit log names who did it**: a promotion from the web UI was recorded as the
   server's operating-system user with no reason; it is now the signed-in user, and a forced
   promotion requires a reason. Deleting a version (also by `gc`) and a promotion the policy

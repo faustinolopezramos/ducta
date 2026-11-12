@@ -115,6 +115,11 @@ class RichLoggerManager:
     # plain text (FORCE_COLOR=1 brings it back). force_terminal=True wrote
     # escape codes into every redirected log.
     console = Console(theme=DUCTA_THEME, stderr=True)
+    #: Where errors go. The same console, except under ``--quiet`` (classic log):
+    #: there ``console`` is silenced (banner, quality and schema tables, sections),
+    #: and the log's ERROR lines, a failed node's error box and the final line are
+    #: all that reach the terminal.
+    error_console = console
     _lock = threading.RLock()  # Reentrant lock for thread-safety
 
     @classmethod
@@ -180,10 +185,12 @@ class RichLoggerManager:
         logger.remove()
 
         console_level = cls._determine_console_level(verbose, quiet, level)
+        # The compact view has its own quiet mode (``ux.view.is_quiet``).
+        cls._set_quiet(quiet and not compact)
 
         if enable_rich_tracebacks:
             install_rich_traceback(
-                console=cls.console,
+                console=cls.get_error_console(),
                 show_locals=verbose,
                 width=100,
                 extra_lines=1,
@@ -201,7 +208,7 @@ class RichLoggerManager:
                 _compact_sink,
                 format="{message}",
                 level=console_level,
-                filter=_compact_filter,
+                filter=lambda record: _compact_filter(record) and redacting_filter(record),
                 colorize=False,
             )
         else:
@@ -210,9 +217,21 @@ class RichLoggerManager:
         cls._add_file_sink(log_file, file_logging, console_level)
 
     @classmethod
+    def _set_quiet(cls, quiet: bool) -> None:
+        """``-q`` ("Errors only"): the decoration printed straight to the console used to
+        go on regardless (some 117 lines for a three-node run)."""
+        cls.console.quiet = quiet
+        cls.error_console = Console(theme=DUCTA_THEME, stderr=True) if quiet else cls.console
+
+    @classmethod
+    def get_error_console(cls) -> Console:
+        """The console errors are printed on (see ``error_console``)."""
+        return cls.error_console if cls.console.quiet else cls.console
+
+    @classmethod
     def _add_rich_handler(cls, console_level: str, verbose: bool, show_path: bool) -> None:
         rich_handler = RichHandler(
-            console=cls.console,
+            console=cls.get_error_console(),
             show_time=False,
             show_level=False,
             show_path=show_path,
@@ -229,6 +248,7 @@ class RichLoggerManager:
             rich_handler,
             format=cls._formatter,
             level=console_level,
+            filter=redacting_filter,
             colorize=False,  # Rich handles colors via markup
         )
 

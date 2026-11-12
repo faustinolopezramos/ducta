@@ -491,10 +491,12 @@ Available checks
        (``column``, ``min``, ``max``), ``referential_integrity``,
        ``schema_drift``
    * - Temporal
-     - ``freshness``, ``incremental_volume``, ``anomaly_detection`` (whether a
-       column's **mean** moved away from the stored baseline — a property of the
-       whole dataset, not a flag on individual rows; scoring rows as anomalous is
-       a model's job, see :doc:`mlops`)
+     - ``freshness`` (a latest value more than an hour in the future fails: it is
+       wrong data, not fresh data), ``incremental_volume``, ``anomaly_detection``
+       (whether a column's **mean** moved away from the stored baseline — a
+       property of the whole dataset, not a flag on individual rows; a column
+       collapsed to one constant counts; scoring rows as anomalous is a model's
+       job, see :doc:`mlops`)
    * - Distribution
      - ``drift_detection`` (against the dataset's stored baseline),
        ``statistical``
@@ -502,6 +504,9 @@ Available checks
      - ``cross_table_referential``, ``dataset_completeness``
    * - Business
      - ``business_rules`` — SQL predicates each row must satisfy
+       (``rule_type: python`` runs lambdas on the driver: the dataset is collected
+       once, and the check fails without running them above ``max_rows``,
+       default 5,000,000)
    * - Model output
      - ``prediction_contract`` (``column``, ``min``, ``max``, ``allow_null``),
        ``prediction_rate`` (``column``, ``threshold``, ``min``, ``max``: the share

@@ -80,9 +80,47 @@ DEFAULT_VACUUM_RETENTION_HOURS = 168  # 7 days
 MIN_VACUUM_RETENTION_HOURS = 168  # Delta Lake enforced minimum
 DEFAULT_ENCODING = "UTF-8"  # Default encoding for text file operations
 
-CLOUD_URI_PREFIXES = ("s3://", "abfss://", "gs://", "dbfs:/")
+#: Every storage scheme Ducta treats as remote: joined as text, never through ``Path``
+#: (which folds ``s3a://bucket`` into ``s3a:/bucket``, a local folder). The one list:
+#: gate, stream and the evidence directories all read it.
+CLOUD_URI_PREFIXES = (
+    "s3://",
+    "s3a://",
+    "s3n://",
+    "gs://",
+    "abfs://",
+    "abfss://",
+    "wasb://",
+    "wasbs://",
+    "hdfs://",
+    "dbfs:/",
+)
 
 
 def is_cloud_path(path: str) -> bool:
     """Check if a path uses a supported cloud storage prefix."""
     return any(str(path).startswith(prefix) for prefix in CLOUD_URI_PREFIXES)
+
+
+def join_cloud_path(*parts: str) -> str:
+    """Join cloud storage paths properly (``Path`` would fold ``s3://`` into ``s3:/``)."""
+    cleaned = [p.strip() for p in parts if p and str(p).strip()]
+    if not cleaned:
+        return ""
+    head = cleaned[0]
+    if "://" in head:
+        scheme, rest = head.split("://", 1)
+        head = scheme + "://" + rest.rstrip("/")
+    else:
+        head = head.rstrip("/")
+    tail = [p.strip("/") for p in cleaned[1:] if p.strip("/")]
+    return head + ("/" + "/".join(tail) if tail else "")
+
+
+def join_path(base: str, *parts: str) -> str:
+    """``base/part/...``: as text for a cloud URI, through ``Path`` for a local one."""
+    if is_cloud_path(base):
+        return join_cloud_path(base, *parts)
+    from pathlib import Path
+
+    return str(Path(base).joinpath(*parts))

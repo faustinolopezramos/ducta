@@ -50,10 +50,10 @@ outputs, `dataset_name` picks the one checked (default: the first).
 | Category | Checks |
 |---|---|
 | Structural | `schema` (`expected_columns`, `strict`), `row_count` (`min`, `max`), `null_rate` (`columns`, `threshold`), `empty_dataset`, `duplicates` (`columns`, `max_duplicate_rate`), `range` (`column`, `min`, `max`), `referential_integrity`, `schema_drift` |
-| Temporal | `freshness`, `incremental_volume`, `anomaly_detection` (a column's mean vs. its baseline) |
+| Temporal | `freshness`, `incremental_volume`, `anomaly_detection` (a column's mean vs. its baseline); `freshness` fails on a value over 1h in the future |
 | Distribution | `drift_detection`, `statistical` |
 | Cross-table | `cross_table_referential`, `dataset_completeness` |
-| Business | `business_rules` — SQL predicates every row must satisfy |
+| Business | `business_rules` — SQL predicates every row must satisfy (`rule_type: python`: lambdas on the driver, refused above `max_rows`, default 5,000,000) |
 | Model output | `prediction_contract`, `prediction_rate`, `prediction_drift` |
 
 Parameters are validated when the project loads (unknown parameter, wrong type, out of

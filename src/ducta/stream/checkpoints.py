@@ -26,25 +26,11 @@ from typing import Any, Callable, Dict, Optional, Set
 
 from loguru import logger  # type: ignore
 
+from ducta.gate.constants import is_cloud_path, join_path
 from ducta.setting.environments import sanitize_env_for_path
 from ducta.setting.interpolator import VariableInterpolator
 from ducta.stream.context_utils import get_active_env, get_context_value
 from ducta.stream.exceptions import StreamingConfigurationError, StreamingError
-
-#: URI schemes a checkpoint is handed to Spark as-is for (s3a/s3n/wasb(s) are the
-#: Hadoop connectors open-source Spark uses for S3 and Azure Blob).
-_CLOUD_PREFIXES = (
-    "s3://",
-    "s3a://",
-    "s3n://",
-    "gs://",
-    "abfs://",
-    "abfss://",
-    "wasb://",
-    "wasbs://",
-    "hdfs://",
-    "dbfs:/",
-)
 
 
 class CheckpointManager:
@@ -69,7 +55,7 @@ class CheckpointManager:
         Anything else goes through pathlib, which folds ``s3a://bucket`` into
         ``s3a:/bucket`` - a path no Hadoop filesystem resolves.
         """
-        return str(path).startswith(_CLOUD_PREFIXES)
+        return is_cloud_path(str(path))
 
     @staticmethod
     def sanitize_path_component(component: str) -> str:
@@ -131,7 +117,7 @@ class CheckpointManager:
                 "because checkpoints may be lost on OS restart.",
                 config_section="streaming.checkpoint / global_config.checkpoints_base",
             )
-        return str(Path(output_path) / sanitize_env_for_path(env) / "streaming_checkpoints")
+        return join_path(str(output_path), sanitize_env_for_path(env), "streaming_checkpoints")
 
     @staticmethod
     def _scope_by_environment(
@@ -147,7 +133,7 @@ class CheckpointManager:
             variables = {**gs, "output_path": output_path or ".", "environment": safe_env}
             resolved = VariableInterpolator.interpolate(template, variables)
         if not has_env_placeholder:
-            resolved = str(Path(resolved) / safe_env)
+            resolved = join_path(resolved, safe_env)
         return resolved
 
     @staticmethod
