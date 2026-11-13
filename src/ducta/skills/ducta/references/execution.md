@@ -38,7 +38,7 @@ ML options (`--model-version`, `--hyperparams`, `--sweep`, `--search`…) are in
 | 1 | unexpected error | read the log; [troubleshooting](troubleshooting.md) |
 | 2 | the project cannot run as configured (no project, invalid configuration, failed preflight) | `ducta config validate --env ENV --output-format json` |
 | 3 | invalid arguments (unknown pipeline or node, malformed date) | check `ducta config list-pipelines`, the date format |
-| 4 | the pipeline ran and failed: a node raised, or a quality gate blocked one (with `--sweep`/`--search`: a trial failed) | find the failed node or gate in the log; re-run it with `--node` |
+| 4 | the pipeline ran and failed: a node raised (in a whole run or with `--node`), or a quality gate blocked one (with `--sweep`/`--search`: a trial failed) | find the failed node or gate in the log; re-run it with `--node` |
 | 5 | nodes were skipped: a dataset they read is missing (an upstream that has not run) | run the upstream first, or `--reuse-upstream`; `ducta config list-pipelines` |
 | 6 | a security check refused a path or module | keep `run:` inside the project's own modules |
 | 7 | **locked**: another run is writing one of its outputs; nothing ran | wait and retry; see `settings.run_lock` |

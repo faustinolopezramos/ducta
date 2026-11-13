@@ -99,6 +99,12 @@ class _DispatchMixin(_Base):
         pause_after: Optional[List[str]] = None,
         reproduce_of: Optional[str] = None,
     ) -> ExecutionResponse:
+        # The run is a task on the server's event loop, so this must be called on
+        # it. Checked before anything is recorded: called from a worker thread it
+        # used to fail at create_task() *after* adding the record and queueing it,
+        # leaving a "pending" run that never ran and whose queue entry later took
+        # a concurrency slot for good. Threads use `execute_from_thread`.
+        asyncio.get_running_loop()
         # Absolute from here on: the run resolves data paths against the project
         # root, and a relative root (`Path("./my_project")`, as the FastAPI
         # tutorial passes) found no inputs — the run was "skipped", exit 0.
@@ -185,6 +191,27 @@ class _DispatchMixin(_Base):
 
         task.add_done_callback(_cleanup_task)
         return record
+
+    def execute_from_thread(self, timeout: float = 30.0, **kwargs: Any) -> ExecutionResponse:
+        """:meth:`execute` from a worker thread (``asyncio.to_thread``, a sync route).
+
+        The call is handed to the server's event loop and its record returned. On
+        the loop's own thread it is simply :meth:`execute`.
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            return self.execute(**kwargs)
+        loop = self._loop
+        if loop is None or loop.is_closed() or not loop.is_running():
+            raise RuntimeError("The execution manager is not running: no event loop to run on")
+
+        async def _execute() -> ExecutionResponse:
+            return self.execute(**kwargs)
+
+        return asyncio.run_coroutine_threadsafe(_execute(), loop).result(timeout=timeout)
 
     def execute_sweep(
         self,

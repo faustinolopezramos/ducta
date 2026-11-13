@@ -492,11 +492,15 @@ Available checks
        ``schema_drift``
    * - Temporal
      - ``freshness`` (a latest value more than an hour in the future fails: it is
-       wrong data, not fresh data), ``incremental_volume``, ``anomaly_detection``
+       wrong data, not fresh data), ``incremental_volume`` (against the average
+       of the runs that passed), ``anomaly_detection``
        (whether a column's **mean** moved away from the stored baseline — a
        property of the whole dataset, not a flag on individual rows; a column
        collapsed to one constant counts; scoring rows as anomalous is a model's
-       job, see :doc:`mlops`)
+       job, see :doc:`mlops`. The distance is measured in the baseline's
+       *row-level* standard deviations, so ``z_score_threshold: 3`` fires on a
+       gross shift — a unit change, a column filled with a default — not on a
+       few percent of drift; lower the threshold for a finer check)
    * - Distribution
      - ``drift_detection`` (against the dataset's stored baseline),
        ``statistical``
@@ -736,7 +740,14 @@ Each run writes its reports next to the environment's data:
          baseline.json                # statistics drift_detection compares against
 
 Reports are scoped per pipeline, so two pipelines with a node of the same name
-never mix. ``settings.quality.output.base_path`` moves them elsewhere.
+never mix. ``settings.quality.output.base_path`` moves them elsewhere. A dataset
+name with a ``/`` (``raw/orders``) gets its own folder, ``raw__orders``.
+
+The baseline is saved from the first run that **passes** (no ERROR failure and,
+with a gate, the gate passed) and then kept: a first load that fails does not
+become the reference later loads are compared with. A baseline or history that
+cannot be read on a run is reported in the report's ``persistence_warnings`` and
+is not overwritten on that run.
 
 ``settings.quality.output`` can also keep every report as a dataset, for a dashboard
 or an audit: ``enabled: true`` writes them under that folder as ``format``

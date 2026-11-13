@@ -401,13 +401,19 @@ def _dispatch_pipeline_type(
     return outcome
 
 
-def _attach_stream_alerts(engine: Any, source_path: Any, project_id: Any, env: str) -> None:
+def _attach_stream_alerts(
+    engine: Any, source_path: Any, project_id: Any, env: str, pipeline_type: str = "streaming"
+) -> None:
     """Send the project's ``alerts:`` for a stream's live events (failure, stall,
-    quarantine) while it runs, not only when the run ends."""
+    quarantine) while it runs, not only when the run ends — a hybrid run's stream
+    phase included."""
     from ducta.api.services.alerts import notify_stream_event
 
     try:
-        engine.streaming_executor.event_listeners.append(
+        executor = (
+            engine.hybrid_executor if pipeline_type == "hybrid" else engine.streaming_executor
+        )
+        executor.event_listeners.append(
             lambda event: notify_stream_event(source_path, project_id, env, event)
         )
     except Exception as e:  # noqa: BLE001 - alerts are best effort
@@ -771,8 +777,10 @@ def run_pipeline_sync(
                     pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
                     manager.register_active_engine(execution_id, engine)
-                    if pipeline_type == PipelineType.STREAMING.value:
-                        _attach_stream_alerts(engine, source_path, spec.project_id, env)
+                    if pipeline_type in (PipelineType.STREAMING.value, PipelineType.HYBRID.value):
+                        _attach_stream_alerts(
+                            engine, source_path, spec.project_id, env, pipeline_type
+                        )
                     # Terminal outcomes that do not raise. ``None`` means a clean run;
                     # otherwise ``{"status": ..., "node": ..., "reason": ...}``.
                     outcome: Optional[Dict[str, Any]] = None

@@ -185,7 +185,8 @@ def agents_md_block(skill_path: str) -> str:
             "## Ducta",
             "",
             "This project is a [Ducta](https://github.com/faustinolopezramos/ducta) data-pipeline "
-            "project (`ducta.yaml`). Before configuring, running or debugging it, read the Ducta "
+            "project (`ducta.yaml`, `.toml` or `.json`). Before configuring, running or debugging "
+            "it, read the Ducta "
             f"skill at `{skill_path}/SKILL.md` and follow it.",
             "",
             "- State of the project: `ducta config validate --env dev --output-format json`",

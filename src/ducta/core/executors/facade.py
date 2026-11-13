@@ -25,6 +25,7 @@ from __future__ import annotations
 import gc
 import json
 import os
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
 
@@ -56,6 +57,11 @@ T = TypeVar("T")
 NO_NODE_CODE = "none"
 
 
+def _stream_succeeded(event: Dict[str, Any]) -> bool:
+    """Whether a stream's ``finished`` event is a success (it ended or was stopped)."""
+    return str(event.get("status") or "error") in ("completed", "stopped")
+
+
 class PipelineExecutor:
     """Orchestrator that delegates to specialized executors."""
 
@@ -79,6 +85,11 @@ class PipelineExecutor:
         #: Asynchronous streaming runs still running: run_id -> (pipeline, started_at).
         #: Their certificate is sealed when the stream's ``finished`` event arrives.
         self._async_stream_runs: Dict[str, Tuple[str, Any]] = {}
+        #: Asynchronous hybrid runs whose stream phase may outlive run_pipeline:
+        #: run_id -> {"state": "running" | "deferred", "event", "pipeline", ...}.
+        #: Guarded by the lock: the stream's finished event comes from another thread.
+        self._hybrid_runs: Dict[str, Dict[str, Any]] = {}
+        self._hybrid_lock = threading.Lock()
 
     @property
     def batch_executor(self) -> BatchExecutor:
@@ -100,6 +111,7 @@ class PipelineExecutor:
         """Lazy initialization of HybridExecutor."""
         if self._hybrid_executor is None:
             self._hybrid_executor = HybridExecutor(self.context, settings=self.settings)
+            self._hybrid_executor.on_finished = self._on_hybrid_stream_finished
         return self._hybrid_executor
 
     def run_pipeline(
@@ -197,6 +209,17 @@ class PipelineExecutor:
                     self.batch_executor.node_subset = None
                 self._collect_batch_outcome(result)
             elif pipeline_type == PipelineType.HYBRID.value:
+                if execution_mode != "sync":
+                    # Registered before the streams start: one may end before this
+                    # call returns (see _on_hybrid_stream_finished).
+                    with self._hybrid_lock:
+                        self._hybrid_runs[run_id] = {
+                            "state": "running",
+                            "event": None,
+                            "pipeline": pipeline_name,
+                            "started_at": started_at,
+                            "run_window": self._effective_dates(start_date, end_date),
+                        }
                 hybrid_result = self.hybrid_executor.execute(
                     pipeline_name, start_date, end_date, model_version, hyperparams, execution_mode
                 )
@@ -237,20 +260,29 @@ class PipelineExecutor:
                     "written the same outputs concurrently"
                 )
             run_lock.release()
-            cert_path, cert_error = self._emit_run_certificate(
-                pipeline_name=pipeline_name,
-                run_id=run_id,
-                started_at=started_at,
-                ended_at=datetime.now(timezone.utc),
-                status=result.status.value,
-                error=result.primary_error,
-                mlops_run_id=result.mlops_run_id,
-                run_window=self._effective_dates(start_date, end_date),
-            )
-            result.certificate_path = cert_path
-            result.certificate_error = cert_error
-            if cert_error and self.settings.require_run_certificate and result.ok:
-                result.add_error(f"run certificate required but not written: {cert_error}")
+            deferred, stream_event = self._hybrid_handover(run_id, result)
+            if deferred:
+                # The stream phase is still running: the certificate is sealed when
+                # it ends, with its nodes (see _on_hybrid_stream_finished).
+                result.certificate_error = "sealed when the stream ends"
+            else:
+                status, error = result.status.value, result.primary_error
+                if stream_event is not None and not _stream_succeeded(stream_event):
+                    status, error = "failed", error or stream_event.get("error")
+                cert_path, cert_error = self._emit_run_certificate(
+                    pipeline_name=pipeline_name,
+                    run_id=run_id,
+                    started_at=started_at,
+                    ended_at=datetime.now(timezone.utc),
+                    status=status,
+                    error=error,
+                    mlops_run_id=result.mlops_run_id,
+                    run_window=self._effective_dates(start_date, end_date),
+                )
+                result.certificate_path = cert_path
+                result.certificate_error = cert_error
+                if cert_error and self.settings.require_run_certificate and result.ok:
+                    result.add_error(f"run certificate required but not written: {cert_error}")
             # Only a whole-pipeline run makes the pipeline "materialized".
             if result.ok and node_name is None and not node_names:
                 self._record_chain_state(pipeline_name, pipeline_type, start_date, end_date)
@@ -459,6 +491,60 @@ class PipelineExecutor:
             result.status = RunStatus.FAILED
             if not result.errors:
                 result.errors.append("hybrid pipeline failed")
+
+    def _hybrid_handover(
+        self, run_id: str, result: PipelineRunResult
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """Whether an asynchronous hybrid run's certificate waits for its stream phase.
+
+        It waits when the batch phase succeeded and a stream is still running. A stream
+        that already ended hands back its event, and the certificate is sealed now; so is
+        a run that failed (its streams were stopped) — a stream stopped that way must not
+        seal a certificate saying "success".
+        """
+        if run_id not in (getattr(self, "_hybrid_runs", None) or {}):
+            return False, None  # not an asynchronous hybrid run
+        with self._hybrid_lock:
+            entry = self._hybrid_runs.get(run_id)
+            if entry is None:
+                return False, None
+            if result.ok and result.streaming_execution_ids and entry["event"] is None:
+                entry["state"] = "deferred"
+                entry["mlops_run_id"] = result.mlops_run_id
+                return True, None
+            self._hybrid_runs.pop(run_id, None)
+            return False, entry["event"]
+
+    def _on_hybrid_stream_finished(self, event: Dict[str, Any]) -> None:
+        """A hybrid run's stream phase ended: seal its certificate, if it waits for it.
+
+        Its stream nodes are already in the ledger (HybridExecutor records them first).
+        Before run_pipeline has decided, the event is only kept for it.
+        """
+        from datetime import datetime, timezone
+
+        run_id = str(event.get("run_id"))
+        with self._hybrid_lock:
+            entry = self._hybrid_runs.get(run_id)
+            if entry is None:
+                return
+            if entry["state"] == "running":
+                entry["event"] = event
+                return
+            self._hybrid_runs.pop(run_id, None)
+        ok = _stream_succeeded(event)
+        path, _error = self._emit_run_certificate(
+            pipeline_name=entry["pipeline"],
+            run_id=run_id,
+            started_at=entry["started_at"],
+            ended_at=datetime.now(timezone.utc),
+            status=RunStatus.SUCCESS.value if ok else "failed",
+            error=None if ok else event.get("error"),
+            mlops_run_id=entry.get("mlops_run_id"),
+            run_window=entry.get("run_window"),
+        )
+        if path:
+            logger.info("Hybrid run {} ended; certificate: {}", run_id, path)
 
     def _seal_async_stream(self, event: Dict[str, Any]) -> None:
         """Seal the certificate of an asynchronous streaming run that just ended.

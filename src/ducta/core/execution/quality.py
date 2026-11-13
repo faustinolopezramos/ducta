@@ -345,9 +345,17 @@ class QualityCheckExecutor:
 
         except Exception as e:
             from ducta.check import QualityChecksFailed
-            from ducta.check.core import QualityGateBlocked
+            from ducta.check.core import QualityConfigError, QualityEngineError, QualityGateBlocked
 
             if isinstance(e, (QualityGateBlocked, QualityChecksFailed)):
+                self._deposit_quality_abort(node_name, "data_quality", e)
+                raise
+            # A wrong config (`severity: warnig`, a broken gate, an unknown profile) or
+            # an output the checks cannot read means no check ran. Returning None here
+            # let the node finish as a success with nothing checked, so these fail it
+            # whatever `fail_fast` says; `fail_fast` only governs the checks' verdicts.
+            if isinstance(e, (QualityConfigError, QualityEngineError)):
+                logger.error(f"Data quality for node '{node_name}' could not run: {e}")
                 self._deposit_quality_abort(node_name, "data_quality", e)
                 raise
             logger.error(f"Data quality check execution failed for node '{node_name}': {e}")

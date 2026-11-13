@@ -35,6 +35,35 @@ from ducta.setting.contexts import Context
 from ducta.stream.pipeline_manager import StreamingPipelineManager
 
 
+def record_stream_outcome(context: Any, event: Dict[str, Any]) -> None:
+    """Each stream node's outcome, in the run's ledger: its certificate shows it.
+
+    Shared by the streaming and the hybrid executors (a hybrid run's stream phase
+    used to be missing from its certificate).
+    """
+    from ducta.core.ledger import ledger_for
+
+    ledger = ledger_for(context)
+    start, end = event.get("start_time"), event.get("end_time")
+    duration = float(end - start) if isinstance(start, (int, float)) and end else 0.0
+    statuses = {"failed": "failed", "skipped": "skipped"}
+    for name, node in (event.get("nodes") or {}).items():
+        sink = node.get("sink")
+        ledger.record_node(
+            name,
+            statuses.get(str(node.get("state")), "success"),
+            duration_seconds=duration,
+            outputs=[sink] if sink else [],
+            error=node.get("error"),
+            node_type="stream",
+            stream={
+                "state": node.get("state"),
+                "totals": node.get("totals"),
+                **(node.get("journal") or {}),
+            },
+        )
+
+
 class StreamingExecutor(BaseExecutor):
     """Executor for streaming pipelines."""
 
@@ -68,28 +97,7 @@ class StreamingExecutor(BaseExecutor):
                 logger.warning("Stream event listener failed: {}", e)
 
     def _record_stream_outcome(self, event: Dict[str, Any]) -> None:
-        """Each stream node's outcome, in the run's ledger: its certificate shows it."""
-        from ducta.core.ledger import ledger_for
-
-        ledger = ledger_for(self.context)
-        start, end = event.get("start_time"), event.get("end_time")
-        duration = float(end - start) if isinstance(start, (int, float)) and end else 0.0
-        statuses = {"failed": "failed", "skipped": "skipped"}
-        for name, node in (event.get("nodes") or {}).items():
-            sink = node.get("sink")
-            ledger.record_node(
-                name,
-                statuses.get(str(node.get("state")), "success"),
-                duration_seconds=duration,
-                outputs=[sink] if sink else [],
-                error=node.get("error"),
-                node_type="stream",
-                stream={
-                    "state": node.get("state"),
-                    "totals": node.get("totals"),
-                    **(node.get("journal") or {}),
-                },
-            )
+        record_stream_outcome(self.context, event)
 
     def execute(
         self,

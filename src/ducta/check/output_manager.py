@@ -29,7 +29,16 @@ from ducta import state
 from ducta.check.core import QualityReport
 from ducta.check.serialization import QualityReportSerializer
 from ducta.check.storage import DEFAULT_PIPELINE_NAME, _sanitize_dataset_name, _sanitize_run_id
+from ducta.gate.constants import is_cloud_path, join_cloud_path
 from ducta.gate.factories import WriterFactory
+
+
+def _join(base: str, *parts: str) -> str:
+    """*base*/*parts*, keeping a cloud URI's ``scheme://`` (``Path`` turned ``s3://b``
+    into ``s3:/b``, which then wrote to a local folder called ``s3:``)."""
+    if is_cloud_path(str(base)):
+        return join_cloud_path(str(base), *parts)
+    return str(Path(base, *parts))
 
 
 @dataclass
@@ -180,11 +189,11 @@ class QualityOutputManager:
         ``<base>/global_summary/<pipeline>/<run_id>``: one file per run, so a run
         never overwrites another's summary.
         """
-        return str(
-            Path(self._resolve_base_path(base_path))
-            / "global_summary"
-            / _sanitize_dataset_name(pipeline_name)
-            / _sanitize_run_id(run_id)
+        return _join(
+            self._resolve_base_path(base_path),
+            "global_summary",
+            _sanitize_dataset_name(pipeline_name),
+            _sanitize_run_id(run_id),
         )
 
     def _resolve_output_path(
@@ -205,6 +214,4 @@ class QualityOutputManager:
         safe_pipeline_name = _sanitize_dataset_name(pipeline_name)
         safe_node_name = _sanitize_dataset_name(node_name)
         safe_run_id = _sanitize_run_id(run_id)
-        return str(
-            Path(base_path) / safe_report_type / safe_pipeline_name / safe_node_name / safe_run_id
-        )
+        return _join(base_path, safe_report_type, safe_pipeline_name, safe_node_name, safe_run_id)

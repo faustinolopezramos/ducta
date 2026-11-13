@@ -470,15 +470,18 @@ class QualityService:
 
         all_scores = list(node_scores.values())
         health_index = sum(all_scores) / len(all_scores)
-        sanity_score = sum(sanity_scores) / len(sanity_scores) if sanity_scores else 1.0
-        dq_score = sum(dq_scores) / len(dq_scores) if dq_scores else 1.0
+        # None, not 1.0, when there is nothing behind it: the stored reports are the
+        # data-quality ones, so a 1.0 here showed "Sanity score 100%" for input checks
+        # that were never measured (or never configured).
+        sanity_score = sum(sanity_scores) / len(sanity_scores) if sanity_scores else None
+        dq_score = sum(dq_scores) / len(dq_scores) if dq_scores else None
         nodes_blocked = [n for n, a in gate_actions.items() if a == "block"]
 
         return {
             "run_id": run_id,
             "health_index": round(health_index, 4),
-            "sanity_score": round(sanity_score, 4),
-            "dq_score": round(dq_score, 4),
+            "sanity_score": None if sanity_score is None else round(sanity_score, 4),
+            "dq_score": None if dq_score is None else round(dq_score, 4),
             "nodes_blocked": nodes_blocked,
             "gate_actions": gate_actions,
         }

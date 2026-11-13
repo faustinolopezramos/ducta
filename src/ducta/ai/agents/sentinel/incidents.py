@@ -25,17 +25,22 @@ new incident; the next successful run of the pipeline resolves it.
 
 from __future__ import annotations
 
+import os
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from ducta.ai.agents.store import RecordStore, new_id, now
+from ducta.ai.agents.store import RecordStore, new_id, now, read_json
 
 KINDS = ("failure", "sla_miss", "slow", "stale")
 #: open: seen, nothing decided yet · remediating: Sentinel has an action
 #: pending · escalated: a person must act · resolved · ignored (by a person).
 STATUSES = ("open", "remediating", "escalated", "resolved", "ignored")
 ACTIVE = ("open", "remediating", "escalated")
+#: A closed incident (resolved, ignored) this many days old moves to ``archive/``:
+#: every run and pass reads the incidents folder whole, and it only grew.
+ARCHIVE_AFTER_DAYS = 90
 
 
 @dataclass
@@ -84,6 +89,16 @@ class Incident:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+def _parse(value: Optional[str]) -> Optional[datetime]:
+    try:
+        found = datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+    if found is not None and found.tzinfo is None:
+        found = found.replace(tzinfo=timezone.utc)
+    return found
+
+
 class Incidents:
     """The project's incidents, on disk under ``.ducta/ai/sentinel/incidents/``."""
 
@@ -96,10 +111,36 @@ class Incidents:
 
     def get(self, incident_id: str) -> Optional[Incident]:
         try:
-            data = self.store.load(incident_id)
+            data = self.store.load(incident_id) or read_json(
+                self.archive_dir / self.store.path(incident_id).name
+            )
         except ValueError:
             return None
-        return Incident.from_dict(data) if data else None
+        return Incident.from_dict(data) if isinstance(data, dict) else None
+
+    @property
+    def archive_dir(self) -> Path:
+        return self.store.folder / "archive"
+
+    def archive_closed(self, older_than_days: int = ARCHIVE_AFTER_DAYS) -> List[str]:
+        """Move closed incidents last changed more than *older_than_days* ago to ``archive/``.
+
+        They stay readable by id (:meth:`get`); lists of incidents no longer read them.
+        """
+        cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        moved: List[str] = []
+        for data in self.store.list(limit=None):
+            incident = Incident.from_dict(data)
+            if incident.active:
+                continue
+            at = _parse(incident.resolved_at or incident.updated_at)
+            if at is None or at >= cutoff:
+                continue
+            source = self.store.path(incident.id)
+            self.archive_dir.mkdir(parents=True, exist_ok=True)
+            os.replace(source, self.archive_dir / source.name)
+            moved.append(incident.id)
+        return moved
 
     def list(self, *, status: Optional[str] = None, env: Optional[str] = None) -> List[Incident]:
         out = [Incident.from_dict(d) for d in self.store.list(limit=None)]

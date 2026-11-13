@@ -1,11 +1,11 @@
 ---
 name: ducta
-description: Install, configure, run and troubleshoot Ducta, the configuration-as-code data-pipeline framework (batch, streaming, ML and hybrid pipelines on Spark or pandas). Use when the project has a ducta.yaml, catalog.yaml or catalog/, or pipelines/*.yaml, when the user mentions Ducta or the ducta CLI, or wants to create or fix medallion (bronze/silver/gold) pipelines, catalog datasets, ingestion sources, data quality checks and gates, MLOps training and model serving, streaming jobs, run certificates, or the Ducta web UI and server.
+description: Install, configure, run and troubleshoot Ducta, the configuration-as-code data-pipeline framework (batch, streaming, ML and hybrid pipelines on Spark or pandas). Use when the project has a ducta.yaml (or ducta.toml / ducta.json), a catalog file or catalog/, or pipelines/*.yaml, when the user mentions Ducta or the ducta CLI, or wants to create or fix medallion (bronze/silver/gold) pipelines, catalog datasets, ingestion sources, data quality checks and gates, MLOps training and model serving, streaming jobs, run certificates, or the Ducta web UI and server.
 license: Apache-2.0
 compatibility: Requires the ducta CLI (pip install ducta; Python 3.11-3.14). Works with any agent that can read files and run shell commands.
 metadata:
   ducta-version: "0.3"
-  skill-version: "1.1.3"
+  skill-version: "1.1.4"
   homepage: https://github.com/faustinolopezramos/ducta
 ---
 
@@ -17,6 +17,7 @@ Ducta runs data pipelines described in files: **what** runs is YAML (or TOML/JSO
 ```text
 my_project/
 ├── ducta.yaml          # version: 2, project, paths, settings, defaults, environments
+│                       #   (or ducta.toml / ducta.json: every file may be YAML, TOML or JSON)
 ├── catalog.yaml        # every dataset once (or catalog/<layer>.yaml)
 ├── pipelines/
 │   ├── etl.yaml        # one pipeline per file; the file name is the pipeline name
@@ -42,8 +43,8 @@ edit over long explanations.
 2. If `ducta.version` does not start with `metadata.ducta-version` above, tell the
    user, and trust `ducta <command> --help` and `ducta config schema` over these
    references.
-3. Find the project root: the nearest folder upwards holding `ducta.yaml`
-   (`project_root` in the output). Run commands from there.
+3. Find the project root: the nearest folder upwards holding `ducta.yaml`,
+   `ducta.toml` or `ducta.json` (`project_root` in the output). Run commands from there.
 4. Get the project's state before changing anything:
 
    ```bash
@@ -144,8 +145,9 @@ profile, environments) to copy patterns from.
 2. Pipelines default to `requires_dates: true`:
    `ducta start --env dev --pipeline NAME --start-date YYYY-MM-DD --end-date YYYY-MM-DD`.
 3. `--validate-only`, `--dry-run` and `--node NAME` narrow a first run.
-4. Read the exit code (0 ok, 2 configuration, 3 arguments, 4 the run failed,
-   5 nodes skipped for a missing input, 7 locked — retry later). See [execution](references/execution.md).
+4. Read the exit code (0 ok, 1 an unexpected error — read the log, 2 configuration,
+   3 arguments, 4 the run failed (a whole run or `--node`), 5 nodes skipped for a missing
+   input, 6 refused for security, 7 locked — retry later). See [execution](references/execution.md).
 
 ### Diagnose a failed run
 

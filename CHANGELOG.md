@@ -68,6 +68,27 @@ headline of everything else; `git log` has the detail.
 
 ### Changed (breaking)
 
+- **Data quality no longer skips its checks on a config or engine error** (review
+  2026-11-12): a misspelled `severity:`, a gate that cannot be evaluated, an unknown
+  profile or an output the checks cannot read now fail the node whatever `fail_fast`
+  says. They used to be logged and the node finished as a success with nothing checked.
+- **The quality baseline is saved from the first run that passes** (no ERROR failure,
+  gate passed), not from the first run whatever its verdict: a blocked first load became
+  the permanent reference and every good load after it read as an anomaly. A baseline or
+  history that cannot be read is reported in `persistence_warnings` and not overwritten.
+- **`data_quality.fail_fast` yields to a declared gate**, as `sanity_checks.fail_fast`
+  already did: a `warn_only` gate was overruled by the first ERROR.
+- **`auto_tune` keeps a `score_threshold` written on the node's or the global gate**; it
+  only fills one in where none was chosen (it lowered a deliberate `0.95` to `0.475`).
+- **`sanity_checks.input_index` outside the node's inputs is a config error**; it used to
+  check input 0 instead.
+- **Quality folders keep a dataset name's prefix**: `raw/orders` is stored as
+  `raw__orders` (it shared `orders` with `gold/orders`). Reports stored under the old,
+  colliding folder stay where they are.
+- **A quality history keeps its last 1,000 runs**; older entries are dropped on append.
+- **`ducta quality score` / `GET …/score`** answer `sanity_score: null` (and `dq_score:
+  null`) when there is nothing to average, instead of a made-up `1.0`.
+
 - **An overwrite no longer changes a Delta table's schema by itself**: `write.overwrite_schema`
   is now `false` by default, and an overwrite whose columns differ from the table's (one
   missing, added or retyped) fails and writes nothing. A missing column used to be kept as
@@ -214,6 +235,69 @@ headline of everything else; `git log` has the detail.
   server's OS user and can read the files it can (see SECURITY.md).
 
 ### Fixed
+
+- **A stream node with `quality:`, `quarantine:` or `merge` no longer writes a batch
+  twice** (review 2026-11-12): written through `foreachBatch`, a parquet/JSON/CSV batch
+  that Spark ran again after a crash (written, not yet committed) was appended a second
+  time — 30 rows for 15 — where Spark's own file sink is exactly-once. Batches are now
+  staged and published under a per-batch marker (`<sink>/_ducta_staging/`,
+  `<sink>/_ducta_batches/`). A CSV quarantine is written with a header.
+- **Stream quality that cannot run stops the query**: a misspelled `severity` (or a
+  broken gate, an unknown profile) let every batch through unchecked.
+- **A stream node's baseline is saved** from its first passing batch: it was held back
+  with the reports and dropped 99 times in 100, so `anomaly_detection` and
+  `drift_detection` had nothing to compare with. A local JSON history gets every batch.
+- **Stream totals survive journal rotation** (`carried.json`): a run long enough to
+  rotate `batches.jsonl` twice reported a fraction of its rows in its certificate and in
+  the API. The newest 50 finished runs per pipeline are kept.
+- **A hybrid run's stream phase is in its certificate and sends alerts**: its manager had
+  no listener. An asynchronous hybrid run's certificate is now sealed when the stream
+  phase ends (a run whose batch phase failed is sealed at once, as failed).
+
+- **`ducta start --node` exits 4 when the node fails** (review 2026-11-12), as a whole run
+  does: the node's exception reached the CLI raw and was reported as an unexpected error
+  (exit 1). Ducta's own errors keep their codes (a lock is still 7).
+- **The agent skill finds TOML and JSON projects** (skill 1.1.4): `check_env.py` looked for
+  `ducta.yaml` only, so a project made with `ducta init --format toml|json` had no
+  `project_root`; SKILL.md, its description and the AGENTS.md block now name every format.
+  `check_env.py` also reports the `database` extra, and `api`/`ai` check `jwt` and
+  `ruamel.yaml`. The skill's exit-code list names all of them, and its quality and
+  Sentinel references describe the behaviour changes of this release.
+
+- **Sentinel re-runs inside the server** (review 2026-11-12): the run-finished hook,
+  the periodic pass and an incident's *Retry* call the execution manager from a worker
+  thread, where it failed with "no running event loop" — no server-side re-run ever
+  started. Worse, each attempt left a "pending" run by `sentinel` in the history and in
+  the queue; at the same priority, five of them later took every concurrency slot and
+  the server's next run waited forever. `ExecutionManager.execute_from_thread` hands the
+  call to the event loop, and `execute` now refuses, before recording anything, to run
+  off it.
+- **Sentinel and Architect child runs** (`ducta ai sentinel watch`, `architect verify`)
+  start Python with `-P`: with `-c` the project folder came first on `sys.path`, so a
+  project file named like a standard module (`json.py`, `calendar.py`) broke the run
+  before it began.
+- **Slow runs the server started** open a `slow` incident: only a scan looked, and a
+  scan skips the runs the server's hook already handled.
+- **The CLI re-run's outcome** is the certificate of the run that began during the
+  re-run, not the pipeline's newest one (a person's run right after it was read as
+  Sentinel's); a locked re-run takes none.
+- **Sentinel incidents** resolved or ignored more than 90 days ago move to
+  `.ducta/ai/sentinel/incidents/archive/` (still readable by id): every run and pass
+  read the whole folder, which only grew.
+
+- **Quality checks and missing values** (review 2026-11-12): on Spark a single `NaN`
+  made a column's `max()` NaN, so `range` and `prediction_contract` passed a `1e9` next
+  to it; NaN is now left out as pandas leaves it out. On pandas a column gone entirely
+  null had a NaN mean and passed `anomaly_detection`; it is now reported as not evaluated.
+- **Quality report datasets on cloud storage**: `settings.quality.output` wrote
+  `s3://bucket/q` reports to a local folder `s3:` (paths now keep their scheme).
+- **`incremental_volume`** compares with the average of the runs that passed; blocked or
+  failed loads dragged the norm down (300 rows against a usual 1,000 passed).
+- **Python business rules** must answer `True`/`False`: a rule returning a number gave
+  negative "violations" and passed; it is now a rule error.
+- **`null_rate`** counts every column in one pass (30 columns were 62 Spark jobs, now 4).
+- A storage error while saving the report of a fail-fast abort no longer replaces the
+  check failure that stopped the node.
 
 - **Cloud output paths** (review 2026-11-11): `s3a://`, `s3n://`, `abfs://`, `wasb(s)://` and
   `hdfs://` are cloud URIs everywhere (one list, `ducta.gate.constants.CLOUD_URI_PREFIXES`); a

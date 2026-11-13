@@ -99,7 +99,7 @@ project.
 | quality gate | `propose_quality` | L2 |
 | code, configuration, other | `propose_fix`: explanation + fix draft, never applied | L2 |
 | late for its SLA | `catch_up` if allowed, else `escalate` | L1/L0 |
-| much slower than its p95 | `suggest_review` | L2 |
+| much slower than its p95 (over 1.5×, once it has 5 runs; server or CLI runs alike) | `suggest_review` | L2 |
 | code changed since the last success | `rerun_stale` if `rerun_stale` is on and nothing is appended, else `observe` | L1/L0 |
 
 An L1 action happens only when the policy allows it at that moment (enabled, the
@@ -108,7 +108,8 @@ left); otherwise the incident is escalated with the reason. A re-run covers the
 failed (or stale) nodes and every node downstream of them, and "appended" is
 judged on all of those. A later successful run resolves the incident if it ran every
 node that failed; a run of other nodes only adds a line to its timeline. Everything is in `.ducta/ai/sentinel/`
-(`incidents/`, `audit.jsonl`).
+(`incidents/`, `audit.jsonl`); incidents resolved or ignored more than 90 days ago move
+to `incidents/archive/` (out of the lists, still readable by id).
 
 ```bash
 ducta ai sentinel status --output-format json

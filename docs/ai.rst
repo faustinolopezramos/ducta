@@ -345,8 +345,10 @@ anyone deciding to send them, so it takes ``propose: {remote: true}``. A re-run 
 node downstream of them, and is the same check for ``rerun_stale``. A re-run happens only if the policy allows it
 at that moment (enabled, the environment listed and not protected, the pipeline
 matching, not paused, budget left); otherwise the incident is escalated with the
-reason. Late (``metadata.sla``) and unusually slow runs open incidents too, and an
-alert rule with ``when: [sentinel]`` hears about escalations and recoveries.
+reason. Late (``metadata.sla``) and unusually slow runs (more than 1.5 times the
+pipeline's p95, once it has five runs) open incidents too — a run the server
+started as well as one seen in a scan — and an alert rule with ``when: [sentinel]``
+hears about escalations and recoveries.
 
 It runs inside the server (each finished run at once, and a pass every
 ``SENTINEL_SCAN_MINUTES`` minutes when ``DUCTA_WORKSPACE`` is set) and as a daemon:
@@ -360,7 +362,9 @@ It runs inside the server (each finished run at once, and a pass every
    ducta ai sentinel pause --reason "db maintenance"   # and: resume
    ducta ai sentinel resolve <incident> --note "fixed upstream"
 
-Its state and an audit log of every action are in ``.ducta/ai/sentinel/``. A
+Its state and an audit log of every action are in ``.ducta/ai/sentinel/``.
+Incidents resolved or ignored more than 90 days ago move to
+``incidents/archive/``: they leave the lists, and stay readable by id. A
 run is triaged once: Sentinel keeps a mark of the newest run it has seen per
 environment, however long the history. Its lock covers deciding, never a re-run
 or a model call, so a re-run in progress does not hold up the triage of other

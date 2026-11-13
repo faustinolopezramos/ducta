@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -303,7 +304,7 @@ def test_the_server_hook_queues_a_rerun_as_sentinel(sales, monkeypatch):
     calls = []
 
     class Manager:
-        def execute(self, **kwargs):
+        def execute_from_thread(self, **kwargs):
             calls.append(kwargs)
 
     monkeypatch.setattr("ducta.api.execution.manager.get_execution_manager", lambda: Manager())
@@ -327,7 +328,8 @@ def test_the_cli_executor_reads_the_runs_certificate(sales, certs, monkeypatch):
     from ducta.ai.agents.sentinel.actions import CliExecutor
 
     def fake_run(root, env, pipeline, **kw):
-        certs.append(("dev", _cert("cli-1", started="2999-01-01T00:00:00+00:00")))
+        # A real run's certificate starts while the re-run is under way.
+        certs.append(("dev", _cert("cli-1", started=datetime.now(timezone.utc).isoformat())))
         return runs.RunOutcome(0, "ok")
 
     monkeypatch.setattr(runs, "run_pipeline", fake_run)
@@ -468,7 +470,7 @@ def test_the_cli_executor_reruns_several_nodes_one_by_one(sales, certs, monkeypa
                     f"step-{n}",
                     pipeline="silver.sales",
                     status=status,
-                    started=f"2999-01-01T00:00:0{n}+00:00",
+                    started=datetime.now(timezone.utc).isoformat(),
                 ),
             )
         )

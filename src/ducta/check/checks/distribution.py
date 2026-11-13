@@ -130,7 +130,7 @@ class DriftDetectionCheck(BaseQualityCheck):
         baseline = getattr(config, "_baseline", None)
         if not baseline:
             return self._create_result(
-                True, "No baseline available, first run creates baseline", {}
+                True, "No baseline yet: the first run that passes saves it", {}
             )
 
         drifts = []

@@ -73,7 +73,7 @@ class TestAppendHistoryNonJsonLocking:
         def fake_write(data_list, path):
             store[str(path)] = list(data_list)
 
-        def fake_read(path):
+        def fake_read(path, strict=False):
             # A tiny delay widens the read-modify-write race window deterministically
             # (without it, the in-memory fake is fast enough that the race may not
             # manifest every run even on unlocked code).

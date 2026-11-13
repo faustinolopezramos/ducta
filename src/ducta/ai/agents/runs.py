@@ -56,7 +56,14 @@ class RunOutcome:
 
 
 def ducta_command(*args: str) -> List[str]:
-    return [sys.executable, "-c", _ENTRY, *args]
+    """This interpreter running ``ducta *args``.
+
+    ``-P``: with ``-c`` Python puts the working directory (the project) first on
+    ``sys.path``, so a project file named like a standard module (``json.py``,
+    ``calendar.py``) replaced it and the run died before it began — where
+    ``ducta start`` itself, a console script, never sees the project there.
+    """
+    return [sys.executable, "-P", "-c", _ENTRY, *args]
 
 
 def start_args(

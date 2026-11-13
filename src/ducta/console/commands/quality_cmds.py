@@ -343,8 +343,12 @@ class QualityCommands:
                 hi = float(data.get("health_index", 1.0))
                 hi_color = "green" if hi >= 0.9 else ("yellow" if hi >= 0.7 else "red")
                 console.print(f"\nPipeline Quality Score — run [bold]{run_id}[/bold]")
+                parts = []
+                for label, key in (("sanity", "sanity_score"), ("dq", "dq_score")):
+                    value = data.get(key)
+                    parts.append(f"{label}={'—' if value is None else f'{float(value):.4f}'}")
                 console.print(
-                    f"  Health Index: [{hi_color}]{hi:.4f}[/{hi_color}]  (sanity={data.get('sanity_score', 1.0):.4f}, dq={data.get('dq_score', 1.0):.4f})"
+                    f"  Health Index: [{hi_color}]{hi:.4f}[/{hi_color}]  ({', '.join(parts)})"
                 )
                 blocked = data.get("nodes_blocked", [])
                 if blocked:

@@ -228,7 +228,7 @@ def test_a_retry_is_the_persons_run(home, proj, monkeypatch):
     calls = []
 
     class Manager:
-        def execute(self, **kwargs):
+        def execute_from_thread(self, **kwargs):
             calls.append(kwargs)
 
     monkeypatch.setattr("ducta.api.execution.manager.get_execution_manager", lambda: Manager())

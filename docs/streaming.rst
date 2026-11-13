@@ -273,14 +273,24 @@ Quarantined rows go to ``quarantine.path``, by default
 ``<output_path>/<environment>/quarantine/<pipeline>/<node>``, in the sink's format.
 The micro-batch path writes ``delta``, ``parquet``, ``json`` and ``csv`` sinks.
 
-**Delta writes are idempotent per batch.** Spark runs a batch again after a
-failure with the same id; a Delta append tagged with the query's id and the batch
-id is skipped the second time, and a merge is an upsert. Parquet, JSON and CSV
-appends have no such guarantee.
+**Writes are idempotent per batch.** Spark runs a batch again, with the same id,
+when the query failed before committing it. A Delta append tagged with the query's
+id and the batch id is skipped the second time, and a merge is an upsert. A
+parquet, JSON or CSV batch is written to ``<sink>/_ducta_staging/`` and moved into
+the sink under a name carrying the query and the batch; a marker in
+``<sink>/_ducta_batches/`` records it, so a batch already published is skipped and
+one interrupted half-way is redone whole — the guarantee Spark's own file sink gives,
+kept when quality or quarantine is added. Spark's readers skip both ``_`` folders.
+(On Spark Connect there is no JVM to move files with: a warning says a re-run batch
+may be written twice.)
 
 A passing batch's quality report is kept one time in
-``settings.streaming_quality_report_every`` (default 100). Every failing batch's
-report is kept.
+``settings.streaming_quality_report_every`` (default 100); every failing batch's
+report is kept. The baseline is saved from the first batch that passes, and a local
+JSON history gets every batch (a parquet/Delta history keeps the reports' pace: each
+append is a Spark job). Checks that cannot run at all — a misspelled ``severity``, a
+broken gate, an unknown profile — stop the query instead of letting the batch through
+unchecked.
 
 Running
 -------
@@ -406,7 +416,9 @@ Fault tolerance
 - **A journal outlives the process**: every run writes
   ``<output_path>/<environment>/.ducta/streams/<pipeline>/<run_id>/``. That holds
   ``run.json`` (status, and each node's outcome at the end) and ``batches.jsonl``
-  (one line per batch with data). A run whose process died reads as
+  (one line per batch with data; rotated at 20 MB, the totals of dropped lines kept
+  in ``carried.json`` so a long run's certificate counts every batch). The newest 50
+  finished runs per pipeline are kept. A run whose process died reads as
   ``interrupted``. The ``adaptive`` trigger starts from the batch durations the
   previous run journaled.
 - **Every run is certified**: an asynchronous run gets its run id when it starts

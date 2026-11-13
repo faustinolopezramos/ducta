@@ -29,6 +29,7 @@ How Sentinel re-runs a pipeline — the only thing it ever does on its own.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List, Optional, Protocol
 
@@ -46,31 +47,38 @@ class Executor(Protocol):
         ...
 
 
-def _newest_certificate(
-    root: Path, env: str, pipeline: str, after: Optional[str]
+def _certificate_of_run(
+    root: Path, env: str, pipeline: str, started: datetime, finished: datetime
 ) -> Optional[dict]:
-    from datetime import datetime, timezone
+    """The certificate of the run Sentinel started between *started* and *finished*.
 
+    It used to take the pipeline's newest certificate: a person's run of the same
+    pipeline begun just after Sentinel's ended was then read as Sentinel's
+    outcome. A pipeline's runs cannot overlap (they hold its run lock), so the
+    run that began inside this window is the one Sentinel started; the earliest
+    such certificate is taken.
+    """
     from ducta.api.services.run_certificates import certificates
 
-    def at(value: object) -> datetime:
-        try:
-            found = datetime.fromisoformat(str(value))
-        except ValueError:
-            return datetime.min.replace(tzinfo=timezone.utc)
-        return found if found.tzinfo else found.replace(tzinfo=timezone.utc)
-
-    since = at(after) if after else None
-    newest = None
+    found = None
+    found_at: Optional[datetime] = None
     for _env, cert in certificates(root, env):
         if cert.get("pipeline") != pipeline:
             continue
-        started = at(cert.get("started_at"))
-        if since is not None and started < since:
+        at = _parse_at(cert.get("started_at"))
+        if at is None or not started <= at <= finished:
             continue
-        if newest is None or started > at(newest.get("started_at")):
-            newest = cert
-    return newest
+        if found_at is None or at < found_at:
+            found, found_at = cert, at
+    return found
+
+
+def _parse_at(value: object) -> Optional[datetime]:
+    try:
+        found = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return found if found.tzinfo else found.replace(tzinfo=timezone.utc)
 
 
 #: How long ``ducta ai sentinel watch`` lets one re-run take before stopping it.
@@ -108,9 +116,11 @@ class CliExecutor:
         self, root: Path, env: str, pipeline: str, nodes: List[str], reuse_upstream: bool
     ) -> RunEvent:
         from ducta.ai.agents.runs import run_pipeline
-        from ducta.ai.agents.store import now
 
-        started = now()
+        # Full precision, taken before the child starts: its certificate (same
+        # machine's clock, microseconds) begins after it. No margin: in a node-by-node
+        # re-run the step before ends just before, and must stay outside the window.
+        started = datetime.now(timezone.utc)
         outcome = run_pipeline(
             root,
             env,
@@ -119,7 +129,13 @@ class CliExecutor:
             reuse_upstream=reuse_upstream and bool(nodes),
             timeout=self.timeout,
         )
-        cert = _newest_certificate(root, env, pipeline, started)
+        # A locked run (exit 7) ran nothing: a certificate in the window is someone
+        # else's run, the one holding the lock.
+        cert = (
+            None
+            if outcome.locked
+            else _certificate_of_run(root, env, pipeline, started, datetime.now(timezone.utc))
+        )
         if cert is not None:
             event = event_from_certificate(env, cert)
         else:
@@ -148,7 +164,9 @@ class ServerExecutor:
     def rerun(
         self, root: Path, env: str, pipeline: str, nodes: List[str], reuse_upstream: bool
     ) -> Optional[RunEvent]:
-        self.manager.execute(
+        # Sentinel's hook, its periodic pass and a person's Retry all run in a
+        # worker thread; `execute` must run on the server's event loop.
+        self.manager.execute_from_thread(
             source_path=root,
             pipeline_name=pipeline,
             env=env,

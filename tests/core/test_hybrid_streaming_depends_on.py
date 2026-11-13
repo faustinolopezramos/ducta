@@ -21,6 +21,7 @@ import pytest
 
 from ducta.core.executors.hybrid import HybridExecutor
 from ducta.core.pipeline_state import NodeType, UnifiedPipelineState
+from tests.core.fakes import FakeContext
 
 
 class FakeStreamingManager:
@@ -33,7 +34,9 @@ class FakeStreamingManager:
         self.start_calls: List[Dict[str, Any]] = []
         self.waited: List[str] = []
 
-    def start_pipeline(self, name: str, pipeline_config: Dict[str, Any]) -> str:
+    def start_pipeline(
+        self, name: str, pipeline_config: Dict[str, Any], run_id: Optional[str] = None
+    ) -> str:
         self.start_calls.append({"name": name, "config": pipeline_config})
         return "exec-1"
 
@@ -60,6 +63,7 @@ class FakeStreamingManager:
 
 def _executor(streaming_manager, batch_nodes=("extract",), streaming_nodes=("enrich",)):
     executor = HybridExecutor.__new__(HybridExecutor)
+    executor.context = FakeContext()  # the run's ledger: its id goes to the stream phase
     executor.streaming_manager = streaming_manager
     executor._mlops_pipeline_name = "hybrid_pipe"
     state = UnifiedPipelineState()

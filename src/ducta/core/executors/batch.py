@@ -180,10 +180,11 @@ class BatchExecutor(BaseExecutor):
         from concurrent.futures import ThreadPoolExecutor
         from concurrent.futures import TimeoutError as FutureTimeout
 
-        from ducta.core.errors import NodeTimeoutError
+        from ducta.core.errors import DuctaError, NodeExecutionError, NodeTimeoutError
         from ducta.core.execution.cancellation import cancel_node
         from ducta.core.execution.coordinator import node_timeout_for
         from ducta.core.ledger import ledger_for
+        from ducta.gate.exceptions import MissingDependencyError
 
         executor = self.node_executor
         limit = node_timeout_for(
@@ -205,6 +206,15 @@ class BatchExecutor(BaseExecutor):
                     "timeout is not rolled back"
                 )
                 raise NodeTimeoutError(node_name, limit) from None
+            except (DuctaError, MissingDependencyError):
+                # Ducta's own errors keep their exit code (a lock is 7); a missing
+                # input is turned into "node skipped" by the caller.
+                raise
+            except Exception as e:
+                # The node's own exception, as a whole-pipeline run reports it. Raw, it
+                # reached the CLI as an "unexpected error" and `start --node` exited 1
+                # where the same failure in a full run exits 4 (the run failed).
+                raise NodeExecutionError(node_name, e) from e
         finally:
             # Never wait for a timed-out thread: it cannot be killed, only refused.
             pool.shutdown(wait=False)

@@ -12,11 +12,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from ducta.core.errors import NodeTimeoutError
+from ducta.core.errors import NodeExecutionError, NodeTimeoutError, PipelineLockedError
 from ducta.core.execution.cancellation import is_cancelled
 from ducta.core.execution.coordinator import node_timeout_for
 from ducta.core.executors.batch import BatchExecutor
 from ducta.core.ledger import ledger_for
+from ducta.gate.exceptions import MissingDependencyError
 from tests.core.fakes import FakeContext
 
 
@@ -63,15 +64,42 @@ def test_node_within_its_timeout_succeeds():
     assert not is_cancelled(context, "quick")
 
 
-def test_node_error_propagates_unchanged():
-    context = FakeContext(nodes_config={"bad": {}})
-
+def _failing(error: BaseException) -> _SlowNode:
     class _Failing(_SlowNode):
         def execute_single_node(self, *args) -> None:
-            raise ValueError("boom")
+            raise error
 
-    with pytest.raises(ValueError, match="boom"):
-        BatchExecutor._execute_atomic_node(_batch(context, _Failing(0)), "bad", None, None, {})  # type: ignore[arg-type]
+    return _Failing(0)
+
+
+def test_node_error_fails_the_run_as_in_a_whole_pipeline_run():
+    """The node's exception is kept (as the cause) and the CLI exits 4, not 1.
+
+    Raw, it reached the CLI as an "unexpected error": `start --node` exited 1 where the
+    same failure in a full run exits 4 (review 2026-11-12).
+    """
+    context = FakeContext(nodes_config={"bad": {}})
+
+    with pytest.raises(NodeExecutionError) as caught:
+        BatchExecutor._execute_atomic_node(
+            _batch(context, _failing(ValueError("boom"))), "bad", None, None, {}
+        )  # type: ignore[arg-type]
+
+    assert caught.value.node == "bad"
+    assert isinstance(caught.value.cause, ValueError) and str(caught.value.cause) == "boom"
+    assert caught.value.exit_code == 4
+
+
+@pytest.mark.parametrize(
+    "error",
+    [PipelineLockedError("p", "out"), MissingDependencyError("input not there yet")],
+    ids=["ducta-error-keeps-its-code", "missing-input-stays-a-skip"],
+)
+def test_ductas_own_errors_and_a_missing_input_are_not_wrapped(error):
+    context = FakeContext(nodes_config={"bad": {}})
+
+    with pytest.raises(type(error)):
+        BatchExecutor._execute_atomic_node(_batch(context, _failing(error)), "bad", None, None, {})  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(

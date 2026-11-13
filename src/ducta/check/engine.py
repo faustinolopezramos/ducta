@@ -171,6 +171,74 @@ def _build_unknown_check_type_result(check_name: str, registry_key: str) -> "Che
     )
 
 
+#: Checks that read the stored baseline; the first two also read the history.
+_BASELINE_CHECKS = ("anomaly_detection", "incremental_volume", "drift_detection")
+_HISTORY_CHECKS = ("anomaly_detection", "incremental_volume")
+
+
+def _execute_check(
+    check_name: str,
+    check_config_dict: Dict[str, Any],
+    df: Any,
+    adapter: DFAdapter,
+    context_datasets: Optional[Dict[str, Any]] = None,
+    *,
+    baseline: Any = None,
+    history: Optional[List[Any]] = None,
+) -> CheckResult:
+    """Run one check entry and return its result; it never raises for the data.
+
+    The one place both phases resolve an entry: ``type:`` (a named instance) or the
+    entry name picks the class, ``severity:`` re-stamps the result, and the result
+    carries the entry name. An unknown type and a check that cannot even be built
+    come back as failed ERROR results; the caller decides what fail_fast does with
+    them. A misspelled ``severity`` raises ``QualityConfigError``: it is the config
+    that is wrong, not the data.
+    """
+    registry_key = check_config_dict.get("type") or check_name
+    check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
+    if not check_class:
+        logger.warning(f"Unknown check type: '{registry_key}' (entry: '{check_name}')")
+        return _build_unknown_check_type_result(check_name, registry_key)
+
+    configured_severity = _configured_severity(check_config_dict, check_name)
+    try:
+        check = check_class()
+        # Named-instance entries carry ``type`` as an attribute; no built-in check
+        # reads a ``type`` attribute, so it confuses nothing.
+        check_config = type("CheckConfig", (), check_config_dict)()
+        # Looked up by type, so a named instance of a temporal check gets them too.
+        if registry_key in _BASELINE_CHECKS:
+            check_config._baseline = baseline
+        if registry_key in _HISTORY_CHECKS:
+            check_config._history = history if history is not None else []
+        logger.debug(f"Executing check '{registry_key}' (as '{check_name}')")
+        result = check.run(df, check_config, adapter, context_datasets)
+    except Exception as e:
+        logger.error(f"Error executing check '{check_name}': {e}")
+        return _build_execution_error_result(check_name, e)
+
+    # Applied before the caller consults fail_fast, so a check the config
+    # downgraded to a warning does not abort the run.
+    result = _apply_configured_severity(result, configured_severity)
+    if registry_key != check_name:
+        result = _rename_result(result, check_name)
+    return result
+
+
+def _enabled_entries(checks_config: Dict[str, Any]) -> List[Any]:
+    """The ``(name, config)`` entries that run: dicts without ``enabled: false``."""
+    entries = []
+    for check_name, check_config_dict in checks_config.items():
+        if not isinstance(check_config_dict, dict):
+            continue
+        if not check_config_dict.get("enabled", True):
+            logger.debug(f"Check '{check_name}' disabled")
+            continue
+        entries.append((check_name, check_config_dict))
+    return entries
+
+
 class QualityReporter:
     def __init__(self) -> None:
         self.rich_available = False
@@ -381,12 +449,17 @@ class SanityPhaseRunner:
             )
 
         input_index = sanity_config_dict.get("input_index", 0)
-        if input_index >= len(dfs):
-            logger.warning(
-                f"Node '{node_name}': input_index={input_index} out of range "
-                f"(only {len(dfs)} inputs available), using index 0"
+        if (
+            isinstance(input_index, bool)
+            or not isinstance(input_index, int)
+            or not 0 <= input_index < len(dfs)
+        ):
+            # It used to fall back to input 0: the checks then passed on an input
+            # nobody asked about, and the one meant went unchecked.
+            raise QualityConfigError(
+                f"Node '{node_name}': sanity_checks.input_index={input_index!r} does not "
+                f"name one of its {len(dfs)} input(s) (0 to {len(dfs) - 1})"
             )
-            input_index = 0
         df = dfs[input_index]
 
         try:
@@ -436,77 +509,17 @@ class SanityPhaseRunner:
         profile_name = sanity_config_dict.get("profile")
         checks_config = resolve_checks_config(raw_checks_config, profile_name, self._profiles)
 
-        for check_name, check_config_dict in checks_config.items():
-            if not isinstance(check_config_dict, dict):
-                continue
-
-            check_enabled = check_config_dict.get("enabled", True)
-            if not check_enabled:
-                logger.debug(f"Check '{check_name}' disabled for node '{node_name}'")
-                continue
-
-            # Support named instances via the ``type`` field:
-            #   check_name  → display name used in reports
-            #   registry_key → the check class to instantiate
-            registry_key = check_config_dict.get("type") or check_name
-            check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
-            if not check_class:
-                logger.warning(f"Unknown check type: '{registry_key}' (entry: '{check_name}')")
-                result = _build_unknown_check_type_result(check_name, registry_key)
-                results.append(result)
-                if fail_fast:
-                    raise QualityCheckError(
-                        check_name=check_name,
-                        message=result.message,
-                        node_name=node_name,
-                    )
-                continue
-
-            configured_severity = _configured_severity(check_config_dict, check_name)
-
-            try:
-                # Create check instance
-                check = check_class()
-
-                # Create config object (named-instance entries carry ``type`` as an
-                # attribute; checks that look for it via getattr won't be confused
-                # since no builtin check uses a ``type`` attribute internally)
-                check_config = type("CheckConfig", (), check_config_dict)()
-
-                # Execute check
-                logger.debug(
-                    f"Executing check '{registry_key}' (as '{check_name}') for node '{node_name}'"
+        for check_name, check_config_dict in _enabled_entries(checks_config):
+            result = _execute_check(check_name, check_config_dict, df, adapter, None)
+            results.append(result)
+            # Fail-fast mode: raise on the first error
+            if fail_fast and result.is_error:
+                raise QualityCheckError(
+                    check_name=check_name,
+                    message=result.message,
+                    node_name=node_name,
+                    severity=result.severity.value,
                 )
-                result = check.run(df, check_config, adapter, None)
-                # Applied before fail_fast is consulted below, so a check the
-                # config downgraded to a warning does not abort the run.
-                result = _apply_configured_severity(result, configured_severity)
-                # Override check_name with display name so reports use the node alias
-                if registry_key != check_name:
-                    result = _rename_result(result, check_name)
-                results.append(result)
-
-                # Fail-fast mode: raise immediately on error
-                if fail_fast and not result.passed and result.is_error:
-                    raise QualityCheckError(
-                        check_name=check_name,
-                        message=result.message,
-                        node_name=node_name,
-                        severity=result.severity.value,
-                    )
-
-            except QualityCheckError:
-                raise
-            except Exception as e:
-                logger.error(f"Error executing check '{check_name}' for node '{node_name}': {e}")
-                result = _build_execution_error_result(check_name, e)
-                results.append(result)
-                if fail_fast:
-                    raise QualityCheckError(
-                        check_name=check_name,
-                        message=str(e),
-                        node_name=node_name,
-                    )
 
         # Build report
         elapsed = time.time() - start_time
@@ -800,14 +813,28 @@ class ValidationPhaseRunner:
                 )
 
             # Baseline and history feed the temporal checks.
-            baseline = self.storage.load_baseline(dataset_name, pipeline_name)
-            history = self.storage.load_history(dataset_name, pipeline_name) or []
+            read_warnings: List[str] = []
+            baseline, baseline_readable = self._read_state(
+                "baseline", self.storage.load_baseline, dataset_name, pipeline_name, read_warnings
+            )
+            history, _ = self._read_state(
+                "history", self.storage.load_history, dataset_name, pipeline_name, read_warnings
+            )
+            history = history or []
 
             raw_checks = _config_value(config, "checks", {})
             profile_name = _config_value(config, "profile", None)
             checks_config = resolve_checks_config(
                 raw_checks if isinstance(raw_checks, dict) else {}, profile_name, self._profiles
             )
+            node_gate_cfg = self._node_gate_config(
+                config, profile_name, dataset_name, pipeline_name
+            )
+            # As in the sanity phase: a declared gate decides what the failures mean,
+            # so fail_fast must not abort before it is evaluated (a `warn_only` gate
+            # used to be overruled by the first ERROR). A gate that turns out to be
+            # disabled decides nothing, and the errors raise below as without one.
+            fail_fast = self.fail_fast and not (node_gate_cfg or self._global_gate_config)
             results = self._run_checks(
                 df,
                 adapter,
@@ -819,6 +846,7 @@ class ValidationPhaseRunner:
                 run_id=run_id,
                 pipeline_name=pipeline_name,
                 start_time=start_time,
+                fail_fast=fail_fast,
             )
 
             report = QualityReport(
@@ -829,16 +857,16 @@ class ValidationPhaseRunner:
                 workspace_path=self.workspace_path,
                 elapsed_seconds=time.perf_counter() - start_time,
             )
-            node_gate_cfg = self._node_gate_config(
-                config, profile_name, dataset_name, pipeline_name
-            )
+            report.persistence_warnings.extend(read_warnings)
             report.score = self._score(report, node_gate_cfg)
-            self._persist_report_and_baseline(
-                report, df, adapter, baseline, run_id, dataset_name, pipeline_name
-            )
+            self._persist_report(report, run_id, dataset_name, pipeline_name)
             dq_gate_result = self._evaluate_gate(
                 report, node_gate_cfg, run_id, dataset_name, pipeline_name
             )
+            if not baseline and baseline_readable:
+                self._save_first_baseline(
+                    report, dq_gate_result, df, adapter, dataset_name, pipeline_name
+                )
 
             # Appended AFTER the gate so its action is recorded.
             try:
@@ -858,11 +886,11 @@ class ValidationPhaseRunner:
             if dq_gate_result is not None and not dq_gate_result.passed:
                 _raise_or_warn_gate(dq_gate_result, dataset_name, run_id=run_id)
 
-            # Non-fail-fast mode: check for errors (AFTER gate so gate result is
-            # persisted). Not when a gate decided: as at the sanity site, its
+            # No gate decided: the errors fail the node (AFTER the gate so its result
+            # is persisted). Not when a gate decided: as at the sanity site, its
             # `warn_only` means "log and carry on", and raising here regardless
             # would take the node down for failures the gate declared tolerable.
-            if not self.fail_fast and dq_gate_result is None:
+            if dq_gate_result is None:
                 errors = [r for r in results if r.is_error]
                 if errors:
                     raise QualityChecksFailed(results, dataset_name, run_id)
@@ -889,67 +917,26 @@ class ValidationPhaseRunner:
         run_id: str,
         pipeline_name: str,
         start_time: float,
+        fail_fast: Optional[bool] = None,
     ) -> List["CheckResult"]:
         """Run every enabled check; under ``fail_fast`` the first error aborts the run."""
+        fail_fast = self.fail_fast if fail_fast is None else fail_fast
         results: List["CheckResult"] = []
-
-        def abort(result: "CheckResult") -> None:
-            self._abort_with_failure(
-                dataset_name, results, result, run_id, pipeline_name, start_time
+        for check_name, check_config_dict in _enabled_entries(checks_config):
+            result = _execute_check(
+                check_name,
+                check_config_dict,
+                df,
+                adapter,
+                context_datasets,
+                baseline=baseline,
+                history=history,
             )
-
-        for check_name, check_config_dict in checks_config.items():
-            if not isinstance(check_config_dict, dict):
-                continue
-            if not check_config_dict.get("enabled", True):
-                logger.debug(f"Check '{check_name}' disabled")
-                continue
-
-            # Support named instances via ``type`` field
-            registry_key = check_config_dict.get("type") or check_name
-            check_class = QUALITY_CHECKS_REGISTRY.get(registry_key)
-            if not check_class:
-                logger.warning(f"Unknown check type: '{registry_key}' (entry: '{check_name}')")
-                result = _build_unknown_check_type_result(check_name, registry_key)
-                results.append(result)
-                if self.fail_fast:
-                    abort(result)
-                continue
-
-            configured_severity = _configured_severity(check_config_dict, check_name)
-
-            try:
-                check = check_class()
-                check_config = type("CheckConfig", (), check_config_dict)()
-                # Temporal checks read the baseline (and the history); looked up by
-                # type, so a named instance of one gets them too.
-                if registry_key in ("anomaly_detection", "incremental_volume"):
-                    check_config._baseline = baseline
-                    check_config._history = history
-                if registry_key == "drift_detection":
-                    check_config._baseline = baseline
-
-                logger.debug(f"Executing check: {registry_key} (as '{check_name}')")
-                result = check.run(df, check_config, adapter, context_datasets)
-                # Applied before fail_fast is consulted below, so a check the
-                # config downgraded to a warning does not abort the run.
-                result = _apply_configured_severity(result, configured_severity)
-                # Use the node-level alias (check_name) in reports for named instances
-                if registry_key != check_name:
-                    result = _rename_result(result, check_name)
-                results.append(result)
-
-                if self.fail_fast and not result.passed and result.is_error:
-                    abort(result)
-
-            except QualityChecksFailed:
-                raise
-            except Exception as e:
-                logger.error(f"Error executing check '{check_name}': {e}")
-                result = _build_execution_error_result(check_name, e)
-                results.append(result)
-                if self.fail_fast:
-                    abort(result)
+            results.append(result)
+            if fail_fast and result.is_error:
+                self._abort_with_failure(
+                    dataset_name, results, result, run_id, pipeline_name, start_time
+                )
         return results
 
     def _node_gate_config(
@@ -965,6 +952,7 @@ class ValidationPhaseRunner:
             dataset_name,
             self.storage,
             pipeline_name,
+            global_gate_cfg=self._global_gate_config,
         )
 
     def _score(self, report: QualityReport, node_gate_cfg: Any) -> float:
@@ -985,17 +973,32 @@ class ValidationPhaseRunner:
             logger.warning(f"Failed to compute quality score: {e}")
             return 1.0
 
-    def _persist_report_and_baseline(
+    def _read_state(
         self,
-        report: QualityReport,
-        df: Any,
-        adapter: DFAdapter,
-        baseline: Any,
-        run_id: str,
+        what: str,
+        load: Callable[[str, str], Any],
         dataset_name: str,
         pipeline_name: str,
+        warnings: List[str],
+    ) -> Any:
+        """``(value, readable)``: the stored baseline/history, or ``(None, False)``.
+
+        A read that fails is not "there is none": treating it as absent rebuilt the
+        baseline from today's data after one transient error, so the comparison
+        point moved without anyone asking. It is reported, and nothing is saved over
+        it on this run.
+        """
+        try:
+            return load(dataset_name, pipeline_name), True
+        except Exception as e:  # noqa: BLE001 — reported on the report, the checks still run
+            logger.warning(f"Could not read the {what} of '{dataset_name}': {e}")
+            warnings.append(f"Could not read the {what}: {e}")
+            return None, False
+
+    def _persist_report(
+        self, report: QualityReport, run_id: str, dataset_name: str, pipeline_name: str
     ) -> None:
-        """Save the report; on the first run, the baseline. A failure is a warning on the report."""
+        """Save the report. A failure is a warning on the report."""
         try:
             self.storage.save_report(report.to_dict(), run_id, dataset_name, pipeline_name)
             logger.debug(f"Saved validation report {run_id}")
@@ -1003,13 +1006,35 @@ class ValidationPhaseRunner:
             logger.warning(f"Failed to save validation report: {e}")
             report.persistence_warnings.append(f"Failed to save validation report: {e}")
 
-        if not baseline:
-            try:
-                self._create_and_save_baseline(df, adapter, dataset_name, pipeline_name)
-                logger.debug(f"Created baseline for '{dataset_name}'")
-            except Exception as e:
-                logger.warning(f"Failed to create baseline: {e}")
-                report.persistence_warnings.append(f"Failed to create baseline: {e}")
+    def _save_first_baseline(
+        self,
+        report: QualityReport,
+        gate_result: Any,
+        df: Any,
+        adapter: DFAdapter,
+        dataset_name: str,
+        pipeline_name: str,
+    ) -> None:
+        """Save the baseline from this run, if it is one to compare later runs with.
+
+        The baseline is kept from then on, so it must come from data that passed: it
+        used to be taken from the very first run whatever its verdict, and a first
+        load the gate blocked became the reference — every good load after it then
+        read as an anomaly, for good. A run with ERROR failures, or one its gate did
+        not pass (``warn_only`` included), leaves it for the next run.
+        """
+        if report.errors_count or (gate_result is not None and not gate_result.passed):
+            logger.warning(
+                f"No baseline saved for '{dataset_name}': this run did not pass; "
+                "the first run that passes will set it"
+            )
+            return
+        try:
+            self._create_and_save_baseline(df, adapter, dataset_name, pipeline_name)
+            logger.debug(f"Created baseline for '{dataset_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to create baseline: {e}")
+            report.persistence_warnings.append(f"Failed to create baseline: {e}")
 
     def _evaluate_gate(
         self,
@@ -1075,7 +1100,9 @@ class ValidationPhaseRunner:
             elapsed_seconds=elapsed,
         )
         self._assign_best_effort_score(report)
-        self.storage.save_report(report.to_dict(), run_id, dataset_name, pipeline_name)
+        # A failed save is logged, not raised: it would replace the check failure
+        # (the reason the node stops) with a storage error.
+        self._persist_report(report, run_id, dataset_name, pipeline_name)
         raise QualityChecksFailed([failing_result], dataset_name, run_id)
 
     @staticmethod

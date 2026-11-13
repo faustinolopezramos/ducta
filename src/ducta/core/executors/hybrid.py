@@ -23,7 +23,7 @@ HybridExecutor: a batch phase followed by a streaming phase.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from loguru import logger  # type: ignore
 
@@ -46,7 +46,32 @@ class HybridExecutor(BaseExecutor):
         super().__init__(context, settings=settings)
         max_streaming_pipelines = self.settings.max_streaming_pipelines
         self._max_streaming_pipelines = max_streaming_pipelines
-        self.streaming_manager = StreamingPipelineManager(context, max_streaming_pipelines)
+        #: Called with the stream phase's ``finished`` event once its nodes are in the
+        #: ledger; the facade seals an asynchronous run's certificate from it.
+        self.on_finished: Optional[Callable[[Dict[str, Any]], None]] = None
+        #: Callables also told about every live stream event (the API's alerts).
+        self.event_listeners: List[Callable[[Dict[str, Any]], None]] = []
+        self.streaming_manager = self._new_manager()
+
+    def _new_manager(self) -> StreamingPipelineManager:
+        # The stream phase used to run on a manager nobody listened to: its nodes never
+        # reached the ledger (nor the certificate) and no stream alert was sent.
+        manager = StreamingPipelineManager(self.context, self._max_streaming_pipelines)
+        manager.add_listener(self._on_stream_event)
+        return manager
+
+    def _on_stream_event(self, event: Dict[str, Any]) -> None:
+        from ducta.core.executors.streaming import record_stream_outcome
+
+        if event.get("kind") == "finished":
+            record_stream_outcome(self.context, event)
+            if self.on_finished is not None:
+                self.on_finished(event)
+        for listener in list(self.event_listeners):
+            try:
+                listener(event)
+            except Exception as e:  # noqa: BLE001 - a listener never breaks a stream
+                logger.warning("Stream event listener failed: {}", e)
 
     def shutdown(self) -> None:
         """Stop the streaming pipelines this executor started and release its manager."""
@@ -55,9 +80,7 @@ class HybridExecutor(BaseExecutor):
     def _ensure_manager(self) -> None:
         """Replace a manager that a previous :meth:`shutdown` closed."""
         if getattr(self.streaming_manager, "is_shut_down", False):
-            self.streaming_manager = StreamingPipelineManager(
-                self.context, self._max_streaming_pipelines
-            )
+            self.streaming_manager = self._new_manager()
 
     def execute(
         self,
@@ -396,9 +419,14 @@ class HybridExecutor(BaseExecutor):
         satisfied = self._completed_batch_nodes()
         stream_pipeline_name = f"{self._mlops_pipeline_name or 'hybrid'}__streaming"
         try:
+            from ducta.core.ledger import ledger_for
+
             execution_id = self.streaming_manager.start_pipeline(
                 stream_pipeline_name,
                 {"nodes": startable, "satisfied_dependencies": sorted(satisfied)},
+                # The run's own id: its journal, and the finished event the facade
+                # seals the run's certificate from.
+                run_id=ledger_for(self.context).run_id,
             )
         except Exception as e:
             logger.error("Failed to start streaming nodes {}: {}", startable, e)

@@ -65,7 +65,7 @@ another dataset (`reference_dataset`, `reference`) need it in the catalog.
 
 | Key | Blocks when |
 |---|---|
-| `max_errors` | more error-severity checks fail (default 0: any failing check blocks) |
+| `max_errors` | more ERROR-severity checks fail (default 0: any failing ERROR check blocks; WARNING ones never do) |
 | `max_warnings` | never blocks; logs when exceeded |
 | `min_pass_rate` | the share of passing checks is lower (0.95 = 95 %) |
 | `required_checks` | one of these fails or is missing |
@@ -73,6 +73,16 @@ another dataset (`reference_dataset`, `reference`) need it in the catalog.
 
 `on_fail`: `skip_downstream` (default — dependants skipped, the run does not fail),
 `stop_all` (the run fails), `warn_only`.
+
+What fails the node:
+
+- With a gate, the gate decides — `fail_fast: true` does not abort before it is
+  evaluated (a `warn_only` gate lets the node continue with failed checks).
+  A gate with `enabled: false` decides nothing: ERROR failures fail the node.
+- Without a gate, any failed ERROR check fails the node.
+- A quality block that cannot run fails the node whatever `fail_fast` says: a
+  misspelled `severity`, an unknown profile, a gate whose values are not numbers, an
+  output the checks cannot read. Nothing was checked, so it is not a pass.
 
 Stricter only in production:
 
@@ -86,7 +96,9 @@ environments:
 
 Named, reusable check sets in `settings.quality.profiles` or `quality/profiles.yaml`
 (not both for the same name). Use with `profile: NAME`; the block's own checks merge on
-top. An unknown profile name is an error.
+top. An unknown profile name is an error. `auto_tune: true` on a profile proposes
+the gate's `score_threshold` from the runs that passed — only where no `score_threshold`
+is written on the node's or the global gate.
 
 ```yaml
 # quality/profiles.yaml
@@ -146,6 +158,15 @@ ducta quality score --run-id ID --env dev
 ```
 
 Pass `--pipeline` (the pipeline the node belongs to): reports are scoped per pipeline.
+A dataset name with a `/` gets its own folder (`raw/orders` → `raw__orders`). The history
+keeps the last 1,000 runs.
+
+`baseline.json` (what `anomaly_detection` and `drift_detection` compare with) is saved
+from the first run that **passes** and then kept; a first load that fails does not become
+the reference. A baseline or history that cannot be read is reported in the report's
+`persistence_warnings`, not overwritten. `anomaly_detection` measures in the baseline's
+row-level standard deviations: `z_score_threshold: 3` catches gross shifts (a unit change,
+a column filled with a default), not a few percent.
 Without `--env`, these commands read the standalone `--workspace` store (`.quality/` of
 `ducta quality run`) instead of the project's.
 

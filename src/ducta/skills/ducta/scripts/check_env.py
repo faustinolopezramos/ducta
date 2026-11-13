@@ -32,10 +32,11 @@ from typing import Any, Dict, List, Optional
 #: What each optional extra (``pip install 'ducta[<extra>]'``) makes importable.
 EXTRAS: Dict[str, List[str]] = {
     "spark": ["pyspark", "pyarrow"],
-    "api": ["fastapi", "uvicorn", "sqlalchemy"],
+    "api": ["fastapi", "uvicorn", "sqlalchemy", "jwt"],
+    "database": ["sqlalchemy", "alembic"],
     "mlops": ["mlflow", "sklearn", "optuna"],
     "boost": ["xgboost", "lightgbm"],
-    "ai": ["httpx", "anthropic", "keyring"],
+    "ai": ["httpx", "anthropic", "keyring", "ruamel.yaml"],
     "delta": ["delta"],
     "databricks": ["databricks.connect"],
     "monitoring": ["prometheus_client"],
@@ -152,9 +153,19 @@ def _java() -> Dict[str, Any]:
     return info
 
 
+#: The project file's suffixes, as Ducta reads them (``ducta.setting.project.files.SUFFIXES``;
+#: this script imports nothing from Ducta, and a test keeps the two equal).
+PROJECT_SUFFIXES = (".yaml", ".yml", ".toml", ".json")
+
+
 def _project(start: Path) -> Optional[str]:
+    """The nearest folder at or above *start* with a ``ducta.*`` project file.
+
+    Only ``ducta.yaml`` was looked for: a project made with ``ducta init --format toml``
+    (or ``json``) had no ``project_root``.
+    """
     for folder in (start, *start.parents):
-        if (folder / "ducta.yaml").is_file():
+        if any((folder / f"ducta{suffix}").is_file() for suffix in PROJECT_SUFFIXES):
             return str(folder)
     return None
 

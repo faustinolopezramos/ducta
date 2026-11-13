@@ -363,8 +363,15 @@ class Sentinel:
 
     # ── a finished run ─────────────────────────────────────────────────────
 
-    def handle(self, event: RunEvent) -> Optional[Incident]:
-        """Triage one finished run; the incident it touched, if any."""
+    def handle(
+        self, event: RunEvent, certs: Optional[List[Dict[str, Any]]] = None
+    ) -> Optional[Incident]:
+        """Triage one finished run; the incident it touched, if any.
+
+        *certs* are the environment's certificates when the caller already read
+        them (a scan); otherwise they are read when a successful run needs its
+        pipeline's history (is it slow?).
+        """
         settings = self.settings()
         if settings is None or not event.pipeline:
             return None
@@ -381,6 +388,7 @@ class Sentinel:
             )
         if event.status == "success":
             self._succeeded(event, settings)
+            self._slow_check(event, settings, certs)
             return None
         if not event.failed:
             return None
@@ -583,10 +591,7 @@ class Sentinel:
                 ended = _ended(cert)
                 if cert.get("run_id") in known or (floor and ended and ended < floor):
                     continue
-                event = event_from_certificate(env, cert)
-                self.handle(event)
-                if event.status == "success":
-                    self._check_slow(env, cert, certs, settings)
+                self.handle(event_from_certificate(env, cert), certs)
         self._check_sla(env, certs, settings)
         if settings.policy.rerun_stale:
             self._check_stale(env, settings)
@@ -621,6 +626,28 @@ class Sentinel:
                 settings,
             )
             self._save(incident)
+
+    def _slow_check(
+        self, event: RunEvent, settings: gate.Settings, certs: Optional[List[Dict[str, Any]]]
+    ) -> None:
+        """Whether a successful run was slow, wherever it was seen.
+
+        It used to be asked only by :meth:`scan`, which skips the runs the
+        server's hook has already handled: a run the server started was never
+        found slow.
+        """
+        cert = event.certificate or {
+            "run_id": event.run_id,
+            "pipeline": event.pipeline,
+            "duration_seconds": event.duration_seconds,
+        }
+        if not cert.get("duration_seconds"):
+            return
+        if certs is None:
+            from ducta.api.services.run_certificates import certificates
+
+            certs = [c for _e, c in certificates(self.root, event.env)]
+        self._check_slow(event.env, cert, certs, settings)
 
     def _check_slow(
         self, env: str, cert: Dict[str, Any], certs: List[Dict[str, Any]], settings: gate.Settings
@@ -696,6 +723,10 @@ class Sentinel:
             if not got:
                 self.report.skipped = "another Sentinel pass is running on this project"
                 return self.report
+            try:
+                self.incidents.archive_closed()
+            except OSError as e:  # housekeeping never stops a pass
+                logger.warning("Sentinel could not archive old incidents: {}", e)
             for env in envs:
                 try:
                     self.scan(env)

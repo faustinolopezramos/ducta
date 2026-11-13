@@ -74,8 +74,12 @@ blocking gate sends the **whole batch** to quarantine (the stream continues) →
 is appended or merged. Quarantine defaults to
 `<output_path>/<env>/quarantine/<pipeline>/<node>`, in the sink's format, with
 `_ducta_reason` / `_ducta_batch_id` / `_ducta_run_id` / `_ducta_quarantined_at`.
-Delta writes are idempotent per batch; without `dedupe_order_by` a batch with a repeated
-key fails. `console`, `memory` and `kafka` sinks cannot use this path.
+Writes are idempotent per batch: Delta by its transaction ids, parquet/JSON/CSV through
+`<sink>/_ducta_staging/` and a marker in `<sink>/_ducta_batches/` (a re-run batch is
+never written twice). Without `dedupe_order_by` a merge batch with a repeated key fails.
+Checks that cannot run (a misspelled `severity`…) stop the query. `console`, `memory` and
+`kafka` sinks cannot use this path. A `type: hybrid` run's certificate is sealed when its
+stream phase ends, and includes its stream nodes.
 
 Every run journals itself under `<output_path>/<env>/.ducta/streams/<pipeline>/<run_id>/`
 (`run.json`, `batches.jsonl`; a dead process reads as `interrupted`) and gets a Run

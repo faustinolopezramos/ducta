@@ -41,6 +41,12 @@ from ducta.locking import exclusive_lock
 #: ({root}/{pipeline_name}/{dataset_name}/...) with no special-cased branch.
 DEFAULT_PIPELINE_NAME = "_adhoc"
 
+#: Most entries a dataset's history keeps; the oldest are dropped past it. The
+#: history is read whole on every run and, outside JSON, rewritten whole on every
+#: append, so unbounded it grew the cost of each run forever. Trends show the last
+#: 20 runs, and the advisor and incremental_volume need far fewer than this.
+HISTORY_MAX_ENTRIES = 1000
+
 
 def _write_json_atomic(path: Path, data: Any) -> None:
     tmp = path.parent / f".{path.name}.tmp-{uuid4().hex}"
@@ -94,7 +100,7 @@ def _append_json_history(path: Path, metric_entry: Any) -> None:
                     _quarantine(path)
                 history = []
             history.append(metric_entry)
-            _write_json_atomic(path, history)
+            _write_json_atomic(path, history[-HISTORY_MAX_ENTRIES:])
 
 
 def _read_json_safe(path: Path) -> Optional[Any]:
@@ -103,6 +109,17 @@ def _read_json_safe(path: Path) -> Optional[Any]:
         return None
     content = path.read_text(encoding="utf-8")
     return json.loads(content) if content else None
+
+
+def _is_not_found(error: BaseException) -> bool:
+    """Whether a reader failed because nothing is stored there yet."""
+    if isinstance(error, FileNotFoundError):
+        return True
+    text = str(error)
+    return any(
+        marker in text
+        for marker in ("PATH_NOT_FOUND", "Path does not exist", "is not a Delta table")
+    )
 
 
 _SAFE_RUN_ID_RE = re.compile(r"^[\w\-]+\Z")
@@ -118,10 +135,17 @@ def _sanitize_run_id(run_id: str) -> str:
 
 
 def _sanitize_dataset_name(dataset_name: str) -> str:
-    safe = Path(dataset_name).name
-    if not safe or safe in (".", ".."):
+    """*dataset_name* as one safe folder name.
+
+    ``Path(name).name`` kept only the last part, so ``raw/orders`` and ``gold/orders``
+    shared one folder — one baseline, one history. The parts are now joined with
+    ``__`` (``raw__orders``); empty, ``.`` and ``..`` parts are still dropped, so a
+    name cannot climb out of the quality folder.
+    """
+    parts = [part for part in re.split(r"[\\/]", str(dataset_name)) if part not in ("", ".", "..")]
+    if not parts:
         raise ValueError(f"Invalid dataset_name: {dataset_name!r}")
-    return safe
+    return "__".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -521,7 +545,15 @@ class ContextAwareStorageBackend(StorageBackend):
         write_config.update(self.writer_options)
         writer.write(df, str(path), write_config)
 
-    def _read_with_io(self, path: Path) -> Optional[list]:
+    def _read_with_io(self, path: Path, strict: bool = False) -> Optional[list]:
+        """The records at *path*, or ``None`` when there are none.
+
+        With *strict*, only "no such file" answers ``None``; any other failure (a
+        throttled bucket, a lost connection, a corrupt file) raises. Baseline and
+        history read strictly: a ``None`` there means "start a new one", and one
+        transient error used to replace the baseline with today's data and the
+        history with a single row.
+        """
         from ducta.gate.factories import ReaderFactory
 
         try:
@@ -529,6 +561,8 @@ class ContextAwareStorageBackend(StorageBackend):
             df = reader.read(str(path), {"format": self.format})
             return cast(Optional[List[Any]], self._from_dataframe(df))
         except Exception as e:
+            if strict and not _is_not_found(e):
+                raise
             logger.debug(f"Failed to read {self.format} from {path}: {e}")
             return None
 
@@ -592,7 +626,8 @@ class ContextAwareStorageBackend(StorageBackend):
             )
         else:
             records = self._read_with_io(
-                self._dataset_dir(dataset_name, pipeline_name) / f"baseline.{self.format}"
+                self._dataset_dir(dataset_name, pipeline_name) / f"baseline.{self.format}",
+                strict=True,
             )
             if records is not None:
                 return {r["column"]: json.loads(r["metrics"]) for r in records}
@@ -615,7 +650,8 @@ class ContextAwareStorageBackend(StorageBackend):
             )
         else:
             return self._read_with_io(
-                self._dataset_dir(dataset_name, pipeline_name) / f"history.{self.format}"
+                self._dataset_dir(dataset_name, pipeline_name) / f"history.{self.format}",
+                strict=True,
             )
 
     def append_history(self, dataset_name, metric_entry, pipeline_name=DEFAULT_PIPELINE_NAME):
@@ -642,10 +678,10 @@ class ContextAwareStorageBackend(StorageBackend):
     def _extend_history(self, history_file, metric_entry, dataset_name, pipeline_name) -> None:
         """Load, extend and save the non-JSON history. Errors propagate.
 
-        ``_read_with_io`` answers ``None`` for "no file" *and* for any read error, and
-        a ``None`` here used to become ``[]``: one transient failure replaced the whole
-        history with a single row. For a local file that exists, a failed read now aborts
-        the append instead.
+        ``load_history`` reads strictly: a read error raises (and aborts the append)
+        instead of answering ``None``, which used to become ``[]`` and replace the whole
+        history with a single row. A local file that exists but reads as nothing is
+        refused the same way.
         """
         history = self.load_history(dataset_name, pipeline_name)
         if history is None:
@@ -656,7 +692,7 @@ class ContextAwareStorageBackend(StorageBackend):
                 )
             history = []
         history.append(metric_entry)
-        self.save_history(history, dataset_name, pipeline_name)
+        self.save_history(history[-HISTORY_MAX_ENTRIES:], dataset_name, pipeline_name)
 
     def save_gate_result(
         self, gate_result, run_id, dataset_name, pipeline_name=DEFAULT_PIPELINE_NAME

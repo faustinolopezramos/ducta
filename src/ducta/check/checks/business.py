@@ -23,6 +23,7 @@ Business rule quality checks.
 import ast
 from typing import Any, ClassVar, Dict, FrozenSet, Optional
 
+import numpy as np
 from loguru import logger
 
 from ducta.check.core import (
@@ -32,6 +33,9 @@ from ducta.check.core import (
     DFAdapter,
     register_check,
 )
+
+#: Sentinel for "every verdict was a bool".
+_OK = object()
 
 
 @register_check("business_rules")
@@ -244,9 +248,19 @@ class BusinessRulesCheck(BaseQualityCheck):
                 {"__builtins__": BusinessRulesCheck._SAFE_BUILTINS},
             )
             # Apply to each row so rules can reference any column
-            violations = (~pdf.apply(lambda_func, axis=1)).sum()
+            verdicts = pdf.apply(lambda_func, axis=1)
+            # `~` on a number is a bitwise not: a rule answering `len(name)` gave -6
+            # "violations" and passed. A rule is a yes/no question; anything else is
+            # a rule that cannot be evaluated.
+            wrong = next((v for v in verdicts if not isinstance(v, (bool, np.bool_))), _OK)
+            if wrong is not _OK:
+                raise ValueError(
+                    f"Python rule '{rule}' must return True or False for every row, "
+                    f"got {type(wrong).__name__} ({wrong!r})"
+                )
+            violations = int((~verdicts.astype(bool)).sum())
 
-            return int(violations)
+            return violations
         except ValueError:
             raise
         except Exception as e:

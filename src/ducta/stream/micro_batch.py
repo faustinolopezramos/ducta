@@ -75,19 +75,27 @@ def needs_micro_batch(node_config: Dict[str, Any]) -> bool:
 
 
 class _BufferedStorage:
-    """A quality storage backend whose writes wait for the batch's verdict.
+    """A quality storage backend whose report writes wait for the batch's verdict.
 
-    Reads go straight through (baselines, history). ``save_*``/``append_*`` calls
-    are kept and replayed by :meth:`flush`, or dropped: a passing batch only keeps
-    its report one time in ``report_every``.
+    Reads go straight through. Reports and gate results (``save_*``) are kept and
+    replayed by :meth:`flush`, or dropped: a passing batch only keeps its report one
+    time in ``report_every``. State is not a report and is never dropped: the
+    baseline is written at once (it used to be dropped with the reports, so the
+    temporal checks had nothing to compare with for ~100 batches), and so is the
+    history when it is a local JSON file. A parquet/delta history is a whole Spark
+    rewrite per append, so there it keeps the reports' pace.
     """
 
     def __init__(self, inner: Any) -> None:
         self._inner = inner
         self._pending: List[Any] = []
+        cheap_history = str(getattr(inner, "format", "json")).lower() == "json"
+        self._through = {"save_baseline"} | ({"append_history"} if cheap_history else set())
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self._inner, name)
+        if name in self._through:
+            return attr
         if name.startswith(("save_", "append_")) and callable(attr):
 
             def deferred(*args: Any, **kwargs: Any) -> None:
@@ -159,6 +167,7 @@ class MicroBatchSink:
         self.report_every = int(gs.get("streaming_quality_report_every") or DEFAULT_REPORT_EVERY)
         self._runner: Any = None
         self._batches_seen = 0
+        self._warned_at_least_once = False
 
     # ── the batch ────────────────────────────────────────────────────────────
 
@@ -242,7 +251,7 @@ class MicroBatchSink:
     def _check(self, df: Any, batch_id: int, stats: Dict[str, Any]) -> Optional[str]:
         """Run the node's checks on *df*; the gate's rules when it blocks, else None."""
         from ducta.check import QualityChecksFailed
-        from ducta.check.core import QualityGateBlocked
+        from ducta.check.core import QualityConfigError, QualityEngineError, QualityGateBlocked
 
         runner = self._quality_runner()
         storage = _BufferedStorage(runner.storage)
@@ -268,6 +277,11 @@ class MicroBatchSink:
         except QualityChecksFailed as e:  # fail_fast with error-severity failures
             blocked = str(e)
             stats["gate"] = "block"
+        except (QualityConfigError, QualityEngineError):
+            # The checks could not run at all (`severity: warnig`, a broken gate, an
+            # unknown profile): nothing was checked, so the batch must not be written
+            # as if it passed — the query fails, as a batch node does.
+            raise
         except Exception as e:
             # Same policy as a batch node: a check that cannot run fails the node
             # only with fail_fast; otherwise the batch goes on, said loudly.
@@ -334,22 +348,50 @@ class MicroBatchSink:
         return self._app_id
 
     def _append(self, df: Any, path: str, fmt: str, batch_id: int, suffix: str = "") -> None:
-        writer = df.write.format(fmt).mode("append")
-        for key, value in self.options.items() if not suffix else ():
-            if value is not None:
-                writer = writer.option(str(key), spark_option_value(value))
+        if fmt != "delta":
+            published = _FilePublisher.for_session(df.sparkSession)
+            if published is not None:
+                key = _sanitize_key(f"{self._app_id_for(df.sparkSession)}:{suffix or 'sink'}")
+                published.publish(
+                    lambda staging: self._writer(df, fmt, suffix).mode("overwrite").save(staging),
+                    path,
+                    key,
+                    batch_id,
+                )
+                return
+            if not self._warned_at_least_once:
+                self._warned_at_least_once = True
+                logger.warning(
+                    "Stream node '{}': no JVM to publish {} files with (Spark Connect); a "
+                    "re-run batch may be written twice",
+                    self.node_name,
+                    fmt,
+                )
+        writer = self._writer(df, fmt, suffix).mode("append")
         if fmt == "delta":
             app_id = self._app_id_for(df.sparkSession)
             writer = writer.option("txnAppId", f"{app_id}:{suffix}" if suffix else app_id)
             writer = writer.option("txnVersion", str(batch_id))
             if suffix:
                 writer = writer.option("mergeSchema", "true")
+        writer.save(path)
+
+    def _writer(self, df: Any, fmt: str, suffix: str) -> Any:
+        """The batch writer of *df* in *fmt*, with the sink's options and partitioning."""
+        writer = df.write.format(fmt)
+        for key, value in self.options.items() if not suffix else ():
+            if value is not None and not (fmt != "delta" and str(key).startswith("delta.")):
+                writer = writer.option(str(key), spark_option_value(value))
+        if suffix and fmt == "csv":
+            # A quarantine has no options of its own; without a header its columns
+            # (the reason among them) had no names.
+            writer = writer.option("header", "true")
         if self.partition_by and not suffix:
             parts = (
                 self.partition_by if isinstance(self.partition_by, list) else [self.partition_by]
             )
             writer = writer.partitionBy(*parts)
-        writer.save(path)
+        return writer
 
     def _merge(self, df: Any, batch_id: int) -> None:
         from ducta.gate.writers import DeltaMerge
@@ -382,6 +424,108 @@ class MicroBatchSink:
             DeltaMerge(df, self.path, {"merge": spec}).run(create=create)
         finally:
             unset_txn()
+
+
+#: Under a file sink's folder; Spark's readers skip names starting with "_".
+STAGING_DIR = "_ducta_staging"
+MARKERS_DIR = "_ducta_batches"
+
+
+def _sanitize_key(text: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in text)[:120]
+
+
+class _FilePublisher:
+    """Exactly-once batch appends to a parquet/JSON/CSV folder.
+
+    Spark runs a micro-batch again, with the same id, when the query failed before
+    committing it — after the files were written. A plain append then wrote them a
+    second time (Spark's own file sink avoids it with ``_spark_metadata``, which a
+    ``foreachBatch`` does not get). Here a batch is written to a staging folder, its
+    files are listed in a marker, moved into the sink under a name carrying the
+    query's key and the batch id, and the marker is closed. Run again, a closed
+    marker for the same batch means "already published" (skipped); an open one
+    means "interrupted half-way": its files are removed and the batch is published
+    again. One marker per key, overwritten by the next batch.
+    """
+
+    def __init__(self, gateway: Any, hadoop_conf: Any) -> None:
+        self._gw = gateway
+        self._conf = hadoop_conf
+
+    @classmethod
+    def for_session(cls, spark: Any) -> Optional["_FilePublisher"]:
+        gateway, conf = jvm(spark), hadoop_configuration(spark)
+        if gateway is None or conf is None:  # Spark Connect: no local JVM
+            return None
+        return cls(gateway, conf)
+
+    def _path(self, text: str) -> Any:
+        return self._gw.org.apache.hadoop.fs.Path(text)
+
+    def _read_marker(self, fs: Any, marker: Any) -> Optional[Dict[str, Any]]:
+        if not fs.exists(marker):
+            return None
+        stream = fs.open(marker)
+        try:
+            reader = self._gw.java.io.BufferedReader(
+                self._gw.java.io.InputStreamReader(stream, "UTF-8")
+            )
+            text = reader.readLine()
+        finally:
+            stream.close()
+        try:
+            data = json.loads(text) if text else None
+        except ValueError:
+            return None
+        return data if isinstance(data, dict) else None
+
+    def _write_marker(self, fs: Any, marker: Any, data: Dict[str, Any]) -> None:
+        out = fs.create(marker, True)
+        try:
+            out.write(bytearray(json.dumps(data).encode("utf-8")))
+        finally:
+            out.close()
+
+    def publish(
+        self, write_staging: Callable[[str], None], target: str, key: str, batch_id: int
+    ) -> None:
+        root = target.rstrip("/")
+        marker = self._path(f"{root}/{MARKERS_DIR}/{key}.json")
+        fs = marker.getFileSystem(self._conf)
+        found = self._read_marker(fs, marker)
+        if found and found.get("batch_id") == batch_id:
+            if found.get("done"):
+                logger.info("Batch {} of '{}' is already in {}: skipped", batch_id, key, root)
+                return
+            for name in found.get("files") or []:  # an interrupted publish: start over
+                fs.delete(self._path(f"{root}/{name}"), False)
+
+        staging_text = f"{root}/{STAGING_DIR}/{key}-b{batch_id}"
+        staging = self._path(staging_text)
+        write_staging(staging_text)
+        base = fs.makeQualified(staging).toString().rstrip("/") + "/"
+        moves = []
+        listing = fs.listFiles(staging, True)
+        while listing.hasNext():
+            source = listing.next().getPath()
+            name = source.getName()
+            if name.startswith(("_", ".")):
+                continue  # _SUCCESS, .crc
+            relative = fs.makeQualified(source).toString()[len(base) :]
+            folder, _, _ = relative.rpartition("/")
+            renamed = f"{folder + '/' if folder else ''}ducta-{key}-b{batch_id}-{name}"
+            moves.append((source, renamed))
+        record = {"batch_id": batch_id, "files": [r for _, r in moves], "done": False}
+        self._write_marker(fs, marker, record)
+        for source, renamed in moves:
+            destination = self._path(f"{root}/{renamed}")
+            fs.mkdirs(destination.getParent())
+            if not fs.rename(source, destination):
+                raise IOError(f"Could not move {source} to {destination}")
+        record["done"] = True
+        self._write_marker(fs, marker, record)
+        fs.delete(staging, True)
 
 
 def default_quarantine_path(context: Any, pipeline_name: str, node_name: str) -> str:

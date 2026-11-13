@@ -181,6 +181,14 @@ class QualityGateBlocked(QualityError):
         }
 
 
+def _none_if_nan(value: Any) -> Optional[float]:
+    """*value* as a float, or ``None`` for a missing one (``None``/``NaN``/``NaT``)."""
+    if value is None:
+        return None
+    number = float(value)
+    return None if number != number else number
+
+
 class DFAdapter:
     def __init__(self, df: Any) -> None:
         self.df = df
@@ -221,18 +229,44 @@ class DFAdapter:
         if self.engine == "spark":
             F = self._spark()
 
-            dtype = dict(self.df.dtypes).get(column)
-            is_numeric = dtype in ("double", "float")
-
-            if is_numeric:
+            if self._is_spark_floating(column):
                 return int(self.df.filter(F.isnull(column) | F.isnan(column)).count())
             return int(self.df.filter(F.isnull(column)).count())
         return int(self.df[column].isna().sum())
 
+    def null_counts(self, columns: List[str]) -> Dict[str, int]:
+        """Nulls (and NaN, for floating columns) per column, in one pass over the data.
+
+        ``null_count`` per column cost Spark two jobs each: 30 columns were 62 jobs.
+        """
+        if not columns:
+            return {}
+        if self.engine == "spark":
+            F = self._spark()
+            exprs = []
+            for i, column in enumerate(columns):
+                missing = F.isnull(F.col(column))
+                if self._is_spark_floating(column):
+                    missing = missing | F.isnan(F.col(column))
+                exprs.append(F.sum(F.when(missing, 1).otherwise(0)).alias(f"_n{i}"))
+            row = self.df.select(*exprs).collect()[0]
+            return {column: int(row[i] or 0) for i, column in enumerate(columns)}
+        counts = self.df[columns].isna().sum()
+        return {column: int(counts[column]) for column in columns}
+
+    def _is_spark_floating(self, column: str) -> bool:
+        return dict(self.df.dtypes).get(column) in ("double", "float")
+
     def min_max(self, column: str) -> Tuple[Optional[float], Optional[float]]:
         if self.engine == "spark":
             F = self._spark()
-            r = self.df.select(F.min(column), F.max(column)).collect()[0]
+            values = F.col(column)
+            if self._is_spark_floating(column):
+                # Spark orders NaN above every number, so one NaN made max() NaN, and
+                # `NaN > max` is False: a 1e9 next to a NaN passed `range`. NaN is left
+                # out, as pandas leaves it out (null_count counts it as missing).
+                values = F.when(~F.isnan(values), values)
+            r = self.df.select(F.min(values), F.max(values)).collect()[0]
             return r[0], r[1]
         import pandas as pd
 
@@ -255,14 +289,23 @@ class DFAdapter:
             F = self._spark()
             r = self.df.select(F.percentile_approx(column, percentile / 100.0)).collect()[0][0]
             return float(r) if r is not None else None
-        return float(self.df[column].quantile(percentile / 100.0))
+        return _none_if_nan(self.df[column].quantile(percentile / 100.0))
 
     def mean_std(self, column: str) -> Tuple[Optional[float], Optional[float]]:
+        """Mean and standard deviation, ``None`` when there is nothing to measure.
+
+        Spark answers ``None`` for a column with no values; pandas answered ``NaN``,
+        and a NaN z-score is never above its threshold: a column gone entirely null
+        passed ``anomaly_detection``.
+        """
         if self.engine == "spark":
             F = self._spark()
-            r = self.df.select(F.avg(column), F.stddev(column)).collect()[0]
+            values = F.col(column)
+            if self._is_spark_floating(column):
+                values = F.when(~F.isnan(values), values)
+            r = self.df.select(F.avg(values), F.stddev(values)).collect()[0]
             return r[0], r[1]
-        return float(self.df[column].mean()), float(self.df[column].std())
+        return _none_if_nan(self.df[column].mean()), _none_if_nan(self.df[column].std())
 
     def distinct_values(self, column: str, limit: Optional[int] = 1000) -> List[Any]:
         if self.engine == "spark":

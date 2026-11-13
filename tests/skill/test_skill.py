@@ -407,3 +407,46 @@ def test_a_failed_copy_leaves_the_installed_skill_in_place(project, monkeypatch)
     assert _run("install", "--target", "agents", "--force") != 0
     assert (dest / "SKILL.md").read_text() == before
     assert sorted(p.name for p in dest.parent.iterdir()) == ["ducta"]
+
+
+# ── review 2026-11-12 ────────────────────────────────────────────────────────
+
+
+def _check_env_module():
+    spec = importlib.util.spec_from_file_location("check_env", SKILL / "scripts" / "check_env.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("name", ["ducta.yaml", "ducta.yml", "ducta.toml", "ducta.json"])
+def test_check_env_finds_a_project_in_any_format(tmp_path, name):
+    """It looked for ducta.yaml only: `ducta init --format toml|json` had no project_root."""
+    (tmp_path / name).write_text("")
+    inner = tmp_path / "pipelines"
+    inner.mkdir()
+    assert _check_env_module()._project(inner) == str(tmp_path)
+
+
+def test_check_env_knows_the_project_suffixes_ducta_reads():
+    from ducta.setting.project.files import SUFFIXES
+
+    assert tuple(_check_env_module().PROJECT_SUFFIXES) == tuple(SUFFIXES)
+
+
+def test_check_env_covers_every_extra():
+    """Each extra of pyproject.toml (but `all`) is reported, so a missing one is visible."""
+    import tomllib
+
+    extras = tomllib.loads((REPO / "pyproject.toml").read_text())["tool"]["poetry"]["extras"]
+    assert set(_check_env_module().EXTRAS) == set(extras) - {"all"}
+
+
+def test_skill_md_names_every_exit_code():
+    from ducta.console.core import ExitCode
+
+    _, body = _frontmatter()
+    line = body[body.index("Read the exit code") :].split("See [execution]")[0]
+    named = {int(n) for n in re.findall(r"\b(\d) ", line)}
+    assert named == {code.value for code in ExitCode}

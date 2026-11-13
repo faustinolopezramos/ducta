@@ -52,6 +52,12 @@ JOURNAL_DIR_TEMPLATE = state.STREAMS_DIR
 #: batches.jsonl is rotated to batches.1.jsonl past this size (one older file kept).
 MAX_BATCHES_BYTES = 20 * 1024 * 1024
 
+#: Totals of the batch lines rotation has dropped (see StreamRunJournal._carry).
+CARRIED_FILE = "carried.json"
+
+#: Finished runs kept per pipeline; older ones are removed when a run starts.
+KEEP_RUNS = 50
+
 #: Statuses after which a run writes nothing more.
 FINAL_STATUSES = frozenset({"completed", "stopped", "failed", "error", "partial_failure"})
 
@@ -98,6 +104,7 @@ class StreamRunJournal:
             / CheckpointManager.sanitize_path_component(run_id)
         )
         self.dir.mkdir(parents=True, exist_ok=True)
+        prune_runs(base, pipeline, keep=KEEP_RUNS)
         self._lock = threading.Lock()
         self.run: Dict[str, Any] = {
             "pipeline": pipeline,
@@ -144,11 +151,29 @@ class StreamRunJournal:
             try:
                 path = self.batches_path
                 if path.exists() and path.stat().st_size > MAX_BATCHES_BYTES:
+                    self._carry(self.dir / "batches.1.jsonl")
                     os.replace(path, self.dir / "batches.1.jsonl")
                 with open(path, "a", encoding="utf-8") as f:
                     f.write(text)
             except OSError as e:  # the journal must never break the stream
                 logger.warning("Could not write to the stream journal {}: {}", self.dir, e)
+
+    def _carry(self, dropped: Path) -> None:
+        """Fold the totals of *dropped* (about to be replaced) into ``carried.json``.
+
+        Only one rotated file is kept, and the run's totals (its certificate, the API
+        once the process is gone) were summed from the lines left: a stream that had
+        run for days reported a fraction of what it read.
+        """
+        if not dropped.exists():
+            return
+        carried = _read_carried(self.dir)
+        for node, totals in _summarize_lines(_lines_of(dropped)).items():
+            carried[node] = _merge_totals(carried.get(node), totals)
+        fd, tmp = tempfile.mkstemp(dir=str(self.dir), suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(carried, f, default=str)
+        os.replace(tmp, self.dir / CARRIED_FILE)
 
     def _write_run(self) -> None:
         try:
@@ -196,6 +221,23 @@ def iter_runs(base: str, pipeline: str) -> Iterator[Dict[str, Any]]:
     return iter(sorted(runs, key=lambda r: str(r.get("started_at") or ""), reverse=True))
 
 
+def prune_runs(base: str, pipeline: str, keep: int = KEEP_RUNS) -> List[str]:
+    """Remove the runs of *pipeline* past the newest *keep*; never one still running.
+
+    A folder per run, forever: every lookup (the API's fallback, the adaptive
+    trigger's history) read all of them.
+    """
+    import shutil
+
+    removed: List[str] = []
+    for run in list(iter_runs(base, pipeline))[keep:]:
+        if run.get("status") not in FINAL_STATUSES and run.get("status") != "interrupted":
+            continue
+        shutil.rmtree(str(run["journal_dir"]), ignore_errors=True)
+        removed.append(str(run.get("run_id")))
+    return removed
+
+
 def find_run(
     base: str,
     pipeline: str,
@@ -211,24 +253,67 @@ def find_run(
     return None
 
 
+def _lines_of(path: Path) -> Iterator[Dict[str, Any]]:
+    if not path.exists():
+        return
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            try:
+                yield json.loads(raw)
+            except ValueError:
+                continue  # a line cut by a crash
+
+
 def iter_lines(run_dir: Path) -> Iterator[Dict[str, Any]]:
-    """Every batch line of a run, oldest first (rotated file included)."""
+    """Every batch line still on disk, oldest first (rotated file included)."""
     for name in ("batches.1.jsonl", "batches.jsonl"):
-        path = Path(run_dir) / name
-        if not path.exists():
-            continue
-        with open(path, encoding="utf-8") as f:
-            for raw in f:
-                try:
-                    yield json.loads(raw)
-                except ValueError:
-                    continue  # a line cut by a crash
+        yield from _lines_of(Path(run_dir) / name)
+
+
+def _read_carried(run_dir: Path) -> Dict[str, Dict[str, Any]]:
+    try:
+        data = json.loads((Path(run_dir) / CARRIED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _merge_totals(a: Optional[Dict[str, Any]], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Two summaries of one node's lines, added up."""
+    if not a:
+        return dict(b)
+    written = [x for x in (a.get("rows_written"), b.get("rows_written")) if x is not None]
+    firsts = [x for x in (a.get("first_batch"), b.get("first_batch")) if x is not None]
+    lasts = [x for x in (a.get("last_batch"), b.get("last_batch")) if x is not None]
+    gate = dict(a.get("gate") or {})
+    for verdict, count in (b.get("gate") or {}).items():
+        gate[verdict] = gate.get(verdict, 0) + count
+    return {
+        "batches": int(a.get("batches") or 0) + int(b.get("batches") or 0),
+        "first_batch": min(firsts) if firsts else None,
+        "last_batch": max(lasts) if lasts else None,
+        "rows_in": int(a.get("rows_in") or 0) + int(b.get("rows_in") or 0),
+        "rows_written": sum(written) if written else None,
+        "rows_quarantined": int(a.get("rows_quarantined") or 0)
+        + int(b.get("rows_quarantined") or 0),
+        "gate": gate,
+    }
 
 
 def summarize(run_dir: Path) -> Dict[str, Dict[str, Any]]:
-    """Per node: batches with data, rows read/written/quarantined, gate verdicts."""
+    """Per node: batches with data, rows read/written/quarantined, gate verdicts.
+
+    The whole run: the lines on disk plus what rotation dropped (``carried.json``).
+    """
+    nodes = _summarize_lines(iter_lines(run_dir))
+    for node, totals in _read_carried(run_dir).items():
+        nodes[node] = _merge_totals(totals, nodes.get(node) or {})
+    return nodes
+
+
+def _summarize_lines(lines: Iterator[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     nodes: Dict[str, Dict[str, Any]] = {}
-    for line in iter_lines(run_dir):
+    for line in lines:
         node = nodes.setdefault(
             str(line.get("node")),
             {

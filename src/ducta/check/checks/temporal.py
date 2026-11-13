@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 Temporal quality checks.
 """
 
+import math
 from datetime import date, datetime, timezone
 from typing import Any, ClassVar, Dict, FrozenSet, List, Optional, cast
 
@@ -32,6 +33,11 @@ from ducta.check.core import (
     DFAdapter,
     register_check,
 )
+
+
+def _finite(value: Any) -> bool:
+    """Whether *value* is a real number (not None, NaN or infinite)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
 @register_check("anomaly_detection")
@@ -70,7 +76,7 @@ class AnomalyDetectionCheck(BaseQualityCheck):
         baseline = getattr(config, "_baseline", None)
         if not baseline:
             return self._create_result(
-                True, "No baseline available, first run creates baseline", {}
+                True, "No baseline yet: the first run that passes saves it", {}
             )
 
         anomalies = []
@@ -85,12 +91,17 @@ class AnomalyDetectionCheck(BaseQualityCheck):
                 # column collapsed to one constant (all 0, all 1e6) pass unchecked.
                 mean, _std = adapter.mean_std(column)
                 if mean is None:
+                    # No value at all today: nothing to compare, said in the details
+                    # instead of a NaN z-score that is never above the threshold.
+                    details[column] = {"skipped": "no non-null values"}
                     continue
 
                 baseline_mean = baseline.get(column, {}).get("mean")
                 baseline_std = baseline.get(column, {}).get("std")
 
-                if baseline_mean is None or baseline_std is None:
+                if not (_finite(baseline_mean) and _finite(baseline_std)):
+                    # A baseline column with one value has a NaN std (saved as NaN).
+                    details[column] = {"skipped": "no usable baseline mean/std"}
                     continue
 
                 # Calculate z-score
@@ -137,8 +148,8 @@ class AnomalyDetectionCheck(BaseQualityCheck):
             # `passed=False` makes it visible instead of silently "ok".
             return self._create_result(
                 False,
-                f"No columns could be evaluated (0/{len(columns)} had a usable "
-                "baseline/non-zero std) — inconclusive, not a pass",
+                f"No columns could be evaluated (0/{len(columns)} had values and a usable "
+                "baseline) — inconclusive, not a pass",
                 details,
                 severity=CheckSeverity.WARNING,
             )
@@ -176,17 +187,28 @@ class IncrementalVolumeCheck(BaseQualityCheck):
             config.min_historical_samples if hasattr(config, "min_historical_samples") else 5
         )
 
-        # Load historical history
-        history = getattr(config, "_history", [])
+        # Only the loads that passed set the norm (as ThresholdAdvisor does): blocked
+        # or failed runs — often the empty, broken loads this check exists to catch —
+        # dragged the mean down, so 300 rows against a usual 1,000 read as 60% of
+        # "normal" next to five failed loads of 0.
+        history = [
+            h
+            for h in getattr(config, "_history", None) or []
+            if isinstance(h, dict)
+            and isinstance(h.get("row_count"), (int, float))
+            and h.get("gate_action") != "block"
+            and not h.get("errors_count")
+        ]
         if len(history) < min_historical_samples:
             return self._create_result(
                 True,
-                f"Insufficient history samples ({len(history)} < {min_historical_samples})",
+                f"Insufficient history samples ({len(history)} passing run(s) < "
+                f"{min_historical_samples})",
                 {},
             )
 
         # Calculate historical average
-        historical_counts = [h.get("row_count", 0) for h in history]
+        historical_counts = [h["row_count"] for h in history]
         historical_mean = (
             sum(historical_counts) / len(historical_counts) if historical_counts else 0
         )

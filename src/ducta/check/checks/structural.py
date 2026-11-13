@@ -112,9 +112,17 @@ class NullRateCheck(BaseQualityCheck):
 
         failures: Dict[str, Any] = {}
         column_errors: Dict[str, str] = {}
+        # One aggregation for every column (it was a Spark job or two per column:
+        # 62 jobs for 30 columns). If it fails, the per-column path below tells which
+        # column could not be read.
+        try:
+            counts = adapter.null_counts(list(columns))
+        except Exception as e:  # noqa: BLE001 — fall back to one column at a time
+            logger.debug(f"Single-pass null count failed, counting per column: {e}")
+            counts = {}
         for col in columns:
             try:
-                null_count = adapter.null_count(col)
+                null_count = counts[col] if col in counts else adapter.null_count(col)
                 rate = null_count / total_rows
 
                 if rate > threshold:

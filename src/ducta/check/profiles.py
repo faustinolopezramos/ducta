@@ -86,8 +86,13 @@ def apply_auto_tune(
     dataset_name: Optional[str],
     storage: Optional[Any],
     pipeline_name: str = DEFAULT_PIPELINE_NAME,
+    global_gate_cfg: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Apply a profile's ``auto_tune`` proposed score_threshold to a gate config.
+
+    Only where nobody chose one: a ``score_threshold`` written on the node's gate or
+    on the global gate is kept. auto_tune used to replace it, so a deliberate
+    ``0.95`` became the history's ``0.475``.
 
     Returns *gate_cfg* unchanged (same object) unless the profile has
     ``auto_tune: true``, a *dataset_name*/*storage* are available to look up
@@ -101,6 +106,16 @@ def apply_auto_tune(
     if not profile or not profile.auto_tune or not dataset_name or storage is None:
         return gate_cfg
     if gate_cfg is not None and not isinstance(gate_cfg, dict):
+        return gate_cfg
+    explicit = [
+        cfg.get("score_threshold")
+        for cfg in (gate_cfg, global_gate_cfg)
+        if isinstance(cfg, dict) and cfg.get("score_threshold") is not None
+    ]
+    if explicit:
+        logger.debug(
+            "auto_tune: '{}' keeps its configured score_threshold {}", dataset_name, explicit[0]
+        )
         return gate_cfg
     # A node without its own quality_gate block (gate_cfg=None) is the common case
     # when gating relies solely on global_config.quality.gate — auto_tune must
