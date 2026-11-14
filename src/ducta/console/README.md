@@ -8,7 +8,7 @@
 |---|---|
 | **Purpose** | Human/CI entry point: run pipelines, scaffold projects, inspect configs and quality |
 | **Layer** | Interface (CLI) |
-| **Depends on** | `core`, `setting`, `check`, `mlrun`, `stream`, `ai` (`ducta ai …`), `api` (`ducta ui`, shared services), `skills` |
+| **Depends on** | `core`, `setting`, `check`, `mlrun`, `stream`, `ai` (`ducta ai …`), `project_store` and `runs` (shared services), `skills`; `ducta ui` hands over to the separate `ducta-server` package, never imports it |
 | **Used by** | End users & CI (the `ducta` command); `api` and `ai` reuse its presentation and templates |
 | **Key entry points** | `ducta` console script → `UnifiedCLI`, subcommands (`start`, `stream`, `template`, `quality`, …) |
 | **Install** | Bundled with the core engine (`pip install ducta`) |
@@ -132,7 +132,7 @@ ducta ai review etl
 ducta ai eval --repeat 3            # how well the configured model drafts (kept, compared)
 ducta ai eval --list
 
-# Run certificate + local UI
+# Run certificate + local UI (the UI needs: pip install ducta-server)
 ducta certify verify --run-id <run_id>
 ducta ui --port 8000
 ```

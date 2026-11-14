@@ -252,7 +252,7 @@ class StorageBackendFactory:
         return str(mode).lower()
 
     @staticmethod
-    def _resolve_mlops_path(
+    def resolve_mlops_path(
         context: "Context",
         base_path: Optional[str] = None,
         pipeline_name: Optional[str] = None,
@@ -314,7 +314,7 @@ class StorageBackendFactory:
             backend_cls: Any = StorageBackendRegistry.get(backend_key)
 
             if mode == "local":
-                path = StorageBackendFactory._resolve_mlops_path(context, base_path, pipeline_name)
+                path = StorageBackendFactory.resolve_mlops_path(context, base_path, pipeline_name)
                 if path is None:
                     logger.error("Could not resolve safe MLOps directory path.")
                     return None

@@ -335,7 +335,7 @@ class SentinelCommands:
     def triage(parsed_args) -> int:
         from ducta.ai.agents.sentinel import policy as gate
         from ducta.ai.agents.sentinel.triage import decide, diagnosis_of, event_from_certificate
-        from ducta.api.services.run_certificates import certificates
+        from ducta.runs.certificates import certificates
 
         root = _project_root(parsed_args)
         found = next(

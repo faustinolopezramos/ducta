@@ -219,12 +219,12 @@ class TestAlertDelivery:
                 return type("P", (), {"project": type("Q", (), {"alerts": rules})()})()
 
         monkeypatch.setattr(
-            "ducta.api.repositories.v2_store.V2ProjectStore.detect",
+            "ducta.project_store.store.V2ProjectStore.detect",
             staticmethod(lambda path: Store()),
         )
 
     def test_a_rule_naming_the_kind_gets_one_message(self, monkeypatch):
-        from ducta.api.services.alerts import notify_stream_event
+        from ducta_server.services.alerts import notify_stream_event
 
         self._store(monkeypatch, self._rules(["stream_quarantine"]))
         monkeypatch.setenv("HOOK", "http://hook")
@@ -246,7 +246,7 @@ class TestAlertDelivery:
         assert sent[0]["kind"] == "stream_quarantine"
 
     def test_other_kinds_and_recoveries_send_nothing(self, monkeypatch):
-        from ducta.api.services.alerts import notify_stream_event
+        from ducta_server.services.alerts import notify_stream_event
 
         self._store(monkeypatch, self._rules(["stream_failed"]))
         monkeypatch.setenv("HOOK", "http://hook")
@@ -263,7 +263,7 @@ class TestAlertDelivery:
 
 class TestJournalStatusForTheApi:
     def test_an_interrupted_run_is_shown_from_its_journal(self, tmp_path):
-        from ducta.api.services.streaming_status import journal_pipeline_status
+        from ducta_server.services.streaming_status import journal_pipeline_status
 
         journal = StreamRunJournal(str(tmp_path), "p", "r1", "e1", ["n"])
         journal.record(

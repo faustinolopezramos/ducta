@@ -298,7 +298,7 @@ environments:
 ducta config list-pipelines                  # what is defined here
 ducta config validate                        # config check, no Spark
 ducta config schema --out .                  # refresh the editor schemas
-ducta server start --port 8000               # web UI (needs the `api` extra)
+ducta server start --port 8000               # web UI (pip install ducta-server)
 ```
 
 Generated on: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}

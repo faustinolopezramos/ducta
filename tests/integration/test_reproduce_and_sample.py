@@ -17,6 +17,8 @@ import pytest
 pytest.importorskip("pyspark")
 
 SRC = str(Path(__file__).resolve().parents[2] / "src")
+#: The server's tree too: the sample-run test drives its `redirect_to_scratch`.
+SERVER_SRC = str(Path(__file__).resolve().parents[2] / "server" / "src")
 
 
 def _ducta(project: Path, *args: str) -> subprocess.CompletedProcess:
@@ -82,7 +84,7 @@ def test_a_sample_run_reads_what_it_wrote_not_the_real_datasets(project, tmp_pat
         "import argparse\n"
         "from ducta.console import execution\n"
         "from ducta.console.commands.config_cmds import _init_config_manager\n"
-        "from ducta.api.execution.runner import redirect_to_scratch\n"
+        "from ducta_server.execution.runner import redirect_to_scratch\n"
         "from ducta.core import PipelineExecutor\n"
         "cm = _init_config_manager(argparse.Namespace(base_path='.', env='base'))\n"
         "ctx = execution.ContextInitializer(cm).initialize('base')\n"
@@ -96,7 +98,7 @@ def test_a_sample_run_reads_what_it_wrote_not_the_real_datasets(project, tmp_pat
         (hidden / layer).parent.mkdir(parents=True, exist_ok=True)
         (real / layer).rename(hidden / layer)
     try:
-        env = {**os.environ, "PYTHONPATH": SRC}
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join([SRC, SERVER_SRC])}
         run = subprocess.run(
             [sys.executable, str(script)],
             cwd=project,

@@ -96,7 +96,7 @@ class TestPipelinesWithoutNodeCode:
         from unittest.mock import MagicMock
 
         batch = MagicMock()
-        batch._get_pipeline_config.return_value = {"nodes": list(nodes_config)}
+        batch.get_pipeline_config.return_value = {"nodes": list(nodes_config)}
         executor = object.__new__(PipelineExecutor)
         executor.context = type("Ctx", (), {"nodes_config": nodes_config})()
         executor._batch_executor = batch

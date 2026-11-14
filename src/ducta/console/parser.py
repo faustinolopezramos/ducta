@@ -44,6 +44,29 @@ ALLOW_UNAUTHENTICATED = {
     ),
 }
 
+
+def add_server_options(parser: argparse.ArgumentParser) -> None:
+    """The web server's options, the same for ``ducta ui``, ``ducta server start`` and
+    ``ducta-server`` (the server package's own command): defined once, here."""
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind (default: 8000)")
+    parser.add_argument("--host", default="127.0.0.1", help="Address to bind (default: 127.0.0.1)")
+    parser.add_argument(
+        "--no-browser", action="store_true", help="Do not open a browser on the app"
+    )
+    parser.add_argument("--source", help="Workspace path or Git URL to open")
+    parser.add_argument(
+        "--db",
+        dest="db_path",
+        default=None,
+        help="SQLite execution-history database (default: ~/.ducta/executions.db)",
+    )
+    parser.add_argument(
+        "--allow-unauthenticated",
+        action="store_true",
+        help=str(ALLOW_UNAUTHENTICATED["help"]),
+    )
+
+
 _INVALID_CHOICE = re.compile(r"invalid choice: '([^']*)' \(choose from (.*)\)")
 
 
@@ -129,8 +152,8 @@ COMMAND_GROUPS = (
     (
         "Web app",
         (
-            ("ui", "Open the web app"),
-            ("server", "Run the API server"),
+            ("ui", "Open the web app (pip install ducta-server)"),
+            ("server", "Run the API server (pip install ducta-server)"),
         ),
     ),
 )
@@ -751,34 +774,22 @@ class UnifiedArgumentParser:
         ui_parser = subparsers.add_parser(
             "ui",
             help="Launch the visual interface",
-            description="Launch the Ducta React frontend and FastAPI backend",
+            description=(
+                "Start the web app and its API on one port. They are a separate package: "
+                "pip install ducta-server (which also gives the `ducta-server` command)."
+            ),
         )
-        ui_parser.add_argument(
-            "--port", type=int, default=8000, help="Port to run the UI server on (default: 8000)"
-        )
-        ui_parser.add_argument(
-            "--host", default="127.0.0.1", help="Host to bind the UI server to (default: 127.0.0.1)"
-        )
-        ui_parser.add_argument(
-            "--no-browser", action="store_true", help="Do not automatically open the browser"
-        )
-        ui_parser.add_argument(
-            "--source", help="Workspace source path or Git URL to load automatically"
-        )
-        ui_parser.add_argument(
-            "--db",
-            dest="db_path",
-            default=None,
-            help="Path for the SQLite execution history database (default: ~/.ducta/executions.db)",
-        )
-        ui_parser.add_argument("--allow-unauthenticated", **ALLOW_UNAUTHENTICATED)
+        add_server_options(ui_parser)
 
     @staticmethod
     def _add_server_subcommand(subparsers):
         server_parser = subparsers.add_parser(
             "server",
             help="Manage the local Ducta server",
-            description="Start the local Ducta server with the web dashboard and API",
+            description=(
+                "Start the local Ducta server: the web app and the API. A separate package: "
+                "pip install ducta-server."
+            ),
         )
         server_subparsers = server_parser.add_subparsers(
             dest="server_command", help="Server commands", required=True
@@ -787,27 +798,12 @@ class UnifiedArgumentParser:
         start_parser = server_subparsers.add_parser(
             "start",
             help="Start the local Ducta server",
-            description="Start the local Ducta server with the MLflow-style web dashboard",
+            description=(
+                "Start the local Ducta server (the same as `ducta ui`). Needs the "
+                "ducta-server package."
+            ),
         )
-        start_parser.add_argument(
-            "--port", type=int, default=8000, help="Port to run the server on (default: 8000)"
-        )
-        start_parser.add_argument(
-            "--host", default="127.0.0.1", help="Host to bind the server to (default: 127.0.0.1)"
-        )
-        start_parser.add_argument(
-            "--no-browser", action="store_true", help="Do not automatically open the browser"
-        )
-        start_parser.add_argument(
-            "--source", help="Workspace source path or Git URL to load automatically"
-        )
-        start_parser.add_argument(
-            "--db",
-            dest="db_path",
-            default=None,
-            help="Path for the SQLite execution history database (default: ~/.ducta/executions.db)",
-        )
-        start_parser.add_argument("--allow-unauthenticated", **ALLOW_UNAUTHENTICATED)
+        add_server_options(start_parser)
 
     @staticmethod
     def _add_quality_subcommand(subparsers):

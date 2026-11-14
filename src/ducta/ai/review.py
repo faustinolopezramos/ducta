@@ -215,7 +215,7 @@ def _function_info(root: Path, node: str) -> Tuple[Optional[Dict[str, Any]], Lis
 
 
 def _durations(root: Path, env: str, pipeline: str, node: str) -> List[float]:
-    from ducta.api.services.run_certificates import certificates
+    from ducta.runs.certificates import certificates
 
     runs: List[Tuple[str, float]] = []
     for _env, cert in certificates(root, env):

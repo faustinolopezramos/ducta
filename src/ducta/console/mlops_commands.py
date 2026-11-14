@@ -77,7 +77,7 @@ def _resolve_storage_path(
     if context is not None:
         from ducta.mlrun.config import StorageBackendFactory
 
-        resolved = StorageBackendFactory._resolve_mlops_path(context, pipeline_name=pipeline_name)
+        resolved = StorageBackendFactory.resolve_mlops_path(context, pipeline_name=pipeline_name)
         if resolved:
             return resolved
 

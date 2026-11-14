@@ -68,6 +68,32 @@ headline of everything else; `git log` has the detail.
 
 ### Changed (breaking)
 
+- **The web server is a package of its own: `ducta-server`.** Ducta now ships as two
+  distributions, built from this repository and released together at the same version:
+  `ducta` (the engine and the CLI) and `ducta-server` (the REST/WebSocket API and the web
+  app). `pip install ducta` for the command line only, `pip install ducta-server` for the
+  web app (it installs `ducta` too: at least its own version, within the same minor), or both. To upgrade:
+  - **`pip install "ducta[api]"` / `"ducta[database]"`** → `pip install ducta-server`. The
+    `api` and `database` extras are gone, and `ducta[all]` no longer brings the server.
+  - **`ducta ui` / `ducta server start`** work as before when `ducta-server` is installed;
+    without it they say what to install and exit 5. `ducta-server` starts it on its own,
+    with the same options.
+  - **Imports**: `ducta.api` is now `ducta_server` (`uvicorn ducta_server.main:app`). What the
+    CLI and the AI layer shared from it moved into `ducta`: `ducta.project_store` (the
+    format-2 project store, code index, staleness, draft validation, governance rules and the
+    store's errors — `DuctaAPIError` is now `ducta.project_store.errors.StoreError`) and
+    `ducta.runs` (run certificates, diagnosis, metrics, dataset previews, node tests, alert
+    delivery and the run context). The engine helpers the server used by private names are
+    public (`get_pipeline_config`, `resolve_mlops_path`, `resolve_mlops_enabled`,
+    `decompile_node`, `compile_checks`, `template_param_values`…).
+  - **Docker**: two images, `--target cli` (`ducta`) and `--target server` (`ducta-server`,
+    the compose default; its entry point is `ducta-server`). The `runtime` target is gone.
+  - **`/health`** reports the server's version (`version`) and the engine's (`engine_version`):
+    the same minor version, possibly different patch releases.
+  - **From a checkout**: the server lives in `server/` (`server/src/ducta_server`, the web
+    app in `server/ui`, built into the package's `ui_dist/`); `poetry install --with server`
+    installs its dependencies.
+
 - **Data quality no longer skips its checks on a config or engine error** (review
   2026-11-12): a misspelled `severity:`, a gate that cannot be evaluated, an unknown
   profile or an output the checks cannot read now fail the node whatever `fail_fast`
@@ -235,6 +261,51 @@ headline of everything else; `git log` has the detail.
   server's OS user and can read the files it can (see SECURITY.md).
 
 ### Fixed
+
+- **Server (review 2026-11-13).** Cancelling a run that executes in the server's own process
+  (`RUN_ISOLATION=thread`, the default without accounts) now stops it: its nodes lose their
+  Spark jobs and writes, nodes not yet started do not start, and the run's certificate says it
+  failed. It used to answer "cancelled" while the run went on writing and sealed a `success`
+  certificate (engine: `PipelineExecutor.cancel_run()`). A run in its own process gets SIGTERM
+  handled the same way, so a cancelled run leaves its certificate there too.
+- **The file API no longer writes to `.git/` or `.ducta/`, nor reads `.git/`** (403).
+  `PUT /api/workspace/files/content` on `.git/config` with `core.fsmonitor` ran a command inside
+  the server on the next `git status`; `.ducta/audit.log` could be overwritten.
+- **Login is throttled**: `LOGIN_MAX_ATTEMPTS` (5) wrong passwords for a user from an address
+  lock that pair out for `LOGIN_LOCKOUT_SECONDS` (300): `429` with `Retry-After` (error handlers
+  also stopped dropping the headers a route sets). **`ducta-server user add|list|set-role|
+  set-password|disable|enable`** creates the accounts that can sign in; only `admin` could exist,
+  so the developer, operator and viewer roles could not be used. The last administrator cannot be
+  disabled or demoted.
+- A schedule for a pipeline that does not exist is refused (404); an invalid environment name on
+  execute, sweep or schedule is a 422 (it was a 202 that failed a moment later); junk ids in
+  `quality/trend`, `quality/score` and certificates no longer return 500; `/docs`, `/redoc` and
+  `/openapi.json` are not served with `AUTH_ENABLED=true` unless `DEBUG=true`; generated projects
+  ignore `.ducta/config.lock`, `.ducta/audit.log` and `.quality/`.
+
+- **Input contracts are checked before the run**: a dataset's `quality` block in `catalog.yaml`
+  (compiled to `sanity_checks.inputs`) was invisible to the preflight, so `ducta start
+  --sanity-only` reported "All sanity checks passed" (exit 0) for an input the real run rejected.
+  Both now check each contract against its own input; a failed one stops the run before anything
+  is written, with exit 4 (it was an "Unexpected error", exit 1).
+- **SIGTERM ends a run in order** (`docker stop`, systemd, Kubernetes): it takes the road Ctrl+C
+  takes — streams are stopped, the nodes still running are cancelled (their writes refused, their
+  Spark jobs cancelled), the run certificate says it was interrupted — and `ducta` exits 143.
+  It used to die on the spot with no certificate. An interrupted batch run also no longer ends as
+  "Unexpected error: Pipeline ended with N node(s) never executed", which replaced the interrupt.
+- **`-q` no longer hides a rejected argument** (`--start-date 2026-13-45 -q` exited 3 and
+  printed nothing).
+- **A `ducta.yaml` that does not parse is reported as that** (the YAML error, or the key written
+  twice, with its line), not as "No Ducta project here".
+- **`ducta check` / `start` report a `${...}` that no variable defines** (`${paths.inpt}`): an
+  error in a `path`, a warning elsewhere. The run used to end "skipped for missing inputs"
+  without naming the path.
+- A failed node's error box is shown once (it was printed twice), and a failed check, failed
+  sanity checks or a node returning something that is not a DataFrame are no longer labelled
+  "Unknown Error".
+- An unknown key in the project's `settings:` is located at its own block, not at the
+  environment's `settings:` line; `python -m ducta` works; `ducta.redaction` no longer imports
+  the AI layer (the patterns moved there; `ducta.ai.context.redact` still exists).
 
 - **A stream node with `quality:`, `quarantine:` or `merge` no longer writes a batch
   twice** (review 2026-11-12): written through `foreachBatch`, a parquet/JSON/CSV batch

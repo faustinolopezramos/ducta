@@ -77,3 +77,26 @@ def test_certificate_error_is_masked():
         error=LEAK,
     )
     _clean(cert.error or "")
+
+
+def test_the_engine_masks_secrets_without_loading_the_ai_layer():
+    """The engine masks what outlives a run (certificate, log, result); it must not need
+    ``ducta.ai`` for that."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "import sys; from ducta.redaction import redact_text; "
+        "assert redact_text('password=hunter2') == 'password=***'; "
+        "assert not any(m == 'ducta.ai' or m.startswith('ducta.ai.') for m in sys.modules)"
+    )
+    src = str(Path(__file__).resolve().parents[2] / "src")
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env={**__import__("os").environ, "PYTHONPATH": src},
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr

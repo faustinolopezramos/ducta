@@ -161,6 +161,18 @@ class TestEnvironments:
         with pytest.raises(ProjectConfigError, match="did you mean 'max_parallel_nodes'"):
             validate_project(root, "prod")
 
+    def test_a_base_typo_is_located_in_the_base_not_in_the_environment_block(self, tmp_path):
+        """With an environment that also has a `settings:` block, a typo in the project's
+        own `settings:` was reported at the environment's line."""
+        root = _project(
+            tmp_path,
+            project=PROJECT.replace("  max_parallel_nodes: 4", "  max_paralel_nodes: 4"),
+        )
+        with pytest.raises(ProjectConfigError) as exc:
+            validate_project(root, "prod")
+        # `settings:` is on line 4 of the file; the environment's, on line 25.
+        assert "ducta.yaml:4" in str(exc.value) and "ducta.yaml:25" not in str(exc.value)
+
 
 class TestErrorsSayWhere:
     def test_unknown_node_key_names_file_and_line(self, tmp_path):
@@ -456,3 +468,38 @@ class TestOtherProjectFormat:
 
         with pytest.raises(ConfigurationError, match="upgrade Ducta"):
             ConfigManager(self._write(tmp_path, "3"))
+
+
+class TestUnreadableProjectFile:
+    """A ``ducta.*`` that does not parse is reported as what it is, with its line.
+
+    It used to be dropped and the CLI said "No Ducta project here" — about a file
+    that was in the folder.
+    """
+
+    def test_a_yaml_error_is_named(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        (tmp_path / "ducta.yaml").write_text(PROJECT + "foo: [unclosed\n")
+        message = other_format(tmp_path)
+        assert message and "ducta.yaml" in message and "not valid YAML" in message
+
+    def test_a_key_written_twice_is_named_with_its_lines(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        (tmp_path / "ducta.yaml").write_text(PROJECT + "environments: {}\nenvironments: {}\n")
+        message = other_format(tmp_path)
+        assert message and "duplicate key 'environments'" in message and "line" in message
+
+    def test_the_cli_reports_it_instead_of_no_project(self, tmp_path):
+        from ducta.console.config import ConfigManager
+        from ducta.console.core import ConfigurationError
+
+        (tmp_path / "ducta.yaml").write_text("version: 2\nfoo: [unclosed\n")
+        with pytest.raises(ConfigurationError, match="not valid YAML"):
+            ConfigManager(tmp_path)
+
+    def test_no_file_at_all_is_still_no_project(self, tmp_path):
+        from ducta.setting.project.reader import other_format
+
+        assert other_format(tmp_path) is None

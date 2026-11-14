@@ -59,6 +59,15 @@ def project_summary(start: Optional[Path] = None) -> Optional[ProjectSummary]:
         return ProjectSummary(root=root, name=root.name, problem=first)
 
 
+def _web_app_hint() -> tuple[str, str]:
+    """``ducta ui`` when the web server is installed, else how to get it."""
+    from ducta.console.ui import server_installed
+
+    if server_installed():
+        return ("ducta ui", "open the web app")
+    return ("pip install ducta-server", "add the web app (ducta ui)")
+
+
 def print_home() -> None:
     """In a project: its pipelines and the next commands. Elsewhere: how to start."""
     from rich.text import Text
@@ -108,7 +117,7 @@ def print_home() -> None:
             (f"ducta start -e {env} -p {pipeline}", "run a pipeline"),
             (f"ducta check -e {env}", "check the project without running it"),
             ("ducta certify list", "the runs recorded here"),
-            ("ducta ui", "open the web app"),
+            _web_app_hint(),
             ("ducta --help", "every command"),
         ]
     )

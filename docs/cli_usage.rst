@@ -433,7 +433,10 @@ run that uses it. ``setup`` asks before saving a connection that failed.
    ducta ui [--port 8000] [--host 127.0.0.1] [--source PATH_OR_GIT_URL] [--no-browser]
    ducta server start [--port 8000] [--host 127.0.0.1] [--source PATH_OR_GIT_URL]
 
-Both serve the web app and its REST API. ``--db PATH`` moves the execution
+Both serve the web app and its REST API, which are a separate package:
+``pip install ducta-server`` (it also gives the ``ducta-server`` command, with the
+same options). Without it, both say how to install it and exit with code 5.
+``--db PATH`` moves the execution
 history (default ``~/.ducta/executions.db``). A non-local ``--host`` (``0.0.0.0``) is
 refused without authentication: set ``AUTH_ENABLED=true``, or pass
 ``--allow-unauthenticated`` to accept that anyone who reaches the address can run

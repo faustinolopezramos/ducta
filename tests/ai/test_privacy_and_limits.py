@@ -177,7 +177,7 @@ def test_a_review_masks_the_nodes_settings():
 
 def test_why_a_dataset_was_not_measured_is_masked(tmp_path, monkeypatch):
     from ducta.ai.proposals import quality_facts
-    from ducta.api.services import dataset_preview
+    from ducta.runs import dataset_preview
 
     root = tmp_path / "sales"
     shutil.copytree(SKILL / "assets" / "examples" / "sales", root)

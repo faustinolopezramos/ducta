@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from ducta.setting.project.decompile import _decompile_node
+from ducta.setting.project.decompile import decompile_node
 from ducta.setting.project.loader import compile_project, validate_project
 from ducta.setting.project.schema import BUILTIN_SCORER, ModelRef, TransformNode
 
@@ -102,7 +102,7 @@ class TestCompiled:
             "    inputs: [raw]\n    outputs: [ml.p.scores]\n",
         )
         problems: list = []
-        out = _decompile_node("score", {**node, "type": "ml"}, {}, problems)
+        out = decompile_node("score", {**node, "type": "ml"}, {}, problems)
         assert not problems
         assert out["model"] == {"name": "churn", "version": 3}
         TransformNode.model_validate(out)

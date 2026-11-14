@@ -29,12 +29,14 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger  # type: ignore
 
 from ducta.check import (
+    QualityCheckError,
+    QualityChecksFailed,
     QualityOutputManager,
     QualityReport,
     QualityReporter,
     SanityPhaseRunner,
 )
-from ducta.core.errors import MLOpsRequiredError, PipelineNotFoundError
+from ducta.core.errors import MLOpsRequiredError, PipelineNotFoundError, SanityCheckFailedError
 from ducta.core.execution.runner import NodeExecutor
 from ducta.core.mlops_auto_config import MLOpsAutoConfigurator
 from ducta.core.mlops_integration import MLOpsExecutorIntegration
@@ -304,7 +306,7 @@ class BaseExecutor:
             if node_name in nodes_config
         }
 
-    def _get_pipeline_config(self, pipeline_name: str) -> Dict[str, Any]:
+    def get_pipeline_config(self, pipeline_name: str) -> Dict[str, Any]:
         """Get pipeline configuration from context."""
         pipeline = self.context.pipelines.get(pipeline_name)
         if not pipeline:
@@ -449,13 +451,25 @@ class BaseExecutor:
 
         runner = SanityPhaseRunner(fail_fast=True, profiles=_profiles)
         pipeline_config = {"nodes": node_configs}
-        reports = runner.run_preflight_checks(
-            pipeline_config,
-            self.context,
-            pipeline_name=self._mlops_pipeline_name or "_adhoc",
-            start_date=start_date,
-            end_date=end_date,
-        )
+        try:
+            reports = runner.run_preflight_checks(
+                pipeline_config,
+                self.context,
+                pipeline_name=self._mlops_pipeline_name or "_adhoc",
+                start_date=start_date,
+                end_date=end_date,
+            )
+        except QualityCheckError as e:
+            # A failed check is a verdict on the data (exit 4, as the same check
+            # failing inside the node), not an unexpected error.
+            raise SanityCheckFailedError(e.node_name or "?", 1, detail=str(e)) from e
+        except QualityChecksFailed as e:
+            raise SanityCheckFailedError(
+                e.dataset_name,
+                e.errors_count,
+                detail="; ".join(str(r.message) for r in e.results if getattr(r, "is_error", False))
+                or None,
+            ) from e
 
         QualityReporter().render_pipeline_summary(reports, show_details=True)
 

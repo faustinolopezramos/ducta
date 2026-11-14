@@ -412,7 +412,7 @@ def candidate_runs_dirs(
     (None when it can't be resolved). A relative one is looked for under the
     project root, where ``ducta start`` runs, and under ``<project>/<env>``,
     where the API server runs a project whose relative paths only exist there
-    (``ducta.api.execution.runner.select_execution_cwd``). The CLI and the web
+    (``ducta.runs.context.select_execution_cwd``). The CLI and the web
     UI used to search one each, so neither saw the other's runs.
     """
     dirs: List[Tuple[Optional[str], Path]] = []

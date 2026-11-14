@@ -23,11 +23,11 @@ asyncio.to_thread() copies the current Context snapshot into the worker thread,
 giving each execution thread an isolated view of these variables without manual
 set/reset in runner.py.
 
-These live in ``core`` rather than ``api`` on purpose. The executor tags its log
-lines with the current node so the API can stream them per node, but ``core`` must
-not import ``api`` to do it: importing anything under ``ducta.api`` pulls in the
-whole FastAPI surface, and ``core`` is the layer the CLI runs on. Two ContextVars
-with no dependencies are the right thing to share; ``ducta.api.execution.context``
+These live in ``core`` rather than in the web server on purpose. The executor tags
+its log lines with the current node so the server can stream them per node, but
+``ducta`` never imports ``ducta_server`` (a separate package, which pulls in the whole
+FastAPI surface), and ``core`` is the layer the CLI runs on. Two ContextVars
+with no dependencies are the right thing to share; ``ducta_server.execution.context``
 re-exports them for the API side.
 """
 

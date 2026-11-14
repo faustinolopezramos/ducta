@@ -239,32 +239,32 @@ Print (or write) the JSON Schema of the format-2 configuration files
 
 ## ducta ui
 
-Launch the Ducta React frontend and FastAPI backend
+Start the web app and its API on one port. They are a separate package: pip install ducta-server (which also gives the `ducta-server` command).
 
 | Option | What it does |
 |---|---|
-| `--port` | Port to run the UI server on (default: 8000) — default `8000` |
-| `--host` | Host to bind the UI server to (default: 127.0.0.1) — default `127.0.0.1` |
-| `--no-browser` | Do not automatically open the browser |
-| `--source` | Workspace source path or Git URL to load automatically |
-| `--db` | Path for the SQLite execution history database (default: ~/.ducta/executions.db) |
+| `--port` | Port to bind (default: 8000) — default `8000` |
+| `--host` | Address to bind (default: 127.0.0.1) — default `127.0.0.1` |
+| `--no-browser` | Do not open a browser on the app |
+| `--source` | Workspace path or Git URL to open |
+| `--db` | SQLite execution-history database (default: ~/.ducta/executions.db) |
 | `--allow-unauthenticated` | Serve on a non-local --host without authentication (AUTH_ENABLED). SECURITY: anyone who can reach the address can run pipelines. Refused by default. |
 
 ## ducta server
 
-Start the local Ducta server with the web dashboard and API
+Start the local Ducta server: the web app and the API. A separate package: pip install ducta-server.
 
 ### ducta server start
 
-Start the local Ducta server with the MLflow-style web dashboard
+Start the local Ducta server (the same as `ducta ui`). Needs the ducta-server package.
 
 | Option | What it does |
 |---|---|
-| `--port` | Port to run the server on (default: 8000) — default `8000` |
-| `--host` | Host to bind the server to (default: 127.0.0.1) — default `127.0.0.1` |
-| `--no-browser` | Do not automatically open the browser |
-| `--source` | Workspace source path or Git URL to load automatically |
-| `--db` | Path for the SQLite execution history database (default: ~/.ducta/executions.db) |
+| `--port` | Port to bind (default: 8000) — default `8000` |
+| `--host` | Address to bind (default: 127.0.0.1) — default `127.0.0.1` |
+| `--no-browser` | Do not open a browser on the app |
+| `--source` | Workspace path or Git URL to open |
+| `--db` | SQLite execution-history database (default: ~/.ducta/executions.db) |
 | `--allow-unauthenticated` | Serve on a non-local --host without authentication (AUTH_ENABLED). SECURITY: anyone who can reach the address can run pipelines. Refused by default. |
 
 ## ducta profile

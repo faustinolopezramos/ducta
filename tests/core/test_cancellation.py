@@ -199,3 +199,54 @@ class TestRunInProcess:
     def test_a_worker_that_finishes_returns_its_outcome(self):
         executor = self._executor(FakeContext())
         assert executor._run_child("cpu", {}, target=_returns_success) == {"status": "success"}
+
+
+class TestCancelRun:
+    """The API's cancel, in the server's own process: the run is a thread that cannot be
+    killed, so it kept computing, writing and sealing a ``success`` certificate."""
+
+    def _ctx(self):
+        ctx = _Ctx()
+        ctx.nodes_config = {"extract": {}, "load": {}}
+        return ctx
+
+    def test_every_node_counts_as_cancelled_started_or_not(self):
+        ctx = self._ctx()
+        cancellation.cancel_run(ctx)
+        assert cancellation.is_cancelled(ctx, "extract")
+        assert cancellation.is_cancelled(ctx, "a_node_not_in_the_config")
+
+    def test_the_spark_jobs_of_each_node_are_cancelled(self):
+        ctx = self._ctx()
+        cancellation.cancel_run(ctx)
+        cancelled = [c for c in ctx.spark.sparkContext.calls if c[0] == "cancel"]
+        assert {c[1] for c in cancelled} == {
+            cancellation.job_tag(ctx, "extract"),
+            cancellation.job_tag(ctx, "load"),
+        }
+
+    def test_no_node_can_write_afterwards(self):
+        ctx = self._ctx()
+        writer = OutputWriter(MagicMock(), ctx)
+        cancellation.cancel_run(ctx)
+        with pytest.raises(NodeCancelledError):
+            writer.save(MagicMock(), {}, "load", "2026-01-01", "2026-01-01", {})
+
+    def test_without_the_call_nothing_is_cancelled(self):
+        ctx = self._ctx()
+        assert not cancellation.is_cancelled(ctx, "extract")
+
+    def test_a_node_not_yet_started_does_not_run(self):
+        ctx = FakeContext()
+        ctx.nodes_config = {"late": {"module": "m", "function": "f"}}
+        executor = NodeExecutor.__new__(NodeExecutor)
+        executor.context = ctx
+        cancellation.cancel_run(ctx)
+        # The guard sits first in the node's try: it never loads the node's function.
+        executor._get_node_config = MagicMock(side_effect=AssertionError("node was started"))
+        executor._set_scheduler_pool = MagicMock()
+        executor._ml_builder = MagicMock()
+        executor._ml_builder.prepare_node_ml_info.return_value = {}
+        executor._ledger = MagicMock()
+        with pytest.raises(NodeCancelledError):
+            executor.execute_single_node("late", None, None, {})

@@ -38,7 +38,7 @@ def test_ducta_home_moves_every_per_user_folder(tmp_path, monkeypatch):
     monkeypatch.setenv("DUCTA_HOME", str(tmp_path / "home"))
 
     from ducta.ai.config import config_path
-    from ducta.api.config import Settings
+    from ducta_server.config import Settings
 
     assert state.user_dir("ai", "evals") == tmp_path / "home" / "ai" / "evals"
     assert config_path() == tmp_path / "home" / "ai.toml"

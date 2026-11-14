@@ -32,8 +32,6 @@ from typing import Any, Dict, List, Optional
 #: What each optional extra (``pip install 'ducta[<extra>]'``) makes importable.
 EXTRAS: Dict[str, List[str]] = {
     "spark": ["pyspark", "pyarrow"],
-    "api": ["fastapi", "uvicorn", "sqlalchemy", "jwt"],
-    "database": ["sqlalchemy", "alembic"],
     "mlops": ["mlflow", "sklearn", "optuna"],
     "boost": ["xgboost", "lightgbm"],
     "ai": ["httpx", "anthropic", "keyring", "ruamel.yaml"],
@@ -51,6 +49,10 @@ try:
     out["ducta"] = version("ducta")
 except Exception:
     out["ducta"] = None
+try:
+    out["ducta_server"] = version("ducta-server")
+except Exception:
+    out["ducta_server"] = None
 mods = {}
 for name in sys.argv[1:]:
     try:
@@ -234,6 +236,8 @@ def check(project: Path) -> Dict[str, Any]:
             "skill_expects": expected,
         },
         "extras": extras,
+        # `ducta ui` needs it; None when only the CLI is installed.
+        "server": probe.get("ducta_server"),
         "java": java,
         "spark_home": os.environ.get("SPARK_HOME"),
         "pyspark": probe.get("pyspark"),

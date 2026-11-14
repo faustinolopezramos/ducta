@@ -105,7 +105,7 @@ def test_a_draft_adds_up_its_attempts_and_records_its_prompt(tmp_path):
 
 def test_the_api_summary_carries_usage_and_prompt_version():
     from ducta.ai.drafts import Draft
-    from ducta.api.routes.ai import _summary
+    from ducta_server.routes.ai import _summary
 
     draft = Draft(
         id="20261023-000000-abcdef",

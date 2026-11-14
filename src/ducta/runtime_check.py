@@ -16,15 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Combinations of Python, Spark, Java and pandas known not to work, found before a run.
-
-Each one was seen failing, most of them halfway through a run or not at all (wrong
-data): ``ducta check`` and the start of a local Spark session say so up front.
-:func:`problems` is pure, so the rules are tested without the versions installed;
-:func:`stack_warnings` reads the real environment once per process.
-:func:`spark_config_problems` adds the Spark defaults a project leaves unset that
-change results (ANSI mode on Spark 4, the session time zone). Standard library only.
 """
 
 from __future__ import annotations
@@ -49,7 +40,6 @@ class Stack:
     pyspark: Optional[str] = None
     pandas: Optional[str] = None
     delta: Optional[str] = None
-    #: The ``java`` Spark would start: its major version, or None when none was found.
     java: Optional[int] = None
 
 
@@ -99,7 +89,6 @@ def problems(stack: Stack) -> List[str]:
     return found
 
 
-#: Set in settings.spark_config, with any value, a key silences its warning below.
 ANSI_KEY = "spark.sql.ansi.enabled"
 TIMEZONE_KEY = "spark.sql.session.timeZone"
 
@@ -107,11 +96,7 @@ TIMEZONE_KEY = "spark.sql.session.timeZone"
 def spark_config_problems(
     pyspark: Optional[str], spark_config: Optional[Mapping[str, Any]], local_zone: str = ""
 ) -> List[str]:
-    """Spark defaults that change results between versions or machines, left unset.
-
-    Ducta does not change them (a silent default would change results too): it says
-    so until the project sets the key, to either value.
-    """
+    """Spark defaults that change results between versions or machines, left unset."""
     if not pyspark:
         return []
     keys = {str(k) for k in (spark_config or {})}

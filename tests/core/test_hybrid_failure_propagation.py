@@ -30,7 +30,7 @@ def _executor(pipeline_type="hybrid"):
     pipeline_cfg = {"type": pipeline_type, "nodes": ["n1"], "requires_dates": False}
 
     batch = MagicMock()
-    batch._get_pipeline_config.return_value = pipeline_cfg
+    batch.get_pipeline_config.return_value = pipeline_cfg
     engine._batch_executor = batch
     engine._hybrid_executor = MagicMock()
     return engine

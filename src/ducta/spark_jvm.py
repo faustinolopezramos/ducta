@@ -16,15 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Every use of PySpark's private JVM handles, in one place.
-
-PySpark reaches the driver's JVM only through private attributes (``_jvm``,
-``_jsc``, ``_jdf``). They can change in any release, and under Spark Connect
-there is no local JVM at all. Ducta touches them only through these helpers,
-which return ``None`` (or ``False``) when the handle is not there, so each
-caller says what it does without one. Standard library only: any package can
-import this module.
 """
 
 from __future__ import annotations

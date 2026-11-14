@@ -28,13 +28,13 @@ def test_a_connection_name_with_a_newline_would_have_broken_the_env_file():
 @pytest.mark.parametrize(
     "module, name, good",
     [
-        ("ducta.api.utils.validators", "_PROJECT_NAME_RE", "my_project"),
-        ("ducta.api.utils.validators", "_ENV_NAME_RE", "dev-1"),
-        ("ducta.api.routes.nodes", "_NODE_NAME_RE", "clean.orders"),
-        ("ducta.api.routes.nodes", "_PY_IDENTIFIER_RE", "clean_orders"),
+        ("ducta_server.utils.validators", "_PROJECT_NAME_RE", "my_project"),
+        ("ducta_server.utils.validators", "_ENV_NAME_RE", "dev-1"),
+        ("ducta_server.routes.nodes", "_NODE_NAME_RE", "clean.orders"),
+        ("ducta_server.routes.nodes", "_PY_IDENTIFIER_RE", "clean_orders"),
         ("ducta.check.storage", "_SAFE_RUN_ID_RE", "run-1"),
         ("ducta.ai.drafts", "DRAFT_ID", "abc-123"),
-        ("ducta.api.routes.ai", "_JOB_ID", "0123456789ab"),
+        ("ducta_server.routes.ai", "_JOB_ID", "0123456789ab"),
         ("ducta.mlrun.validators", "VALID_NAME_PATTERN", "model.v1"),
     ],
 )

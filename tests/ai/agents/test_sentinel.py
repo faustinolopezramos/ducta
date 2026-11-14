@@ -16,7 +16,7 @@ from ducta.ai.agents.sentinel import policy as gate
 from ducta.ai.agents.sentinel.engine import Sentinel, engine_lock
 from ducta.ai.agents.sentinel.incidents import Incidents
 from ducta.ai.agents.sentinel.triage import RunEvent, decide
-from ducta.api.services import run_certificates
+from ducta.runs import certificates as run_certificates
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 from test_builder import FakeProvider  # noqa: E402
@@ -296,31 +296,6 @@ def test_one_pass_at_a_time(sales):
         assert got
         report = Sentinel(sales, FakeExecutor(), notify=False).run_once(["dev"])
     assert report.skipped
-
-
-def test_the_server_hook_queues_a_rerun_as_sentinel(sales, monkeypatch):
-    from ducta.ai.agents.sentinel import server
-
-    calls = []
-
-    class Manager:
-        def execute_from_thread(self, **kwargs):
-            calls.append(kwargs)
-
-    monkeypatch.setattr("ducta.api.execution.manager.get_execution_manager", lambda: Manager())
-    monkeypatch.setattr(
-        "ducta.api.routes.execution.run_errors",
-        lambda _id: [{"node_id": "land_orders", "message": INFRA}],
-    )
-    record = {
-        "id": "e1",
-        "pipeline_name": "bronze.sales",
-        "env": "dev",
-        "status": "failed",
-        "error_message": INFRA,
-    }
-    server.on_run_finished(sales, "sales", record)
-    assert calls and calls[0]["user_id"] == "sentinel" and calls[0]["node_names"] == ["land_orders"]
 
 
 def test_the_cli_executor_reads_the_runs_certificate(sales, certs, monkeypatch):

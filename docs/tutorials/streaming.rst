@@ -251,7 +251,7 @@ its process. Copy another ``.json`` event into ``data/events/`` and it appears i
 ``data/dev/silver/events``. Press Ctrl+C to stop both queries.
 
 To keep a stream running without a terminal, start it from the server
-(``ducta ui``) and watch or stop it there (see :doc:`../streaming`).
+(``ducta-server`` or ``ducta ui``) and watch or stop it there (see :doc:`../streaming`).
 
 Step 4: Run it as a finite job
 ------------------------------

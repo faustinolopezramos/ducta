@@ -15,7 +15,7 @@ poetry run pytest
 
 # A single module's suite
 poetry run pytest tests/core
-poetry run pytest tests/check tests/mlrun tests/stream tests/console tests/api
+poetry run pytest tests/check tests/mlrun tests/stream tests/console tests/server
 
 # With coverage
 poetry run pytest --cov=ducta --cov-report=term-missing
@@ -33,13 +33,14 @@ local working copy regardless of any editable install.
 | `tests/mlrun/` | `ducta.mlrun` | data fingerprinting, reproducible splits (random/temporal/group/stratified), `MLOpsConfig`, `FileLock`, hyperparameter grids |
 | `tests/stream/` | `ducta.stream` | topological sort + cycle detection, traversal-safe checkpoint paths, `QueryHealthMonitor`, error helpers |
 | `tests/console/` | `ducta.console` | CLI argument validators, date parsing, exit codes |
-| `tests/api/` | `ducta.api` | `AuthService` (bcrypt + JWT), **SSRF** host guards, production config guards, `/health` smoke test |
+| `tests/server/` | `ducta_server` (the `ducta-server` package; `poetry install --with server`) | `AuthService` (bcrypt + JWT), **SSRF** host guards, production config guards, `/health` smoke test |
 | `tests/setting/`, `tests/gate/` | `ducta.setting`, `ducta.gate` | pre-existing suites (see note below) |
 
 ## Environment notes
 
-- Required test deps: `pytest`, `pandas`, `numpy`, `pydantic`, `jose`, `bcrypt`,
-  `fastapi`, `sqlalchemy`, `pyyaml`.
+- Required test deps: `poetry install --with server` (the dev group plus the web
+  server's dependencies, which `tests/server/` needs: FastAPI, SQLAlchemy, PyJWT,
+  bcrypt…). The engine's tests need only the dev group.
 - Optional deps that gate some tests: `pyspark`, `polars`, `sqlglot` (absent →
   the relevant paths are skipped or exercised via their pure-Python fallbacks).
 - Fixtures that write data use CSV (parquet needs `pyarrow`/`fastparquet`).

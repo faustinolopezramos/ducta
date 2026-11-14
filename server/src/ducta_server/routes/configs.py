@@ -1,0 +1,127 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+
+from ducta.project_store.errors import (
+    ConcurrencyError,
+    ConfigFileNotFoundError,
+    ConfigValidationError,
+)
+from ducta_server.dependencies import ConfigServiceDep, require_permission
+from ducta_server.exceptions import http_error_on
+from ducta_server.models.config import ConfigFileResponse, ConfigValidationResponse
+from ducta_server.utils.validators import validate_environment_name
+
+router = APIRouter(prefix="/configs", tags=["Configs"])
+
+
+def _validate_env(env: str) -> None:
+    with http_error_on(400):
+        validate_environment_name(env)
+
+
+class ConfigUpdateRequest(BaseModel):
+    content: Dict[str, Any] = Field(description="Updated config content")
+    expected_commit_sha: Optional[str] = Field(None, description="Version token for OCC validation")
+
+
+@router.get(
+    "/{env}",
+    summary="List all configs for an environment",
+    dependencies=[Depends(require_permission("config.read"))],
+    responses={400: {"description": "Invalid environment name"}},
+)
+async def list_configs(
+    env: str,
+    config_svc: ConfigServiceDep,
+) -> Dict[str, ConfigFileResponse]:
+    """Return all resolved config files for an environment."""
+    _validate_env(env)
+    try:
+        return {
+            name: ConfigFileResponse.model_validate(cfg)
+            for name, cfg in config_svc.list_configs(env).items()
+        }
+    except ConfigFileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+
+
+@router.get(
+    "/{env}/{name}",
+    summary="Get a single config file",
+    dependencies=[Depends(require_permission("config.read"))],
+    responses={400: {"description": "Invalid environment name"}},
+)
+async def get_config(
+    env: str,
+    name: str,
+    config_svc: ConfigServiceDep,
+) -> ConfigFileResponse:
+    """Return content of a single config file."""
+    _validate_env(env)
+    try:
+        return ConfigFileResponse.model_validate(config_svc.get_config(name, env))
+    except ConfigFileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+
+
+@router.put(
+    "/{env}/{name}",
+    summary="Update a config file",
+    dependencies=[Depends(require_permission("config.write"))],
+    responses={400: {"description": "Invalid environment name"}},
+)
+async def update_config(
+    env: str,
+    name: str,
+    body: ConfigUpdateRequest,
+    config_svc: ConfigServiceDep,
+) -> ConfigFileResponse:
+    """Update a config file and commit to git."""
+    _validate_env(env)
+    try:
+        return ConfigFileResponse.model_validate(
+            config_svc.save_config(name, body.content, env, expected_sha=body.expected_commit_sha)
+        )
+    except ConfigFileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=exc.message)
+    except ConfigValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message)
+    except ConcurrencyError as exc:
+        raise HTTPException(status_code=409, detail=exc.message)
+
+
+@router.post(
+    "/validate",
+    summary="Validate all configs for an environment",
+    dependencies=[Depends(require_permission("config.read"))],
+)
+async def validate_configs(
+    config_svc: ConfigServiceDep,
+    env: str = "base",
+) -> ConfigValidationResponse:
+    """Validate workspace configs against ducta schemas."""
+    return ConfigValidationResponse.model_validate(config_svc.validate_configs(env))

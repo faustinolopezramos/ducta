@@ -4,7 +4,11 @@ Deployment and Cloud Environments Guide
 This guide provides instructions for deploying and running Ducta in the two standard operating models:
 
 1. **Model 1: Shared Central Cloud Server** (enterprise team hub hosted on AWS, Azure, or GCP).
-2. **Model 2: Local Developer Workstation** (running ``ducta ui`` on a local machine connected to cloud data).
+2. **Model 2: Local Developer Workstation** (running ``ducta-server`` or ``ducta ui`` on a local machine connected to cloud data).
+
+Both models run the web server, ``ducta-server``: a package of its own, released with
+``ducta`` at the same version, that installs ``ducta`` with it. Machines that only run
+pipelines from the command line (a scheduler, CI) need ``ducta`` alone.
 
 .. contents:: Table of Contents
    :depth: 2
@@ -43,6 +47,11 @@ Model 1: Shared Central Cloud Server
 
 In this model, Ducta runs as a central service inside an enterprise virtual network (VPC/VNet). Team members connect through their web browsers to review pipelines, inspect DAGs, run jobs, and review execution certificates.
 
+The repository's own ``Dockerfile`` builds two images: ``--target server``
+(``ducta-server``: the web app and the API, plus the CLI) and ``--target cli``
+(``ducta`` only, for schedulers and CI). The example below builds a server image
+from PyPI instead, with cloud connectors added.
+
 Docker Container Setup
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -61,12 +70,12 @@ A production ``Dockerfile`` packaging Ducta with cloud connectors:
 
    WORKDIR /app
 
-   # ducta[api] already brings the PostgreSQL drivers (asyncpg, psycopg2-binary).
-   # The cloud packages serve `ducta quality run`/`ducta profile` and an S3 run
-   # lock — see
-   # "Cloud Storage Access" below for Spark.
+   # ducta-server already brings the PostgreSQL drivers (asyncpg, psycopg2-binary)
+   # and installs ducta. The cloud packages serve `ducta quality run`/`ducta profile`
+   # and an S3 run lock — see "Cloud Storage Access" below for Spark.
    RUN pip install --no-cache-dir \
-       "ducta[api]" \
+       "ducta-server" \
+       "ducta[spark]" \
        "boto3" \
        "s3fs" \
        "adlfs" \
@@ -76,7 +85,7 @@ A production ``Dockerfile`` packaging Ducta with cloud connectors:
 
    EXPOSE 8000
 
-   CMD ["ducta", "server", "start", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
+   CMD ["ducta-server", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
 
 Compose Configuration
 ~~~~~~~~~~~~~~~~~~~~~
@@ -205,8 +214,8 @@ Installation
    python3 -m venv .venv
    source .venv/bin/activate
 
-   # Install Ducta with Web UI
-   pip install "ducta[api]"
+   # Install Ducta's web app (it installs Ducta's engine and CLI with it)
+   pip install ducta-server "ducta[spark]"
 
    # Optional: cloud filesystems for `ducta quality run` / `ducta profile`
    # (pipelines on Spark need its connector — see "Cloud Storage Access" above)
@@ -235,12 +244,13 @@ Log in with your corporate cloud CLI:
 Starting the UI
 ~~~~~~~~~~~~~~~
 
-Run ``ducta ui`` from your project directory or specify a target:
+Run ``ducta-server`` (or ``ducta ui``, the same) from your project directory or
+specify a target with ``--source``:
 
 .. code-block:: bash
 
    cd ~/projects/sales_pipeline
-   ducta ui
+   ducta-server
 
 The browser opens automatically at ``http://localhost:8000``.
 

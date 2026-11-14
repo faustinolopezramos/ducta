@@ -21,10 +21,12 @@ SPDX-License-Identifier: Apache-2.0
 import argparse
 import os
 import re
+import signal
 import sys
+import threading
 import traceback
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional
 
 from loguru import logger
 
@@ -233,6 +235,50 @@ def _report_error(message: str, hints: Optional[List[tuple]] = None) -> None:
             logger.info("  {}: {}", label, text)
 
 
+#: What a shell reports for a process ended by SIGTERM (128 + 15).
+EXIT_SIGTERM = 128 + int(getattr(signal, "SIGTERM", 15))
+
+
+class TerminationRequested(KeyboardInterrupt):
+    """SIGTERM arrived (``docker stop``, systemd, Kubernetes).
+
+    A ``KeyboardInterrupt``, so a termination takes the road Ctrl+C already takes:
+    streams are stopped in order, the run certificate says the run was interrupted,
+    Spark is shut down. Left to its default, SIGTERM ended the process on the spot:
+    no certificate, no stop, semaphores left behind.
+    """
+
+
+def _install_sigterm_handler() -> Optional[Any]:
+    """Turn SIGTERM into :class:`TerminationRequested`; returns what to restore.
+
+    Only in the main thread (``signal.signal`` raises elsewhere, and a caller that
+    embeds the CLI — a test, a notebook — keeps its own handler). The first signal
+    is handled; a second one gets the default action, so a shutdown that hangs can
+    still be ended.
+    """
+    if not hasattr(signal, "SIGTERM") or threading.current_thread() is not threading.main_thread():
+        return None
+
+    def _on_sigterm(signum: int, frame: Any) -> None:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        raise TerminationRequested()
+
+    try:
+        return (signal.signal(signal.SIGTERM, _on_sigterm),)
+    except (ValueError, OSError):
+        return None
+
+
+def _restore_sigterm_handler(saved: Optional[Any]) -> None:
+    if saved is None:
+        return
+    try:
+        signal.signal(signal.SIGTERM, saved[0] if saved[0] is not None else signal.SIG_DFL)
+    except (ValueError, OSError):
+        pass
+
+
 class UnifiedCLI:
     _set_spark_quiet = False
 
@@ -243,6 +289,7 @@ class UnifiedCLI:
         parsed_args: Optional[argparse.Namespace] = None
         original_cwd = Path.cwd()
         previous_reporter = set_reporter(ConsoleReporter())
+        saved_sigterm = _install_sigterm_handler()
         try:
             parsed_args = self._parse_and_setup_logging(args)
             return self._dispatch_subcommand(parsed_args)
@@ -251,6 +298,9 @@ class UnifiedCLI:
             if parsed_args is not None and getattr(parsed_args, "verbose", False):
                 logger.debug(traceback.format_exc())
             return e.exit_code
+        except TerminationRequested:
+            logger.warning("Terminated (SIGTERM)")
+            return EXIT_SIGTERM
         except KeyboardInterrupt:
             logger.warning("Interrupted")
             return ExitCode.GENERAL_ERROR.value
@@ -279,6 +329,7 @@ class UnifiedCLI:
                         logger.debug(traceback.format_exc())
             return ExitCode.GENERAL_ERROR.value
         finally:
+            _restore_sigterm_handler(saved_sigterm)
             try:
                 os.chdir(original_cwd)
             except OSError:
@@ -529,8 +580,8 @@ class UnifiedCLI:
                 )
             )
         except ImportError as e:
-            logger.error('The web UI needs the api extra: pip install "ducta[api]" ({})', e)
-            return ExitCode.GENERAL_ERROR.value
+            logger.error("The web UI could not start, a dependency is missing: {}", e)
+            return ExitCode.DEPENDENCY_ERROR.value
         except Exception as e:
             logger.error("Error launching UI: {}", e)
             return ExitCode.GENERAL_ERROR.value

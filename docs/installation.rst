@@ -1,7 +1,29 @@
 Installation
 ============
 
-Ducta is designed to be lightweight and modular. You can install the core engine or include specific modules for your workflow (APIs, Spark, MLOps, etc.).
+Ducta is designed to be lightweight and modular. It comes in two packages, built from
+the same repository and released together at the same version:
+
+.. list-table::
+   :widths: 22 38 40
+   :header-rows: 1
+
+   * - You want…
+     - Install
+     - Then
+   * - The command line only
+     - ``pip install "ducta[spark]"``
+     - ``ducta start``, ``ducta check``, ``ducta config validate``…
+   * - The web app
+     - ``pip install ducta-server "ducta[spark]"``
+     - ``ducta-server`` (the web app and its API, on one port)
+   * - Both
+     - the same as the web app
+     - both; ``ducta ui`` starts the web app too
+
+``ducta-server`` depends on ``ducta`` and installs it; ``ducta`` never needs the
+server. The extras below (Spark, MLOps, AI…) are the engine's: add them to ``ducta``
+whichever way you install. See :doc:`server_api` for the web server.
 
 Requirements
 ------------
@@ -74,11 +96,6 @@ Ducta follows a "pay-for-what-you-use" approach with its dependencies. You can i
      - PySpark and PyArrow: the engine pipelines run on.
    * - ``ducta[delta]``
      - Delta Lake for local Spark (``delta-spark``): Delta reads, writes and ``merge``.
-   * - ``ducta[api]``
-     - The server and web app (``ducta ui``): FastAPI, persistence drivers, Git,
-       Redis for shared rate limits.
-   * - ``ducta[database]``
-     - SQL drivers (SQLAlchemy, PostgreSQL, SQLite) on their own.
    * - ``ducta[mlops]``
      - MLflow, scikit-learn, NumPy, SciPy and Optuna: tracking, the model
        registry and hyperparameter search.
@@ -111,8 +128,11 @@ file per Python, to its `GitHub release
 
 .. code-block:: bash
 
-   pip install "ducta[all]==X.Y.Z" \
+   pip install "ducta[all]==X.Y.Z" "ducta-server==X.Y.Z" \
      -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt
+
+Leave out ``"ducta-server==X.Y.Z"`` for the command line only. The constraints files
+pin the server's dependencies too.
 
 Put the version you install and your Python in the command. Releases published
 before Ducta supported Python 3.14 have no constraints files.

@@ -45,7 +45,8 @@ Core CLI Commands
    * - ``ducta model promote|gc``
      - Moves a registered model version to a stage, or removes old versions.
    * - ``ducta server start``
-     - Launches the API and the web app (the same command as ``ducta ui``).
+     - Launches the API and the web app (the same command as ``ducta ui`` and
+       ``ducta-server``). Needs ``pip install ducta-server``.
    * - ``ducta --version``
      - Displays the installed version.
 

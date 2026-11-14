@@ -91,11 +91,16 @@ def project_file(root: Path) -> Path:
 
 def _declared_version(path: Path) -> Any:
     """The ``version`` a ``ducta.*`` file declares; None when it has none or does not parse."""
+    return _read_version(path)[0]
+
+
+def _read_version(path: Path) -> "tuple[Any, Optional[str]]":
+    """``(version, problem)`` of a ``ducta.*`` file: *problem* says why it cannot be read."""
     try:
         data = pf.load(path)
-    except Exception:  # noqa: BLE001 — not ours to diagnose here
-        return None
-    return data.get("version") if isinstance(data, dict) else None
+    except Exception as e:  # noqa: BLE001 — reported by other_format, not raised here
+        return None, str(e)
+    return (data.get("version") if isinstance(data, dict) else None), None
 
 
 def _declares_v2(path: Path) -> bool:
@@ -106,17 +111,23 @@ def other_format(start: Path) -> Optional[str]:
     """Why the nearest ``ducta.*`` at or above *start* is not a project this Ducta reads.
 
     A project written for another format (a newer Ducta's ``version: 3``) used to
-    be reported as no project at all. None when the nearest one is format 2, or
-    when no ``ducta.*`` declares a version.
+    be reported as no project at all, and so was a ``ducta.*`` that does not parse
+    (a YAML error, a key written twice): the message is then the parse error, with
+    its line. None when the nearest one is format 2, or when no ``ducta.*`` exists
+    or declares a version.
     """
     start = Path(start).resolve()
     for directory in (start, *start.parents):
         for candidate in (directory, directory / "config"):
             found = pf.find_files(candidate, "ducta")
-            versions = [(path, _declared_version(path)) for path in found]
-            if any(v == PROJECT_FORMAT_VERSION for _, v in versions):
+            read = [(path, *_read_version(path)) for path in found]
+            if any(v == PROJECT_FORMAT_VERSION for _, v, _problem in read):
                 return None
-            for path, declared in versions:
+            for path, declared, problem in read:
+                if problem is not None:
+                    # A project file that does not parse is the project: saying "no project
+                    # here" sent people looking for a file that was in front of them.
+                    return f"{path}: {problem}"
                 if declared is not None:
                     return _other_format_message(path, declared)
     return None

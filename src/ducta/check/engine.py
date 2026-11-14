@@ -62,6 +62,16 @@ def _config_value(config: Any, key: str, default: Any) -> Any:
     return getattr(config, key, default)
 
 
+def input_dataset_keys(node_config: Dict[str, Any]) -> List[str]:
+    """The node's input datasets in the order its DataFrames are loaded."""
+    raw = node_config.get("input") or []
+    if isinstance(raw, dict):
+        return [str(v) for v in raw.values()]
+    if isinstance(raw, str):
+        return [raw]
+    return [str(v) for v in raw]
+
+
 def _raise_or_warn_gate(gate_result: Any, dataset_name: str, run_id: Optional[str] = None) -> None:
     """Apply a failed gate's ``behavior``.
 
@@ -584,6 +594,56 @@ class SanityPhaseRunner:
 
         return report
 
+    def _preflight_node(
+        self,
+        dfs: List[Any],
+        node_config: dict,
+        node_name: str,
+        pipeline_name: str,
+    ) -> QualityReport:
+        """One node's preflight report.
+
+        ``sanity_checks.inputs: {dataset: {checks, gate, ...}}`` (what a catalog
+        entry's ``quality`` block compiles to) is a contract per input dataset:
+        each is checked against the DataFrame of that dataset, as the real run
+        does (``QualityCheckExecutor._run_input_contracts``), and the verdicts are
+        merged into one report. Without this the preflight saw a node with no
+        checks, and ``--sanity-only`` passed what the run then rejected.
+        """
+        sanity_config = node_config.get("sanity_checks") or {}
+        contracts = sanity_config.get("inputs")
+        if not isinstance(contracts, dict) or not contracts:
+            return self.run_node_checks(dfs, node_config, node_name, pipeline_name=pipeline_name)
+
+        keys = input_dataset_keys(node_config)
+        merged = QualityReport(dataset_name=node_name, passed=True, results=[])
+        for dataset, block in contracts.items():
+            if not isinstance(block, dict) or block.get("enabled", True) is False:
+                continue
+            if dataset not in keys:
+                logger.warning(
+                    "Node '{}': contract for '{}' ignored — the node does not read it",
+                    node_name,
+                    dataset,
+                )
+                continue
+            single = {k: v for k, v in block.items() if k != "gate"}
+            if "gate" in block:
+                single["sanity_gate"] = block["gate"]
+            single["input_index"] = keys.index(dataset)
+            report = self.run_node_checks(
+                dfs,
+                {**node_config, "sanity_checks": single},
+                node_name,
+                pipeline_name=pipeline_name,
+            )
+            merged.results.extend(report.results)
+            merged.passed = merged.passed and report.passed
+            merged.elapsed_seconds += report.elapsed_seconds
+            merged.score = min(merged.score, report.score)
+            merged.gate_decided = merged.gate_decided or report.gate_decided
+        return merged
+
     def run_preflight_checks(
         self,
         pipeline_config: dict,
@@ -656,8 +716,8 @@ class SanityPhaseRunner:
                 continue
 
             try:
-                reports[node_name] = self.run_node_checks(
-                    dfs, node_config, node_name, pipeline_name=pipeline_name
+                reports[node_name] = self._preflight_node(
+                    dfs, node_config, node_name, pipeline_name
                 )
             except QualityGateBlocked as e:
                 from ducta.check.gate import GateBehavior

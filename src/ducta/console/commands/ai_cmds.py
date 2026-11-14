@@ -341,7 +341,7 @@ class AICommands:
         from ducta.ai.config import load_config
         from ducta.ai.explain import explain_failure
         from ducta.ai.providers import make_provider
-        from ducta.api.services.diagnosis import diagnose
+        from ducta.runs.diagnosis import diagnose
 
         source = parsed_args.error_file
         try:

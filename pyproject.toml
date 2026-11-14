@@ -30,8 +30,6 @@ classifiers = [
     # First public release: alpha until the API is declared stable.
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
-    "Environment :: Web Environment",
-    "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: Apache Software License",
@@ -50,31 +48,13 @@ packages = [
     { include = "ducta", from = "src" },
 ]
 
-include = [
-    { path = "src/ducta/ui/dist", format = ["sdist", "wheel"] },
-]
-
 exclude = [
     "src/ducta/**/__pycache__",
-    "src/ducta/ui/node_modules",
-    "src/ducta/ui/src",
-    "src/ducta/ui/ds-bundle",
-    "src/ducta/ui/.ds-sync",
-    "src/ducta/ui/.design-sync",
-    "src/ducta/ui/.storybook",
-    "src/ducta/ui/.storybook-static",
-    "src/ducta/ui/*.ts",
-    "src/ducta/ui/*.d.ts",
-    "src/ducta/ui/*.tsbuildinfo",
-    "src/ducta/ui/*.json",
-    "src/ducta/ui/*.html",
-    "src/ducta/ui/README.md",
     "**/.DS_Store",
     "src/ducta/core/README.md",
     "src/ducta/mlrun/README.md",
     "src/ducta/stream/README.md",
     "src/ducta/gate/README.md",
-    "src/ducta/api/README.md",
     "src/ducta/setting/README.md",
     "src/ducta/check/README.md",
     "src/ducta/console/README.md",
@@ -90,8 +70,6 @@ python = ">=3.11,<3.15"
 
 loguru = "^0.7.0"
 PyYAML = "^6.0"
-# <3: pandas 3 turns a missing text value into the string "NaN" on its way to
-# Spark (3.5 and 4.2), with no error. tests/integration/test_type_contract.py.
 pandas = "^2.0.0"
 python-dotenv = "^1.0.0"
 typing-extensions = "^4.3.0"
@@ -100,47 +78,18 @@ pydantic-settings = "^2.7.0"  # NoDecode (comma-separated list env vars)
 rich = ">=13.0.0,<16.0.0"
 tomli-w = "^1.0.0"
 sqlglot = ">=23.0.0,<31.0.0"
-# Spark 3.5 and 4.2 are both supported. Python 3.14 needs Spark 4: Spark 3.5's function
-# serializer fails there. <4.3: Delta Lake has no build for Spark 4.3 yet.
 pyspark = [
     { version = ">=3.5.0,<4.3.0", python = "<3.14", optional = true },
     { version = ">=4.2.0,<4.3.0", python = ">=3.14", optional = true },
 ]
-# >=23.0.1: CVE-2026-25087 (use-after-free in Arrow C++). 26 is the first with Python 3.15 wheels.
 pyarrow = { version = ">=23.0.1,<27.0.0", optional = true }
 setuptools = { version = ">=68.0.0", python = ">=3.12", optional = true }
 
-# --- API server (extra: api) ---
-fastapi = { version = ">=0.104.0,<1.0.0", optional = true }
-msgpack = { version = "^1.0.0", optional = true }
-# ">=x,<1", not "^0.x": a caret on 0.x pins the minor (uvicorn stayed on 0.23).
-uvicorn = { version = ">=0.23.0,<1.0.0", extras = ["standard"], optional = true }
-# PyJWT rather than python-jose: python-jose pulls in `ecdsa`, whose Minerva
-# timing vulnerability (CVE-2024-23342) is unfixable in pure Python and has no
-# planned patch. Ducta only ever signs with HS256, so the ECDSA code was dead
-# weight that every dependency scanner flagged. PyJWT delegates to `cryptography`.
-PyJWT = { version = "^2.8.0", optional = true }
-bcrypt = { version = ">=4.0.0,<6.0.0", optional = true }
-
-# --- Database persistence (extra: database) ---
-sqlalchemy = { version = "^2.0.0", extras = ["asyncio"], optional = true }
-alembic = { version = "^1.14.0", optional = true }
-aiosqlite = { version = ">=0.20.0,<1.0.0", optional = true }
-asyncpg = { version = ">=0.30.0,<1.0.0", optional = true }
-psycopg2-binary = { version = "^2.9.0", optional = true }
-
-# --- Infrastructure (extra: api) ---
-GitPython = { version = "^3.1.0", optional = true }
-redis = { version = ">=5.0.0,<9.0.0", optional = true }
-# Round-trip YAML for API edits of format-2 projects: keeps the comments and
-# key order of files people also edit by hand.
 "ruamel.yaml" = { version = ">=0.18,<0.20", optional = true }
 
 # --- MLOps (extra: mlops) ---
-# ^3.15: every MLflow advisory that has a fix is fixed by 3.15.0.
 mlflow = { version = "^3.15.0", optional = true }
 scikit-learn = { version = "^1.3.0", optional = true }
-# numpy 1.26 ships no Python 3.13 wheels: 3.13 needs numpy 2.1+ or a source build.
 numpy = [
     { version = "^1.24.0", python = "<3.13", optional = true },
     { version = ">=2.1.0,<3.0.0", python = ">=3.13", optional = true },
@@ -149,25 +98,16 @@ scipy = { version = "^1.11.0", optional = true }
 optuna = { version = ">=3.4.0,<6.0.0", optional = true }
 
 # --- Gradient boosting (extra: boost) — models the registry and the serving node
-# load natively (xgboost .json/.ubj, lightgbm .txt) without trusting a pickle.
 xgboost = { version = ">=2.0.0,<4.0.0", optional = true }
 lightgbm = { version = "^4.0.0", optional = true }
 
 # --- Delta Lake (extra: delta) — the Python API for write_mode: merge. The
-# jar itself is resolved by the local session (setting/session.py
-# local_delta_configs) to the build matching the installed PySpark. Each
-# delta-spark release requires its own PySpark range (3.x ↔ Spark 3.5,
-# 4.x ↔ Spark 4), so the resolver picks the pair: pyspark 4.2.1 gets delta-spark
-# 4.1.0 (4.4.1 requires pyspark<=4.2.0), which runs against the 4.4.1 jar.
 delta-spark = { version = ">=3.2.0,<5.0.0", optional = true }
 
 # --- Databricks Connect (extra: databricks — MUTUALLY EXCLUSIVE with `spark`) ---
 databricks-connect = { version = "^14.0.0", optional = true }
 
 # --- AI pipeline builder (extra: ai) — `ducta ai`. Local models (Ollama, LM Studio,
-# vLLM) and OpenAI are reached over httpx; Claude through the official SDK. keyring
-# keeps API keys in the OS keychain. Drafts are validated with the API layer's
-# validator, which needs none of the `api` extra: `ducta[ai]` is enough.
 httpx = { version = ">=0.24", optional = true }
 anthropic = { version = ">=1.13.0,<3.0.0", optional = true }
 keyring = { version = ">=25.0.0", optional = true }
@@ -177,12 +117,6 @@ prometheus-client = { version = ">=0.17.0,<1.0.0", optional = true }
 
 [tool.poetry.extras]
 spark = ["pyspark", "pyarrow", "setuptools"]
-api = [
-    "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
-    "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "redis", "ruamel.yaml",
-]
-database = ["sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary"]
 mlops = ["mlflow", "scikit-learn", "numpy", "scipy", "optuna"]
 boost = ["xgboost", "lightgbm"]
 monitoring = ["prometheus-client"]
@@ -190,10 +124,7 @@ ai = ["httpx", "anthropic", "keyring", "ruamel.yaml"]
 databricks = ["databricks-connect"]
 delta = ["delta-spark"]
 all = [
-    "pyspark", "pyarrow", "setuptools", "delta-spark",
-    "fastapi", "uvicorn", "PyJWT", "bcrypt", "msgpack",
-    "sqlalchemy", "alembic", "aiosqlite", "asyncpg", "psycopg2-binary",
-    "GitPython", "redis", "ruamel.yaml",
+    "pyspark", "pyarrow", "setuptools", "delta-spark", "ruamel.yaml",
     "mlflow", "scikit-learn", "numpy", "scipy", "optuna",
     "xgboost", "lightgbm",
     "prometheus-client",
@@ -201,7 +132,6 @@ all = [
 ]
 
 [tool.poetry.group.dev.dependencies]
-# ^9.0.3: PYSEC-2026-1845 is fixed there (dev-only; never installed for users).
 pytest = "^9.0.3"
 pytest-cov = "^7.0.0"
 mypy = "^1.8.0"
@@ -210,6 +140,24 @@ types-toml = "^0.10"
 ruff = "^0.4.0"
 httpx = ">=0.24"
 pre-commit = "^3.7.0"
+
+[tool.poetry.group.server]
+optional = true
+
+[tool.poetry.group.server.dependencies]
+fastapi = ">=0.104.0,<1.0.0"
+msgpack = "^1.0.0"
+uvicorn = { version = ">=0.23.0,<1.0.0", extras = ["standard"] }
+PyJWT = "^2.8.0"
+bcrypt = ">=4.0.0,<6.0.0"
+sqlalchemy = { version = "^2.0.0", extras = ["asyncio"] }
+alembic = "^1.14.0"
+aiosqlite = ">=0.20.0,<1.0.0"
+asyncpg = ">=0.30.0,<1.0.0"
+psycopg2-binary = "^2.9.0"
+GitPython = "^3.1.0"
+redis = ">=5.0.0,<9.0.0"
+"ruamel.yaml" = ">=0.18,<0.20"
 
 [tool.poetry.group.docs]
 optional = true
@@ -233,15 +181,7 @@ ducta = "ducta.console.wrapper:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --import-mode=importlib --strict-markers"
-# "src" puts the package under test on the path; "." puts the repo root there so
-# `tests.core.fakes` — the shared fake Context/DataFrame several core tests import
-# — resolves as a namespace package. Without it, only `python -m pytest` works
-# (it adds the cwd itself); the bare `pytest` console script that CI runs fails
-# collection with "No module named 'tests.core'".
-pythonpath = ["src", "."]
-# A deprecation is next release's breakage. Warnings raised from third-party code
-# are shown in the summary; one that Ducta's own code triggers fails the test,
-# so a removed API is caught while it still only warns.
+pythonpath = ["src", "server/src", "."]
 filterwarnings = [
     "error::DeprecationWarning:ducta",
     "error::PendingDeprecationWarning:ducta",
@@ -253,16 +193,13 @@ markers = [
 ]
 
 [tool.coverage.run]
-source = ["ducta"]
+source = ["ducta", "ducta_server"]
 branch = true
 omit = [
-    "src/ducta/ui/*",
     "*/__pycache__/*",
 ]
 
 [tool.coverage.report]
-# A floor, not a target: 78% when it was last raised (2026-11-08). Raise it as
-# coverage grows; a change that drops below it fails CI.
 fail_under = 75
 show_missing = true
 skip_covered = true
@@ -280,11 +217,6 @@ warn_unused_configs = true
 ignore_missing_imports = true
 show_error_codes = true
 
-# Installed packages whose source mypy must not parse: sphinx, and numpy from
-# 2.3 (installed on Python 3.12+), ship Python 3.12 `type` statements, which stop
-# the whole run under python_version 3.11. CI's py3.11 gets numpy 1.26 and passed;
-# a py3.13 environment did not. numpy's are stubs (.pyi), which follow_imports
-# leaves alone unless follow_imports_for_stubs says otherwise.
 [[tool.mypy.overrides]]
 module = ["sphinx.*", "numpy", "numpy.*"]
 follow_imports = "skip"
@@ -302,7 +234,7 @@ ignore = ["E501"]
 "tests/**" = ["F401", "F811"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["ducta"]
+known-first-party = ["ducta", "ducta_server"]
 
 [tool.ruff.format]
 quote-style = "double"

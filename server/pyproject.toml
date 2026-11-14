@@ -1,0 +1,92 @@
+# ==============================================================================
+# ducta-server: Ducta's web server — the REST/WebSocket API and the web app.
+#
+# A separate distribution from `ducta` (the engine and the CLI, at the repo
+# root), built from the same repository and released with the same version.
+# It depends on `ducta`; `ducta` never depends on it. `pip install ducta-server`
+# installs both.
+# ==============================================================================
+[tool.poetry]
+name = "ducta-server"
+version = "0.3.0"
+description = "Ducta's web server: the REST API and the web app for Ducta data pipelines."
+authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
+maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
+readme = "README.md"
+license = "Apache-2.0"
+homepage = "https://github.com/faustinolopezramos/ducta"
+repository = "https://github.com/faustinolopezramos/ducta"
+documentation = "https://github.com/faustinolopezramos/ducta/tree/main/docs"
+keywords = ["data-pipeline", "etl", "spark", "web-ui", "rest-api", "ducta"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
+
+packages = [
+    { include = "ducta_server", from = "src" },
+]
+
+# The built web app (`npm run build` in server/ui writes it here). Gitignored:
+# it exists only once the UI is built, which the release workflow checks.
+include = [
+    { path = "src/ducta_server/ui_dist", format = ["sdist", "wheel"] },
+]
+
+exclude = [
+    "src/ducta_server/**/__pycache__",
+    "**/.DS_Store",
+]
+
+[tool.poetry.urls]
+"Source" = "https://github.com/faustinolopezramos/ducta"
+"Issues" = "https://github.com/faustinolopezramos/ducta/issues"
+"Changelog" = "https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md"
+
+[tool.poetry.dependencies]
+python = ">=3.11,<3.15"
+
+# The engine, at least this server's own version and within its minor: the server
+# runs it in-process and in child processes and uses its public API, which a
+# patch release may extend (an older patch of the engine may lack what it calls).
+ducta = ">=0.3.0,<0.4.0"
+
+fastapi = ">=0.104.0,<1.0.0"
+msgpack = "^1.0.0"
+# ">=x,<1", not "^0.x": a caret on 0.x pins the minor (uvicorn stayed on 0.23).
+uvicorn = { version = ">=0.23.0,<1.0.0", extras = ["standard"] }
+# PyJWT rather than python-jose: python-jose pulls in `ecdsa`, whose Minerva
+# timing vulnerability (CVE-2024-23342) is unfixable in pure Python and has no
+# planned patch. Ducta only ever signs with HS256. PyJWT delegates to `cryptography`.
+PyJWT = "^2.8.0"
+bcrypt = ">=4.0.0,<6.0.0"
+
+# Execution history: SQLite by default, PostgreSQL when DATABASE_URL says so.
+sqlalchemy = { version = "^2.0.0", extras = ["asyncio"] }
+alembic = "^1.14.0"
+aiosqlite = ">=0.20.0,<1.0.0"
+asyncpg = ">=0.30.0,<1.0.0"
+psycopg2-binary = "^2.9.0"
+
+GitPython = "^3.1.0"
+redis = ">=5.0.0,<9.0.0"
+# Round-trip YAML: edits of format-2 projects keep the comments and key order of
+# files people also edit by hand.
+"ruamel.yaml" = ">=0.18,<0.20"
+
+[tool.poetry.scripts]
+ducta-server = "ducta_server.cli:main"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

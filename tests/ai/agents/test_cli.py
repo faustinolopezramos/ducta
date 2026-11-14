@@ -83,9 +83,7 @@ def test_sentinel_watch_once_runs_due_reruns(sales, capsys, monkeypatch):
         )
     )
     monkeypatch.setattr("ducta.ai.agents.sentinel.actions.CliExecutor", lambda *a, **k: Recorder())
-    monkeypatch.setattr(
-        "ducta.api.services.run_certificates.certificates", lambda root, env: iter([])
-    )
+    monkeypatch.setattr("ducta.runs.certificates.certificates", lambda root, env: iter([]))
     assert _run("sentinel", "watch", "--once", "--env", "dev", "--output-format", "json") == 0
     assert Recorder.calls == ["bronze.sales"]
     assert [i.status for i in Incidents(sales).list()] == ["resolved"]

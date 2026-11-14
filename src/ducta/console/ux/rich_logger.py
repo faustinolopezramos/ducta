@@ -154,7 +154,7 @@ class RichLoggerManager:
         level_tag = f"[{level_style}]{level_name: <8}[/] "
 
         # The handler reads the line as Rich markup, and only the prefix above is markup.
-        # A message is literal text: unescaped, `ducta[api]` printed as `ducta` and a
+        # A message is literal text: unescaped, `ducta[spark]` printed as `ducta` and a
         # `[/data/x.csv]` raised MarkupError, which lost the message.
         record["extra"]["_rich_message"] = escape(record["message"])
 

@@ -107,7 +107,7 @@ Prerequisites
 
 For all tutorials, you should have:
 
-- Ducta installed (``pip install ducta[all]``)
+- Ducta installed (``pip install ducta[all]``; for the web app, also ``pip install ducta-server``)
 - Basic Python knowledge
 - Familiarity with data processing concepts
 

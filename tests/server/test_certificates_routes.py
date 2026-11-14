@@ -1,0 +1,246 @@
+"""Run Certificate lookup under the Ducta storage convention.
+
+`run_certificate_dir` defaults to the template
+``${output_path}/${environment}/.ducta/runs``. The executor resolved it, but
+the API glued the raw template onto the project directory and searched
+``projects/<id>/${output_path}/${environment}/.ducta/runs`` — a directory that
+never exists — so every certificate GET/verify/diff/reproduce answered 404
+while the file sat in ``data/<env>/.ducta/runs/<run_id>/``. These tests build a
+real project config (resolved through the same loader the runner uses) rather
+than patching the resolver out.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import textwrap
+from pathlib import Path
+
+import pytest
+
+fastapi = pytest.importorskip("fastapi", reason="certificate route tests require the api extra")
+
+from fastapi import FastAPI  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+
+from ducta.runs.certificates import candidate_runs_dirs  # noqa: E402
+from ducta_server.dependencies import get_current_user, get_source_path  # noqa: E402
+from ducta_server.models.auth import User  # noqa: E402
+from ducta_server.routes import certificates as certificates_route  # noqa: E402
+
+RUN_ID = "6d5b1c20e9ab41268dec6f9bbf2faef7"
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(textwrap.dedent(text).lstrip(), encoding="utf-8")
+
+
+def _write_certificate(runs_dir: Path, run_id: str, env: str | None) -> Path:
+    run_dir = runs_dir / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "certificate.json").write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "pipeline": "golden.transformation",
+                "status": "success",
+                "started_at": "2026-09-15T05:18:47+00:00",
+                "environment_name": env,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
+
+
+@pytest.fixture()
+def workspace(tmp_path: Path) -> Path:
+    """A workspace whose `batch` project keeps its outputs under `./data`."""
+    project = tmp_path / "projects" / "batch"
+    _write(
+        project / "ducta.yaml",
+        """
+        version: 2
+        project: batch
+        paths: {input: ./data, output: ./data}
+        settings: {mode: local}
+        """,
+    )
+    _write(project / "catalog.yaml", "{}\n")
+    (project / "pipelines").mkdir()
+    return tmp_path
+
+
+@pytest.fixture()
+def project(workspace: Path) -> Path:
+    return workspace / "projects" / "batch"
+
+
+@pytest.fixture()
+def client(workspace: Path) -> TestClient:
+    app = FastAPI()
+    app.include_router(certificates_route.router, prefix="/api")
+    app.dependency_overrides[get_source_path] = lambda: workspace
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id="test-user", username="test-user", email="test@ducta.local", roles=["admin"]
+    )
+    return TestClient(app)
+
+
+class TestCandidateRunsDirs:
+    def test_resolves_the_template_to_the_environment_output_dir(self, project: Path):
+        runs_dir = project / "data" / "dev" / ".ducta" / "runs"
+        runs_dir.mkdir(parents=True)
+
+        assert candidate_runs_dirs(project, "dev") == [("dev", runs_dir)]
+
+    def test_never_changes_the_server_process_cwd(self, project: Path):
+        before = os.getcwd()
+        candidate_runs_dirs(project, "dev")
+        assert os.getcwd() == before
+
+
+class TestGetCertificate:
+    def test_finds_a_certificate_under_the_env_scoped_output_dir(
+        self, client: TestClient, project: Path
+    ):
+        _write_certificate(project / "data" / "dev" / ".ducta" / "runs", RUN_ID, "dev")
+
+        resp = client.get(f"/api/projects/batch/certificates/{RUN_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["run_id"] == RUN_ID
+
+    def test_env_param_restricts_the_search_to_that_environment(
+        self, client: TestClient, project: Path
+    ):
+        _write_certificate(project / "data" / "dev" / ".ducta" / "runs", RUN_ID, "dev")
+
+        assert client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=dev").status_code == 200
+        assert (
+            client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=staging").status_code == 404
+        )
+
+    def test_an_unknown_run_is_still_a_404(self, client: TestClient, project: Path):
+        (project / "data" / "dev" / ".ducta" / "runs").mkdir(parents=True)
+
+        resp = client.get("/api/projects/batch/certificates/does-not-exist")
+
+        assert resp.status_code == 404
+
+
+class TestListCertificates:
+    def test_lists_runs_from_every_environment_with_its_name(
+        self, client: TestClient, project: Path
+    ):
+        _write_certificate(project / "data" / "dev" / ".ducta" / "runs", "run-dev", "dev")
+        _write_certificate(
+            project / "data" / "staging" / ".ducta" / "runs", "run-staging", "staging"
+        )
+
+        resp = client.get("/api/projects/batch/certificates")
+
+        assert resp.status_code == 200
+        by_run = {row["run_id"]: row["environment_name"] for row in resp.json()}
+        assert by_run == {"run-dev": "dev", "run-staging": "staging"}
+
+    def test_env_param_filters_the_listing(self, client: TestClient, project: Path):
+        _write_certificate(project / "data" / "dev" / ".ducta" / "runs", "run-dev", "dev")
+        _write_certificate(
+            project / "data" / "staging" / ".ducta" / "runs", "run-staging", "staging"
+        )
+
+        resp = client.get("/api/projects/batch/certificates?env=staging")
+
+        assert [row["run_id"] for row in resp.json()] == ["run-staging"]
+
+
+class TestMirroredCertificate:
+    """Certificates written before the storage convention moved survive only in
+    the StorageBackend mirror; the history links them, so they must open."""
+
+    @pytest.fixture()
+    def mirror(self, tmp_path: Path, monkeypatch):
+        from ducta.core.storage.base import LocalStorageBackend
+
+        backend = LocalStorageBackend(tmp_path / "mirror")
+        monkeypatch.setattr("ducta.core.storage.get_storage_backend", lambda *a, **k: backend)
+        return backend
+
+    def _mirror(self, backend, pipeline: str = "golden.transformation", env: str = "dev"):
+        payload = {
+            "run_id": RUN_ID,
+            "pipeline": pipeline,
+            "status": "success",
+            "environment_name": env,
+        }
+        backend.put_object(f"certificates/{RUN_ID}/certificate.json", json.dumps(payload).encode())
+
+    def test_a_mirrored_certificate_of_this_project_opens(self, client, project, mirror):
+        _write(project / "pipelines" / "golden.transformation.yaml", "nodes: []\n")
+        self._mirror(mirror)
+
+        resp = client.get(f"/api/projects/batch/certificates/{RUN_ID}")
+
+        assert resp.status_code == 200
+        assert resp.json()["pipeline"] == "golden.transformation"
+
+    def test_a_mirrored_certificate_of_another_project_stays_404(self, client, project, mirror):
+        self._mirror(mirror, pipeline="someone.elses")
+
+        assert client.get(f"/api/projects/batch/certificates/{RUN_ID}").status_code == 404
+
+    def test_the_env_filter_applies_to_the_mirror(self, client, project, mirror):
+        _write(project / "pipelines" / "golden.transformation.yaml", "nodes: []\n")
+        self._mirror(mirror, env="dev")
+
+        assert client.get(f"/api/projects/batch/certificates/{RUN_ID}?env=prod").status_code == 404
+
+
+class TestReproduce:
+    """The web's "Reproduce" re-runs over the run's dates, into a folder of its own."""
+
+    def _start(self, client: TestClient, project: Path, body: dict, window: dict | None):
+        from ducta_server.dependencies import get_execution_manager
+
+        run_dir = _write_certificate(project / "data" / "dev" / ".ducta" / "runs", RUN_ID, "dev")
+        cert = json.loads((run_dir / "certificate.json").read_text())
+        if window:
+            cert["run_window"] = window
+        (run_dir / "certificate.json").write_text(json.dumps(cert))
+        calls: list = []
+
+        class _Manager:
+            def execute(self, **kwargs):
+                calls.append(kwargs)
+                return {
+                    "id": "e1",
+                    "pipeline_name": kwargs["pipeline_name"],
+                    "user_id": "test-user",
+                    "env": kwargs["env"],
+                    "status": "pending",
+                    "started_at": "2026-11-08T00:00:00+00:00",
+                }
+
+        client.app.dependency_overrides[get_execution_manager] = lambda: _Manager()  # type: ignore[attr-defined]
+        resp = client.post(f"/api/projects/batch/certificates/{RUN_ID}/reproduce", json=body)
+        assert resp.status_code == 202, resp.text
+        return calls[0]
+
+    def test_it_reproduces_into_its_own_folder_over_the_recorded_dates(self, client, project):
+        call = self._start(
+            client, project, {}, {"start_date": "2026-01-01", "end_date": "2026-01-31"}
+        )
+        assert call["reproduce_of"] == RUN_ID
+        assert (call["start_date"], call["end_date"]) == ("2026-01-01", "2026-01-31")
+
+    def test_dates_in_the_body_win(self, client, project):
+        call = self._start(
+            client,
+            project,
+            {"start_date": "2026-02-01", "end_date": "2026-02-28"},
+            {"start_date": "2026-01-01", "end_date": "2026-01-31"},
+        )
+        assert (call["start_date"], call["end_date"]) == ("2026-02-01", "2026-02-28")

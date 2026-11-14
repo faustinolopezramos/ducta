@@ -3,6 +3,8 @@
   * No two packages import each other at module level. ``setting`` ↔ ``mlrun`` did
     (``setting.contexts`` → ``mlrun.hyperparams``; ``mlrun.config`` → ``setting``):
     it worked only for as long as the import order happened to.
+  * Nothing in ``ducta`` imports the web server (``ducta_server``): it is a separate
+    distribution (``ducta-server``) that depends on this one, never the other way round.
   * The engine does not depend on the layers built on it. ``core`` and ``check``
     imported the CLI's presentation (``console.ux``) to print progress; they now
     report through ``ducta.reporting``, which the CLI and the API server fill in.
@@ -23,7 +25,9 @@ import pytest
 SRC = Path(__file__).resolve().parents[1] / "src" / "ducta"
 
 #: The engine: it runs pipelines and must work without the CLI or the server.
-ENGINE = ("setting", "gate", "check", "mlrun", "stream", "core")
+#: ``project_store`` and ``runs`` read and edit what the engine runs and leaves
+#: behind; the CLI, the AI layer and the server share them.
+ENGINE = ("setting", "gate", "check", "mlrun", "stream", "core", "project_store", "runs")
 #: What is built on top of the engine.
 INTERFACES = ("console", "api", "ai")
 
@@ -104,3 +108,49 @@ def test_the_shared_low_level_modules_depend_on_nothing_in_ducta(module):
     # Every package may import them, so they may import none: no cycle can start here.
     imported = [name for name, _ in _imports(SRC / module)]
     assert not [m for m in imported if m.startswith("ducta")]
+
+
+SERVER = Path(__file__).resolve().parents[1] / "server" / "src" / "ducta_server"
+
+
+def _all_imports(root: Path) -> Iterator[Tuple[str, str]]:
+    """``(file, imported module)`` for every import under *root*, lazy ones included."""
+    for path in root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    yield str(path.relative_to(root.parent)), alias.name
+            elif isinstance(node, ast.ImportFrom) and not node.level:
+                yield str(path.relative_to(root.parent)), node.module or ""
+
+
+def test_ducta_never_imports_the_server():
+    # `ducta ui` finds the server by name at run time (console/ui.py), never by import:
+    # it is a separate distribution (ducta-server) that depends on this one.
+    offending = sorted(
+        f"{file} -> {module}"
+        for file, module in _all_imports(SRC)
+        if module.split(".")[0] in ("ducta_server",) or module.startswith("ducta.api")
+    )
+    assert offending == [], "the server is a separate package:\n" + "\n".join(offending)
+
+
+def test_the_server_lives_outside_the_engine_tree():
+    assert not (SRC / "api").exists() and not (SRC / "ui").exists()
+    assert (SERVER / "main.py").is_file()
+
+
+def test_the_server_uses_no_private_name_of_the_engine():
+    # What the server imports from `ducta` is the engine's contract with it: a
+    # private name there breaks the server on an engine refactor no engine test sees.
+    offending = []
+    for path in SERVER.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("ducta."):
+                offending += [
+                    f"{path.relative_to(SERVER.parent)}: {node.module}.{a.name}"
+                    for a in node.names
+                    if a.name.startswith("_") and not a.name.startswith("__")
+                ]
+    assert offending == [], "\n".join(offending)

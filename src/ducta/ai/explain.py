@@ -19,7 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Why a run failed, in plain words.
 
-Ducta's diagnosis (:mod:`ducta.api.services.diagnosis`) already knows the kind
+Ducta's diagnosis (:mod:`ducta.runs.diagnosis`) already knows the kind
 of failure, the line of the project's code it was raised on, and what changed
 since the last good run. The model only turns those facts — with the error and
 the code around that line — into an explanation and next steps. It changes
@@ -108,7 +108,7 @@ def node_function(root: Path, node: str) -> Optional[Dict[str, Any]]:
     """
     import yaml  # type: ignore[import-untyped]
 
-    from ducta.api.services.code_index import module_file
+    from ducta.project_store.code_index import module_file
     from ducta.setting.project.loader import PIPELINES_DIR, visible_in
 
     root = Path(root).resolve()

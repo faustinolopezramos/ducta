@@ -53,6 +53,8 @@ class _Registry:
     def __init__(self) -> None:
         self.lock = threading.Lock()
         self.cancelled: Set[str] = set()
+        #: The whole run was cancelled: every node counts as cancelled, started or not.
+        self.run_cancelled = False
 
 
 def _registry(context: Any) -> _Registry:
@@ -128,13 +130,30 @@ def cancel_node(context: Any, node: str) -> None:
     tag = job_tag(context, node)
     try:
         spark.sparkContext.cancelJobsWithTag(tag)
-        logger.warning("Cancelled Spark jobs of timed-out node '{}'", node)
+        logger.warning("Cancelled Spark jobs of cancelled node '{}'", node)
     except Exception:  # noqa: BLE001
         try:
             spark.interruptTag(tag)
-            logger.warning("Interrupted Spark operations of timed-out node '{}'", node)
+            logger.warning("Interrupted Spark operations of cancelled node '{}'", node)
         except Exception as e:  # noqa: BLE001
             logger.warning("Could not cancel Spark jobs of node '{}': {}", node, e)
+
+
+def cancel_run(context: Any) -> None:
+    """Cancel the whole run: every node, those running and those yet to start.
+
+    A thread cannot be killed, so a run cancelled from outside (the API's cancel, in the
+    server's own process) kept going — computing, writing its outputs and sealing a
+    ``success`` certificate. Marking the run makes every check that already guards a node
+    (:func:`ensure_not_cancelled` before each write, the retry policy, the node's start)
+    refuse from now on, and the Spark jobs of each node are cancelled to unblock its thread.
+    """
+    reg = _registry(context)
+    with reg.lock:
+        reg.run_cancelled = True
+    nodes = getattr(context, "nodes_config", None)
+    for node in list(nodes) if isinstance(nodes, dict) else []:
+        cancel_node(context, str(node))
 
 
 def is_cancelled(context: Any, node: str) -> bool:
@@ -142,7 +161,7 @@ def is_cancelled(context: Any, node: str) -> bool:
     if reg is None:
         return False
     with reg.lock:
-        return node in reg.cancelled
+        return reg.run_cancelled or node in reg.cancelled
 
 
 def ensure_not_cancelled(context: Any, node: Optional[str] = None) -> None:

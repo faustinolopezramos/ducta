@@ -136,11 +136,15 @@ validate configuration or check certificates without paying for a JVM.
 
 ```bash
 pip install "ducta[mlops]"        # + experiment tracking & model registry
-pip install "ducta[api]"          # + web app / REST API
 pip install "ducta[ai]"           # + drafting, fixing and reviewing pipelines with a model
 pip install "ducta[delta]"        # + Delta Lake (time travel, MERGE, streaming upserts)
 pip install "ducta[all]"          # everything above
 ```
+
+**The web app is a package of its own.** `pip install ducta-server` adds the web app
+and its REST API (and installs `ducta` with it, at the same version). Install only
+`ducta` to work from the command line, only `ducta-server` to work from the browser,
+or both.
 
 **`databricks` is a separate, mutually exclusive extra.** Use
 `pip install "ducta[databricks]"` *instead of* `[spark]`, never alongside it:
@@ -367,7 +371,8 @@ in all three. Details: [File formats](https://github.com/faustinolopezramos/duct
 ### 6. Prefer a visual workspace?
 
 ```bash
-ducta server start --port 8000     # web app & API docs at http://localhost:8000
+pip install ducta-server           # the web app (same version as ducta)
+ducta-server --port 8000           # web app & API docs at http://localhost:8000
 ```
 
 Browse pipelines, edit configuration, launch runs, and watch logs stream live.
@@ -558,8 +563,8 @@ Ducta is a layered set of modules; each has its own README with a deeper tour.
 flowchart TD
     subgraph Interfaces
         CLI["<b>console</b><br/>the ducta CLI"]
-        API["<b>api</b><br/>FastAPI REST + WebSocket"]
-        UI["<b>ui</b><br/>web app"]
+        API["<b>ducta-server</b><br/>FastAPI REST + WebSocket<br/>(separate package)"]
+        UI["<b>web app</b><br/>React, served by ducta-server"]
     end
 
     subgraph Engine
@@ -596,7 +601,7 @@ flowchart TD
 | [`stream`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/stream/README.md) | Declarative Spark Structured Streaming: readers, sinks, checkpoints, query supervision; per-batch merge, quarantine and quality checks, a run journal and live alerts. | Streaming |
 | [`core`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/core/README.md) | Turns a `Context` into running work — dependency graph, parallel nodes, gates, run certificate. | Execution engine |
 | [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
-| [`api`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/api/README.md) | REST + WebSocket over the engine; serves the bundled web app. | Service |
+| [`ducta_server`](https://github.com/faustinolopezramos/ducta/blob/main/server/src/ducta_server/README.md) | REST + WebSocket over the engine; serves the bundled web app. A separate package, `ducta-server`. | Service |
 | [`ai`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/ai/README.md) | A local or remote model drafts, fixes, reviews and explains pipelines (`ducta ai`); every draft is validated, and nothing is written until a person accepts it. Also ships the agent skill (`ducta skill`). | Authoring assistance |
 
 ### The public API

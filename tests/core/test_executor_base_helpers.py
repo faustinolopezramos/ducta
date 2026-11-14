@@ -191,6 +191,26 @@ class TestPreflightSanity:
             end_date="2026-01-02",
         )
 
+    def test_a_failed_check_is_a_data_error_not_an_unexpected_one(self, monkeypatch):
+        """A check failing in the preflight (fail_fast) used to escape as a bare
+        QualityCheckError: the CLI printed "Unexpected error" and exited 1, where the
+        same check failing inside the node exits 4."""
+        from ducta.check import QualityCheckError
+        from ducta.core.errors import SanityCheckFailedError
+
+        runner = MagicMock()
+        runner.return_value.run_preflight_checks.side_effect = QualityCheckError(
+            "schema", "Missing column", node_name="extract"
+        )
+        monkeypatch.setattr(base_mod, "SanityPhaseRunner", runner)
+        nodes = {"extract": {"sanity_checks": {"checks": {"schema": {}}}}}
+
+        with pytest.raises(SanityCheckFailedError) as raised:
+            _executor()._run_preflight_sanity_checks(nodes)
+
+        assert raised.value.exit_code == 4
+        assert "extract" in str(raised.value) and "Missing column" in str(raised.value)
+
 
 class TestEndMlopsRun:
     def test_nothing_to_end(self):

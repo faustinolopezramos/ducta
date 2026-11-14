@@ -241,7 +241,7 @@ Channels: ``slack`` and ``teams`` (``webhook_env``), ``webhook`` (``url_env``),
 server's ``DUCTA_PUBLIC_URL`` set (``https://ducta.company.com``), each alert links to
 the run's page.
 
-Alerts are sent by the server (``ducta ui`` / ``ducta server start``) for the
+Alerts are sent by the server (``ducta-server`` / ``ducta ui``) for the
 runs it executes; ``ducta start`` on the command line sends none.
 ``POST .../alerts/test`` sends a test message through one rule.
 

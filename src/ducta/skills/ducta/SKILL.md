@@ -5,7 +5,7 @@ license: Apache-2.0
 compatibility: Requires the ducta CLI (pip install ducta; Python 3.11-3.14). Works with any agent that can read files and run shell commands.
 metadata:
   ducta-version: "0.3"
-  skill-version: "1.1.4"
+  skill-version: "1.2.0"
   homepage: https://github.com/faustinolopezramos/ducta
 ---
 
@@ -105,8 +105,9 @@ profile, environments) to copy patterns from.
 1. Run `scripts/check_env.py`. If `ducta.command` is null, Ducta is not installed in
    the active environment.
 2. Recommend a virtual environment, then `pip install "ducta[spark]"` for local Spark
-   pipelines; add extras by need (`api` for the UI, `mlops`, `ai`, `delta`,
-   `databricks`). See [installation](references/installation.md).
+   pipelines; add extras by need (`mlops`, `ai`, `delta`, `databricks`). The web app
+   is a separate package: `pip install ducta-server` (it installs Ducta with it).
+   See [installation](references/installation.md).
 3. Check again with `scripts/check_env.py` and `ducta --version`.
 
 ### Create a project

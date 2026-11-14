@@ -51,3 +51,13 @@ def test_quiet_success_line():
     line = _quiet_success_line("etl", result)
     assert line.startswith("✓ etl completed")
     assert line.endswith("certificate data/dev/.ducta/runs/r1/certificate.json")
+
+
+def test_a_rejected_argument_is_printed_under_quiet(quiet_classic, capsys):
+    """`start --start-date 2026-13-45 -q` exited 3 and printed nothing: the error box went
+    to the console `-q` silences."""
+    from ducta.console.core import ValidationError
+    from ducta.console.ux.error_analyzer import try_format_error
+
+    assert try_format_error(ValidationError("Invalid date format '2026-13-45'"), "", scope=None)
+    assert "2026-13-45" in capsys.readouterr().err

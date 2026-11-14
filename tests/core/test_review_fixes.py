@@ -222,7 +222,7 @@ class TestCodeFingerprintHashesContent:
         loader.secure_importer.temporary_sys_path = temporary_sys_path
 
         batch = MagicMock()
-        batch._get_pipeline_config.return_value = {"nodes": ["n"]}
+        batch.get_pipeline_config.return_value = {"nodes": ["n"]}
         batch.node_executor._function_loader = loader
 
         executor = object.__new__(PipelineExecutor)

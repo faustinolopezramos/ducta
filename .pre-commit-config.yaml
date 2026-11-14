@@ -37,19 +37,19 @@ repos:
       - id: check-toml
       - id: check-case-conflict
 
-  # UI checks only run when something under src/ducta/ui/ changes.
+  # UI checks only run when something under server/ui/ changes.
   - repo: local
     hooks:
       - id: ui-quality
         name: ui quality gate (WCAG contrast + design tokens)
-        entry: bash -c 'cd src/ducta/ui && npm run ui:quality'
+        entry: bash -c 'cd server/ui && npm run ui:quality'
         language: system
-        files: ^src/ducta/ui/
+        files: ^server/ui/
         pass_filenames: false
 
       - id: ui-typecheck
         name: ui typecheck (tsc)
-        entry: bash -c 'cd src/ducta/ui && npx tsc -b'
+        entry: bash -c 'cd server/ui && npx tsc -b'
         language: system
-        files: ^src/ducta/ui/.*\.(ts|tsx)$
+        files: ^server/ui/.*\.(ts|tsx)$
         pass_filenames: false

@@ -98,7 +98,7 @@ class HybridExecutor(BaseExecutor):
         self._ensure_manager()
         keep_streams_running = False
 
-        pipeline = self._get_pipeline_config(pipeline_name)
+        pipeline = self.get_pipeline_config(pipeline_name)
         pipeline_nodes = extract_pipeline_nodes(pipeline)
         node_configs = self._get_node_configs(pipeline_nodes)
 

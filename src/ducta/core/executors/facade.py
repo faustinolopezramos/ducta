@@ -139,7 +139,7 @@ class PipelineExecutor:
         clear_cache()
         self._run_preflight(pipeline_name)
 
-        pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
+        pipeline = self.batch_executor.get_pipeline_config(pipeline_name)
         pipeline_type = pipeline.get("type", PipelineType.BATCH.value)
 
         if pipeline_type in [
@@ -994,7 +994,7 @@ class PipelineExecutor:
     ) -> bool:
         """True if *pipeline_name* can be safely skipped as already materialized."""
         try:
-            pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
+            pipeline = self.batch_executor.get_pipeline_config(pipeline_name)
         except Exception:
             return False
 
@@ -1166,7 +1166,7 @@ class PipelineExecutor:
             import importlib.util
 
             nodes_config = getattr(self.context, "nodes_config", {}) or {}
-            pipeline = self.batch_executor._get_pipeline_config(pipeline_name)
+            pipeline = self.batch_executor.get_pipeline_config(pipeline_name)
             modules = {
                 (nodes_config.get(node) or {}).get("module")
                 for node in extract_pipeline_nodes(pipeline)
@@ -1288,6 +1288,17 @@ class PipelineExecutor:
             "description": pipeline.get("description", ""),
             "nodes": nodes,
         }
+
+    def cancel_run(self) -> None:
+        """Cancel the run in progress, from another thread (the API's cancel).
+
+        Running nodes lose their Spark jobs and their writes, nodes not yet started do not
+        start: nothing more lands, and the run's certificate says it did not succeed.
+        :meth:`shutdown` alone only stops streams and releases pools.
+        """
+        from ducta.core.execution.cancellation import cancel_run
+
+        cancel_run(self.context)
 
     def shutdown(self) -> None:
         """Unified shutdown with resource cleanup."""

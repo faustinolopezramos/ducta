@@ -1,0 +1,188 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+import functools
+import sys
+import sysconfig
+import threading
+from pathlib import Path
+from types import ModuleType
+from typing import Optional, Set, Tuple
+
+from loguru import logger
+
+
+class ModuleIsolationManager:
+    """Snapshots/removes `sys.modules` entries added during an execution.
+
+    This is in-process namespace hygiene only — it stops a pipeline's own
+    `import` side effects (module-level caches, monkeypatches, singleton
+    state) from leaking into the next execution that reuses the same
+    process. Only the project's own code is removed: a library or the standard
+    library stays loaded, because a C extension cannot always be initialised twice
+    in one process (numpy 2 refuses with "cannot load module more than once per
+    process", so every run after the first one that imported it failed). It is
+    NOT a security sandbox: node code still runs with the
+    server's full privileges, in the server's own process, with access to
+    every module already importable there (including this one). Only used
+    with ``RUN_ISOLATION=thread``; ``process`` runs each pipeline in its own
+    OS process (see :mod:`ducta_server.execution.child_runner`).
+    """
+
+    # Built-in/core modules that should never be removed
+    PROTECTED_MODULES = frozenset(
+        {
+            "__builtin__",
+            "__main__",
+            "sys",
+            "os",
+            "builtins",
+            "io",
+            "pathlib",
+            "threading",
+            "asyncio",
+            # Add other core packages as needed
+        }
+    )
+
+    def __init__(self):
+        self._original_modules: dict[str, Set[str]] = {}
+
+    def snapshot_modules(self, execution_id: str) -> None:
+        """Snapshot current module state before execution."""
+        # Don't snapshot if already done (per-execution)
+        if execution_id in self._original_modules:
+            return
+
+        current = set(sys.modules.keys())
+        self._original_modules[execution_id] = current.copy()
+        logger.debug(
+            "Module isolation: snapshot {count} modules for execution {id}",
+            count=len(current),
+            id=execution_id,
+        )
+
+    def cleanup(self, execution_id: str) -> int:
+        """
+        Remove modules that were loaded during execution (not present in snapshot).
+        Return the number of modules removed.
+        """
+        if execution_id not in self._original_modules:
+            return 0
+
+        original = self._original_modules[execution_id]
+        current = set(sys.modules.keys())
+        to_remove = current - original
+
+        # Don't remove protected modules
+        to_remove = {m for m in to_remove if not self._is_protected(m, sys.modules.get(m))}
+
+        removed_count = 0
+        for module_name in to_remove:
+            try:
+                del sys.modules[module_name]
+                removed_count += 1
+            except (KeyError, RuntimeError) as e:
+                logger.debug(
+                    "Module isolation: could not remove '{m}': {e}",
+                    m=module_name,
+                    e=e,
+                )
+
+        logger.debug(
+            "Module isolation: removed {count} modules after execution {id}",
+            count=removed_count,
+            id=execution_id,
+        )
+
+        # Clean up our snapshots
+        self._original_modules.pop(execution_id, None)
+
+        return removed_count
+
+    def cleanup_all(self) -> None:
+        """Clear all snapshots (on shutdown)."""
+        self._original_modules.clear()
+
+    @staticmethod
+    def _is_protected(module_name: str, module: Optional[ModuleType] = None) -> bool:
+        """Return True if this module should not be removed."""
+        # Check protected list
+        if module_name in ModuleIsolationManager.PROTECTED_MODULES:
+            return True
+        if module is not None and _is_installed(module):
+            return True
+
+        # Check prefixes: builtins, private modules, ducta itself
+        if module_name.startswith("_"):
+            return True
+        if module_name.startswith(("ducta.", "ducta_server.")):
+            # Keep Ducta's engine and this server
+            return True
+        if module_name in sys.builtin_module_names:
+            return True
+
+        return False
+
+
+#: Where the standard library and installed packages live (everything that is not
+#: the project's own code).
+_INSTALLED_MARKERS = ("site-packages", "dist-packages")
+
+
+@functools.lru_cache(maxsize=1)
+def _installed_roots() -> Tuple[Path, ...]:
+    paths = sysconfig.get_paths()
+    keys = ("stdlib", "platstdlib", "purelib", "platlib")
+    return tuple(Path(paths[k]).resolve() for k in keys if paths.get(k))
+
+
+def _is_installed(module: ModuleType) -> bool:
+    """True for a module of the standard library or an installed package.
+
+    A module with no file (built-in, frozen, namespace package) is not judged here.
+    """
+    file = getattr(module, "__file__", None)
+    if not isinstance(file, str):
+        return False
+    if any(marker in file for marker in _INSTALLED_MARKERS):
+        return True
+    try:
+        resolved = Path(file).resolve()
+    except (OSError, RuntimeError):
+        return False
+    return any(resolved.is_relative_to(root) for root in _installed_roots())
+
+
+# Singleton instance
+_module_isolation: ModuleIsolationManager | None = None
+_module_isolation_lock = threading.Lock()
+
+
+def get_module_isolation_manager() -> ModuleIsolationManager:
+    """Get or create the singleton ModuleIsolationManager."""
+    global _module_isolation
+    if _module_isolation is None:
+        with _module_isolation_lock:
+            if _module_isolation is None:
+                _module_isolation = ModuleIsolationManager()
+    return _module_isolation

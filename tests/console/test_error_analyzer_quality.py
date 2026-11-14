@@ -82,3 +82,30 @@ class TestOrdinaryErrorsAreUnaffected:
         analysis = classify_error("something went wrong")
 
         assert analysis["error_type"] == "Unknown Error"
+
+
+class TestOtherVerdictsAboutTheData:
+    """A failed check, failed sanity checks and a node returning something that is not a
+    DataFrame were shown as "Unknown Error" beside a message saying what failed."""
+
+    def test_a_failed_check(self):
+        from ducta.check.core import QualityCheckError
+
+        error = QualityCheckError("schema", "Missing 1 expected column(s)", node_name="extract")
+        analysis = classify_error(str(error), error)
+        assert analysis["error_type"] == "Quality Check Failed"
+        assert any("schema" in s and "Missing" in s for s in analysis["suggestions"])
+
+    def test_failed_sanity_checks(self):
+        from ducta.core.errors import SanityCheckFailedError
+
+        error = SanityCheckFailedError("extract", 2)
+        assert classify_error(str(error), error)["error_type"] == "Sanity Checks Failed"
+
+    def test_a_result_that_is_not_a_dataframe(self):
+        from ducta.core.errors import SchemaValidationError
+
+        error = SchemaValidationError("Unsupported DataFrame type: <class 'int'>")
+        analysis = classify_error(str(error), error)
+        assert analysis["error_type"] == "Invalid Node Result"
+        assert analysis["severity"] != "high"

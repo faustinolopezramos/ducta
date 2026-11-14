@@ -87,7 +87,7 @@ def redirect_writes(
     original = _original_output_root(ctx)
     gs = ctx.global_config
     # Before the output path moves: without `mlops_path` the store lives under it.
-    real_mlops = StorageBackendFactory._resolve_mlops_path(ctx, None, pipeline_name)
+    real_mlops = StorageBackendFactory.resolve_mlops_path(ctx, None, pipeline_name)
     if real_mlops:
         ctx.serving_mlops_path = str(real_mlops)
     gs["mlops_path"] = str(state.under(target, "mlops"))

@@ -173,8 +173,14 @@ class ParallelCoordinator:
             cause=exception,
         )
 
-    def cancel_all(self, running_snapshot: List) -> None:
-        """Cancel all running futures from a snapshot of (future, node_info) pairs."""
+    def cancel_all(self, running_snapshot: List, hard: bool = False) -> None:
+        """Cancel all running futures from a snapshot of (future, node_info) pairs.
+
+        A future that already started cannot be cancelled. With *hard* (an interrupted
+        run) each running node is also cancelled the way a timed-out one is: its writes
+        are refused and its Spark jobs cancelled, so the process is not held up until
+        the node finishes on its own.
+        """
         if not running_snapshot:
             return
         logger.warning("Cancelling {} running futures", len(running_snapshot))
@@ -185,6 +191,11 @@ class ParallelCoordinator:
                 future.cancel()
             except Exception:
                 logger.debug("Could not cancel future for node '{}'", node_name)
+            if hard:
+                try:
+                    cancel_node(self.context, node_name)
+                except Exception as e:  # noqa: BLE001 — stopping the others matters more
+                    logger.debug("Could not hard-cancel node '{}': {}", node_name, e)
 
     def _submit_ready_nodes(
         self,

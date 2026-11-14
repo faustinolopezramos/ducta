@@ -21,7 +21,7 @@ from ducta.ai.agents.sentinel import actions
 from ducta.ai.agents.sentinel.engine import Sentinel
 from ducta.ai.agents.sentinel.incidents import Incident, Incidents
 from ducta.ai.agents.sentinel.triage import RunEvent, event_from_certificate
-from ducta.api.services import run_certificates
+from ducta.runs import certificates as run_certificates
 
 SALES = (
     Path(__file__).parents[3]
@@ -80,7 +80,7 @@ def _cert(i: int, duration: float, pipeline: str = "bronze.sales", **kw: Any) ->
 
 class TestServerReruns:
     def test_execute_off_the_event_loop_records_nothing(self, tmp_path):
-        from ducta.api.execution.manager import ExecutionManager
+        from ducta_server.execution.manager import ExecutionManager
 
         manager = ExecutionManager()
         with pytest.raises(RuntimeError):
@@ -89,7 +89,7 @@ class TestServerReruns:
         assert manager._execution_queue.queue_depth == 0
 
     def test_execute_from_thread_without_a_running_manager_is_refused(self, tmp_path):
-        from ducta.api.execution.manager import ExecutionManager
+        from ducta_server.execution.manager import ExecutionManager
 
         manager = ExecutionManager()
         with pytest.raises(RuntimeError, match="not running"):
@@ -97,7 +97,7 @@ class TestServerReruns:
         assert manager._store.list_all() == []
 
     def test_a_sentinel_rerun_from_a_worker_thread_runs_on_the_loop(self, tmp_path, monkeypatch):
-        from ducta.api.execution.manager import ExecutionManager
+        from ducta_server.execution.manager import ExecutionManager
 
         manager = ExecutionManager()
         seen: Dict[str, Any] = {}
@@ -183,16 +183,14 @@ def test_a_late_pipeline_opens_an_sla_incident(sales, certs):
 def test_stale_nodes_open_a_stale_incident(sales, certs, monkeypatch):
     (sales / "ducta.yaml").write_text((sales / "ducta.yaml").read_text() + "  rerun_stale: true\n")
     monkeypatch.setattr(
-        "ducta.api.services.staleness.node_freshness",
+        "ducta.project_store.staleness.node_freshness",
         lambda store, latest: {
             "land_orders": SimpleNamespace(
                 state="stale", pipeline="bronze.sales", node="land_orders"
             )
         },
     )
-    monkeypatch.setattr(
-        "ducta.api.services.run_certificates.latest_successful", lambda root, env: {}
-    )
+    monkeypatch.setattr("ducta.runs.certificates.latest_successful", lambda root, env: {})
     Sentinel(sales, NoRuns(), notify=False).run_once(["dev"])
     (incident,) = Incidents(sales).list()
     assert incident.kind == "stale"

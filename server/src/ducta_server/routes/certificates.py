@@ -1,0 +1,337 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
+
+from ducta.core.certificate import (
+    diff_certificates,
+    iter_certificate_dirs,
+    load_certificate,
+    resolve_signing_key_from_dir,
+    verify_certificate_data,
+)
+from ducta.runs.certificates import candidate_runs_dirs as _candidate_runs_dirs
+from ducta.runs.certificates import load_run_certificate as _load_run_certificate
+from ducta_server.dependencies import (
+    CurrentUserDep,
+    ExecutionManagerDep,
+    SourcePathDep,
+    WorkspaceManagerDep,
+    require_permission,
+)
+from ducta_server.models.execution import ExecutionResponse
+from ducta_server.workspace.manager import WorkspaceManager
+
+router = APIRouter(prefix="/projects", tags=["certificates"])
+
+
+class CertificateSummary(BaseModel):
+    """One row in the certificate list."""
+
+    run_id: str
+    pipeline: str
+    status: str
+    started_at: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    environment_name: Optional[str] = None
+    signed: bool = False
+    quality_passed: Optional[int] = Field(
+        default=None, description="Checks that passed, e.g. 3 of quality_total"
+    )
+    quality_total: Optional[int] = Field(
+        default=None, description="Total quality checks recorded on the certificate"
+    )
+
+
+class CertificateVerifyResponse(BaseModel):
+    """Outcome of verifying a certificate (tamper + signature check)."""
+
+    ok: bool
+    run_id: Optional[str] = None
+    reason: str
+    signature: str = Field(
+        default="unsigned",
+        description="unsigned | valid | invalid | present (no key) | stripped | unverifiable",
+    )
+    level: str = Field(
+        default="none",
+        description=(
+            "What a passing result proves: integrity (self-hash only — detects corruption, "
+            "not deliberate tampering) | authenticated (signature checked) | none (failed)"
+        ),
+    )
+    policy_satisfied: bool = Field(
+        default=True,
+        description=(
+            "False when the certificate's own policy (evidence_level=signed) requires "
+            "authentication and no key was supplied"
+        ),
+    )
+
+
+class CertificateDiffOutputRow(BaseModel):
+    key: str
+    in_a: bool
+    in_b: bool
+    #: True (same), False (differs), None = measured with different fingerprint
+    #: algorithms (e.g. across a Ducta upgrade) — "not comparable", not a claim
+    #: either way. See `not_comparable_reason` for why.
+    match: Optional[bool]
+    not_comparable_reason: Optional[str] = None
+
+
+class CertificateDiffQualityRow(BaseModel):
+    node: Optional[str] = None
+    phase: Optional[str] = None
+    passed_a: Optional[bool] = None
+    passed_b: Optional[bool] = None
+    errors_a: Optional[int] = None
+    errors_b: Optional[int] = None
+    match: bool
+
+
+class CertificateDiffModelRow(BaseModel):
+    node: str
+    model_a: Optional[str] = None
+    model_b: Optional[str] = None
+    match: bool
+
+
+class CertificateDiffResponse(BaseModel):
+    """Structural diff between two Run Certificates."""
+
+    run_a: Optional[str] = None
+    run_b: Optional[str] = None
+    pipeline_a: Optional[str] = None
+    pipeline_b: Optional[str] = None
+    pipeline_match: bool
+    environment_match: bool
+    status_a: Optional[str] = None
+    status_b: Optional[str] = None
+    status_match: bool
+    config_fingerprint_match: bool
+    outputs: List[CertificateDiffOutputRow]
+    outputs_match: bool
+    #: Whether every output could be measured with a comparable fingerprint —
+    #: false means at least one output's `match` is `None` ("not comparable"),
+    #: so `outputs_match`/`identical` cover only what could actually be checked.
+    outputs_comparable: bool = True
+    quality: List[CertificateDiffQualityRow]
+    #: The model each serving node scored with, side by side (schema >= 1.6).
+    models: List[CertificateDiffModelRow] = []
+    models_match: bool = True
+    identical: bool
+
+
+class ReproduceRequest(BaseModel):
+    """Optional date-range override for a reproduction run."""
+
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+
+
+def _project_dir(root: Path, project_id: str) -> Path:
+    """The directory a project's runs execute from (same rule as execute/reproduce)."""
+    return WorkspaceManager(root).for_project(project_id).root
+
+
+def _certificate(
+    root: Path, project_id: str, run_id: str, env: Optional[str] = None
+) -> Dict[str, Any]:
+    """The run's certificate — the project's copy, else the StorageBackend mirror; 404 when neither."""
+    from ducta.project_store.errors import StoreError
+
+    try:
+        data = _load_run_certificate(_project_dir(root, project_id), run_id, env)
+    except StoreError:
+        raise  # a project id that is invalid or unknown: its own 4xx, not a server fault
+    except Exception as exc:  # noqa: BLE001 — found but unparseable is a server-side fault
+        raise HTTPException(status_code=500, detail=f"Could not read certificate: {exc}") from exc
+    if data is not None:
+        return data
+    raise HTTPException(
+        status_code=404,
+        detail=f"No certificate found for run '{run_id}' in project '{project_id}'"
+        + (f" (environment '{env}')" if env else ""),
+    )
+
+
+@router.get(
+    "/{project_id}/certificates",
+    response_model=List[CertificateSummary],
+    summary="List a project's Run Certificates (newest first)",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def list_certificates(
+    project_id: str,
+    source_path: SourcePathDep,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = Query(
+        None, description="Restrict to one environment (default: all environments)"
+    ),
+) -> List[CertificateSummary]:
+    summaries: List[CertificateSummary] = []
+    for dir_env, runs_dir in _candidate_runs_dirs(_project_dir(manager.root, project_id), env):
+        for run_id, run_dir in iter_certificate_dirs(runs_dir):
+            try:
+                data = load_certificate(run_dir / "certificate.json")
+            except Exception:  # noqa: BLE001 — a corrupt file must not break the listing
+                continue
+            quality = data.get("quality", []) or []
+            summaries.append(
+                CertificateSummary(
+                    run_id=str(data.get("run_id", run_id)),
+                    pipeline=str(data.get("pipeline", "?")),
+                    status=str(data.get("status", "?")),
+                    started_at=data.get("started_at"),
+                    duration_seconds=data.get("duration_seconds"),
+                    environment_name=dir_env or data.get("environment_name"),
+                    signed=bool(data.get("signature")),
+                    quality_passed=sum(1 for q in quality if q.get("passed")) if quality else None,
+                    quality_total=len(quality) if quality else None,
+                )
+            )
+    summaries.sort(key=lambda s: s.started_at or "", reverse=True)
+    return summaries
+
+
+@router.get(
+    "/{project_id}/certificates/{run_id}",
+    summary="Get one Run Certificate as JSON",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def get_certificate(
+    project_id: str,
+    run_id: str,
+    source_path: SourcePathDep,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = Query(None, description="Environment the run was recorded under"),
+) -> Dict[str, Any]:
+    return _certificate(manager.root, project_id, run_id, env=env)
+
+
+@router.post(
+    "/{project_id}/certificates/{run_id}/verify",
+    response_model=CertificateVerifyResponse,
+    summary="Verify a Run Certificate's integrity (and signature when keyed)",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def verify_certificate_endpoint(
+    project_id: str,
+    run_id: str,
+    source_path: SourcePathDep,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = Query(None, description="Environment the run was recorded under"),
+) -> CertificateVerifyResponse:
+    data = _certificate(manager.root, project_id, run_id, env=env)
+    signing_root = _project_dir(manager.root, project_id)
+    result = verify_certificate_data(data, signing_key=resolve_signing_key_from_dir(signing_root))
+    return CertificateVerifyResponse(
+        ok=result.ok,
+        run_id=result.run_id,
+        reason=result.reason,
+        signature=result.signature,
+        level=result.level,
+        policy_satisfied=result.policy_satisfied,
+    )
+
+
+@router.get(
+    "/{project_id}/certificates/{run_id}/diff/{other_run_id}",
+    response_model=CertificateDiffResponse,
+    summary="Compare two Run Certificates (config, outputs, quality)",
+    dependencies=[Depends(require_permission("execution.read"))],
+)
+async def diff_certificates_endpoint(
+    project_id: str,
+    run_id: str,
+    other_run_id: str,
+    source_path: SourcePathDep,
+    manager: WorkspaceManagerDep,
+    env: Optional[str] = Query(
+        None, description="Environment both runs were recorded under (default: search all)"
+    ),
+) -> CertificateDiffResponse:
+    cert_a = _certificate(manager.root, project_id, run_id, env=env)
+    cert_b = _certificate(manager.root, project_id, other_run_id, env=env)
+    return CertificateDiffResponse(**diff_certificates(cert_a, cert_b))
+
+
+@router.post(
+    "/{project_id}/certificates/{run_id}/reproduce",
+    response_model=ExecutionResponse,
+    status_code=202,
+    summary="Re-run a certificate's pipeline to test reproducibility",
+    description=(
+        "Starts an async execution of the certificate's pipeline/environment, the "
+        "same way POST .../pipelines/{name}/execute does, over the dates the run used "
+        "(unless the body gives others). Its outputs are written to "
+        "`<output>/<env>/.ducta/reproduce/<run_id>`, never to the real datasets; its "
+        "certificate says `reproduction_of`. Poll the returned execution "
+        "(GET /executions/{id}) until it reaches a terminal status, then read its "
+        "`certificate_run_id` and call the diff endpoint against the original `run_id` "
+        "to compare outputs and quality."
+    ),
+    dependencies=[Depends(require_permission("pipeline.execute"))],
+)
+async def reproduce_certificate(
+    project_id: str,
+    run_id: str,
+    body: ReproduceRequest,
+    source_path: SourcePathDep,
+    exec_manager: ExecutionManagerDep,
+    manager: WorkspaceManagerDep,
+    current_user: CurrentUserDep,
+    env: Optional[str] = Query(None, description="Environment the run was recorded under"),
+) -> ExecutionResponse:
+    cert = _certificate(manager.root, project_id, run_id, env=env)
+
+    pipeline = cert.get("pipeline")
+    if not pipeline:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Certificate '{run_id}' has no pipeline name — cannot reproduce",
+        )
+
+    exec_source = _project_dir(manager.root, project_id)
+    from ducta_server.services.governance import check_can_run
+
+    # Reproducing is running: a protected environment takes an operator here too.
+    check_can_run(current_user, str(cert.get("environment_name") or "base"), exec_source)
+
+    from ducta.core.scratch import reproduction_window
+
+    start_date, end_date = reproduction_window(cert, body.start_date, body.end_date)
+    return exec_manager.execute(
+        source_path=exec_source,
+        pipeline_name=str(pipeline),
+        env=str(cert.get("environment_name") or "base"),
+        start_date=start_date,
+        end_date=end_date,
+        project_id=project_id,
+        user_id=current_user.id,
+        reproduce_of=str(cert.get("run_id") or run_id),
+    )

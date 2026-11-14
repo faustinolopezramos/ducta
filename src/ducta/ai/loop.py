@@ -132,8 +132,8 @@ class Assembled:
 
 def validate_files(root: Path, files: Dict[str, str]) -> List[Dict[str, Any]]:
     try:
-        from ducta.api.repositories.v2_store import V2ProjectStore
-        from ducta.api.services.draft_validation import validate_draft
+        from ducta.project_store.draft_validation import validate_draft
+        from ducta.project_store.store import V2ProjectStore
     except ImportError as e:
         raise AIEnvironmentError(
             "Validating drafts needs Ducta's AI extra: pip install 'ducta[ai]'"

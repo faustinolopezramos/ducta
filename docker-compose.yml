@@ -2,9 +2,9 @@
 # Cross-platform Compose file — works the same on macOS (Intel & Apple Silicon),
 # Linux (amd64 & arm64) and Windows (Docker Desktop / WSL2).
 #
-# This runs the FULL Ducta app in one container: the FastAPI backend serves the
-# compiled React UI and the API on the same port (single origin — the same thing
-# `ducta ui` does natively). Use this whenever the native install misbehaves on
+# This runs the FULL Ducta app in one container: the `server` image (ducta-server)
+# serves the compiled web app and the API on the same port (single origin — the
+# same thing `ducta-server` does natively). Use this whenever the native install misbehaves on
 # your OS.
 #
 # Portability choices:
@@ -24,18 +24,18 @@
 services:
 
   # ---------------------------------------------------------------
-  # Ducta — React UI + FastAPI backend on one port (served by `ducta ui`)
+  # Ducta — web app + API on one port (served by `ducta-server`)
   # ---------------------------------------------------------------
   ducta:
     build:
       context: .
       dockerfile: Dockerfile
-      target: runtime          # lean production image (dev override builds the `dev` stage)
-    image: ducta:latest
+      target: server           # lean production image (dev override builds the `dev` stage)
+    image: ducta-server:latest
     container_name: ducta
     # Same entry point the CLI uses; the image's default CMD is identical, so
     # this is here only to make the run explicit and overridable.
-    command: ["ui", "--host", "0.0.0.0", "--port", "8000", "--no-browser"]
+    command: ["--host", "0.0.0.0", "--port", "8000", "--no-browser"]
     ports:
       - "${API_PORT:-8000}:8000"       # UI + API
       - "${SPARK_UI_PORT:-4040}:4040"  # Spark UI (when a pipeline runs a Spark job)

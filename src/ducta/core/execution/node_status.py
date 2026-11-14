@@ -1,0 +1,34 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+
+The ``[node_status]`` log line a run writes when a node changes state.
+
+The engine logs one per transition (running, success, failed, skipped,
+gate_blocked); the web server reads them back from a run's output to show each
+node's state live. This module is that contract, written once for both sides.
+"""
+
+from __future__ import annotations
+
+import re
+
+#: ``logger.info(NODE_STATUS_FORMAT, node_name, status)``
+NODE_STATUS_FORMAT = "[node_status] node_id={} status={}"
+#: Matches one such line: group 1 is the node, group 2 the status.
+NODE_STATUS_RE = re.compile(r"^\[node_status\] node_id=(\S+) status=(\S+)$")

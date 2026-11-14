@@ -289,7 +289,7 @@ class CoreSettings:
                 _get(context, "strict_module_import", gs.get("strict_module_import")),
                 default=True,
             ),
-            mlops_enabled=cls._resolve_mlops_enabled(gs, mlops_section),
+            mlops_enabled=cls.resolve_mlops_enabled(gs, mlops_section),
             mlops_required=coerce_bool("mlops_required", gs.get("mlops_required"), default=False),
             split_enforcement=(
                 "warn"
@@ -451,7 +451,7 @@ class CoreSettings:
         return coerce_bool("mlflow.enabled", mlflow_section.get("enabled"), default=False)
 
     @staticmethod
-    def _resolve_mlops_enabled(gs: Mapping[str, Any], mlops_section: Mapping[str, Any]) -> bool:
+    def resolve_mlops_enabled(gs: Mapping[str, Any], mlops_section: Mapping[str, Any]) -> bool:
         """Resolve MLOps enablement from the flat flag and the nested section."""
         nested = mlops_section.get("enabled")
         if nested is not None:

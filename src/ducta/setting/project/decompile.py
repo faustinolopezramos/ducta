@@ -149,7 +149,7 @@ _HANDLED = {
 }
 
 
-def _producers(nodes: Dict[str, Any]) -> Dict[str, str]:
+def dataset_producers(nodes: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     for name, node in nodes.items():
         for ds in _as_list((node or {}).get("output")):
@@ -157,7 +157,7 @@ def _producers(nodes: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-def _decompile_node(
+def decompile_node(
     name: str, node: Dict[str, Any], producers: Dict[str, str], problems: List[str]
 ) -> Dict[str, Any]:
     where = f"node '{name}'"
@@ -386,7 +386,7 @@ def decompile(
         tree["metadata"] = metadata
 
     nodes = docs["nodes_config"] or {}
-    producers = _producers(nodes)
+    producers = dataset_producers(nodes)
     owner: Dict[str, str] = {}
     pipelines: Dict[str, Any] = {}
     for pname, pdoc in (docs["pipelines_config"] or {}).items():
@@ -410,7 +410,7 @@ def decompile(
             if nname not in nodes:
                 problems.append(f"pipeline '{pname}' lists node '{nname}', which is not defined")
                 continue
-            pnodes[nname] = _decompile_node(nname, nodes[nname] or {}, producers, problems)
+            pnodes[nname] = decompile_node(nname, nodes[nname] or {}, producers, problems)
         if pdoc.get("inputs") or pdoc.get("outputs"):
             note = "pipeline-level inputs/outputs dropped (nothing read them)"
             if note not in notes:
@@ -475,8 +475,8 @@ def _promote_contracts(pipelines: Dict[str, Any], catalog: Dict[str, Any]) -> No
 # ── environments as minimal overrides ────────────────────────────────────────
 
 
-def _diff(base: Any, other: Any, problems: List[str], path: str) -> Any:
-    """The override that turns ``base`` into ``other`` under deep merge, or _SAME."""
+def override_diff(base: Any, other: Any, problems: List[str], path: str) -> Any:
+    """The override that turns ``base`` into ``other`` under deep merge, or UNCHANGED."""
     if isinstance(base, dict) and isinstance(other, dict):
         out = {}
         for key in base:
@@ -488,14 +488,14 @@ def _diff(base: Any, other: Any, problems: List[str], path: str) -> Any:
             if key not in base:
                 out[key] = value
                 continue
-            sub = _diff(base[key], value, problems, f"{path}{key}.")
-            if sub is not _SAME:
+            sub = override_diff(base[key], value, problems, f"{path}{key}.")
+            if sub is not UNCHANGED:
                 out[key] = sub
-        return out if out else _SAME
-    return _SAME if base == other else other
+        return out if out else UNCHANGED
+    return UNCHANGED if base == other else other
 
 
-_SAME = object()
+UNCHANGED = object()
 
 
 # ── equivalence ──────────────────────────────────────────────────────────────
@@ -519,7 +519,7 @@ def canonical(docs: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
         if k in known and k not in ("metadata", "environments", "project_name")
     }
     nodes = copy.deepcopy(docs["nodes_config"] or {})
-    producers = _producers(nodes)
+    producers = dataset_producers(nodes)
     cnodes: Dict[str, Any] = {}
     used_in: set = set()
     used_out: set = set()
@@ -622,14 +622,14 @@ def _strip_defaults(value: Any) -> Any:
     return value
 
 
-def _first_difference(a: Any, b: Any, path: str = "") -> Optional[str]:
+def first_difference(a: Any, b: Any, path: str = "") -> Optional[str]:
     if isinstance(a, dict) and isinstance(b, dict):
         for key in sorted(set(a) | set(b), key=str):
             if key not in a:
                 return f"{path}{key}: only after migration = {b[key]!r}"
             if key not in b:
                 return f"{path}{key}: lost in migration (was {a[key]!r})"
-            diff = _first_difference(a[key], b[key], f"{path}{key}.")
+            diff = first_difference(a[key], b[key], f"{path}{key}.")
             if diff:
                 return diff
         return None

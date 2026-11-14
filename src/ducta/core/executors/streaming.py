@@ -110,7 +110,7 @@ class StreamingExecutor(BaseExecutor):
         logger.info("Executing streaming pipeline: {}", pipeline_name)
 
         self._ensure_manager()
-        pipeline = self._get_pipeline_config(pipeline_name)
+        pipeline = self.get_pipeline_config(pipeline_name)
         # Definitions, not status snapshots: the snapshots do not carry them.
         running_pipelines = [
             {"pipeline_config": cfg} for cfg in self.streaming_manager.running_pipeline_configs()

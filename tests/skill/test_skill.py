@@ -208,9 +208,9 @@ def test_the_example_project_validates_in_every_environment():
 
 
 def test_the_example_projects_code_matches_its_nodes():
-    pytest.importorskip("fastapi")
-    from ducta.api.repositories.v2_store import V2ProjectStore
-    from ducta.api.services.draft_validation import code_problems
+    pytest.importorskip("ruamel.yaml")  # the project store reads YAML with it
+    from ducta.project_store.draft_validation import code_problems
+    from ducta.project_store.store import V2ProjectStore
 
     store = V2ProjectStore.detect(SKILL / "assets" / "examples" / "sales")
     assert [p.message for p in code_problems(store)] == []

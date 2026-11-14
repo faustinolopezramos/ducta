@@ -16,24 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-Where Ducta keeps its own state: the ``.ducta`` folders, decided in one place.
-
-Each path used to be written by hand wherever it was needed — the certificates'
-default twice in ``core`` and once more in ``setting``, the API's sample runs on
-their own — and the CLI and the web app once looked for certificates in different
-folders. Everything that reads or writes framework state takes its location from
-here. The leading dot hides it (as ``.git`` or ``.venv``): it is Ducta's
-bookkeeping, not the project's data.
-
-Three roots:
-
-* **per environment**, under the environment's output — templates the engine
-  interpolates (``${output_path}/${environment}/.ducta/...``);
-* **per project**, relative to its root — editor schemas, comments, the API's
-  config lock and audit log;
-* **per user**, ``~/.ducta`` (``DUCTA_HOME`` moves it) — what belongs to the
-  machine, not to a project: AI settings and evals, the web app's history, caches.
 """
 
 from __future__ import annotations
@@ -42,43 +24,24 @@ import os
 from pathlib import Path
 from typing import Union
 
-#: The folder name every root uses.
 DIR_NAME = ".ducta"
-
-# ── per environment: ${output_path}/${environment}/.ducta/… ──────────────────
-
 _ENV_ROOT = "${output_path}/${environment}/" + DIR_NAME
-
-#: Run certificates (``settings.run_certificate_dir``).
 RUNS_DIR = f"{_ENV_ROOT}/runs"
-#: Chain-state markers (``settings.chain.state_dir``).
 CHAIN_STATE_DIR = f"{_ENV_ROOT}/chain_state"
-#: Run-lock files (``settings.run_lock.dir``).
 LOCKS_DIR = f"{_ENV_ROOT}/locks"
-#: Streaming run journals (``settings.stream_journal_dir``).
 STREAMS_DIR = f"{_ENV_ROOT}/streams"
 
 # ── per project, relative to its root ─────────────────────────────────────────
-
-#: JSON Schemas editors read for completion.
 SCHEMA_DIR = f"{DIR_NAME}/schema"
-#: Review comment threads, one JSON file each.
 COMMENTS_DIR = f"{DIR_NAME}/comments"
-#: The API's lock on configuration edits.
 CONFIG_LOCK = f"{DIR_NAME}/config.lock"
-#: The API's audit trail.
 AUDIT_LOG = f"{DIR_NAME}/audit.log"
 
 PathLike = Union[str, Path]
 
 
 def local_env_dir(template: str, env: str) -> str:
-    """``.ducta/<env>/<kind>``, relative to the project root, for an ``_ENV_ROOT`` template.
-
-    Where the per-environment state goes when the environment's output is cloud
-    storage: certificates, chain state, locks and journals are local files, and
-    ``Path`` folded ``s3://bucket/out`` into a local folder named ``s3:``.
-    """
+    """``.ducta/<env>/<kind>``, relative to the project root, for an ``_ENV_ROOT`` template."""
     return f"{DIR_NAME}/{env}/{template.rsplit('/', 1)[-1]}"
 
 

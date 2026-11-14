@@ -25,7 +25,7 @@ import inspect
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from loguru import logger  # type: ignore
 
@@ -519,6 +519,62 @@ def _check_quality_gate(report: PreflightReport, where: str, gate: Any) -> None:
         )
 
 
+#: Keys whose value is a location: a leftover placeholder there is a path nobody can read.
+_LOCATION_KEYS = frozenset({"path", "filepath", "checkpointLocation", "checkpoint_location"})
+_PLACEHOLDER = re.compile(r"\$\{[^}]*\}")
+
+
+def _unresolved_placeholders(value: Any, where: str) -> List[Tuple[str, str, str]]:
+    """``(location_key_or_empty, dotted_key, placeholder)`` for every ``${...}`` left in *value*."""
+    found: List[Tuple[str, str, str]] = []
+    if isinstance(value, str):
+        key = where.rsplit(".", 1)[-1]
+        for match in _PLACEHOLDER.finditer(value):
+            found.append((key if key in _LOCATION_KEYS else "", where, match.group(0)))
+    elif isinstance(value, dict):
+        for k, v in value.items():
+            found += _unresolved_placeholders(v, f"{where}.{k}" if where else str(k))
+    elif isinstance(value, (list, tuple)):
+        for i, v in enumerate(value):
+            found += _unresolved_placeholders(v, f"{where}[{i}]")
+    return found
+
+
+def _check_unresolved_placeholders(
+    report: PreflightReport,
+    node_name: str,
+    node_config: Dict[str, Any],
+    input_config: Dict[str, Any],
+    output_config: Dict[str, Any],
+) -> None:
+    """A ``${paths.inpt}`` that no variable defines stays in the path as written.
+
+    Nothing flagged it: ``check`` passed, and the run said "skipped for missing
+    inputs" without naming the path. In a location (``path``, ``filepath``,
+    checkpoints) it is an error; elsewhere (an option, a query) it may be meant
+    literally, so it is a warning.
+    """
+    sources: List[Tuple[str, Any]] = [
+        *((key, input_config.get(key)) for key in _input_keys(node_config)),
+        *((key, output_config.get(key)) for key in _output_keys(node_config)),
+    ]
+    for stream_key in ("stream", "streaming"):
+        inline = node_config.get(stream_key)
+        if isinstance(inline, dict):
+            sources.append((f"{stream_key} of node '{node_name}'", inline))
+    seen = set()
+    for label, config in sources:
+        for location, dotted, placeholder in _unresolved_placeholders(config, ""):
+            if (label, dotted) in seen:
+                continue
+            seen.add((label, dotted))
+            message = (
+                f"Node '{node_name}': '{label}' has {placeholder} in {dotted}, which no "
+                "variable defines (a typo in its name? `ducta config show` lists the values)"
+            )
+            (report.error if location else report.warn)(message)
+
+
 def _check_quality_config(
     report: PreflightReport, node_name: str, node_config: Dict[str, Any]
 ) -> None:
@@ -914,6 +970,9 @@ def validate_pipeline(context: Any, pipeline_name: str) -> PreflightReport:
     for node_name in pipeline_nodes:
         _check_io_keys(
             report, node_name, node_configs[node_name], input_config, output_config, validator
+        )
+        _check_unresolved_placeholders(
+            report, node_name, node_configs[node_name], input_config, output_config
         )
         _check_quality_config(report, node_name, node_configs[node_name])
         _check_use_pandas(report, node_name, node_configs[node_name], input_config)

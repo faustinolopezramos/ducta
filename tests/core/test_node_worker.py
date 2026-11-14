@@ -197,10 +197,10 @@ class TestWorkerSeesWhatTheParentRunChanged:
     def test_a_sample_run_worker_writes_to_the_scratch_and_reads_the_sample(
         self, tmp_path, monkeypatch
     ):
-        from ducta.api.execution.runner import redirect_to_scratch
         from ducta.core.node_worker import build_node_payload
         from ducta.core.worker_bootstrap import bootstrap_worker_context, capture_run_overrides
         from ducta.setting.project.context import load_project_context
+        from ducta_server.execution.runner import redirect_to_scratch
 
         root = self._project(tmp_path)
         monkeypatch.chdir(root)

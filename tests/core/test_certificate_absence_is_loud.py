@@ -26,7 +26,7 @@ def _executor(global_config: dict) -> PipelineExecutor:
     executor.settings = CoreSettings.from_context(executor.context)
 
     fake_batch = MagicMock()
-    fake_batch._get_pipeline_config.return_value = {
+    fake_batch.get_pipeline_config.return_value = {
         "type": PipelineType.BATCH.value,
         # These tests are about certificate bookkeeping, not date validation.
         "requires_dates": False,
@@ -128,7 +128,7 @@ class TestEscalation:
 class TestAsyncStreamingIsSealedWhenItEnds:
     def _start(self):
         executor = _executor({})
-        executor._batch_executor._get_pipeline_config.return_value = {
+        executor._batch_executor.get_pipeline_config.return_value = {
             "type": PipelineType.STREAMING.value,
             "requires_dates": False,
         }

@@ -15,7 +15,7 @@ import pytest
 import yaml
 
 from ducta.console.templates.generator import ConfigFormat, TemplateGenerator, TemplateType
-from ducta.setting.project.decompile import _first_difference, canonical, decompile
+from ducta.setting.project.decompile import canonical, decompile, first_difference
 from ducta.setting.project.loader import compile_project, validate_project
 
 KINDS = ["medallion_basic", "streaming_basic", "ml_basic", "ml_scoring", "hybrid_basic"]
@@ -50,7 +50,7 @@ def test_every_template_survives_the_round_trip(tmp_path, kind):
     root = tmp_path / "p"
     TemplateGenerator(root, ConfigFormat.YAML).generate_project(TemplateType(kind), "p")
     before, after = _round_trip(root, tmp_path)
-    assert _first_difference(canonical(before), canonical(after)) is None
+    assert first_difference(canonical(before), canonical(after)) is None
 
 
 WINDOWED_PROJECT = """\
@@ -102,7 +102,7 @@ def test_windowed_loads_survive_the_round_trip(tmp_path):
 
     before, after = _round_trip(root, tmp_path)
 
-    assert _first_difference(canonical(before), canonical(after)) is None
+    assert first_difference(canonical(before), canonical(after)) is None
     out = after["output_config"]["silver.sales.daily"]
     assert out["partition_overwrite"] == "dynamic"
     assert after["nodes_config"]["pull"]["incremental"] == {"column": "order_day"}

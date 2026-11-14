@@ -222,13 +222,13 @@ class NodeTimeoutError(ExecutionError):
 
 
 class NodeCancelledError(ExecutionError):
-    """A node was cancelled (it exceeded its timeout, or the run's) and its
-    remaining work — Spark jobs, dataset writes — was refused."""
+    """A node was cancelled (it exceeded its timeout or the run's, or the run was
+    interrupted) and its remaining work — Spark jobs, dataset writes — was refused."""
 
     def __init__(self, node: str) -> None:
         super().__init__(
-            f"Node '{node}' was cancelled after exceeding its time limit; its "
-            "remaining work was refused",
+            f"Node '{node}' was cancelled (its time limit, or the run was interrupted); "
+            "its remaining work was refused",
             node=node,
         )
         self.node = node
@@ -363,9 +363,10 @@ class SanityCheckFailedError(DataError):
     selectively by anything and read as an internal error to every caller.
     """
 
-    def __init__(self, node: str, errors_count: int) -> None:
+    def __init__(self, node: str, errors_count: int, detail: Optional[str] = None) -> None:
         super().__init__(
-            f"Sanity checks failed for node '{node}': {errors_count} error(s)",
+            f"Sanity checks failed for node '{node}': {errors_count} error(s)"
+            + (f" — {detail}" if detail else ""),
             node=node,
             errors_count=errors_count,
         )

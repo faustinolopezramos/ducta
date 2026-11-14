@@ -78,7 +78,7 @@ def verify(
 ) -> VerifyReport:
     """Check *pipelines* as the project now has them; run and snapshot them in *env* if asked."""
     from ducta.ai.loop import describe_problem, validate_files
-    from ducta.api.services.governance import protected_environments
+    from ducta.project_store.governance import protected_environments
     from ducta.setting.project.loader import ProjectConfigError, validate_project
 
     root = Path(root).resolve()
@@ -199,8 +199,8 @@ def _preflight(root: Path, env: str, names: Sequence[str]) -> List[str]:
 
 
 def _snapshot_tests(root: Path, project: Any, names: Sequence[str], env: str) -> List[str]:
-    from ducta.api.services.code_index import module_file
-    from ducta.api.services.node_tests import generate_snapshot_test
+    from ducta.project_store.code_index import module_file
+    from ducta.runs.node_tests import generate_snapshot_test
 
     written: List[str] = []
     for name in names:

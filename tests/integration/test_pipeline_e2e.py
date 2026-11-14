@@ -121,9 +121,9 @@ class TestPipelineRun:
         assert "verified" in (verified.stdout + verified.stderr).lower()
 
     def test_stdout_is_not_polluted_with_serialized_logs(self, executed):
-        """Regression guard: importing ducta.api used to hijack the CLI's logging.
+        """Regression guard: importing ducta_server used to hijack the CLI's logging.
 
-        `ducta.api.main` built its FastAPI app at import time, and `create_app`
+        `ducta_server.main` built its FastAPI app at import time, and `create_app`
         calls `configure_logging`, which does `logger.remove()` and installs a
         JSON sink on stdout. Because the executor imported an API helper on the
         node path, every pipeline run dumped serialized loguru records over its

@@ -33,6 +33,7 @@ from ducta.check import (
     QualityReporter,
     SanityPhaseRunner,
 )
+from ducta.check.engine import input_dataset_keys
 from ducta.core.errors import SanityCheckFailedError
 from ducta.core.ledger import ledger_for
 from ducta.core.settings import CoreSettings
@@ -178,7 +179,7 @@ class QualityCheckExecutor:
         same dataset in one run it is checked once, and every consumer gets the
         same verdict — a failed contract blocks each of them, not only the first.
         """
-        keys = _input_dataset_keys(node_config)
+        keys = input_dataset_keys(node_config)
         cache = self._contract_cache()
         reports: List[QualityReport] = []
         for dataset, block in contracts.items():
@@ -438,13 +439,3 @@ class QualityCheckExecutor:
                 self.context.add_quality_output_path(output_path)
         except Exception as e:
             logger.error(f"Failed to persist {report_type} report for node {node_name}: {e}")
-
-
-def _input_dataset_keys(node_config: Dict[str, Any]) -> List[str]:
-    """The node's input datasets in the order its DataFrames are loaded."""
-    raw = node_config.get("input") or []
-    if isinstance(raw, dict):
-        return [str(v) for v in raw.values()]
-    if isinstance(raw, str):
-        return [raw]
-    return [str(v) for v in raw]

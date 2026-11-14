@@ -122,8 +122,7 @@ class TestAiFindsTheProjectUpward:
 class TestUiDetection:
     @pytest.mark.parametrize("fmt", ["toml", "json"])
     def test_detects_every_project_format(self, tmp_path, fmt):
-        pytest.importorskip("fastapi")
-        from ducta.console.ui import _detect_ducta_workspace
+        from ducta.setting.workspace import detect_workspace
 
         root = tmp_path / f"p_{fmt}"
         rc = UnifiedCLI().run(
@@ -131,15 +130,14 @@ class TestUiDetection:
         )
         assert rc == 0
         with _cwd(root / "pipelines"):
-            assert Path(_detect_ducta_workspace()).resolve() == root.resolve()
+            assert Path(detect_workspace()).resolve() == root.resolve()
 
     def test_a_project_file_that_does_not_parse_is_still_opened(self, tmp_path):
-        pytest.importorskip("fastapi")
-        from ducta.console.ui import _detect_ducta_workspace
+        from ducta.setting.workspace import detect_workspace
 
         (tmp_path / "ducta.yaml").write_text("version: 2\n  broken: [", encoding="utf-8")
         with _cwd(tmp_path):
-            assert Path(_detect_ducta_workspace()).resolve() == tmp_path.resolve()
+            assert Path(detect_workspace()).resolve() == tmp_path.resolve()
 
 
 class TestCertify:
@@ -217,7 +215,8 @@ class TestWrapperExtras:
             ("databricks", "databricks"),
             ("httpx", "ai"),
             ("ruamel", "ai"),
-            ("fastapi", "api"),
+            ("fastapi", "server"),
+            ("ducta_server", "server"),
             ("pyspark", "spark"),
         ],
     )
@@ -225,3 +224,9 @@ class TestWrapperExtras:
         from ducta.console.wrapper import _identify_feature_for_module
 
         assert _identify_feature_for_module(module) == extra
+
+    def test_the_web_server_is_its_own_package(self):
+        from ducta.console.wrapper import _get_missing_dependency_message
+
+        assert "pip install ducta-server" in _get_missing_dependency_message("fastapi", "server")
+        assert 'pip install "ducta[spark]"' in _get_missing_dependency_message("pyspark", "spark")

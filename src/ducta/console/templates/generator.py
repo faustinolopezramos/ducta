@@ -532,6 +532,12 @@ htmlcov/
 # Spark
 metastore_db/
 spark-warehouse/
+
+# Kept by the web server for this machine: its lock and audit trail, and the reports
+# of `ducta-server`'s ad-hoc "run checks" (committed schemas and comments stay tracked)
+.ducta/config.lock
+.ducta/audit.log
+.quality/
 """
             + template.GITIGNORE_EXTRA
         )

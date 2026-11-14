@@ -237,8 +237,8 @@ def quality_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> Qua
         raise AIConfigError(f"Node '{node}' writes no dataset: there is nothing to check")
     facts = QualityFacts(pipeline, rel, node, dataset, env, current)
     try:
-        from ducta.api.services.dataset_preview import dataset_location, read_frame
         from ducta.check.profiling import infer_spec, profile_dataset
+        from ducta.runs.dataset_preview import dataset_location, read_frame
 
         location, fmt = dataset_location(root, env, dataset)
         frame, _cols, total = read_frame(location, fmt, limit=MAX_ROWS)
@@ -481,7 +481,7 @@ def _columns_of(root: Path, name: str, entry: Dict[str, Any], env: str) -> List[
         cols: Any = listed if isinstance(listed, (dict, list)) else schema
         return [str(c.get("name") if isinstance(c, dict) else c) for c in cols][:80]
     try:
-        from ducta.api.services.dataset_preview import dataset_location, read_frame
+        from ducta.runs.dataset_preview import dataset_location, read_frame
 
         location, fmt = dataset_location(root, env, name)
         _frame, cols, _total = read_frame(location, fmt, limit=1)

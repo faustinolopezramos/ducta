@@ -161,7 +161,7 @@ class MLOpsAutoConfigurator:
 
         An explicit setting always wins over detection. Both spellings are
         accepted, and the nested one wins, matching
-        ``CoreSettings._resolve_mlops_enabled`` — this used to read only
+        ``CoreSettings.resolve_mlops_enabled`` — this used to read only
         ``mlops.enabled``, so the flat ``mlops_enabled`` that
         ``GlobalConfigSchema`` documents did nothing here.
         """

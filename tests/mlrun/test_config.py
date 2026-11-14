@@ -83,31 +83,31 @@ class TestResolveMLOpsPath:
 
     def test_explicit_base_path_wins(self):
         ctx = self._ctx(output_path="/out")
-        assert StorageBackendFactory._resolve_mlops_path(ctx, base_path="/explicit") == "/explicit"
+        assert StorageBackendFactory.resolve_mlops_path(ctx, base_path="/explicit") == "/explicit"
 
     def test_global_config_mlops_path(self):
         ctx = self._ctx(global_config={"mlops_path": "/gs/path"})
-        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/gs/path"
+        assert StorageBackendFactory.resolve_mlops_path(ctx) == "/gs/path"
 
     def test_output_path_with_pipeline_and_env(self):
         ctx = self._ctx(output_path="/out", env="dev")
-        got = StorageBackendFactory._resolve_mlops_path(ctx, pipeline_name="sales.train")
+        got = StorageBackendFactory.resolve_mlops_path(ctx, pipeline_name="sales.train")
         assert got == "/out/dev/sales/train"
 
     def test_output_path_only(self):
         ctx = self._ctx(output_path="/out", env="dev")
-        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev"
+        assert StorageBackendFactory.resolve_mlops_path(ctx) == "/out/dev"
 
     def test_no_path_returns_none(self):
         ctx = self._ctx(output_path=None)
-        assert StorageBackendFactory._resolve_mlops_path(ctx) is None
+        assert StorageBackendFactory.resolve_mlops_path(ctx) is None
 
     def test_empty_mlops_path_falls_through_to_output_path(self):
         # A `mlops_path: ""` (e.g. from a templated config) must not be
         # returned as-is — that would make LocalStorageBackend write into the
         # current working directory instead of falling through to output_path.
         ctx = self._ctx(global_config={"mlops_path": ""}, output_path="/out", env="dev")
-        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev"
+        assert StorageBackendFactory.resolve_mlops_path(ctx) == "/out/dev"
 
     def test_mlops_path_placeholders_are_expanded(self):
         # Used as written, `${output_path}/${environment}/models` created a directory
@@ -117,14 +117,14 @@ class TestResolveMLOpsPath:
             output_path="/out",
             env="dev",
         )
-        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/dev/models"
+        assert StorageBackendFactory.resolve_mlops_path(ctx) == "/out/dev/models"
 
     def test_mlops_path_without_env_uses_base(self):
         ctx = self._ctx(
             global_config={"mlops_path": "${output_path}/${environment}/models"},
             output_path="/out",
         )
-        assert StorageBackendFactory._resolve_mlops_path(ctx) == "/out/base/models"
+        assert StorageBackendFactory.resolve_mlops_path(ctx) == "/out/base/models"
 
 
 class TestEnvBoolAcceptsCommonSpellings:

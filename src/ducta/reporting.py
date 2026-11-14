@@ -16,15 +16,6 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
-
-What the engine shows while a pipeline runs.
-
-``core`` and ``check`` report progress through the reporter set here instead of
-importing the CLI's presentation (``ducta.console.ux``): the engine must not depend
-on the layers built on top of it. The ``ducta`` command and the API server install
-``ducta.console.ux.reporter.ConsoleReporter``; without one — Ducta used as a
-library — the base reporter only logs, and Ducta logs nothing unless the
-application enables it (``logger.enable("ducta")``).
 """
 
 from __future__ import annotations

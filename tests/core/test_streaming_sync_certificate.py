@@ -26,7 +26,7 @@ def _executor(pipeline_type: str, execution_id: str = "exec-1") -> PipelineExecu
     executor.settings = CoreSettings.from_context(executor.context)
 
     fake_batch = MagicMock()
-    fake_batch._get_pipeline_config.return_value = {"type": pipeline_type}
+    fake_batch.get_pipeline_config.return_value = {"type": pipeline_type}
     executor._batch_executor = fake_batch
 
     fake_streaming = MagicMock()

@@ -142,8 +142,8 @@ def event_from_execution(
 def diagnosis_of(root: Path, event: RunEvent) -> Dict[str, Any]:
     """Ducta's diagnosis of a failed run (no model), with its text masked."""
     from ducta.ai.context import redact_config
-    from ducta.api.services.diagnosis import diagnose
-    from ducta.api.services.run_certificates import latest_successful
+    from ducta.runs.certificates import latest_successful
+    from ducta.runs.diagnosis import diagnose
 
     last_ok: Optional[Dict[str, Any]] = None
     try:

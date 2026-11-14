@@ -388,7 +388,7 @@ def test_the_scoring_runs_id_is_back_on_the_context_after_the_retrain(tmp_path):
 
 
 def test_the_api_records_the_retrain_on_the_execution():
-    from ducta.api.execution.runner import _link_certificate
+    from ducta_server.execution.runner import _link_certificate
 
     attached: Dict[str, Any] = {}
     manager = SimpleNamespace(

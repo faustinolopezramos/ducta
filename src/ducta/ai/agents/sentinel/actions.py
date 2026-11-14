@@ -58,7 +58,7 @@ def _certificate_of_run(
     run that began inside this window is the one Sentinel started; the earliest
     such certificate is taken.
     """
-    from ducta.api.services.run_certificates import certificates
+    from ducta.runs.certificates import certificates
 
     found = None
     found_at: Optional[datetime] = None

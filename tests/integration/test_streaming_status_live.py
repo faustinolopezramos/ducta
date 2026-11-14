@@ -6,7 +6,7 @@ import time
 
 import pytest
 
-from ducta.api.services.streaming_status import streaming_status
+from ducta_server.services.streaming_status import streaming_status
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def engine(spark, tmp_path, monkeypatch):
     TemplateGenerator(root).generate_project(TemplateType.STREAMING_BASIC, "sb")
     monkeypatch.chdir(root)
     monkeypatch.syspath_prepend(str(root))
-    from ducta.api.execution.runner import normalize_execution_context_paths
+    from ducta.runs.context import normalize_execution_context_paths
 
     context = load_project_v2(root, "dev")
     # As the API runner does: relative paths would resolve against the shared

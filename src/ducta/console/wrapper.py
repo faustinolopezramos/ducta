@@ -33,7 +33,10 @@ def _get_missing_dependency_message(module_name: str, feature: str) -> str:
     Returns:
         Formatted message to display to the user
     """
-    install_command = f'pip install "ducta[{feature}]"'
+    # The web server is a package of its own, not an extra of this one.
+    install_command = (
+        "pip install ducta-server" if feature == "server" else f'pip install "ducta[{feature}]"'
+    )
 
     return f"""
 ╔═══════════════════════════════════════════════════════════════════════╗
@@ -68,14 +71,16 @@ def _identify_feature_for_module(module_name: str) -> Optional[str]:
     module_to_feature = {
         "pyspark": "spark",
         "pyarrow": "spark",
-        "fastapi": "api",
-        "starlette": "api",
-        "uvicorn": "api",
-        "jwt": "api",
-        "bcrypt": "api",
-        "sqlalchemy": "database",
-        "alembic": "database",
-        "psycopg2": "database",
+        # The web server's dependencies come with the ducta-server package.
+        "fastapi": "server",
+        "starlette": "server",
+        "uvicorn": "server",
+        "jwt": "server",
+        "bcrypt": "server",
+        "sqlalchemy": "server",
+        "alembic": "server",
+        "psycopg2": "server",
+        "ducta_server": "server",
         "mlflow": "mlops",
         "sklearn": "mlops",
         "optuna": "mlops",

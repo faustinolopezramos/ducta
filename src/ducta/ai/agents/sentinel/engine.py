@@ -274,7 +274,7 @@ class Sentinel:
         if not self.notify:
             return
         try:
-            from ducta.api.services.alerts import AlertEvent, deliver
+            from ducta.runs.alerts import AlertEvent, deliver
             from ducta.setting.project.loader import validate_project
 
             rules = validate_project(self.root).project.alerts
@@ -570,7 +570,7 @@ class Sentinel:
         settings = self.settings()
         if settings is None:
             return
-        from ducta.api.services.run_certificates import certificates
+        from ducta.runs.certificates import certificates
 
         epoch = datetime.min.replace(tzinfo=timezone.utc)
         certs = sorted(
@@ -597,7 +597,7 @@ class Sentinel:
             self._check_stale(env, settings)
 
     def _check_sla(self, env: str, certs: List[Dict[str, Any]], settings: gate.Settings) -> None:
-        from ducta.api.services.metrics import project_metrics
+        from ducta.runs.metrics import project_metrics
         from ducta.setting.project.loader import validate_project
 
         project = validate_project(self.root)
@@ -644,7 +644,7 @@ class Sentinel:
         if not cert.get("duration_seconds"):
             return
         if certs is None:
-            from ducta.api.services.run_certificates import certificates
+            from ducta.runs.certificates import certificates
 
             certs = [c for _e, c in certificates(self.root, event.env)]
         self._check_slow(event.env, cert, certs, settings)
@@ -652,7 +652,7 @@ class Sentinel:
     def _check_slow(
         self, env: str, cert: Dict[str, Any], certs: List[Dict[str, Any]], settings: gate.Settings
     ) -> None:
-        from ducta.api.services.metrics import project_metrics
+        from ducta.runs.metrics import project_metrics
 
         pipeline = str(cert.get("pipeline") or "")
         history = [
@@ -685,9 +685,9 @@ class Sentinel:
         self._save(incident)
 
     def _check_stale(self, env: str, settings: gate.Settings) -> None:
-        from ducta.api.repositories.v2_store import V2ProjectStore
-        from ducta.api.services.run_certificates import latest_successful
-        from ducta.api.services.staleness import node_freshness
+        from ducta.project_store.staleness import node_freshness
+        from ducta.project_store.store import V2ProjectStore
+        from ducta.runs.certificates import latest_successful
 
         store = V2ProjectStore.detect(self.root)
         if store is None:

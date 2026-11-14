@@ -27,21 +27,23 @@ jobs:
         run: pipx install "poetry==$POETRY_VERSION"
       # NOT --all-extras: that would pull in the `databricks` extra, whose
       # databricks-connect overwrites pyspark and breaks every Spark test.
+      # `--with server`: the web server's dependencies (server/pyproject.toml),
+      # so its tree (server/src) is linted and type-checked with the engine's.
       - name: Install dependencies
-        run: poetry install --extras all
+        run: poetry install --extras all --with server
       # F rules include F821 (undefined name). A whole module once shipped with
       # 13 undefined names because nothing ran this in CI — keep it blocking.
       - name: Ruff lint
-        run: poetry run ruff check src tests
+        run: poetry run ruff check src server/src tests scripts
       # Blocking since the formatting backlog reached zero. `ruff format` is
       # deterministic, so anything it would rewrite is a diff nobody reviewed —
       # keep it a hard failure rather than let the backlog grow back.
       - name: Ruff format check
-        run: poetry run ruff format --check src tests
+        run: poetry run ruff format --check src server/src tests scripts
       # Blocking, for every module: the ratchet list it started with in
       # 2026-10 (486 errors in 103 files) is empty and gone.
       - name: mypy
-        run: poetry run mypy src/ducta
+        run: poetry run mypy src/ducta server/src/ducta_server
 
   test:
     name: Tests (py${{ matrix.python-version }}, Spark ${{ matrix.spark }})
@@ -84,13 +86,13 @@ jobs:
       # NOT --all-extras: that would pull in the `databricks` extra, whose
       # databricks-connect overwrites pyspark and breaks every Spark test.
       - name: Install dependencies
-        run: poetry install --extras all
+        run: poetry install --extras all --with server
       # Delta's Python package and its jar follow the Spark line (3.x <-> Spark 3.5).
       - name: Switch to Spark ${{ matrix.spark }}
         if: matrix.spark == '3.5'
         run: poetry run pip install "pyspark>=3.5,<3.6" "delta-spark>=3.2,<4"
       - name: Run tests
-        run: poetry run pytest --cov=ducta --cov-report=term --cov-report=xml
+        run: poetry run pytest --cov --cov-report=term --cov-report=xml
       - name: Upload coverage
         if: matrix.python-version == '3.11' && matrix.spark == '4.2'
         uses: actions/upload-artifact@v4
@@ -98,9 +100,10 @@ jobs:
           name: coverage
           path: coverage.xml
 
-  # Proves the published artifact is installable from a clean environment on
-  # every supported Python — the check that would have caught both the
-  # undeclared msgpack dependency and the pyarrow/3.13 wheel gap.
+  # Proves both published artifacts install from a clean environment on every
+  # supported Python, in the three ways a user installs them: the CLI alone, the
+  # web server alone (which pulls the engine in), and both. Plain imports and
+  # commands, so any dependency used but not declared fails here.
   install-matrix:
     name: Clean install (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -115,76 +118,121 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install Poetry
         run: pipx install "poetry==$POETRY_VERSION"
-      # The wheel bundles `src/ducta/ui/dist`, which is gitignored — it only
-      # exists once the UI is built. Without this step `poetry build` silently
-      # produces a wheel with no web app, and `ducta server start` 404s on `/`
-      # for anyone who installs it. Build it here so the artifact under test is
-      # the artifact users get.
+
+      # ── ducta: the engine and the CLI. No Node, no web app. ──────────────
+      - name: Build the ducta wheel
+        run: poetry build -f wheel -o dist
+      - name: Assert the ducta wheel carries no server
+        run: |
+          python - <<'PY'
+          import glob, sys, zipfile
+          wheel = glob.glob("dist/ducta-[0-9]*.whl")[0]
+          names = zipfile.ZipFile(wheel).namelist()
+          leaked = [n for n in names if n.startswith(("ducta/api/", "ducta/ui/", "ducta_server/"))]
+          if leaked:
+              sys.exit(f"{wheel} ships server files: {leaked[:5]}")
+          print(f"{wheel}: engine and CLI only")
+          PY
+      - name: CLI only — install and run
+        run: |
+          python -m venv /tmp/cli
+          /tmp/cli/bin/pip install --upgrade pip
+          /tmp/cli/bin/pip install "$(ls dist/ducta-[0-9]*.whl)[all]"
+          /tmp/cli/bin/ducta --version
+          /tmp/cli/bin/ducta --help > /dev/null
+          /tmp/cli/bin/ducta init project --name shop --path /tmp/shop
+          (cd /tmp/shop && /tmp/cli/bin/ducta config validate && /tmp/cli/bin/ducta list)
+          /tmp/cli/bin/python - <<'PY'
+          import importlib.util, sys
+          import ducta, ducta.ai.providers, ducta.runs.certificates, ducta.project_store.store
+          from ducta.core.executors import PipelineExecutor
+          from ducta.stream.query_manager import StreamingQueryManager
+          import anthropic, httpx, keyring  # the `ai` extra
+          for name in ("fastapi", "uvicorn", "sqlalchemy", "ducta_server"):
+              if importlib.util.find_spec(name) is not None:
+                  sys.exit(f"the CLI install brought {name} in")
+          print("CLI OK", ducta.__version__)
+          PY
+          # `ducta ui` without the server: says what to install, exit 5 (dependency).
+          set +e; /tmp/cli/bin/ducta ui --no-browser; code=$?; set -e
+          test "$code" = 5
+
+      # ── ducta-server: the API and the web app ────────────────────────────
+      # The wheel ships server/src/ducta_server/ui_dist, which is gitignored: it only
+      # exists once the UI is built. Build it here so the artifact under test is the
+      # artifact users get.
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: src/ducta/ui/package-lock.json
+          cache-dependency-path: server/ui/package-lock.json
       - name: Build the web app
-        working-directory: src/ducta/ui
+        working-directory: server/ui
         run: |
           npm ci
           npm run build
-      - name: Build wheel
-        run: poetry build
-      - name: Assert the wheel bundles the web app
+      - name: Build the ducta-server wheel
+        working-directory: server
+        run: poetry build -f wheel -o ../dist
+      - name: Assert the ducta-server wheel bundles the web app
         run: |
           python - <<'PY'
           import glob, zipfile, sys
-          wheel = glob.glob("dist/*.whl")[0]
+          wheel = glob.glob("dist/ducta_server-*.whl")[0]
           names = zipfile.ZipFile(wheel).namelist()
-          if not any(n.endswith("ducta/ui/dist/index.html") for n in names):
-              sys.exit(f"{wheel} ships no UI: build src/ducta/ui before packaging")
+          if "ducta_server/ui_dist/index.html" not in names:
+              sys.exit(f"{wheel} ships no UI: build server/ui before packaging")
           print(f"{wheel} bundles the web app")
           PY
-      - name: Install the built wheel with all extras
+      # pip resolves `ducta` from the wheel built above, not from PyPI.
+      - name: Server only — install and start
         run: |
-          python -m venv /tmp/clean
-          /tmp/clean/bin/pip install --upgrade pip
-          /tmp/clean/bin/pip install "$(ls dist/*.whl)[all]"
-      # Import every entry point a user hits first. These are plain imports, so
-      # any dependency that is used but not declared fails here.
-      - name: Smoke-test imports and CLI
-        run: |
-          /tmp/clean/bin/ducta --version
-          /tmp/clean/bin/ducta --help > /dev/null
-          /tmp/clean/bin/python - <<'PY'
-          import ducta
-          import ducta.ai.providers
-          from ducta.api.main import create_app
-          from ducta.stream.query_manager import StreamingQueryManager
-          from ducta.core.executors import PipelineExecutor
-          # The AI builder's SDKs (`ai` extra) must import from a clean install.
-          import anthropic, httpx, keyring
+          python -m venv /tmp/server
+          /tmp/server/bin/pip install --upgrade pip
+          /tmp/server/bin/pip install "$(ls dist/ducta_server-*.whl)" --find-links dist
+          /tmp/server/bin/pip show ducta-server | grep -E '^Requires:.*\bducta\b'
+          /tmp/server/bin/ducta-server --version
+          /tmp/server/bin/ducta-server --help > /dev/null
+          /tmp/server/bin/python - <<'PY'
+          from ducta_server.main import create_app
           paths = create_app().openapi()["paths"]
           assert "/health" in paths
           assert "/api/ai/settings" in paths
-          print("smoke OK", ducta.__version__)
+          print("server OK")
           PY
+      - name: Both — `ducta ui` finds the server
+        run: |
+          /tmp/cli/bin/pip install "$(ls dist/ducta_server-*.whl)" --find-links dist
+          /tmp/cli/bin/python -c "from ducta.console.ui import server_installed; assert server_installed()"
 
   # The image is what a deployment runs: build it and start Spark in it, so a base
   # image, Python or JDK that no longer fits is caught here and not at deploy time.
   docker:
-    name: Docker image
+    name: Docker images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build the runtime image
-        run: docker build --target runtime -t ducta:ci .
-      - name: Smoke-test it
+      - name: Build the CLI image
+        run: docker build --target cli -t ducta:ci .
+      - name: Build the server image
+        run: docker build --target server -t ducta-server:ci .
+      - name: Smoke-test them
         run: |
           docker run --rm ducta:ci --version
+          docker run --rm ducta-server:ci --version
           docker run --rm --entrypoint python ducta:ci -c "
+          import importlib.util
+          assert importlib.util.find_spec('ducta_server') is None, 'the CLI image ships the server'
           from pyspark.sql import SparkSession
           spark = SparkSession.builder.master('local[1]').getOrCreate()
           assert spark.range(3).count() == 3
           print('Spark', spark.version, 'runs in the image')
           spark.stop()
+          "
+          docker run --rm --entrypoint python ducta-server:ci -c "
+          from ducta_server.main import create_app
+          assert '/health' in create_app().openapi()['paths']
+          print('server image OK')
           "
 
   ui:
@@ -192,14 +240,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: src/ducta/ui
+        working-directory: server/ui
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: src/ducta/ui/package-lock.json
+          cache-dependency-path: server/ui/package-lock.json
       - name: Install dependencies
         run: npm ci
       - name: Type-check
@@ -245,13 +293,13 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: src/ducta/ui/package-lock.json
+          cache-dependency-path: server/ui/package-lock.json
 
       # ── Python ────────────────────────────────────────────────────────────
       - name: Install Poetry
         run: pipx install "poetry==$POETRY_VERSION"
       - name: Install dependencies
-        run: poetry install --extras all
+        run: poetry install --extras all --with server
       # Audits the resolved environment, so it covers transitive packages the
       # lockfile pulls in — which is where these almost always live.
       #
@@ -267,13 +315,13 @@ jobs:
 
       # ── UI ────────────────────────────────────────────────────────────────
       - name: Install UI dependencies
-        working-directory: src/ducta/ui
+        working-directory: server/ui
         run: npm ci
       # `--omit=dev` is the point: these are the packages that ship inside
-      # src/ducta/ui/dist and execute in the user's browser.
+      # the ducta-server wheel (ui_dist) and execute in the user's browser.
       - name: npm audit (shipped UI dependencies)
-        working-directory: src/ducta/ui
+        working-directory: server/ui
         run: npm audit --omit=dev --audit-level=low
       - name: npm audit (build toolchain — advisory)
-        working-directory: src/ducta/ui
+        working-directory: server/ui
         run: npm audit --audit-level=high || true

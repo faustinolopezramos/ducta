@@ -40,17 +40,31 @@ def _compact_view() -> bool:
         return False
 
 
+#: Set on an exception once its failure has been shown.
+_REPORTED = "_ducta_failure_reported"
+
+
 def report_node_failure(error: Exception, node_name: str) -> None:
     """Show a failed node's error the reporter's way (a rich, developer-facing
     breakdown on the terminal), falling back to a plain log line.
 
     Shared by ``NodeExecutor`` and ``ParallelCoordinator``, which previously
     each carried an identical try/import/format/except-fallback copy of this.
+
+    The error is marked once shown: it travels from the node's thread to the
+    coordinator, which reports it again, and the terminal printed every failure
+    twice.
     """
+    if getattr(error, _REPORTED, False):
+        return
     try:
         get_reporter().node_failed(node_name, error)
     except Exception:
         logger.error("Node '{}' failed: {}", node_name, error)
+    try:
+        setattr(error, _REPORTED, True)
+    except Exception:  # noqa: BLE001 — a type that refuses attributes is shown again, no worse
+        pass
 
 
 class OutputWriter:

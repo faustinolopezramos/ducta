@@ -39,6 +39,7 @@ from ducta.core.execution.coordinator import ParallelCoordinator
 from ducta.core.execution.ingestion import IngestionExecutor
 from ducta.core.execution.loader import FunctionLoader
 from ducta.core.execution.ml_builder import MLContextBuilder
+from ducta.core.execution.node_status import NODE_STATUS_FORMAT
 from ducta.core.execution.output import OutputWriter, report_node_failure
 from ducta.core.execution.quality import QualityCheckExecutor
 from ducta.core.execution.state import ThreadSafeExecutionState
@@ -157,7 +158,7 @@ class NodeExecutor:
 
         node_id_var.set(node_name)
 
-        logger.info("[node_status] node_id={} status=running", node_name)
+        logger.info(NODE_STATUS_FORMAT, node_name, "running")
 
         self._set_scheduler_pool(node_name)
         # Tag this node's Spark jobs so a timeout can cancel them on the cluster.
@@ -165,13 +166,16 @@ class NodeExecutor:
 
         with resource_manager.resource_context(f"node_{node_name}"):
             try:
+                if is_cancelled(self.context, node_name):
+                    # The run was cancelled before this node began: compute nothing.
+                    raise NodeCancelledError(node_name)
                 node_config = self._get_node_config(node_name)
 
                 if self._should_run_in_process(node_config):
                     self._run_node_in_subprocess(
                         node_name, node_config, start_date, end_date, ml_info, child_evidence
                     )
-                    logger.info("[node_status] node_id={} status=success", node_name)
+                    logger.info(NODE_STATUS_FORMAT, node_name, "success")
                     return
 
                 node_type = node_config.get("type", "batch")
@@ -184,7 +188,7 @@ class NodeExecutor:
                         ml_info,
                         pipeline_name=self.pipeline_name,
                     )
-                    logger.info("[node_status] node_id={} status=success", node_name)
+                    logger.info(NODE_STATUS_FORMAT, node_name, "success")
                     return
 
                 function = self._function_loader.load(node_config)
@@ -313,7 +317,7 @@ class NodeExecutor:
                     ml_info,
                 )
 
-                logger.info("[node_status] node_id={} status=success", node_name)
+                logger.info(NODE_STATUS_FORMAT, node_name, "success")
 
             except Exception as e:
                 from ducta.check.core import QualityGateBlocked
@@ -334,7 +338,7 @@ class NodeExecutor:
                 else:
                     node_status = "failed"
                 node_error = str(e)
-                logger.info("[node_status] node_id={} status={}", node_name, node_status)
+                logger.info(NODE_STATUS_FORMAT, node_name, node_status)
                 if node_status == "skipped":
                     # A skip is an expected outcome; the caller logs it. Running
                     # it through the developer error formatter would print a
@@ -684,6 +688,18 @@ class NodeExecutor:
                 logger.error("Pipeline execution failed: {}", e)
                 self._coordinator.cancel_all(execution_state.get_running_items_snapshot())
                 raise
+            except BaseException as interrupt:
+                # Ctrl+C or SIGTERM. Not an `Exception`, so it used to skip this
+                # block: `cleanup()` then found the nodes never executed and its
+                # RuntimeError replaced the interrupt, ending the run as a failure
+                # with "Unexpected error". Keep the interrupt, and stop the nodes
+                # in flight for real: refuse their writes, cancel their Spark jobs.
+                original_exc = interrupt
+                logger.warning("Pipeline interrupted: stopping the nodes still running")
+                self._coordinator.cancel_all(
+                    execution_state.get_running_items_snapshot(), hard=True
+                )
+                raise
             finally:
                 try:
                     self._coordinator.cleanup(
@@ -692,7 +708,9 @@ class NodeExecutor:
                     )
                 except Exception as cleanup_exc:
                     if original_exc is not None:
-                        logger.error(
+                        # An interrupt leaves nodes never executed: expected, not worth an ERROR.
+                        log = logger.error if isinstance(original_exc, Exception) else logger.debug
+                        log(
                             "cleanup() raised while an exception was already "
                             "propagating ({}); keeping the original exception: {}",
                             original_exc,

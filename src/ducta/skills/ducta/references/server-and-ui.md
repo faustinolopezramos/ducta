@@ -1,13 +1,15 @@
 # The web UI and the API server
 
-Needs `pip install "ducta[api]"`.
+A separate package from the CLI, at the same version: `pip install ducta-server`
+(it installs `ducta` too). `check_env.py` reports it as `server`.
 
 ```bash
-ducta ui --source /path/to/project        # web app + API, opens the browser
+ducta-server --source /path/to/project    # web app + API, opens the browser
+ducta ui --source /path/to/project        # the same, when `ducta` is installed too
 ducta server start --port 8000 --no-browser
 ```
 
-Options for both: `--port` (8000), `--host` (127.0.0.1), `--source PATH_OR_GIT_URL`,
+Options for all three: `--port` (8000), `--host` (127.0.0.1), `--source PATH_OR_GIT_URL`,
 `--no-browser`, `--db PATH` (execution history, default `~/.ducta/executions.db`),
 `--allow-unauthenticated`.
 The server can run pipelines, so on a `--host` other than this machine it refuses to start
@@ -77,7 +79,7 @@ Returns `202` with an execution id; poll `GET /api/executions/{id}`;
 
 | Symptom | Fix |
 |---|---|
-| `ducta ui` fails with missing modules | `pip install "ducta[api]"` |
+| `ducta ui` says the web UI is installed separately (exit 5) | `pip install ducta-server` |
 | port already in use | `--port 8010`, or stop the other process |
 | the UI shows no project | start with `--source /path/to/project`, or select the workspace in the app |
 | a save is refused with problems | the edit would make some environment invalid: fix what it lists |

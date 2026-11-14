@@ -28,13 +28,15 @@ logs/
 
 # Node / UI
 node_modules/
-src/ducta/ui/dist/
-src/ducta/ui/.storybook-static/
-src/ducta/ui/.design-sync/
-src/ducta/ui/ds-bundle/
+# The web app's build, inside the server package (server/ui → npm run build)
+server/src/ducta_server/ui_dist/
+server/ui/dist/
+server/ui/.storybook-static/
+server/ui/.design-sync/
+server/ui/ds-bundle/
 # Local visual-check harness (fake session, machine-specific workspace path)
-src/ducta/ui/.tmp-harness/
-src/ducta/ui/harness.html
+server/ui/.tmp-harness/
+server/ui/harness.html
 *.tsbuildinfo
 
 # IDE / OS

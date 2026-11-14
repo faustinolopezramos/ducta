@@ -11,7 +11,7 @@
 | **Purpose** | Draft new pipelines, and fixes for broken ones, with an LLM — validated, reviewable, opt-in |
 | **Layer** | Authoring assistance (sits beside `setting`; never on the execution path) |
 | **Depends on** | `setting` (project loader), `core` (`DuctaError`), `check` (profiling, validation); lazily `api` (`validate_draft`, `code_index`, `v2_store`, metrics, the execution manager) and `console` (`TemplateCommand`, for evals) |
-| **Used by** | `console` (`ducta ai …`), `api` (`/api/ai/*`, `/api/projects/{id}/ai/*`) |
+| **Used by** | `console` (`ducta ai …`), the web server `ducta_server` (`/api/ai/*`, `/api/projects/{id}/ai/*`; a separate package) |
 | **Key entry points** | `load_config`, `make_provider`, `generate`, `fix`, `apply_draft`, `build_context` |
 | **Install** | `pip install "ducta[ai]"` — brings `httpx`, `anthropic`, `keyring`, `ruamel.yaml`; the validator needs nothing from the `api` extra |
 
@@ -29,7 +29,7 @@ flowchart TD
     style ai fill:#4f46e5,stroke:#312e81,color:#fff
 ```
 
-`ai` produces **files**, never runs. In the UI it is *Build with AI* (project pipelines; *Several pipelines — design first* is Ducta Architect, `components/AI/Architect.tsx`), *Fix with AI* (a pipeline's problems, a failed run), *Runs → Reliability* (Sentinel, `pages/SentinelPage/`) and *Settings → AI* (`src/ducta/ui/src/components/AI/`, `pages/ProjectSettingsPage/AISettings.tsx`). Its output reaches the engine only after a person applies a draft and runs the pipeline like any other.
+`ai` produces **files**, never runs. In the UI it is *Build with AI* (project pipelines; *Several pipelines — design first* is Ducta Architect, `components/AI/Architect.tsx`), *Fix with AI* (a pipeline's problems, a failed run), *Runs → Reliability* (Sentinel, `pages/SentinelPage/`) and *Settings → AI* (`server/ui/src/components/AI/`, `pages/ProjectSettingsPage/AISettings.tsx`). Its output reaches the engine only after a person applies a draft and runs the pipeline like any other.
 
 ---
 
@@ -54,7 +54,7 @@ Ducta AI is a small generate → validate → repair loop:
 *   **Proposals** (`proposals.py`): a node's checks (`propose_quality`) and missing descriptions (`propose_docs`). The model answers with the proposal only; an *assembler* passed to the loop applies it with `yaml_edit.edit_yaml` (comments and layout kept) and can add nothing else. Proposed checks run on the measured output (`run_on_sample`) and those that fail go back to the model.
 *   **Extensions** (`extend.py`): new nodes for an existing pipeline. The model answers with the pipeline's file and modules whole; `existing_changes` (no model) rejects any change to an existing node, key (`depends_on` may only grow), function or import — and any added statement that binds or mutates a name the module already has (`_touched`: a second `def`, an assignment, `import … as`, `CONFIG[k] = …`), since the later one would win on import — and `new_code_problems` holds the added code to the review's rules. The pipeline file in the draft is rebuilt by Ducta (`yaml_edit`): the original text plus the new nodes, so the diff shows only additions. `apply_draft` asks `existing_changes` again, even forced.
 *   **Pipeline review** (`pipeline_review.py`): every node's `ducta_checks` (each finding names its node) plus the pipeline's own (owner, descriptions, nothing checking its data); the model's findings must name a node of the pipeline and a line of its function or a setting (`check_finding`, per node); up to three ideas for new nodes, unchecked, each a request for `extend`.
-*   **Explanations** (`explain.py`): a failed run's diagnosis (`api/services/diagnosis.py`), its error and the code around the line — or the failing node's function — turned into *what happened / why / what to do*. Changes nothing; kept in `.ducta/ai/explanations/<run>.json`.
+*   **Explanations** (`explain.py`): a failed run's diagnosis (`ducta/runs/diagnosis.py`), its error and the code around the line — or the failing node's function — turned into *what happened / why / what to do*. Changes nothing; kept in `.ducta/ai/explanations/<run>.json`.
 
 ---
 
@@ -284,7 +284,7 @@ class Canned:
 
 ## 5. Over HTTP
 
-The server exposes the same builder (`ducta/api/routes/ai.py`). Generation can take minutes on a local model, so it runs as a **job** the client polls.
+The server exposes the same builder (`ducta_server/routes/ai.py`, in the `ducta-server` package). Generation can take minutes on a local model, so it runs as a **job** the client polls.
 
 | Route | Permission | Does |
 |---|---|---|
@@ -390,4 +390,4 @@ Same contract as the rest of `ducta ai`: **rules decide, the model proposes**, a
 ## Related docs
 *   `docs/ai.rst` — user guide (CLI, API, privacy).
 *   `docs/server_api.rst` — roles and permissions (`ai.use`, `ai.configure`).
-*   `src/ducta/api/services/draft_validation.py` — the validator every draft goes through.
+*   `src/ducta/project_store/draft_validation.py` — the validator every draft goes through.

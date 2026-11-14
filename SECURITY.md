@@ -42,7 +42,7 @@ points at Python functions, business rules are evaluated expressions, and
 not trying to. **Treat a Ducta project directory with exactly the trust you
 would give a repository of Python scripts** — because that is what it is.
 
-**The API server** (`ducta server start`, the `api` module and the web app)
+**The API server** (the `ducta-server` package: `ducta-server`, `ducta ui`, the web app)
 *is* a security boundary, and is the part this policy is really about. It can
 read and write files in the workspace, execute pipelines, run git operations,
 and — when explicitly enabled — hand out a shell.
@@ -77,7 +77,7 @@ and — when explicitly enabled — hand out a shell.
 ## Production checklist
 
 The API is **local-first by default**: it binds to `127.0.0.1` and ships with
-authentication off, so that `ducta server start` works on a laptop with no
+authentication off, so that `ducta-server` works on a laptop with no
 setup. Every item below is what you must change before it is reachable by
 anyone else. `environment=production` enforces the first three at startup and
 refuses to boot otherwise.
@@ -114,6 +114,17 @@ refuses to boot otherwise.
       explicitly), and `RATE_LIMIT_REDIS_URL` if you run more than one worker —
       the in-memory limiter is per-process, so the effective limit otherwise
       multiplies by `WORKERS`.
+- [ ] **Accounts beyond `admin`.** The server starts with the one administrator
+      (`DUCTA_ADMIN_PASSWORD`). Give everyone else the narrowest role with
+      `ducta-server user add <name> --role developer|operator|viewer` (a
+      developer can edit and run but not run in `prod`; an operator runs in `prod`
+      but edits nothing; a viewer only reads), and `ducta-server user disable <name>`
+      when they leave. Passwords are asked for or read from `--password-env`,
+      never taken as an argument.
+- [ ] **`LOGIN_MAX_ATTEMPTS`** (default 5) wrong passwords for one user from one
+      address lock that pair out for `LOGIN_LOCKOUT_SECONDS` (default 300) with a
+      `429` and a `Retry-After`. The count is per process: with several workers,
+      also limit `/api/auth/login` in the reverse proxy.
 - [ ] **`GIT_CLONE_ALLOWED_HOSTS`** restricted to the forges you actually clone
       from. Outside development this defaults to the public forges; widen it
       deliberately, never to everything.

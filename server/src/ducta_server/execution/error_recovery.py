@@ -1,0 +1,309 @@
+"""
+Copyright (C) 2024-2026 Faustino Lopez Ramos
+
+This file is part of ducta.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at
+
+    https://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+License for the specific language governing permissions and limitations
+under the License.
+
+SPDX-License-Identifier: Apache-2.0
+"""
+
+from __future__ import annotations
+
+import enum
+import json
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, cast
+
+from loguru import logger  # type: ignore
+
+from ducta_server.execution._registry import KeyedRegistry
+from ducta_server.utils.fsio import atomic_write_json
+
+_ERRORS_FILENAME = "errors.json"
+# Retention: keep the most recent N executions' error logs on disk so a failed
+# run stays diagnosable after the in-memory registry is cleaned up.
+_MAX_ERROR_LOGS_KEPT = 50
+
+
+class ErrorCategory(str, enum.Enum):
+    TEMPORARY = "temporary"
+    PERMANENT = "permanent"
+    RESOURCE = "resource"
+    CONFIGURATION = "configuration"
+    TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class ErrorContext:
+    execution_id: str
+    node_id: Optional[str] = None
+    node_type: Optional[str] = None
+    pipeline_name: Optional[str] = None
+    attempt: int = 1
+    timestamp: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+    environment: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+#: What to look at first, per category. Advice only: nothing retries a run
+#: automatically, so the hint never promises one.
+_CATEGORY_HINTS: Dict["ErrorCategory", str] = {
+    ErrorCategory.TIMEOUT: "Increase the execution timeout or optimise the pipeline.",
+    ErrorCategory.RESOURCE: "Reduce parallelism or chunk size, then re-run.",
+    ErrorCategory.CONFIGURATION: "Review the pipeline configuration and fix it before re-running.",
+    ErrorCategory.PERMANENT: "Fix the code or input data; re-running unchanged will fail again.",
+    ErrorCategory.TEMPORARY: "Likely transient: re-running may succeed.",
+}
+
+
+class ErrorAnalyzer:
+    CATEGORY_MAP = {
+        TimeoutError: ErrorCategory.TIMEOUT,
+        OSError: ErrorCategory.RESOURCE,
+        MemoryError: ErrorCategory.RESOURCE,
+        ImportError: ErrorCategory.CONFIGURATION,
+        ValueError: ErrorCategory.PERMANENT,
+        TypeError: ErrorCategory.PERMANENT,
+        RuntimeError: ErrorCategory.TEMPORARY,
+    }
+
+    @staticmethod
+    def categorize_error(exception: Exception) -> ErrorCategory:
+        exc_type = type(exception)
+        if exc_type in ErrorAnalyzer.CATEGORY_MAP:
+            return ErrorAnalyzer.CATEGORY_MAP[exc_type]
+
+        for parent_type, category in ErrorAnalyzer.CATEGORY_MAP.items():
+            if isinstance(exception, parent_type):
+                return category
+
+        msg = str(exception).lower()
+        if any(w in msg for w in ("timeout", "exceeded")):
+            return ErrorCategory.TIMEOUT
+        if any(w in msg for w in ("memory", "resource", "pool")):
+            return ErrorCategory.RESOURCE
+        if any(w in msg for w in ("config", "missing", "invalid")):
+            return ErrorCategory.CONFIGURATION
+        return ErrorCategory.UNKNOWN
+
+    @staticmethod
+    def hint_for(category: ErrorCategory) -> Optional[str]:
+        return _CATEGORY_HINTS.get(category)
+
+    @staticmethod
+    def get_error_details(exception: Exception) -> Dict[str, Any]:
+        tb_lines = traceback.format_exception(type(exception), exception, exception.__traceback__)
+        return {
+            "type": type(exception).__name__,
+            "message": str(exception),
+            "category": ErrorAnalyzer.categorize_error(exception).value,
+            "traceback": "".join(tb_lines),
+            "traceback_lines": tb_lines[-10:],
+        }
+
+
+class ExecutionErrorLog:
+    def __init__(self, execution_id: str, base_dir: Optional[str] = None):
+        self.execution_id = execution_id
+        self.errors: List[Dict[str, Any]] = []
+        self.warnings: List[Dict[str, Any]] = []
+        self.start_time = datetime.now(tz=timezone.utc)
+        # When set, `save()` mirrors the log to <base_dir>/<execution_id>/errors.json
+        # so failures survive the in-memory registry cleanup (and server restarts).
+        self._base_dir = base_dir
+
+    def log_error(self, exception: Exception, context: ErrorContext) -> None:
+        error_details = ErrorAnalyzer.get_error_details(exception)
+        self.errors.append(
+            {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "execution_id": self.execution_id,
+                "node_id": context.node_id,
+                "node_type": context.node_type,
+                "attempt": context.attempt,
+                "error": error_details,
+                "hint": ErrorAnalyzer.hint_for(ErrorCategory(error_details["category"])),
+            }
+        )
+
+        logger.error(
+            "Execution {exec_id}: Node {node_id} failed (attempt {attempt}): {error_type}: {msg}",
+            exec_id=self.execution_id,
+            node_id=context.node_id,
+            attempt=context.attempt,
+            error_type=type(exception).__name__,
+            msg=str(exception)[:80],
+        )
+
+    def log_error_details(self, details: Dict[str, Any], context: ErrorContext) -> None:
+        """Record an error analysed elsewhere (a run in its own process sends
+        :meth:`ErrorAnalyzer.get_error_details` of its exception, not the exception)."""
+        try:
+            category = ErrorCategory(details.get("category"))
+        except ValueError:
+            category = ErrorCategory.UNKNOWN
+        error_details = {
+            "type": str(details.get("type") or "Exception"),
+            "message": str(details.get("message") or ""),
+            "category": category.value,
+            "traceback": str(details.get("traceback") or ""),
+            "traceback_lines": [str(x) for x in details.get("traceback_lines") or []],
+        }
+        self.errors.append(
+            {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "execution_id": self.execution_id,
+                "node_id": context.node_id,
+                "node_type": context.node_type,
+                "attempt": context.attempt,
+                "error": error_details,
+                "hint": ErrorAnalyzer.hint_for(category),
+            }
+        )
+
+    def log_warning(self, message: str, context: Optional[Dict[str, Any]] = None) -> None:
+        self.warnings.append(
+            {
+                "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+                "execution_id": self.execution_id,
+                "message": message,
+                "context": context or {},
+            }
+        )
+        logger.warning("Execution {exec_id}: {msg}", exec_id=self.execution_id, msg=message)
+
+    def get_summary(self) -> Dict[str, Any]:
+        return {
+            "execution_id": self.execution_id,
+            "error_count": len(self.errors),
+            "warning_count": len(self.warnings),
+            "elapsed_seconds": (datetime.now(tz=timezone.utc) - self.start_time).total_seconds(),
+            "errors": self.errors,
+            "warnings": self.warnings,
+            "has_critical_errors": any(
+                err["error"]["category"] == "permanent" for err in self.errors
+            ),
+        }
+
+    # ── Disk persistence (best-effort, mirrors FileLogStore semantics) ────────
+
+    def save(self) -> None:
+        """Atomically mirror the log to <base_dir>/<execution_id>/errors.json.
+
+        No-op when file persistence is disabled or the log has nothing to store.
+        Failures are logged but never raised into the execution hot path.
+        """
+        if not self._base_dir:
+            return
+        if not self.errors and not self.warnings:
+            return
+        try:
+            run_dir = Path(self._base_dir) / self.execution_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(run_dir / _ERRORS_FILENAME, self.get_summary())
+        except OSError as exc:  # noqa: BLE001
+            logger.warning(
+                "ExecutionErrorLog.save failed for {id}: {exc}", id=self.execution_id, exc=exc
+            )
+
+    @staticmethod
+    def load_from_disk(execution_id: str, base_dir: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Return the persisted summary dict for an execution, or None."""
+        if not base_dir:
+            return None
+        try:
+            path = Path(base_dir) / execution_id / _ERRORS_FILENAME
+            if not path.is_file():
+                return None
+            return cast(Optional[Dict[str, Any]], json.loads(path.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:  # noqa: BLE001
+            logger.warning(
+                "ExecutionErrorLog.load failed for {id}: {exc}", id=execution_id, exc=exc
+            )
+            return None
+
+
+def _error_base_dir() -> Optional[str]:
+    """Resolve the runs dir configured for file persistence (empty → disabled)."""
+    try:
+        from ducta_server.config import get_settings
+
+        runs_dir = get_settings().runs_dir
+        return runs_dir.strip() if runs_dir and runs_dir.strip() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+_error_logs: KeyedRegistry[str, ExecutionErrorLog] = KeyedRegistry(
+    lambda execution_id: ExecutionErrorLog(execution_id, base_dir=_error_base_dir())
+)
+
+
+def get_error_log(execution_id: str) -> ExecutionErrorLog:
+    return _error_logs.get_or_create(execution_id)
+
+
+def try_get_error_log(execution_id: str) -> Optional[ExecutionErrorLog]:
+    """Return the in-memory log without creating one."""
+    return _error_logs.peek(execution_id)
+
+
+def _prune_error_logs(max_keep: int = _MAX_ERROR_LOGS_KEPT) -> None:
+    """Keep only the most recent `max_keep` persisted error logs on disk."""
+    base_dir = _error_base_dir()
+    if not base_dir:
+        return
+    try:
+        root = Path(base_dir)
+        persisted = sorted(
+            root.glob(f"*/{_ERRORS_FILENAME}"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        for stale in persisted[max_keep:]:
+            stale.unlink(missing_ok=True)
+    except OSError as exc:  # noqa: BLE001
+        logger.debug("Error log pruning failed: {exc}", exc=exc)
+
+
+def flush_error_log(execution_id: str) -> bool:
+    """Persist the in-memory log to disk (if any) and drop it from memory.
+
+    Returns True when an entry existed. Callers use this when a run finishes:
+    the file keeps the failure diagnosable after the in-memory registry is
+    cleaned up, and `load_error_log_summary` reads it back for the API.
+    """
+    log = _error_logs.pop(execution_id)
+    if log is not None:
+        log.save()
+        _prune_error_logs()
+        return True
+    return False
+
+
+def load_error_log_summary(execution_id: str) -> Optional[Dict[str, Any]]:
+    """Return the error summary for an execution, from memory or disk.
+
+    Prefers the live in-memory log (so a running execution's errors are served
+    immediately); falls back to the persisted file after cleanup/restart.
+    """
+    log = try_get_error_log(execution_id)
+    if log is not None and (log.errors or log.warnings):
+        return log.get_summary()
+    return ExecutionErrorLog.load_from_disk(execution_id, _error_base_dir())

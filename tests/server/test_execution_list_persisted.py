@@ -1,0 +1,180 @@
+"""Listing executions must reach past the in-memory window.
+
+`GET /executions` listed only the in-memory store, which keeps a run for six
+hours (or until the 500-record cap, or a restart) while its `meta.json` stays in
+`runs_dir`. A single run could be opened by id long after it had disappeared
+from the list — and anything counting runs over a day or a week, like the
+dashboard, silently undercounted.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from ducta_server.execution.file_log_store import FileLogStore
+from ducta_server.execution.manager import ExecutionManager
+from ducta_server.models.execution import ExecutionResponse, ExecutionStatus
+
+NOW = datetime.now(tz=timezone.utc)
+
+
+def _record(execution_id: str, **overrides) -> ExecutionResponse:
+    payload = {
+        "id": execution_id,
+        "pipeline_name": "ml.student_performance",
+        "project_id": "batch",
+        "env": "dev",
+        "status": ExecutionStatus.SUCCESS,
+        "started_at": NOW,
+    }
+    payload.update(overrides)
+    return ExecutionResponse(**payload)
+
+
+class _MemoryStore:
+    def __init__(self, records=()):
+        self._records = list(records)
+
+    def list_all(self):
+        return sorted(self._records, key=lambda e: e.started_at, reverse=True)
+
+
+@pytest.fixture
+def store(tmp_path) -> FileLogStore:
+    return FileLogStore(str(tmp_path))
+
+
+def _manager(memory, file_store) -> ExecutionManager:
+    # Built field-by-field, as in test_execution_log_persistence: the list path
+    # touches only the two stores.
+    mgr = object.__new__(ExecutionManager)
+    mgr._store = _MemoryStore(memory)
+    mgr._file_log_store = file_store
+    mgr._db_store = None
+    return mgr
+
+
+class TestListingIncludesPersistedRuns:
+    def test_a_run_pruned_from_memory_is_still_listed(self, store):
+        store.finish_run(_record("old", started_at=NOW - timedelta(days=2)))
+        mgr = _manager([_record("live")], store)
+
+        runs, total = mgr.list_executions_paginated()
+
+        assert total == 2
+        assert [r.id for r in runs] == ["live", "old"]  # newest first across both
+
+    def test_the_in_memory_copy_wins_over_its_file(self, store):
+        store.finish_run(_record("run-1", status=ExecutionStatus.RUNNING))
+        mgr = _manager([_record("run-1", status=ExecutionStatus.FAILED)], store)
+
+        runs = mgr.list_executions()
+
+        assert len(runs) == 1
+        assert runs[0].status == ExecutionStatus.FAILED
+
+    def test_ownership_still_applies_to_persisted_runs(self, store):
+        store.finish_run(_record("theirs", user_id="owner"))
+        mgr = _manager([], store)
+
+        assert mgr.list_executions(user_id="someone-else") == []
+        assert [r.id for r in mgr.list_executions(user_id="owner")] == ["theirs"]
+
+    def test_time_filters_reach_persisted_runs(self, store):
+        store.finish_run(_record("yesterday", started_at=NOW - timedelta(hours=20)))
+        store.finish_run(_record("last-week", started_at=NOW - timedelta(days=8)))
+        mgr = _manager([], store)
+
+        since = (NOW - timedelta(days=7)).isoformat()
+        runs, _ = mgr.list_executions_paginated(since=since)
+
+        assert [r.id for r in runs] == ["yesterday"]
+
+    def test_filters_apply_to_persisted_runs(self, store):
+        store.finish_run(_record("other-project", project_id="streaming"))
+        store.finish_run(_record("this-project"))
+        mgr = _manager([], store)
+
+        runs, _ = mgr.list_executions_paginated(project_id="batch")
+
+        assert [r.id for r in runs] == ["this-project"]
+
+    def test_without_a_runs_dir_only_memory_is_listed(self):
+        mgr = _manager([_record("live")], None)
+        assert [r.id for r in mgr.list_executions()] == ["live"]
+
+
+class TestListingIsScopedToTheWorkspace:
+    """The run store is shared by every workspace, and project ids repeat across
+    them: a copy of `batch` elsewhere listed its runs as this `batch`'s, whose
+    certificates then 404ed here."""
+
+    def test_only_runs_from_this_workspace_or_inside_it(self, store, tmp_path):
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        elsewhere = tmp_path / "copy" / "batch"
+        elsewhere.mkdir(parents=True)
+        store.finish_run(_record("from-copy", workspace=str(elsewhere)))
+        mgr = _manager(
+            [
+                _record("from-root", workspace=str(here)),
+                _record("from-project", workspace=str(here / "projects" / "batch")),
+            ],
+            store,
+        )
+
+        runs, total = mgr.list_executions_paginated(workspace=here)
+        assert sorted(r.id for r in runs) == ["from-project", "from-root"]
+        assert total == 2
+
+        # Opened at the project: the workspace-level run is its too.
+        runs, _ = mgr.list_executions_paginated(workspace=here / "projects" / "batch")
+        assert sorted(r.id for r in runs) == ["from-project", "from-root"]
+
+    def test_runs_that_do_not_say_where_they_ran_are_kept(self, store, tmp_path):
+        store.finish_run(_record("legacy"))
+        runs, _ = _manager([], store).list_executions_paginated(workspace=tmp_path)
+        assert [r.id for r in runs] == ["legacy"]
+
+    def test_legacy_runs_of_a_project_this_workspace_lacks_are_dropped(self, store, tmp_path):
+        # Records without `workspace` are kept only when their project is here:
+        # a legacy run of a project from another workspace can't be opened here.
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        (here / "projects" / "batch" / "ducta.yaml").write_text("version: 2\nproject: education\n")
+        store.finish_run(_record("legacy-here"))
+        store.finish_run(_record("legacy-elsewhere", project_id="ml_scoring"))
+        store.finish_run(_record("legacy-no-project", project_id=None))
+        runs, _ = _manager([], store).list_executions_paginated(workspace=here)
+        assert sorted(r.id for r in runs) == ["legacy-here", "legacy-no-project"]
+
+    def test_runs_of_a_project_since_deleted_from_this_workspace_are_dropped(self, store, tmp_path):
+        here = tmp_path / "ws"
+        (here / "projects" / "batch").mkdir(parents=True)
+        (here / "projects" / "batch" / "ducta.yaml").write_text("version: 2\nproject: education\n")
+        store.finish_run(_record("kept", workspace=str(here / "projects" / "batch")))
+        store.finish_run(
+            _record(
+                "gone", project_id="ml_scoring", workspace=str(here / "projects" / "ml_scoring")
+            )
+        )
+        runs, _ = _manager([], store).list_executions_paginated(workspace=here)
+        assert [r.id for r in runs] == ["kept"]
+
+
+def test_status_filter_takes_several_statuses():
+    """The Runs page filters on several statuses at once ("failed,cancelled")."""
+    mgr = _manager(
+        [
+            _record("ok", status=ExecutionStatus.SUCCESS),
+            _record("bad", status=ExecutionStatus.FAILED),
+            _record("stop", status=ExecutionStatus.CANCELLED),
+        ],
+        None,
+    )
+    both, total = mgr.list_executions_paginated(status="failed,cancelled")
+    assert {e.id for e in both} == {"bad", "stop"} and total == 2
+    one, _ = mgr.list_executions_paginated(status="failed")
+    assert [e.id for e in one] == ["bad"]

@@ -12,15 +12,15 @@ This tutorial shows how to wrap your Ducta project in a REST API using FastAPI. 
 A Basic Pipeline API
 --------------------
 
-Ducta includes a built-in API that you can use or extend. However, if you want to build your own custom integration, you should use the core ``ExecutionManager`` and ``WorkspaceManager``.
+Ducta's web server (the ``ducta-server`` package, imported as ``ducta_server``) is a built-in API that you can use or extend. If you want to build your own custom integration, you can use its ``ExecutionManager`` and ``WorkspaceManager``.
 
 **Project Setup**
 
-1.  Install Ducta with API extras:
+1.  Install Ducta's web server, which brings FastAPI and uvicorn (and Ducta itself):
 
     .. code-block:: bash
 
-       pip install ducta[api] uvicorn
+       pip install ducta-server
 
 2.  Save the following code as ``api_demo.py``.
 
@@ -31,9 +31,9 @@ Ducta includes a built-in API that you can use or extend. However, if you want t
    import asyncio
    from pathlib import Path
    from fastapi import FastAPI, HTTPException, Depends
-   from ducta.api.execution.manager import ExecutionManager
-   from ducta.api.workspace.manager import WorkspaceManager
-   from ducta.api.models.execution import ExecuteRequest
+   from ducta_server.execution.manager import ExecutionManager
+   from ducta_server.workspace.manager import WorkspaceManager
+   from ducta_server.models.execution import ExecuteRequest
 
    app = FastAPI(title="Custom Ducta API")
 

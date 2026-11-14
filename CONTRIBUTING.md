@@ -14,9 +14,11 @@ then pick **one** of the two setup paths.
 Ducta is a Python framework for building and running data pipelines (batch,
 streaming, ML). A contributor typically touches:
 
-- **`src/ducta/`** — the Python package (CLI, pipeline engine, API server…).
-- **`src/ducta/ui/`** — the web interface (React + Vite). Optional to build.
-- **`tests/`** — the test suite.
+- **`src/ducta/`** — the `ducta` package: the pipeline engine and the CLI.
+- **`server/`** — the `ducta-server` package, released with `ducta` at the same
+  version: the API server (`server/src/ducta_server/`) and the web interface
+  (`server/ui/`, React + Vite). Optional to build.
+- **`tests/`** — the test suite of both (`tests/server/` for the server).
 
 Dependencies are managed with **Poetry** (`pyproject.toml` + `poetry.lock` are
 the source of truth — there is no hand-maintained `requirements.txt`).
@@ -105,15 +107,15 @@ instantly). Pick the scope you need:
 | Command | Installs |
 |---|---|
 | `poetry install` | Core + dev tools + tests |
-| `poetry install -E api` | + the web/API backend |
+| `poetry install --with server` then `pip install --no-deps -e ./server` | + the web/API server (`ducta-server`) |
 | `poetry install --all-extras` | Everything (Spark, MLOps…) — needs Java |
 
 ### B.4 Build the web UI (only if you'll use it)
 
 ```bash
-cd src/ducta/ui && npm ci && npm run build && cd ../../..
+cd server/ui && npm ci && npm run build && cd ../..
 ```
-The API serves the compiled output. (For live UI development use `npm run dev`
+The build lands in `server/src/ducta_server/ui_dist`, which the API serves. (For live UI development use `npm run dev`
 instead of `build`.)
 
 ### B.5 Run and test
@@ -123,7 +125,7 @@ Everything runs **inside Poetry's environment** — prefix with `poetry run`
 ```bash
 poetry run pytest                 # run the tests (tests/)
 poetry run ducta --help           # the CLI, using your code
-poetry run ducta ui --no-browser  # UI + API → http://localhost:8000
+poetry run ducta-server --no-browser  # UI + API → http://localhost:8000 (needs B.3's server line)
 ```
 > Don't have Spark installed? Tests marked `spark` skip automatically — the rest
 > still run.
@@ -158,7 +160,7 @@ four checks above are green before opening the PR.
 | Path | Remove everything |
 |---|---|
 | Docker | `docker compose down --rmi all -v` (and `docker system prune -a` for the rest) |
-| Native | delete the project folder (deps live in `./.venv` and `src/ducta/ui/node_modules`) |
+| Native | delete the project folder (deps live in `./.venv` and `server/ui/node_modules`) |
 
 Poetry's download cache is shared across projects and safe to clear anytime:
 `poetry cache clear --all pypi`.
@@ -169,7 +171,7 @@ Poetry's download cache is shared across projects and safe to clear anytime:
 
 - **Docs:** `docs/` (build with `poetry run sphinx-build docs docs/_build`).
 - **Per-module guides:** `src/ducta/<module>/README.md`.
-- **The UI:** `src/ducta/ui/README.md`.
+- **The server and the UI:** `server/src/ducta_server/README.md`, `server/ui/README.md`.
 - **Changelog / status:** `CHANGELOG.md` (project is in alpha — things move).
 
 Questions or stuck? Open an issue describing your OS, the command you ran, and

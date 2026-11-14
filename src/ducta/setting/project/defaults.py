@@ -254,7 +254,7 @@ NODE_TEMPLATES_DIR = "templates/nodes"
 _USE_KEYS = ("use", "with")
 
 
-def _param_values(declared: Dict[str, Any]) -> Dict[str, Any]:
+def template_param_values(declared: Dict[str, Any]) -> Dict[str, Any]:
     """A template's params as name → default: ``{type, default}`` specs or a bare default."""
     out: Dict[str, Any] = {}
     for key, spec in declared.items():
@@ -284,7 +284,10 @@ def node_template_body(root: Path, instance: Any) -> Dict[str, Any]:
         return {}
     try:
         template = load(with_a_suffix(root, f"{NODE_TEMPLATES_DIR}/{ref}"))
-        values = {**_param_values(template.get("params") or {}), **(instance.get("with") or {})}
+        values = {
+            **template_param_values(template.get("params") or {}),
+            **(instance.get("with") or {}),
+        }
         body = _substitute(template.get("node") or {}, values)
     except Exception:  # noqa: BLE001 — a broken template is the loader's to report
         return {}
@@ -347,7 +350,7 @@ def resolve_node_templates(
             if not isinstance(declared, dict) or not isinstance(supplied, dict):
                 problems.append(f"{at}: 'with' and the template's params must be mappings")
                 continue
-            values = {**_param_values(declared), **supplied}
+            values = {**template_param_values(declared), **supplied}
             bad = False
             for key in supplied:
                 if key not in declared:
@@ -470,7 +473,7 @@ def resolve_pipeline_uses(
             if not isinstance(declared, dict) or not isinstance(supplied, dict):
                 problems.append(f"{at}: 'with' and the subpipeline's params must be mappings")
                 continue
-            values = {**_param_values(declared), **supplied}
+            values = {**template_param_values(declared), **supplied}
             bad = False
             for key in supplied:
                 if key not in declared:

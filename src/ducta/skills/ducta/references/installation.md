@@ -30,8 +30,6 @@ else is an extra — install only what the project needs:
 |---|---|---|
 | `spark` | pyspark, pyarrow | running Spark pipelines locally (most projects) |
 | `delta` | delta-spark | `format: delta`, merge writes, time travel |
-| `api` | FastAPI, uvicorn, SQLAlchemy, GitPython… | `ducta ui`, `ducta server` |
-| `database` | SQLAlchemy and Postgres/SQLite drivers | persisting server history in a database |
 | `mlops` | mlflow, scikit-learn, numpy, scipy, optuna | ML pipelines, `ducta experiment`, `ducta model` |
 | `boost` | xgboost, lightgbm | gradient-boosting models, native model formats |
 | `ai` | httpx, anthropic, keyring, ruamel.yaml | `ducta ai` |
@@ -42,6 +40,10 @@ else is an extra — install only what the project needs:
 ```bash
 pip install "ducta[spark,delta,mlops]"
 ```
+
+The web app and its API are not an extra but a package of their own, at the same
+version: `pip install ducta-server` (installs `ducta` too). Then `ducta-server` or
+`ducta ui` starts it. `check_env.py` reports it as `server` (its version, or null).
 
 A missing extra shows up as `No module named '<package>'` and exit code **1**
 from `ducta start`, with the `pip install` to run.

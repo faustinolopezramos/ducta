@@ -281,6 +281,36 @@ def _classify_quality_outcome(
             "severity": "medium",
             "suggestions": [f"Failed check(s): {', '.join(failed)}"] if failed else [],
         }
+
+    from ducta.check.core import QualityCheckError
+    from ducta.core.errors import SanityCheckFailedError, SchemaValidationError
+
+    # Verdicts about the data too: they fell through to the regex table and were shown
+    # as "Unknown Error", beside a message that says exactly what failed.
+    if isinstance(exception, QualityCheckError):
+        return {
+            "error_type": "Quality Check Failed",
+            "emoji": "🚦",
+            "color": "bright_yellow",
+            "severity": "medium",
+            "suggestions": [f"Check '{exception.check_name}': {exception.message}"],
+        }
+    if isinstance(exception, SanityCheckFailedError):
+        return {
+            "error_type": "Sanity Checks Failed",
+            "emoji": "🚦",
+            "color": "bright_yellow",
+            "severity": "medium",
+            "suggestions": [str(exception)],
+        }
+    if isinstance(exception, SchemaValidationError):
+        return {
+            "error_type": "Invalid Node Result",
+            "emoji": "📋",
+            "color": "bright_yellow",
+            "severity": "medium",
+            "suggestions": [str(exception)],
+        }
     return None
 
 
@@ -464,13 +494,16 @@ def format_error_for_developer(
 
 def try_format_error(error: Exception, label: str, scope: Optional[str] = "node") -> bool:
     """Attempt to render *error* via :func:`format_error_for_developer` on the
-    active Rich console. Returns whether it succeeded, so callers can fall
+    console errors go to. Returns whether it succeeded, so callers can fall
     back to their own logging without duplicating the try/except/import
-    boilerplate."""
+    boilerplate.
+
+    The error console, not the decorated one: under ``-q`` the latter is silenced,
+    and a rejected argument (``--start-date 2026-13-45``) exited 3 printing nothing."""
     try:
         from ducta.console.ux.rich_logger import RichLoggerManager
 
-        format_error_for_developer(error, label, RichLoggerManager.get_console(), scope)
+        format_error_for_developer(error, label, RichLoggerManager.get_error_console(), scope)
         return True
     except Exception:
         return False

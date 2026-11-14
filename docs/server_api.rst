@@ -1,33 +1,41 @@
 Ducta Server & API
 ==================
 
-Ducta includes a built-in FastAPI server that provides a RESTful interface for managing projects, executing pipelines, and monitoring your data platform through a visual dashboard.
+Ducta's web server provides a RESTful interface for managing projects, executing pipelines, and monitoring your data platform through a visual dashboard.
+
+It is a package of its own, ``ducta-server``, released with ``ducta`` at the same
+version. It installs ``ducta`` (the engine that runs the pipelines) with it; add the
+engine's extras as usual:
+
+.. code-block:: bash
+
+   pip install ducta-server "ducta[spark]"
 
 Features
 --------
 
 - **REST API**: Programmatic control over your Ducta workspace.
 - **Visual Dashboard**: A React-based UI for monitoring pipeline health and execution history.
-- **Persistence**: execution history in SQLite or PostgreSQL, configured via the ``DATABASE_URL`` environment variable (e.g. ``sqlite+aiosqlite:///./data/ducta.db`` or ``postgresql+asyncpg://user:pass@host:5432/ducta``). ``ducta ui`` and ``ducta server start`` default to SQLite at ``~/.ducta/executions.db`` when ``DATABASE_URL`` is not set; ``DATABASE_URL=""`` (set, but empty) keeps history in memory. The app run directly (``uvicorn ducta.api.main:app``) is in-memory unless ``DATABASE_URL`` is set.
+- **Persistence**: execution history in SQLite or PostgreSQL, configured via the ``DATABASE_URL`` environment variable (e.g. ``sqlite+aiosqlite:///./data/ducta.db`` or ``postgresql+asyncpg://user:pass@host:5432/ducta``). ``ducta-server`` and ``ducta ui`` default to SQLite at ``~/.ducta/executions.db`` when ``DATABASE_URL`` is not set; ``DATABASE_URL=""`` (set, but empty) keeps history in memory. The app run directly (``uvicorn ducta_server.main:app``) is in-memory unless ``DATABASE_URL`` is set.
 - **Interactive Docs**: Built-in Swagger/OpenAPI documentation.
 - **Authentication**: JWT-based security for enterprise environments.
 
 Starting the Server
 -------------------
 
-You can start the server directly from the CLI:
-
 .. code-block:: bash
 
+   ducta-server --port 8000
+
+   # The same server, when the CLI (`ducta`) is installed too
+   ducta ui --port 8000
    ducta server start --port 8000
 
-   # The same command under another name
-   ducta ui --port 8000
+All three start the same server: the API and the web app, on one port. They open a
+browser unless ``--no-browser`` is given. Without ``ducta-server`` installed,
+``ducta ui`` says how to install it and exits with code 5.
 
-Both start the same server: the API and the web app, on one port. Both open a
-browser unless ``--no-browser`` is given.
-
-**Common Options** (``ducta server start`` and ``ducta ui`` accept the same options):
+**Common Options** (``ducta-server``, ``ducta ui`` and ``ducta server start`` accept the same options):
 
 - ``--port``: Port to bind (default: 8000). No short flag.
 - ``--host``: Host to bind (default: 127.0.0.1).
@@ -38,7 +46,7 @@ browser unless ``--no-browser`` is given.
 API Endpoints
 -------------
 
-Once the server is running, you can access the interactive documentation at ``http://localhost:8000/docs`` (Swagger UI) or ``http://localhost:8000/redoc`` (ReDoc). The raw OpenAPI schema is served at ``http://localhost:8000/openapi.json``.
+Once the server is running, you can access the interactive documentation at ``http://localhost:8000/docs`` (Swagger UI) or ``http://localhost:8000/redoc`` (ReDoc). The raw OpenAPI schema is served at ``http://localhost:8000/openapi.json``. With authentication on (``AUTH_ENABLED=true``) these three are not served unless ``DEBUG=true``: the schema lists every route.
 
 All domain routes are mounted under the ``/api`` prefix (there is no ``/v1`` version segment). Health probes are mounted without the ``/api`` prefix.
 
@@ -260,7 +268,7 @@ Secure Startup Checklist
 
 The API ships with **safe local-first defaults**: it binds to ``127.0.0.1``,
 authentication is disabled, and execution history goes to a local SQLite file
-(in memory when the app is run directly, without ``ducta ui``/``ducta server start``). These defaults make local development frictionless but are **not**
+(in memory when the app is run directly, without ``ducta-server``/``ducta ui``). These defaults make local development frictionless but are **not**
 appropriate once the service is reachable by anyone else.
 
 When exposing the API beyond ``localhost``, set ``ENVIRONMENT=production`` — this
@@ -321,7 +329,7 @@ warnings — and work through this checklist:
        rate limit in front.
    * - ``DATABASE_URL``
      - PostgreSQL DSN
-     - Persists executions, logs, and users. Unset, ``ducta ui``/``ducta server start``
+     - Persists executions, logs, and users. Unset, ``ducta-server``/``ducta ui``
        use SQLite at ``~/.ducta/executions.db``; empty means in-memory — state is
        lost on restart. Use ``postgresql+asyncpg://...`` for anything shared or
        long-lived.

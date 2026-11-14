@@ -232,7 +232,10 @@ def override_positions(
 
     def walk(path: Tuple[str, ...], value: Any, source: Tuple[str, ...]) -> None:
         at = located.where.get(("project", "environments", name, *source), PROJECT_FILE)
-        mark(path, at)
+        # A mapping the project also declares (`settings:`) stays where it is written: an
+        # unknown key inside it was reported at the environment's `settings:` line.
+        if not isinstance(value, dict) or keyed(path) not in located.where:
+            mark(path, at)
         if isinstance(value, dict):
             for key, inner in value.items():
                 walk((*path, str(key)), inner, (*source, str(key)))

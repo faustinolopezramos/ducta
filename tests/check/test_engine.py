@@ -107,6 +107,65 @@ class TestRunPreflightChecks:
                 runner.run_preflight_checks(pipeline_config, context=object())
 
 
+class TestPreflightInputContracts:
+    """``sanity_checks.inputs`` (what a catalog entry's ``quality`` compiles to) used to be
+    invisible to the preflight: it reported a node with no checks, so ``--sanity-only``
+    passed what the real run rejected."""
+
+    @staticmethod
+    def _config(columns):
+        return {
+            "nodes": {
+                "n": {
+                    "input": {"orders": "raw.orders", "other": "raw.other"},
+                    "sanity_checks": {
+                        "inputs": {
+                            "raw.orders": {
+                                "empty_dataset": {},
+                                "checks": {"schema": {"expected_columns": columns}},
+                            }
+                        }
+                    },
+                }
+            }
+        }
+
+    def _run(self, config, frames, fail_fast=False):
+        runner = SanityPhaseRunner(fail_fast=fail_fast)
+        with patch("ducta.gate.input.InputLoader") as loader:
+            loader.return_value.load_inputs.return_value = frames
+            return runner.run_preflight_checks(config, context=object())
+
+    def test_a_broken_contract_fails_the_preflight(self):
+        frames = [pd.DataFrame({"id": [1]}), pd.DataFrame({"x": [1]})]
+        reports = self._run(self._config(["id", "missing"]), frames)
+        assert reports["n"].passed is False
+        assert any("missing" in r.message for r in reports["n"].results)
+
+    def test_a_met_contract_passes_with_its_checks_counted(self):
+        frames = [pd.DataFrame({"id": [1]}), pd.DataFrame({"x": [1]})]
+        reports = self._run(self._config(["id"]), frames)
+        assert reports["n"].passed is True
+        assert reports["n"].checks_count >= 1
+
+    def test_the_contract_is_checked_against_its_own_input(self):
+        # `raw.orders` is the first input: its columns are the ones that count.
+        frames = [pd.DataFrame({"id": [1]}), pd.DataFrame({"other": [1]})]
+        assert self._run(self._config(["id"]), frames)["n"].passed is True
+
+    def test_fail_fast_runner_raises_on_a_broken_contract(self):
+        frames = [pd.DataFrame({"id": [1]}), pd.DataFrame({"x": [1]})]
+        with pytest.raises(Exception):
+            self._run(self._config(["nope"]), frames, fail_fast=True)
+
+    def test_a_contract_for_an_input_the_node_does_not_read_is_ignored(self):
+        config = self._config(["id"])
+        config["nodes"]["n"]["sanity_checks"]["inputs"] = {"raw.unrelated": {"empty_dataset": {}}}
+        reports = self._run(config, [pd.DataFrame({"id": [1]}), pd.DataFrame({"x": [1]})])
+        assert reports["n"].passed is True
+        assert reports["n"].checks_count == 0
+
+
 class TestValidationPhaseRunnerFailFast:
     def test_fail_fast_report_score_reflects_failure(self, tmp_path):
         """Regression: a report persisted during a fail-fast abort must not be

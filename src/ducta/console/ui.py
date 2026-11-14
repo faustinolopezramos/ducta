@@ -16,182 +16,49 @@ License for the specific language governing permissions and limitations
 under the License.
 
 SPDX-License-Identifier: Apache-2.0
+
+``ducta ui`` / ``ducta server start``: start the web server when it is installed.
+
+The web server and its UI are a separate package (``pip install ducta-server``);
+this CLI only hands over to it, so a CLI-only install carries none of its
+dependencies.
 """
 
-import os
-import threading
-import time
-import webbrowser
-from pathlib import Path
-from typing import Optional
+from __future__ import annotations
+
+from typing import Any
 
 from loguru import logger
 
-from ducta import state
 from ducta.console.core import ExitCode
 
-_DEFAULT_DB_PATH = state.user_dir("executions.db")
-_PROJECT_SUFFIXES = (".yaml", ".yml", ".toml", ".json")
+#: What to install to get ``ducta ui``.
+SERVER_PACKAGE = "ducta-server"
+#: The module that starts it.
+LAUNCHER_MODULE = "ducta_server.launcher"
 
 
-def _detect_ducta_workspace() -> Optional[str]:
-    """Detect if the current directory (or any parent) is a Ducta workspace."""
-    from ducta.api.workspace.utils import normalize_workspace_path
-    from ducta.setting.project.context import find_nearest_project
-    from ducta.setting.project.loader import find_project_root
-
-    def _is_project_dir(path: Path) -> bool:
-        return find_project_root(path) is not None or (path / "config").is_dir()
-
-    cwd = Path.cwd()
-
-    # The project at or above the current directory, in any of its formats:
-    # looking only for ducta.yaml/.yml missed every TOML and JSON project.
-    root = find_nearest_project(cwd)
-    if root is not None:
-        return str(normalize_workspace_path(root))
-    # A project file that does not parse is still the project to open: the UI
-    # is where its errors are shown.
-    for candidate in (cwd, *cwd.parents):
-        if any((candidate / f"ducta{ext}").is_file() for ext in _PROJECT_SUFFIXES):
-            return str(normalize_workspace_path(candidate))
-
-    # Fallback: config/ directory with recognised config files in CWD
-    config_dir = cwd / "config"
-    if config_dir.is_dir():
-        config_files = (
-            list(config_dir.glob("*.yaml"))
-            + list(config_dir.glob("*.yml"))
-            + list(config_dir.glob("*.json"))
-            + list(config_dir.glob("*.toml"))
-        )
-        if config_files:
-            return str(normalize_workspace_path(cwd))
-
-    # Fallback: multi-project root with a projects/ subdirectory
-    projects_dir = cwd / "projects"
-    if projects_dir.is_dir():
-        sub_projects = [d for d in projects_dir.iterdir() if d.is_dir() and _is_project_dir(d)]
-        if len(sub_projects) == 1:
-            # Single project: use it unambiguously
-            return str(normalize_workspace_path(sub_projects[0]))
-        if len(sub_projects) > 1:
-            # Multiple projects: use the workspace root (parent directory)
-            # This allows the UI to show all projects in a grid
-            logger.info(
-                "Detected {} Ducta projects under {}. Using workspace root to display all projects.",
-                len(sub_projects),
-                projects_dir,
-            )
-            return str(normalize_workspace_path(cwd))
-
-    return None
-
-
-def _refuse_open_bind(host: str, allow_unauthenticated: bool) -> Optional[str]:
-    """Why the server must not start on ``host`` with authentication off, else None."""
-    try:
-        from ducta.api.config import LOCAL_HOSTS, get_settings
-
-        get_settings.cache_clear()  # HOST was just set; a cached Settings still has the old one
-        settings = get_settings()
-    except Exception as exc:  # noqa: BLE001 — an unreadable configuration fails on its own at startup
-        logger.debug("Could not read the API settings to check the bind address: {}", exc)
-        return None
-    if settings.auth_enabled or host in LOCAL_HOSTS:
-        return None
-    if allow_unauthenticated:
-        logger.warning(
-            "SECURITY: serving on {} WITHOUT authentication (--allow-unauthenticated). Anyone "
-            "who can reach this address can run pipelines and read the project.",
-            host,
-        )
-        return None
-    return (
-        f"Refusing to serve on {host} without authentication: anyone who can reach it could "
-        "run pipelines on this machine. Set AUTH_ENABLED=true and a strong JWT_SECRET_KEY, "
-        "bind to 127.0.0.1, or pass --allow-unauthenticated if the exposure is intended."
-    )
-
-
-def launch_ui(
-    host: str = "127.0.0.1",
-    port: int = 8000,
-    open_browser: bool = True,
-    source: Optional[str] = None,
-    db_path: Optional[str] = None,
-    allow_unauthenticated: bool = False,
-):
-    """
-    Launch the FastAPI backend which serves the React frontend.
-
-    The server can run pipelines, so reaching it is reaching code execution: on an address
-    other than this machine's it is refused unless authentication is on (``AUTH_ENABLED``),
-    or ``allow_unauthenticated`` says the exposure is intended.
-    """
-    import urllib.parse
-
-    import uvicorn
-
-    # Auto-detect workspace if not provided — allows `ducta ui` from within a pipelines folder
-    if not source:
-        detected = _detect_ducta_workspace()
-        if detected:
-            source = detected
-            logger.info(
-                "Auto-detected Ducta workspace at {}. Run pipelines or edit "
-                "configuration through the UI. To use a different workspace, "
-                "pass --source <path>.",
-                detected,
-            )
-
-    # Share the resolved workspace with the server process via env var so the
-    # API can auto-detect it for requests that omit the ?source= parameter.
-    # This is set unconditionally — the terminal flag is separate and opt-in.
-    if source:
-        os.environ.setdefault("DUCTA_WORKSPACE", source)
-
-    # The API reads where it is bound from HOST (its exposure warning does too): the
-    # address given here has to be the one it sees.
-    os.environ["HOST"] = host
-    refusal = _refuse_open_bind(host, allow_unauthenticated)
-    if refusal:
-        logger.error(refusal)
-        return ExitCode.SECURITY_ERROR.value
-
-    # Enable SQLite persistence by default so execution history survives restarts.
-    # Users can opt out by setting DATABASE_URL="" in their environment before
-    # launching — `not os.environ.get(...)` used to treat that explicit opt-out
-    # identically to "unset" (both are falsy) and silently overwrote it with the
-    # default path anyway. `"DATABASE_URL" not in os.environ` respects it.
-    if "DATABASE_URL" not in os.environ:
-        resolved_db = Path(db_path) if db_path else _DEFAULT_DB_PATH
-        resolved_db.parent.mkdir(parents=True, exist_ok=True)
-        os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{resolved_db}"
-        logger.info("Execution history persistence enabled at {}", resolved_db)
-
-    url = f"http://{host}:{port}"
-    if source:
-        url += f"/?source={urllib.parse.quote(source)}"
-    logger.info("Launching Ducta UI at {}", url)
-
-    if open_browser:
-
-        def open_tab():
-            time.sleep(2)
-            logger.info("Opening browser at {}", url)
-            webbrowser.open(url)
-
-        thread = threading.Thread(target=open_tab)
-        thread.daemon = True
-        thread.start()
+def server_installed() -> bool:
+    """True when the web server package can be imported."""
+    import importlib.util
 
     try:
-        from ducta.api.config import get_settings
+        return importlib.util.find_spec(LAUNCHER_MODULE) is not None
+    except Exception:  # noqa: BLE001 — absent or broken: either way it cannot start
+        return False
 
-        get_settings.cache_clear()  # DATABASE_URL, HOST… are set now: read them afresh
-        uvicorn.run("ducta.api.main:app", host=host, port=port, log_level="info")
-        return 0
-    except Exception as e:
-        logger.error("Failed to start UI server: {}", e)
-        return 1
+
+def launch_ui(**kwargs: Any) -> int:
+    """Start the web server (``launch_ui`` in the server package), or say how to
+    install it. Returns the process exit code."""
+    if not server_installed():
+        logger.error(
+            "The web UI is installed separately: pip install {} "
+            "(it installs Ducta's engine too, at the same version).",
+            SERVER_PACKAGE,
+        )
+        return ExitCode.DEPENDENCY_ERROR.value
+    import importlib
+
+    launcher = importlib.import_module(LAUNCHER_MODULE)
+    return int(launcher.launch_ui(**kwargs))

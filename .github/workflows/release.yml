@@ -1,9 +1,11 @@
 name: Release
 
-# Publishing was a manual, undocumented sequence run from a laptop, and one step
-# of it — building the web app before packaging — is invisible: `src/ducta/ui/dist`
-# is gitignored, so `poetry build` on a clean tree silently produces a wheel with
-# no UI and no error. This workflow makes the whole sequence the only way to ship.
+# Publishes the two packages this repository builds, together and at the same
+# version: `ducta` (engine + CLI, the repo root) and `ducta-server` (API + web app,
+# server/). One step is invisible by hand — building the web app before packaging
+# the server: `server/src/ducta_server/ui_dist` is gitignored, so `poetry build` on
+# a clean tree silently produces a server wheel with no UI and no error. This
+# workflow makes the whole sequence the only way to ship.
 on:
   push:
     tags: ["v*"]
@@ -36,56 +38,68 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: src/ducta/ui/package-lock.json
+          cache-dependency-path: server/ui/package-lock.json
       - name: Install Poetry
         run: |
           pipx install "poetry==$POETRY_VERSION"
           pipx inject poetry poetry-plugin-export
 
-      - name: Refuse to release a tag that disagrees with pyproject
+      - name: Refuse to release a tag that disagrees with either pyproject
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          pkg="$(poetry version --short)"
-          if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag v$tag does not match pyproject version $pkg"
+          engine="$(poetry version --short)"
+          server="$(cd server && poetry version --short)"
+          if [ "$tag" != "$engine" ] || [ "$tag" != "$server" ]; then
+            echo "::error::tag v$tag, ducta $engine and ducta-server $server must agree"
             exit 1
           fi
-          echo "tag and pyproject agree on $pkg"
+          echo "tag, ducta and ducta-server agree on $engine"
 
       - name: Build the web app
-        working-directory: src/ducta/ui
+        working-directory: server/ui
         run: |
           npm ci
           npm run build
 
-      - name: Build sdist and wheel
-        run: poetry build
+      - name: Build sdists and wheels (ducta, then ducta-server)
+        run: |
+          poetry build -o dist
+          (cd server && poetry build -o ../dist)
 
-      # The failure this workflow exists to prevent. Assert it directly rather
-      # than trusting that the step above ran.
-      - name: Assert the wheel bundles the web app
+      # The failures this workflow exists to prevent. Assert them directly rather
+      # than trusting that the steps above ran.
+      - name: Assert each wheel carries what it should
         run: |
           python - <<'PY'
           import glob, sys, zipfile
-          wheel = glob.glob("dist/*.whl")[0]
-          names = zipfile.ZipFile(wheel).namelist()
-          if not any(n.endswith("ducta/ui/dist/index.html") for n in names):
-              sys.exit(f"{wheel} ships no UI — refusing to publish")
-          assets = [n for n in names if "/ui/dist/assets/" in n]
+          engine = glob.glob("dist/ducta-[0-9]*.whl")[0]
+          leaked = [n for n in zipfile.ZipFile(engine).namelist()
+                    if n.startswith(("ducta/api/", "ducta/ui/", "ducta_server/"))]
+          if leaked:
+              sys.exit(f"{engine} ships server files — refusing to publish: {leaked[:5]}")
+          server = glob.glob("dist/ducta_server-*.whl")[0]
+          names = zipfile.ZipFile(server).namelist()
+          if "ducta_server/ui_dist/index.html" not in names:
+              sys.exit(f"{server} ships no UI — refusing to publish")
+          assets = [n for n in names if n.startswith("ducta_server/ui_dist/assets/")]
           if not assets:
-              sys.exit(f"{wheel} has index.html but no built assets — refusing to publish")
-          print(f"{wheel} bundles the web app ({len(assets)} assets)")
+              sys.exit(f"{server} has index.html but no built assets — refusing to publish")
+          print(f"{engine}: engine and CLI; {server}: the web app ({len(assets)} assets)")
           PY
 
-      - name: Smoke-test the built wheel
+      - name: Smoke-test the built wheels
         run: |
-          python -m venv /tmp/clean
-          /tmp/clean/bin/pip install --upgrade pip
-          /tmp/clean/bin/pip install "$(ls dist/*.whl)[all]"
-          /tmp/clean/bin/ducta --version
-          /tmp/clean/bin/python - <<'PY'
-          from ducta.api.main import create_app
+          python -m venv /tmp/cli
+          /tmp/cli/bin/pip install --upgrade pip
+          /tmp/cli/bin/pip install "$(ls dist/ducta-[0-9]*.whl)[all]"
+          /tmp/cli/bin/ducta --version
+          python -m venv /tmp/server
+          /tmp/server/bin/pip install --upgrade pip
+          /tmp/server/bin/pip install "$(ls dist/ducta_server-*.whl)" --find-links dist
+          /tmp/server/bin/ducta-server --version
+          /tmp/server/bin/python - <<'PY'
+          from ducta_server.main import create_app
           app = create_app()
           assert "/health" in app.openapi()["paths"]
           print("smoke OK")
@@ -103,7 +117,7 @@ jobs:
       # Kept out of dist/: the PyPI upload takes every file there.
       - name: Export the constraints files
         run: |
-          poetry export --extras all --without-hashes -o exported.txt
+          poetry export --extras all --with server --without-hashes -o exported.txt
           python -m pip install packaging
           python scripts/constraints.py exported.txt 3.11 3.12 3.13 3.14
       - uses: actions/upload-artifact@v4
@@ -118,7 +132,8 @@ jobs:
     # Gate publication behind a GitHub Environment so a tag push cannot ship on
     # its own — configure it with required reviewers under
     # Settings → Environments. Trusted publishing (OIDC) means no API token is
-    # stored anywhere; register the publisher on PyPI for this repo/workflow.
+    # stored anywhere; register the publisher on PyPI for this repo/workflow —
+    # once per project: `ducta` AND `ducta-server` (dist/ holds both, uploaded together).
     environment: ${{ github.event.inputs.target || 'pypi' }}
     permissions:
       id-token: write
@@ -137,7 +152,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
 
   # Attach the constraints files to the GitHub release of the tag, so
-  #   pip install "ducta[all]==X.Y.Z" -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt
+  #   pip install "ducta[all]==X.Y.Z" "ducta-server==X.Y.Z" -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt
   # installs what was tested. Only for tag pushes, after PyPI accepted the release.
   github-release:
     name: Attach constraints to the GitHub release

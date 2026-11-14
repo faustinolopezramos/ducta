@@ -44,7 +44,7 @@ from ducta.setting.project.schema import (
 
 if TYPE_CHECKING:
     from ducta.setting.contexts import Context
-from ducta.setting.project.compiler import _checks, compile_project
+from ducta.setting.project.compiler import compile_checks, compile_project
 from ducta.setting.project.overlay import (
     apply_environment,
     environment_overrides,
@@ -79,7 +79,7 @@ __all__ = [
     "Project",
     "ProjectConfigError",
     "QUALITY_DIR",
-    "_checks",
+    "compile_checks",
     "_conventional_path",
     "apply_environment",
     "catalog_dir_files",

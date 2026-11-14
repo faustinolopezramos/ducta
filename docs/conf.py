@@ -75,7 +75,7 @@ html_favicon = "img/logo.ico"
 
 # ---------------------------------------------------------------------------
 # Brand palette — "Blueprint / Deep Petrol" theme:
-# Direct parity with Web UI (src/ducta/ui/src/theme/ducta-theme.css).
+# Direct parity with Web UI (server/ui/src/theme/ducta-theme.css).
 #
 # Light mode: "Blueprint" cool paper ground (#F4F6F7), white surfaces (#FFFFFF),
 # ink text (#0F1B20), and deep Petrol accent (#0B5F73, 7.1:1 AAA on white).

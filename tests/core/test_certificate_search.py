@@ -98,8 +98,7 @@ class TestCliAndWebUiSeeTheSameRuns:
     def test_the_api_finds_the_certificate_of_a_run_it_made_from_the_env_folder(
         self, env_folder_project
     ):
-        pytest.importorskip("fastapi")
-        from ducta.api.services.run_certificates import candidate_runs_dirs as api_candidates
+        from ducta.runs.certificates import candidate_runs_dirs as api_candidates
 
         found = api_candidates(env_folder_project, "dev")
 

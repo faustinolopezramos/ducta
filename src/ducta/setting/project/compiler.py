@@ -121,7 +121,7 @@ def _gate(gate: Any) -> Dict[str, Any]:
     return cast(Dict[str, Any], d)
 
 
-def _checks(block: ChecksBlock, gate_key: str) -> Dict[str, Any]:
+def compile_checks(block: ChecksBlock, gate_key: str) -> Dict[str, Any]:
     out = _drop_empty(
         {
             "fail_fast": block.fail_fast,
@@ -182,7 +182,7 @@ def _compile_node(name: str, node: Any, catalog: Dict[str, CatalogEntry]) -> Dic
         out.update(_drop_empty(spec))
     out.update(_drop_empty(common))
     if node.quality is not None:
-        out["data_quality"] = _checks(node.quality, "quality_gate")
+        out["data_quality"] = compile_checks(node.quality, "quality_gate")
     return cast(Dict[str, Any], _placeholders(out))
 
 
@@ -197,10 +197,10 @@ def _input_contracts(node: TransformNode, catalog: Dict[str, CatalogEntry]) -> D
     for ds in _node_inputs(node):
         entry = catalog.get(ds)
         if entry is not None and entry.quality is not None:
-            contracts[ds] = _checks(entry.quality, "gate")
+            contracts[ds] = compile_checks(entry.quality, "gate")
     for target, block in node.input_checks.items():
         ds = params.get(target, target)
-        contracts[ds] = _checks(block, "gate")
+        contracts[ds] = compile_checks(block, "gate")
     return contracts
 
 

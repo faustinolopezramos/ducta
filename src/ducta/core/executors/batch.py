@@ -52,7 +52,7 @@ class BatchExecutor(BaseExecutor):
         self._skipped_atomic_node = None
         self.node_executor.pipeline_name = pipeline_name
         self.node_executor.begin_run()
-        pipeline = self._get_pipeline_config(pipeline_name)
+        pipeline = self.get_pipeline_config(pipeline_name)
 
         self._apply_global_seed()
 

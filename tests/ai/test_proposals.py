@@ -155,11 +155,9 @@ def test_quality_facts_measure_the_output_without_sending_values(tmp_path, monke
     root = _project(tmp_path)
     frame = pd.DataFrame({"order_id": [1, 2, 3], "name": ["Ada", "Bob", "Cy"]})
     monkeypatch.setattr(
-        "ducta.api.services.dataset_preview.dataset_location", lambda *a, **k: ("x", "parquet")
+        "ducta.runs.dataset_preview.dataset_location", lambda *a, **k: ("x", "parquet")
     )
-    monkeypatch.setattr(
-        "ducta.api.services.dataset_preview.read_frame", lambda *a, **k: (frame, [], 3)
-    )
+    monkeypatch.setattr("ducta.runs.dataset_preview.read_frame", lambda *a, **k: (frame, [], 3))
     facts = proposals.quality_facts(root, "etl", "etl.clean")
     assert facts.dataset == "clean" and facts.rows == 3
     rendered = facts.render()
@@ -332,7 +330,7 @@ def test_ducta_ai_explain_reads_the_error_and_changes_nothing(tmp_path, monkeypa
 
 
 def test_a_project_under_a_folder_named_ducta_still_has_its_frames(tmp_path):
-    from ducta.api.services.diagnosis import first_user_frame
+    from ducta.runs.diagnosis import first_user_frame
 
     root = tmp_path / "ducta" / "projects" / "shop"
     (root / "pipelines").mkdir(parents=True)

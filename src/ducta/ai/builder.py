@@ -310,7 +310,7 @@ def where_code_goes(root: Path) -> str:
 
 def _modules_run_by(root: Path, pipeline_text: str) -> Set[str]:
     """Project-relative ``.py`` paths a pipeline file's ``run:`` references name."""
-    from ducta.api.services.code_index import module_file
+    from ducta.project_store.code_index import module_file
 
     return {
         module_file(root, module).relative_to(root).as_posix()

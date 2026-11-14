@@ -62,3 +62,28 @@ class TestOriginalExceptionSurvivesCleanupFailure:
                 end_date="2026-01-01",
                 ml_info={},
             )
+
+
+class TestInterruptSurvivesCleanup:
+    """Ctrl+C and SIGTERM are not `Exception`s. They skipped the `except` block, so
+    `cleanup()` found the unfinished nodes "never executed" and its RuntimeError
+    replaced the interrupt: an interrupted run ended as an "Unexpected error"."""
+
+    @pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+    def test_the_interrupt_wins_over_cleanup_and_stops_running_nodes_hard(self, interrupt):
+        ne = _node_executor_with_fake_coordinator(
+            coordinate_error=interrupt(),
+            cleanup_error=RuntimeError("Pipeline ended with 2 node(s) never executed"),
+        )
+
+        with pytest.raises(interrupt):
+            ne.execute_nodes_parallel(
+                execution_order=["n1"],
+                node_configs={"n1": {}},
+                dag={"n1": set()},
+                start_date=None,
+                end_date=None,
+                ml_info={},
+            )
+
+        assert ne._coordinator.cancel_all.call_args.kwargs == {"hard": True}
