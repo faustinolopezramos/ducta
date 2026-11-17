@@ -4,6 +4,8 @@ import { ResizeHandle } from "../../components/ui/ResizeHandle";
 import { ProblemsPanel } from "../../components/Problems/ProblemsPanel";
 import { SamplePreview } from "../../components/Pipeline/SamplePreview";
 import { StreamingStatusPanel } from "../../components/Execution/StreamingStatusPanel";
+import { StreamLauncher } from "../../components/Execution/StreamLauncher";
+import { routes } from "../../utils/routes";
 import { InlineLogs } from "../../components/Execution/InlineLogs";
 import { useExecutionLogs } from "../../api/queries";
 import { useLogsStore } from "../../store/logsStore";
@@ -12,7 +14,8 @@ import { formatDate } from "../../utils/formatDate";
 import type { Problem } from "../../api/queries/problems";
 import type { DagCanvasItem } from "../../components/Pipeline/types";
 import type { BottomPanelTab } from "../../store/uiStore";
-import type { StreamSummary } from "../../utils/streaming";
+import { agoText, type StreamSummary } from "../../utils/streaming";
+import { formatDuration } from "../../utils/formatDuration";
 
 const DOCK = { min: 120, max: 640, initial: 260 };
 
@@ -38,10 +41,26 @@ export interface PipelineDockProps {
   executionStates: Record<string, string>;
   isStreamPipeline?: boolean;
   streamSummary?: StreamSummary | null;
+  /** The queries this stream starts, named in the Stream tab while it starts. */
+  streamNodeNames?: string[];
+  /** Start the stream (the Stream tab offers it while nothing runs). */
+  onStartStream?: () => void;
+  /** Why the stream cannot be started now, if it cannot. */
+  startBlocked?: string | null;
   /** The pipeline's last recorded run: its logs show until this session runs something. */
-  lastRun?: { id?: string; status: string } | null;
+  lastRun?: { id?: string; status: string; started_at?: string | null; finished_at?: string | null } | null;
   /** The latest run this server started (the latest with stored logs), when lastRun is not it. */
   lastServedRun?: { id: string; status: string; started_at?: string | null } | null;
+}
+
+/** One line about the pipeline's last run: its length, how it ended and how long ago. */
+function lastRunText(lastRun: PipelineDockProps["lastRun"]): string | null {
+  if (!lastRun) return null;
+  const started = lastRun.started_at ? Date.parse(lastRun.started_at) : NaN;
+  const ended = lastRun.finished_at ? Date.parse(lastRun.finished_at) : NaN;
+  const length = !Number.isNaN(started) && !Number.isNaN(ended) ? formatDuration((ended - started) / 1000, "uptime") : null;
+  const when = agoText(lastRun.finished_at ?? lastRun.started_at);
+  return ["Last run", [length, lastRun.status, when].filter(Boolean).join(" · ")].join(": ");
 }
 
 export function PipelineDock({
@@ -66,6 +85,9 @@ export function PipelineDock({
   executionStates,
   isStreamPipeline = false,
   streamSummary = null,
+  streamNodeNames = [],
+  onStartStream,
+  startBlocked = null,
   lastRun = null,
   lastServedRun = null,
 }: PipelineDockProps) {
@@ -184,13 +206,19 @@ export function PipelineDock({
               env={activeEnv}
             />
           ) : shown === "stream" ? (
-            activeExecutionId ? (
-              <StreamingStatusPanel executionId={activeExecutionId} isActive={isExecuting} fullView />
-            ) : (
-              <div className="stream-idle-panel">
-                <p>Stream is not currently running. Click <b>Start stream</b> above to launch the streaming queries.</p>
-              </div>
-            )
+            <StreamLauncher
+              phase={isExecuting ? (streamSummary ? "running" : "starting") : lastRun ? "stopped" : "never"}
+              href={
+                projectId && (isExecuting ? activeExecutionId : lastRun?.id)
+                  ? routes.stream(projectId, (isExecuting ? activeExecutionId : lastRun?.id) as string)
+                  : undefined
+              }
+              summary={streamSummary}
+              nodeCount={streamNodeNames.length}
+              lastRun={lastRunText(lastRun)}
+              onStart={onStartStream}
+              blocked={startBlocked}
+            />
           ) : (
             <>
               {activeExecutionId && (

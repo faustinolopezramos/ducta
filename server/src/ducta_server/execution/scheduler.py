@@ -293,6 +293,17 @@ class AsyncCronScheduler:
                                 )
                                 continue
 
+                            if not await _may_run_in_env(sched):
+                                logger.error(
+                                    "Schedule '{id}' ({name}) targets protected environment "
+                                    "'{env}' but its creator may not run there; skipping. "
+                                    "An operator or admin has to recreate it.",
+                                    id=sched.id,
+                                    name=sched.pipeline_name,
+                                    env=sched.env,
+                                )
+                                continue
+
                             sched.last_run_at = now.isoformat()
                             self._save_schedules()
 
@@ -322,6 +333,11 @@ class AsyncCronScheduler:
     async def list_schedules(self, source_path: str) -> List[PipelineSchedule]:
         async with self._lock:
             return [s for s in self._schedules.values() if s.source_path == source_path]
+
+    async def get_schedule(self, schedule_id: str, source_path: str) -> Optional[PipelineSchedule]:
+        async with self._lock:
+            sched = self._schedules.get(schedule_id)
+            return sched if sched and sched.source_path == source_path else None
 
     async def create_schedule(self, schedule: PipelineSchedule) -> PipelineSchedule:
         async with self._lock:
@@ -376,6 +392,36 @@ class AsyncCronScheduler:
             sched.enabled = not sched.enabled if enabled is None else enabled
             self._save_schedules()
             return sched
+
+
+async def _may_run_in_env(sched: "PipelineSchedule") -> bool:
+    """Whether the schedule's creator may run in its environment (protected ones need a role).
+
+    Schedules made before the create/edit routes checked this — or by a role that has
+    since lost the permission — must not keep running in ``prod`` on their own.
+    """
+    from ducta.project_store.governance import PROTECTED_PERMISSION, protected_environments
+
+    root: Optional[Path] = None
+    try:
+        if sched.project_id and sched.source_path:
+            from ducta_server.services.project import ProjectService
+
+            root = ProjectService(Path(sched.source_path)).store(sched.project_id).root
+    except Exception:  # noqa: BLE001 — an unreadable project is guarded by the defaults
+        root = None
+    if sched.env not in protected_environments(root):
+        return True
+    from ducta_server.config import get_settings
+
+    if not get_settings().auth_enabled:
+        return True  # one local user with every permission
+    if not sched.user_id:
+        return False
+    from ducta_server.auth.users import get_user_store
+
+    user = await get_user_store().get_by_id(sched.user_id)
+    return bool(user and user.is_active and user.has_permission(PROTECTED_PERMISSION))
 
 
 _scheduler: Optional[AsyncCronScheduler] = None

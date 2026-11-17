@@ -502,3 +502,35 @@ def test_a_cancellation_sends_the_child_one_term_however_many_places_stop_it():
         t.join(15)
     assert proc.poll() is not None
     assert len(sent) == 1
+
+
+def test_deep_preflight_subprocess_does_not_get_the_servers_secrets(monkeypatch, tmp_path):
+    """`/preflight` imports the project's modules in a subprocess; module-level code there
+    used to read JWT_SECRET_KEY, DATABASE_URL and the admin password from the inherited env."""
+    import subprocess
+
+    from ducta_server.workspace import preflight
+
+    for name, value in (
+        ("JWT_SECRET_KEY", "probe-secret"),
+        ("DUCTA_ADMIN_PASSWORD", "probe-admin"),
+        ("DATABASE_URL", "sqlite:///probe.db"),
+        ("DUCTA_TEST_ORDINARY_VAR", "kept"),
+    ):
+        monkeypatch.setenv(name, value)
+
+    seen = {}
+
+    def fake_run(cmd, **kwargs):
+        seen.update(kwargs)
+        out = preflight._DEEP_PREFLIGHT_MARKER + '{"ok": true, "errors": [], "warnings": []}\n'
+        return subprocess.CompletedProcess(cmd, 0, stdout=out, stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    result = preflight.run_deep_preflight(tmp_path, "etl", "base")
+    assert result["ok"] is True
+    env = seen["env"]
+    assert "JWT_SECRET_KEY" not in env
+    assert "DUCTA_ADMIN_PASSWORD" not in env
+    assert "DATABASE_URL" not in env
+    assert env["DUCTA_TEST_ORDINARY_VAR"] == "kept"

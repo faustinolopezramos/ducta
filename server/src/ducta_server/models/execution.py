@@ -50,6 +50,9 @@ class ExecutionStatus(str, Enum):
     GATE_BLOCKED = "gate_blocked"
     #: Stopped at a data breakpoint, after a node, until resumed or cancelled.
     PAUSED = "paused"
+    #: Never finished: the server (or the process running it) stopped while the
+    #: run was queued or running. Distinct from FAILED (the run itself broke).
+    INTERRUPTED = "interrupted"
 
 
 class ExecutionResponse(BaseModel):
@@ -118,6 +121,14 @@ class ExecutionResponse(BaseModel):
             "workspace this server (and any other process using RUNS_DIR) has run, "
             "and project ids repeat across them; this is what tells them apart. "
             "None on records written before it existed."
+        ),
+    )
+    origin: Literal["server", "cli"] = Field(
+        default="server",
+        description=(
+            "`server` for a run this server started; `cli` for a run known only from its "
+            "Run Certificate (started with `ducta start`). A `cli` run has no logs here: "
+            "its id is the certificate's run_id."
         ),
     )
 
@@ -384,7 +395,7 @@ class StreamingNodeStatus(BaseModel):
     """One streaming node of a running execution: its query, throughput and model."""
 
     node: str
-    #: active · failed · skipped (never started) · stopped
+    #: active · restarting · failed · skipped (never started) · stopped
     state: str
     error: Optional[str] = None
     last_batch_id: Optional[int] = None
@@ -409,6 +420,21 @@ class StreamingNodeStatus(BaseModel):
     health: Optional[str] = None
     #: Seconds the query has reported without input rows.
     idle_seconds: Optional[float] = None
+    #: Automatic restarts of this node in its current failure episode, and the
+    #: seconds left before the next one (state ``restarting``).
+    restarts: Optional[int] = None
+    next_restart_in_seconds: Optional[float] = None
+    #: A stateful query (aggregation, join, dedupe): its event-time watermark, the
+    #: rows and bytes it holds in state, and the rows it dropped as too late.
+    watermark: Optional[str] = None
+    state_rows: Optional[float] = None
+    state_memory_bytes: Optional[float] = None
+    late_rows_dropped: Optional[float] = None
+    #: How far the query is behind its sources (Kafka offsets, Delta files).
+    source_lag: Optional[float] = None
+    #: What Spark actually reads, one description per source (a join in the
+    #: transform reads more than the node declares).
+    sources: Optional[List[str]] = None
 
 
 class StreamingPipelineStatus(BaseModel):
@@ -435,6 +461,25 @@ class StreamingRestartResponse(BaseModel):
 
     restarted: bool
     node: str
+
+
+class StreamRowsResponse(BaseModel):
+    """`GET .../streaming/nodes/{node}/rows`: the newest rows a streaming node has written."""
+
+    node: str
+    #: False when there is nothing to show, and `reason` says why (a kafka sink, nothing written yet).
+    available: bool
+    reason: Optional[str] = None
+    #: The sink as the node declares it ("parquet data/dev/silver/events").
+    sink: Optional[str] = None
+    format: Optional[str] = None
+    columns: List[Dict[str, str]] = Field(default_factory=list)
+    #: Newest first.
+    rows: List[Dict[str, Any]] = Field(default_factory=list)
+    #: Rows in the sink's parquet files (from their footers); null for json/csv.
+    total_rows: Optional[int] = None
+    #: When the newest file landed.
+    newest_at: Optional[str] = None
 
 
 class StreamingStatusResponse(BaseModel):

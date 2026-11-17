@@ -7,7 +7,7 @@
  */
 export function formatDate(iso?: string | null, options?: { includeYear?: boolean }): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString([], {
+  return new Date(iso).toLocaleString("en", {
     month: "short",
     day: "numeric",
     ...(options?.includeYear ? { year: "numeric" as const } : {}),

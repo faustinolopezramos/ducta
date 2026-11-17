@@ -60,7 +60,29 @@ def test_loopback_hosts_are_served_as_before():
 def test_authentication_on_allows_a_non_local_host(monkeypatch):
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("JWT_SECRET_KEY", "x" * 40)
+    monkeypatch.setenv("DUCTA_ADMIN_PASSWORD", "a-password-of-my-own")
     code, run = _launch("0.0.0.0")
+    assert code == 0
+    run.assert_called_once()
+
+
+@pytest.mark.parametrize("secret, password", [(None, "own-password"), ("x" * 40, None)])
+def test_authentication_with_default_credentials_is_refused_on_a_non_local_host(
+    monkeypatch, secret, password
+):
+    # Accounts on, but the JWT key or the admin password is the published default: anyone
+    # can sign a token as admin / log in as admin:admin. Loopback is still fine.
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("DUCTA_ADMIN_PASSWORD", raising=False)
+    if secret:
+        monkeypatch.setenv("JWT_SECRET_KEY", secret)
+    if password:
+        monkeypatch.setenv("DUCTA_ADMIN_PASSWORD", password)
+    code, run = _launch("0.0.0.0")
+    assert code == ExitCode.SECURITY_ERROR.value
+    run.assert_not_called()
+    code, run = _launch("127.0.0.1")
     assert code == 0
     run.assert_called_once()
 

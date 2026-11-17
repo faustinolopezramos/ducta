@@ -522,7 +522,15 @@ class UnifiedArgumentParser:
             dest="stream_command", help="Streaming commands", required=True
         )
 
-        run_parser = stream_subparsers.add_parser("run", help="Run streaming pipeline")
+        run_parser = stream_subparsers.add_parser(
+            "run",
+            help="Run streaming pipeline",
+            description="Start a streaming pipeline and keep it running in this terminal. "
+            "It prints what each node reads and writes, then a table of rows per second "
+            "every 30 s and whenever a node changes state. Ctrl+C stops the queries after "
+            "their current batch and prints a closing summary. `ducta stream plan` shows "
+            "what would start without starting it.",
+        )
         run_parser.add_argument("--config", "-c", help=HELP_CONFIG_FILE)
         run_parser.add_argument("--pipeline", "-p", required=True, help="Pipeline name to execute")
         run_parser.add_argument(
@@ -540,8 +548,10 @@ class UnifiedArgumentParser:
             "process): 'async' (default) reports their status and stops them on Ctrl+C; "
             "'sync' waits inside the engine",
         )
-        run_parser.add_argument("--model-version", help="Model version for ML pipelines")
-        run_parser.add_argument("--hyperparams", help="Hyperparameters as JSON string")
+        # Still accepted (an ML node inside a hybrid pipeline), but not offered: they mean
+        # nothing for a plain stream.
+        run_parser.add_argument("--model-version", help=argparse.SUPPRESS)
+        run_parser.add_argument("--hyperparams", help=argparse.SUPPRESS)
         run_parser.add_argument(
             "--transforms-module",
             nargs="*",

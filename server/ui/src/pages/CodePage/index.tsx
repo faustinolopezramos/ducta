@@ -2,7 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useBlocker, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { IconCode, IconMessageCircle, IconX } from "@tabler/icons-react";
-import { nodesByFunction, useCodeIndex, useComments, useServerProject, useWorkspaceFileContent } from "../../api/queries";
+import { nodesByFunction, useCodeIndex, useComments, useGitAvailable, useServerProject, useWorkspaceFileContent } from "../../api/queries";
 import { CommentThreads } from "../../components/Comments/CommentThreads";
 import { useFileSave } from "../../components/Editor/useFileSave";
 import { ConflictBanner } from "../../components/Editor/ConflictBanner";
@@ -145,6 +145,7 @@ export function CodePage() {
 
   const treeActive = workspacePath || undefined;
   const [mode, setMode] = useState<"edit" | CompareMode>("edit");
+  const gitAvailable = useGitAvailable();
   const activeEnv = useSourceStore((st) => st.activeEnv) || "base";
   // The pipeline whose last good run this file is compared with: the first that runs it.
   const pipelineOfFile = index?.nodes.find((n) => n.file === filePath)?.pipeline ?? null;
@@ -196,16 +197,27 @@ export function CodePage() {
           <div className="code-page__modes" role="tablist" aria-label="Edit or compare">
             {([
               ["edit", "Edit"],
-              ["head", "Changes"],
-              ["last-good", "Vs last good run"],
-              ["history", "History"],
-              ["branch", "Vs branch"],
+              // Every comparison reads an earlier version from Git: without a
+              // repository the four tabs each said so, in the same words.
+              ...(gitAvailable === false
+                ? []
+                : ([
+                    ["head", "Changes"],
+                    ["last-good", "Vs last good run"],
+                    ["history", "History"],
+                    ["branch", "Vs branch"],
+                  ] as const)),
             ] as const).map(([id, label]) => (
               <button key={id} type="button" role="tab" aria-selected={mode === id}
                 className={`code-page__mode${mode === id ? " is-active" : ""}`} onClick={() => setMode(id)}>
                 {label}
               </button>
             ))}
+            {gitAvailable === false && (
+              <span className="code-page__modes-note" title="Run git init in the workspace folder to compare with earlier versions">
+                No Git repository — comparisons need one
+              </span>
+            )}
           </div>
         )}
         <div className="code-page__editor">

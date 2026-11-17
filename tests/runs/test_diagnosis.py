@@ -88,6 +88,33 @@ def test_a_spark_column_error_is_data_even_with_java_in_the_trace():
     assert classify(text) == "data"
 
 
+_REFUSED_JDBC = (
+    "An error occurred while calling o83.load.\n"
+    ": com.microsoft.sqlserver.jdbc.SQLServerException: No se pudo realizar la conexión "
+    'TCP/IP al host localhost, puerto 1433. Error: "Connection refused. Verifique las '
+    'propiedades de conexión".\n'
+    "\tat com.microsoft.sqlserver.jdbc.SQLServerException.makeFromDriverError(SQLServerException.java:237)\n"
+    "\tat org.apache.spark.sql.execution.datasources.jdbc.JDBCRDD$.getQueryOutputSchema(JDBCRDD.scala:63)\n"
+    "\tat org.apache.spark.sql.execution.datasources.jdbc.JDBCRelation$.getSchema(JDBCRelation.scala:241)\n"
+    "\tat java.base/jdk.internal.reflect.NativeMethodAccessorImpl.invoke0(Native Method)\n"
+)
+
+
+def test_a_refused_jdbc_connection_is_infrastructure_not_data():
+    """The word "schema" in a method name of the Java trace (getSchema) made it `data`,
+    so Sentinel never retried it."""
+    assert classify(_REFUSED_JDBC) == "infra"
+
+
+def test_stack_frames_do_not_decide_the_kind():
+    text = (
+        "AnalysisException: [UNRESOLVED_COLUMN] `G4`\n"
+        "\tat org.apache.spark.sql.OutOfMemoryHelper.run(Helper.scala:1)\n"
+    )
+    assert classify(text) == "data"
+    assert classify("boom\n\tat com.acme.Schema.load(Schema.java:9)\n") == "unknown"
+
+
 def test_the_node_is_read_from_the_message_when_the_log_has_none():
     r = diagnose({"error_message": "node 'silver.clean' raised KeyError"}, [], None, None, None)
     assert r["node"] == "silver.clean"

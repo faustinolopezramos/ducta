@@ -153,6 +153,10 @@ git push origin my-change          # 3. open a Pull Request on GitHub
 Keep changes focused, add or update tests for what you touch, and make sure the
 four checks above are green before opening the PR.
 
+`pre-commit install` (once) runs most of them for you: ruff, file hygiene, secret
+detection, the skill's CLI reference and `poetry.lock` on every commit, and mypy on
+every push. Formatting is `ruff format` only — do not add Black next to it.
+
 ---
 
 ## 4. Keeping your machine clean

@@ -115,3 +115,68 @@ def test_a_file_at_a_commit(repo):
         "/api/git/file-at", params={"source": str(repo), "path": "nope.txt", "rev": head}
     )
     assert r.json()["exists"] is False
+
+
+# ── git must not hand over what the file API refuses ─────────────────────────
+
+
+def _viewer() -> TestClient:
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: User(
+        id="v", username="viewer", email="v@example.com", roles=["viewer"]
+    )
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("secret", [".env", ".env.local", "pipelines/.env", ".git/config"])
+def test_git_routes_refuse_secret_and_git_files(repo, secret):
+    (repo / ".env").write_text("WAREHOUSE_PASSWORD=s3cr3t\n")
+    (repo / ".env.local").write_text("TOKEN=abc\n")
+    (repo / "pipelines" / ".env").write_text("TOKEN=def\n")
+    client = _viewer()
+    src = {"source": str(repo)}
+
+    # The file API says no ...
+    assert (
+        client.get("/api/workspace/files/content", params={**src, "path": secret}).status_code
+        == 403
+    )
+    # ... and so does every git route that returns a file's content.
+    r = client.get("/api/git/working-diff", params={**src, "path": secret})
+    assert r.status_code == 403, r.text
+    assert "s3cr3t" not in r.text and "TOKEN" not in r.text
+    sha = git.Repo(repo).head.commit.hexsha
+    assert (
+        client.get("/api/git/file-at", params={**src, "path": secret, "rev": sha}).status_code
+        == 403
+    )
+    assert client.get(f"/api/git/blame/{secret}", params=src).status_code == 403
+    assert (
+        client.get(f"/api/git/diff/{sha}/{sha}", params={**src, "path": secret}).status_code == 403
+    )
+
+
+def test_git_revert_refuses_secret_files(repo):
+    r = git.Repo(repo)
+    (repo / ".env").write_text("A=1\n")
+    r.git.add("-f", ".env")
+    sha = r.index.commit("committed a .env by mistake").hexsha
+    (repo / ".env").write_text("A=2\n")
+    resp = _client().post(
+        "/api/git/revert", params={"source": str(repo)}, json={"path": ".env", "commit": sha}
+    )
+    assert resp.status_code == 403, resp.text
+    assert (repo / ".env").read_text() == "A=2\n"
+
+
+def test_git_routes_still_serve_ordinary_files(repo):
+    client = _viewer()
+    src = {"source": str(repo)}
+    sha = git.Repo(repo).head.commit.hexsha
+    path = "pipelines/etl.yaml"
+    assert client.get("/api/git/working-diff", params={**src, "path": path}).status_code == 200
+    assert (
+        client.get("/api/git/file-at", params={**src, "path": path, "rev": sha}).status_code == 200
+    )
+    assert client.get(f"/api/git/blame/{path}", params=src).status_code == 200
+    assert client.get(f"/api/git/diff/{sha}/{sha}", params={**src, "path": path}).status_code == 200

@@ -373,7 +373,7 @@ class FileStreamReader(BaseStreamingReader):
 
             file_format = config.get("file_format", "parquet")
 
-            logger.info(f"Creating file stream reader (format={file_format}, path={path})")
+            logger.debug(f"Creating file stream reader (format={file_format}, path={path})")
 
             reader = self._spark_read_stream().format(str(file_format))
 

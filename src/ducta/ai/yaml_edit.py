@@ -39,7 +39,7 @@ def edit_yaml(text: str, edit: Callable[[Any], None]) -> str:
         from ruamel.yaml.comments import CommentedMap
 
         from ducta.project_store.store import restore_blank_lines, round_trip_yaml, style_of
-    except ImportError as e:  # pragma: no cover — the api extra brings ruamel
+    except ImportError as e:  # pragma: no cover — the ai extra brings ruamel
         raise AIEnvironmentError(
             "Applying a proposal needs Ducta's AI extra: pip install 'ducta[ai]'"
         ) from e

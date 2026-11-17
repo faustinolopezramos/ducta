@@ -256,9 +256,8 @@ def register_transforms(registry: Any) -> None:
             "# Start the stream (runs until you stop it)",
             f"ducta stream run --pipeline {pipeline} --env dev",
             "",
-            "# In another shell: watch it, then stop it",
-            "ducta stream status --env dev",
-            "ducta stream stop --env dev --execution-id <id>",
+            "# Ctrl+C in that terminal stops it. To watch it live in the web app:",
+            "pip install ducta-server && ducta ui",
         ]
 
     def readme(self) -> str:
@@ -274,11 +273,13 @@ pip install -r requirements.txt
 
 # Start the stream (runs until you stop it)
 ducta stream run --pipeline events_stream --env dev
-
-# In another shell: watch it, then stop it
-ducta stream status --env dev
-ducta stream stop --env dev --execution-id <id>
 ```
+
+The stream lives in that terminal: **Ctrl+C stops it** (the queries finish their
+current batch) and prints a closing summary. `ducta stream status` and
+`ducta stream stop` only see streams of their own process, so they are for code
+that runs a stream in-process. To watch a stream live, start it from the web app
+(`pip install ducta-server && ducta ui`, then **Start stream** on the pipeline).
 
 `data/events/` ships five seed events. Two have a null `amount`, so the silver
 layer visibly drops rows the bronze layer kept. Drop another `.json` file into

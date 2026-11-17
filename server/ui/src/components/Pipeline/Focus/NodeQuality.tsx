@@ -242,8 +242,8 @@ export function NodeQuality({
       {tryChecks.data && (
         <p className={`node-tests__summary${tryChecks.data.passed ? " is-ok" : " is-bad"}`} role="status">
           {tryChecks.data.passed ? "All checks pass" : `${tryChecks.data.results.filter((r) => r.passed === false).length} failing`} on{" "}
-          {tryChecks.data.sampled_rows.toLocaleString()} rows
-          {tryChecks.data.total_rows && tryChecks.data.total_rows > tryChecks.data.sampled_rows ? ` of ${tryChecks.data.total_rows.toLocaleString()}` : ""}
+          {tryChecks.data.sampled_rows.toLocaleString("en")} rows
+          {tryChecks.data.total_rows && tryChecks.data.total_rows > tryChecks.data.sampled_rows ? ` of ${tryChecks.data.total_rows.toLocaleString("en")}` : ""}
         </p>
       )}
       {tryChecks.error && <p className="node-quality__msg" role="alert">{apiErrorMessage(tryChecks.error)}</p>}

@@ -534,7 +534,7 @@ class SparkSessionFactory:
         logger.info(f"Attempting to create Spark session in {mode} mode")
 
         if ml_config:
-            logger.info("Applying ML-specific Spark configurations")
+            logger.debug("Applying ML-specific Spark configurations")
 
         normalized = str(mode).lower()
 

@@ -70,7 +70,11 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
   const total = data?.total ?? executions.length;
   const { mutate: bulkCancel, isPending: isBulkCancelling } = useBulkCancelExecutions();
 
-  const hasFilters = Object.values(filters).some((v) => v);
+  // The page's own project scope is not a filter the user set: under a project,
+  // an empty list said "no executions match these filters" with none chosen.
+  const hasFilters = Object.entries(filters).some(
+    ([key, v]) => v && !(key === "project_id" && projectId && v === projectId),
+  );
   const sweepStats = computeSweepStats(executions);
 
   // Derive unique pipeline names for the filter dropdown
@@ -157,7 +161,12 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
         stickyHeader
         loading={isLoading}
         error={error ? "Failed to load executions." : undefined}
-        onRowClick={(ex) => selectExecution(selectedId === ex.id ? null : ex.id)}
+        onRowClick={(ex) =>
+          // A CLI run has no server logs: its record is its certificate.
+          ex.origin === "cli" && ex.project_id
+            ? setCertModal({ projectId: ex.project_id, runId: ex.certificate_run_id ?? ex.id })
+            : selectExecution(selectedId === ex.id ? null : ex.id)
+        }
         isRowSelected={(ex) => selectedId === ex.id}
         rowClassName={(ex) =>
           ex.status === "failed"
@@ -178,11 +187,11 @@ export function ExecutionHistoryPage({ projectId, header }: { projectId?: string
         empty={
           <EmptyState
             icon={hasFilters ? IconSearch : IconClockHour4}
-            title={hasFilters ? "No executions match these filters" : "No executions yet"}
+            title={hasFilters ? "No runs match these filters" : "No runs yet"}
             description={
               hasFilters
                 ? "Try adjusting or clearing the filters above."
-                : "Run a pipeline from the Pipeline page to see results here."
+                : "Run a pipeline from its page, or with ducta start, to see it here."
             }
           />
         }

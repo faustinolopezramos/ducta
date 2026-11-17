@@ -84,7 +84,7 @@ export function useExecutionState(
   const isQueued = execution?.status === "pending";
   const isRunning = execution?.status === "running";
   const isActive = isQueued || isRunning;
-  const isDone = execution?.status === "success" || execution?.status === "failed" || execution?.status === "cancelled" || execution?.status === "skipped";
+  const isDone = execution?.status === "success" || execution?.status === "failed" || execution?.status === "cancelled" || execution?.status === "skipped" || execution?.status === "interrupted";
   const isFailed = execution?.status === "failed";
 
   // Parents often pass inline callbacks. Reading them through a ref keeps the

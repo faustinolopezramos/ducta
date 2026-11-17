@@ -71,3 +71,28 @@ def test_run_reports_outcomes_and_where_it_failed(project):
 def test_tests_for_finds_files_that_call_the_function(project):
     assert covering_tests(project, "silver.f", "f") == ["tests/test_m.py"]
     assert covering_tests(project, "x", "nothing_calls_me") == []
+
+
+def test_tests_do_not_inherit_the_servers_secrets(tmp_path, monkeypatch):
+    """The project's tests are its own code: they must not see the server's JWT key or admin
+    password (a server that serves a project runs `tests/run` in its environment)."""
+    monkeypatch.setenv("JWT_SECRET_KEY", "probe-secret")
+    monkeypatch.setenv("DUCTA_ADMIN_PASSWORD", "probe-admin")
+    monkeypatch.setenv("DUCTA_TEST_ORDINARY_VAR", "kept")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_env.py").write_text(
+        textwrap.dedent(
+            """
+            import os
+
+            def test_secrets_are_gone():
+                assert os.environ.get("JWT_SECRET_KEY") is None
+                assert os.environ.get("DUCTA_ADMIN_PASSWORD") is None
+
+            def test_ordinary_variables_stay():
+                assert os.environ.get("DUCTA_TEST_ORDINARY_VAR") == "kept"
+            """
+        )
+    )
+    result = run_tests(tmp_path, ["tests/test_env.py"])
+    assert result["summary"] == {"passed": 2}, result

@@ -271,7 +271,7 @@ class TriggerScheduler:
             try:
                 previous = self._read_conf(spark_session, "spark.sql.shuffle.partitions")
                 spark_session.conf.set("spark.sql.shuffle.partitions", str(partitions))
-                logger.info("Streaming query '{}': shuffle.partitions={}", node_name, partitions)
+                logger.debug("Streaming query '{}': shuffle.partitions={}", node_name, partitions)
                 if previous is not None:
                     restores.append(
                         lambda: spark_session.conf.set("spark.sql.shuffle.partitions", previous)

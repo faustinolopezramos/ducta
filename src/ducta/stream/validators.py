@@ -42,6 +42,19 @@ TRIGGER_INTERVAL_FIELD = "streaming.trigger.interval"
 DEFAULT_SUPPORTED_OUTPUT_FORMATS = ["console", "memory", "delta", "parquet", "kafka", "json", "csv"]
 ALLOWED_FILE_FORMATS = {"parquet", "json", "csv", "orc", "text", "avro"}
 RESERVED_OUTPUT_KEYS = {"trigger", "outputMode", "checkpointLocation", "queryName"}
+#: Output modes each native streaming sink accepts (Spark's own rules); a node
+#: written per micro-batch (foreachBatch) accepts all three.
+NATIVE_SINK_OUTPUT_MODES: Dict[str, List[str]] = {
+    "parquet": ["append"],
+    "json": ["append"],
+    "csv": ["append"],
+    "delta": ["append", "complete"],
+    "memory": ["append", "complete"],
+    "kafka": ["append", "update", "complete"],
+    "console": ["append", "update", "complete"],
+}
+#: The only sinks the continuous trigger writes to.
+CONTINUOUS_SINKS = frozenset({"kafka", "console", "memory"})
 
 
 class StreamingValidator:
@@ -145,6 +158,7 @@ class StreamingValidator:
         self._validate_node_streaming_config(node_config, node_name)
         self._validate_node_function_config(node_config, node_name)
         self._validate_node_micro_batch_config(node_config, node_name)
+        self._validate_node_sink_compatibility(node_config, node_name)
 
     def _validate_node_structure(self, node_config: Dict[str, Any], node_name: str) -> None:
         """Validate basic node structure (Phase 1)."""
@@ -512,6 +526,65 @@ class StreamingValidator:
                 field="output.format",
                 expected=str(sorted(MICRO_BATCH_SINKS)),
                 actual=fmt,
+            )
+
+    def _validate_node_sink_compatibility(
+        self, node_config: Dict[str, Any], node_name: str
+    ) -> None:
+        """Output mode and trigger against the sink, before Spark refuses them at start.
+
+        A native sink supports only some output modes (``update`` on a parquet sink
+        used to pass ``ducta stream plan`` and fail when the query started). A node
+        written per micro-batch (merge, quarantine, quality) takes any mode. The
+        ``continuous`` trigger runs neither micro-batches nor file sinks nor event-time
+        state.
+        """
+        from ducta.stream.micro_batch import needs_micro_batch
+        from ducta.stream.query_manager import single_spec
+
+        output = single_spec(node_config, "output")
+        if not isinstance(output, dict):
+            return
+        fmt = str(output.get("format") or "").strip().lower()
+        streaming = node_config.get("streaming") or {}
+        mode = str(streaming.get("output_mode") or "append").strip().lower()
+        micro_batch = needs_micro_batch(node_config)
+
+        if not micro_batch and fmt in NATIVE_SINK_OUTPUT_MODES:
+            allowed = NATIVE_SINK_OUTPUT_MODES[fmt]
+            if mode not in allowed:
+                hint = (
+                    " To upsert an aggregation's changes into a table, use a delta sink "
+                    "with output.mode: merge (merge.keys = the grouping columns)."
+                    if mode == "update"
+                    else ""
+                )
+                raise StreamingValidationError(
+                    f"Node '{node_name}': a {fmt} sink does not support output_mode "
+                    f"'{mode}' (it supports {', '.join(allowed)}).{hint}",
+                    field="streaming.output_mode",
+                    expected=" | ".join(allowed),
+                    actual=mode,
+                )
+
+        trigger = streaming.get("trigger") or {}
+        kind = str(trigger.get("type") or "").strip().lower() if isinstance(trigger, dict) else ""
+        if kind != StreamingTrigger.CONTINUOUS.value:
+            return
+        problem = None
+        if micro_batch:
+            problem = "merge, quarantine and quality checks run per micro-batch"
+        elif fmt not in CONTINUOUS_SINKS:
+            problem = f"it writes only to {', '.join(sorted(CONTINUOUS_SINKS))}, not {fmt}"
+        elif streaming.get("watermark"):
+            problem = "it keeps no event-time state (watermark, aggregations, joins)"
+        if problem:
+            raise StreamingValidationError(
+                f"Node '{node_name}' cannot use the continuous trigger: {problem}. "
+                "Use processing_time (a short interval) instead.",
+                field="streaming.trigger.type",
+                expected="processing_time | available_now | once | adaptive",
+                actual=kind,
             )
 
     def _validate_file_output_path(

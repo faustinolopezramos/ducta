@@ -511,7 +511,9 @@ class GateSpec(_Strict):
     )
     enabled: Optional[bool] = None
     name: Optional[str] = None
-    consume_from: Optional[str] = None
+    consume_from: Optional[str] = Field(
+        default=None, description="Accepted but not used: the engine does not read it"
+    )
     output: Optional[Dict[str, Any]] = None
 
 

@@ -1,138 +1,263 @@
-/* One row per node: a dot, a name, a sentence, a trend and a rate. Detail opens on click. */
-.stream-panel { display: grid; gap: 4px; font-size: var(--text-xs); }
-.stream-panel__head { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 6px; }
+/*
+ * The stream monitor. Compact (above the logs): one row per node. Full (the Stream tab):
+ * what is wrong, four figures, the throughput chart and a table of nodes.
+ *
+ * Theme tokens only. `--surface-muted` was never defined in the theme, so the panel derives
+ * its own tints from tokens that are: they follow both themes.
+ */
+.streaming-status-panel {
+  --st-muted: color-mix(in srgb, var(--text) 4%, var(--surface));
+  --st-line: var(--border-hover, var(--border));
+  --st-warn: var(--warning-strong, var(--warning));
+  --st-cols: 120px minmax(130px, 1fr) minmax(0, 1.3fr) 88px 70px 62px 16px;
+  --st-action: 112px;
+
+  container-type: inline-size;
+  display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 8px 16px; max-height: 320px; overflow-y: auto;
+  border-bottom: 1px solid var(--border); background: var(--surface);
+  font-size: var(--text-xs);
+}
+/* tokens.css re-declares --warning-strong after the dark theme, so in dark it stays a dark brown:
+   say the vivid warning here, as the theme's own comment intends. */
+[data-theme="dark"] .streaming-status-panel { --st-warn: var(--warning); }
+.streaming-status-panel--full { padding: 24px 28px 28px; max-height: 100%; border-bottom: 0; background: var(--surface); font-size: var(--text-sm); }
+
+.stream-panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.stream-panel:not(.stream-panel--compact) { gap: 20px; }
+.stream-panel__head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 14px; padding: 2px 0 6px; }
+.stream-panel:not(.stream-panel--compact) .stream-panel__head { padding: 0; }
 .stream-panel__name { font-family: var(--font-mono); font-weight: var(--weight-semibold); color: var(--text); }
+.stream-panel:not(.stream-panel--compact) .stream-panel__name { font-size: var(--text-lg); letter-spacing: var(--tracking-tight); }
 .stream-panel__sub { color: var(--text-muted); }
 .stream-panel__note { margin-top: 4px; color: var(--danger); word-break: break-word; }
 
-.stream-rows { list-style: none; margin: 0; padding: 0; }
-.stream-row { display: grid; grid-template-columns: 1fr auto; align-items: center; column-gap: 12px; border-top: 1px solid var(--border); }
-.stream-row__main {
-  display: grid; grid-template-columns: 14px 150px minmax(0, 1fr) 96px 72px; align-items: center; gap: 12px;
-  min-height: 30px; padding: 4px 0; width: 100%;
-  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
-}
-.stream-row__main:hover .stream-row__name { text-decoration: underline; text-decoration-color: var(--text-dim); }
-.stream-row__name { font-family: var(--font-mono); font-weight: var(--weight-semibold); color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stream-row__text { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stream-row__text--warn { color: var(--warning); }
-.stream-row__text--bad { color: var(--danger); }
-.stream-row__rate { font-family: var(--font-mono); text-align: right; color: var(--text); }
-.stream-row__rate--none { color: var(--text-dim); }
-.stream-row__action { min-width: 64px; display: flex; justify-content: flex-end; }
-
-.stream-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); display: inline-block; }
+/* ── Dots and chips: the state is always said in words; these only back it up ── */
+.stream-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); display: inline-block; flex: none; }
 .stream-dot--active { background: var(--success); }
 .stream-dot--stalled { background: var(--warning); }
 .stream-dot--failed { background: var(--danger); }
-
-.stream-row__more { grid-column: 1 / -1; padding: 0 0 10px 26px; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); line-height: 1.7; }
-.stream-row__more b { font-weight: normal; color: var(--text); }
-.stream-row__more button { margin: 4px 0 0 -10px; } /* the button's own padding lines its label up with the text */
-
-/* ── KPI Summary Cards ── */
-.stream-kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 8px;
-  margin: 6px 0 10px;
+/* The live pulse: a ring that grows and fades. Transform and opacity only, so the compositor
+   runs it without repainting the page on every frame (a box-shadow animation repaints). */
+.stream-dot--live { position: relative; }
+.stream-dot--live::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; background: inherit;
+  animation: stream-pulse 2.4s ease-out infinite; will-change: transform, opacity;
 }
-.stream-kpi-card {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-}
-.stream-kpi-label {
-  font-size: var(--text-2xs);
-  color: var(--text-dim);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  font-weight: var(--weight-medium);
-}
-.stream-kpi-value {
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-bold);
-  color: var(--text);
-}
-.stream-kpi-value--good {
-  color: var(--success);
-}
-.stream-kpi-value--warn {
-  color: var(--warning);
-}
-.stream-kpi-sub {
-  font-size: var(--text-2xs);
-  color: var(--text-muted);
+@keyframes stream-pulse {
+  0% { transform: scale(1); opacity: 0.55; }
+  70%, 100% { transform: scale(2.75); opacity: 0; }
 }
 
-/* ── Filter Chips ── */
-.stream-filters {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 8px;
+.stream-chip {
+  display: inline-flex; align-items: center; gap: 7px; padding: 3px 10px; border-radius: var(--radius-pill, 999px);
+  border: 1px solid var(--border); background: var(--st-muted); color: var(--text-muted);
+  font-size: var(--text-xs); font-weight: var(--weight-medium); white-space: nowrap;
 }
-.stream-filter-chip {
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  color: var(--text-muted);
-  font-size: var(--text-2xs);
-  cursor: pointer;
-  transition: all var(--dur-fast) ease;
-}
-.stream-filter-chip:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
-.stream-filter-chip.is-active {
-  background: var(--primary);
-  border-color: var(--primary);
-  color: #fff;
-}
-.stream-filter-chip--alert.is-active {
-  background: var(--danger);
-  border-color: var(--danger);
-}
+.stream-chip__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-dim); }
+.stream-chip--good { color: var(--success); border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 9%, transparent); }
+.stream-chip--good .stream-chip__dot { background: var(--success); }
+.stream-chip--warn { color: var(--st-warn); border-color: color-mix(in srgb, var(--warning) 40%, var(--border)); background: color-mix(in srgb, var(--warning) 10%, transparent); }
+.stream-chip--warn .stream-chip__dot { background: var(--warning); }
+.stream-chip--bad { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.stream-chip--bad .stream-chip__dot { background: var(--danger); }
 
-/* ── Backpressure and Checkpoint Copy ── */
+/* ── The stream's figures in one strip of labelled cells: the rate is the figure ── */
+.stream-headline {
+  --sh-warn: var(--warning-strong, var(--warning));
+  display: flex; flex-wrap: wrap; align-items: stretch;
+  border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);
+  color: var(--text-muted); font-size: var(--text-sm);
+}
+[data-theme="dark"] .stream-headline { --sh-warn: var(--warning); }
+.stream-headline__cell { flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px; padding: 14px 20px; box-shadow: -1px 0 0 color-mix(in srgb, var(--border) 60%, transparent); }
+.stream-headline__cell:first-child { box-shadow: none; }
+.stream-headline__rate { flex-basis: 240px; }
+.stream-headline__extra { flex: 0 1 200px; }
+.stream-headline__label { font-size: var(--text-xs); color: var(--text-dim); }
+.stream-headline__value { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; }
+.stream-headline b { font: var(--weight-semibold) var(--text-base, 15px)/1.3 var(--font-mono); color: var(--text); font-variant-numeric: tabular-nums; }
+.stream-headline small { font-size: var(--text-xs); color: var(--text-muted); }
+.stream-headline small.is-good { color: var(--success); }
+.stream-headline small.is-warn { color: var(--sh-warn); }
+.stream-headline small.is-bad { color: var(--danger); }
+.stream-headline b.is-text { font-family: var(--font-sans); }
+.stream-headline__rate b { font-size: 24px; line-height: 1.1; letter-spacing: -0.02em; }
+.stream-headline__lag b, .stream-headline__lag small { color: var(--sh-warn); }
+
+.stream-panel__stop { margin-left: auto; }
+
+/* ── Cards: the chart and the table of nodes ── */
+.stream-card { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); }
+.stream-card > .throughput-chart { padding: 4px 14px 12px 20px; box-sizing: border-box; }
+.stream-card__head { display: flex; align-items: center; gap: 14px; padding: 13px 20px 0; }
+.stream-card__head h3 { margin: 0; font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text); }
+.stream-card__hint { margin-left: auto; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--text-dim); }
+.stream-card__window { flex: none; }
+.stream-focus-chip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 10px; border: 1px solid color-mix(in srgb, var(--primary) 40%, var(--border));
+  border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--text);
+  font: var(--weight-medium) var(--text-xs) var(--font-mono); cursor: pointer;
+}
+.stream-focus-chip:hover { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.stream-focus-chip:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.stream-card__count { margin-left: 6px; font-weight: var(--weight-regular); color: var(--text-muted); }
+.stream-legend { display: inline-flex; gap: 16px; font-size: var(--text-xs); color: var(--text-muted); }
+.stream-legend i { display: inline-block; width: 14px; margin-right: 6px; vertical-align: middle; border-top: 2px solid var(--primary); border-radius: 2px; }
+.stream-legend i.is-dashed { border-top: 2px dashed var(--text-dim); }
+
+.stream-card--table { overflow: hidden; }
+.stream-card--table > .stream-card__head { padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.stream-cols,
+.stream-panel:not(.stream-panel--compact) .stream-row__main { display: grid; grid-template-columns: var(--st-cols); align-items: center; gap: 14px; }
+.stream-cols { padding: 8px calc(20px + var(--st-action) + 12px) 8px 20px; background: var(--st-muted); border-bottom: 1px solid var(--border); font-size: var(--text-2xs); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.stream-cols > :nth-child(5), .stream-cols > :nth-child(6) { text-align: right; }
+
+/* ── Rows ── */
+.stream-rows { list-style: none; margin: 0; padding: 0; }
+.stream-row { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 12px; border-top: 1px solid var(--border); }
+.stream-card--table .stream-row:first-child { border-top: 0; }
+.stream-row--failed::before, .stream-row--stalled::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
+.stream-row--failed::before { background: var(--danger); }
+.stream-row--stalled::before { background: var(--warning); }
+
+.stream-row__main {
+  display: grid; grid-template-columns: 116px minmax(0, 1fr) 84px 64px 14px; align-items: center; gap: 12px;
+  min-height: 30px; padding: 4px 0; width: 100%;
+  background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.stream-panel:not(.stream-panel--compact) .stream-row__main { min-height: 52px; padding: 12px 20px; }
+.stream-row__main:hover { background: var(--surface-hover); }
+.stream-row__main:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.stream-panel--compact .stream-row__flow, .stream-panel--compact .stream-row__latency { display: none; }
+
+.stream-row__state { display: inline-flex; align-items: center; gap: 8px; font-weight: var(--weight-medium); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; }
+.stream-row__state--good { color: var(--text); }
+.stream-row__state--muted { color: var(--text-muted); }
+.stream-row__state--warn { color: var(--st-warn); }
+.stream-row__state--bad { color: var(--danger); }
+.stream-row__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-weight: var(--weight-semibold); color: var(--text); }
+.stream-row__note { display: block; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-sans); font-weight: var(--weight-regular); font-size: var(--text-xs); color: var(--text-muted); }
+.stream-panel:not(.stream-panel--compact) .stream-row__note { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }
+.stream-row__note--bad { color: var(--danger); }
+.stream-row__note--warn { color: var(--st-warn); }
+.stream-row__flow { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; color: var(--text-muted); }
+.stream-kind { flex: none; padding: 1px 7px; border-radius: 5px; background: var(--st-muted); border: 1px solid var(--border); font: var(--weight-medium) var(--text-2xs) var(--font-mono); color: var(--text); }
+.stream-row__arrow { color: var(--text-dim); }
+.stream-row__target { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--font-mono); font-size: var(--text-xs); }
+.stream-row__trend { display: flex; align-items: center; }
+.stream-row__flatline { width: 100%; border-top: 1.5px dashed var(--st-line); }
+.stream-row__rate, .stream-row__latency { font-family: var(--font-mono); font-size: var(--text-sm); font-weight: var(--weight-medium); text-align: right; color: var(--text); font-variant-numeric: tabular-nums; }
+.stream-row__rate--none { color: var(--text-dim); }
+.stream-row__chevron { color: var(--text-dim); transition: transform var(--dur-fast, 120ms); }
+.stream-row.is-open .stream-row__chevron { transform: rotate(90deg); }
+.stream-row__action { min-width: 64px; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.stream-panel:not(.stream-panel--compact) .stream-row__action { min-width: var(--st-action); padding-right: 8px; box-sizing: border-box; }
+.stream-pin { display: inline-grid; place-items: center; width: 28px; height: 28px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-dim); cursor: pointer; }
+.stream-pin:hover { background: var(--surface-hover); color: var(--text); }
+.stream-pin[aria-pressed="true"] { color: var(--primary); border-color: color-mix(in srgb, var(--primary) 40%, var(--border)); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.stream-pin:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+/* A row opened: the error in full, the facts, then the way out. */
+.stream-row__more { grid-column: 1 / -1; display: grid; gap: 12px; padding: 2px 20px 16px 166px; }
+.stream-panel--compact .stream-row__more { padding: 0 0 10px 26px; }
+.stream-row__actions { display: flex; gap: 8px; }
+.stream-errbox { padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--border)); border-radius: var(--radius); background: color-mix(in srgb, var(--danger) 6%, var(--surface)); color: var(--danger); font: var(--text-xs) / 1.55 var(--font-mono); overflow-wrap: anywhere; }
+
+/* What a node reads, writes and checkpoints. The sentence form is also the node focus panel's. */
+.stream-detail { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); line-height: 1.7; overflow-wrap: anywhere; }
+.stream-detail b { font-weight: normal; color: var(--text); }
+.stream-detail--grid { display: grid; gap: 12px; font-size: var(--text-xs); line-height: 1.5; }
+.stream-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px 24px; margin: 0; }
+.stream-facts > div { min-width: 0; }
+.stream-facts dt { font-family: var(--font-sans); font-size: var(--text-2xs); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.stream-facts dd { margin: 2px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); color: var(--text); }
+.stream-detail__path { padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--st-muted); color: var(--text); font: inherit; overflow-wrap: anywhere; }
+
 .stream-row__backpressure {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warning) 12%, transparent);
-  color: var(--warning);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-medium);
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 4px; padding: 2px 8px;
+  border-radius: var(--radius-sm); background: color-mix(in srgb, var(--warning) 12%, transparent);
+  color: var(--st-warn); font-size: var(--text-2xs); font-weight: var(--weight-medium);
+}
+.stream-row__checkpoint-wrap { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.stream-copy-btn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 1px 6px; border-radius: var(--radius-sm);
+  background: var(--st-muted); border: 1px solid var(--border); color: var(--text-muted); font-size: var(--text-2xs); cursor: pointer;
+}
+.stream-copy-btn:hover { background: var(--surface-hover); color: var(--text); }
+.stream-copy-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.stream-live { display: flex; align-items: center; gap: 8px; color: var(--text-dim); font-size: var(--text-xs); }
+
+/* ── Before there is a live status: starting (skeletons), stopped or never started (dashes) ── */
+.stream-placeholder { min-height: 100%; }
+.stream-panel__start { margin-left: auto; }
+.stream-chip--muted { color: var(--text-muted); }
+.stream-dot--spin { background: transparent; border: 2px solid var(--st-line); border-top-color: var(--primary); box-sizing: border-box; animation: stream-spin 0.8s linear infinite; }
+@keyframes stream-spin { to { transform: rotate(360deg); } }
+.stream-skel {
+  display: inline-block; width: 110px; height: 10px; border-radius: 5px;
+  background: linear-gradient(90deg, var(--st-muted), var(--surface-hover), var(--st-muted)); background-size: 200% 100%;
+  animation: stream-shimmer 1.4s linear infinite;
+}
+.stream-skel--figure { width: 70px; height: 24px; border-radius: 6px; }
+@keyframes stream-shimmer { to { background-position: -200% 0; } }
+.stream-figure__none { color: var(--text-dim); }
+.stream-card__empty { display: grid; place-items: center; height: 190px; color: var(--text-dim); font-size: var(--text-sm); }
+.stream-row__main--static { cursor: default; }
+.stream-row__main--static:hover { background: none; }
+
+/* ── A narrow panel (inspector open, small window): fewer columns, the same rows ── */
+@container (max-width: 700px) {
+  .streaming-status-panel--full { padding: 18px 16px; }
+  .stream-headline { gap: 4px 20px; }
+  .stream-card__head { flex-wrap: wrap; }
+  .stream-cols, .stream-panel:not(.stream-panel--compact) .stream-row__main { grid-template-columns: 116px minmax(0, 1fr) 76px 20px; }
+  .stream-cols > :nth-child(3), .stream-cols > :nth-child(4), .stream-cols > :nth-child(6),
+  .stream-panel:not(.stream-panel--compact) :is(.stream-row__flow, .stream-row__trend, .stream-row__latency) { display: none; }
+  .stream-panel:not(.stream-panel--compact) .stream-row__more { padding-left: 20px; }
+  .stream-cols { padding-right: calc(20px + var(--st-action) + 12px); }
+}
+@container (max-width: 560px) {
+  .stream-panel--compact .stream-row__main { grid-template-columns: 110px minmax(0, 1fr) 64px 14px; }
+  .stream-panel--compact .stream-row__trend { display: none; }
 }
 
-.stream-row__checkpoint-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+@media (prefers-reduced-motion: reduce) {
+  .stream-dot--live::after, .stream-dot--spin, .stream-skel { animation: none; }
+  .stream-dot--live::after { opacity: 0; }
+  .stream-row__chevron { transition: none; }
 }
-.stream-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: var(--text-2xs);
-  cursor: pointer;
-}
-.stream-copy-btn:hover {
-  background: var(--surface-hover);
-  color: var(--text);
-}
+
+/* What a stream node would do when it starts: its facts, problems and the Start dialog's list. */
+.stream-plan { margin-top: 2px; }
+.stream-plan__issues { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.stream-plan__issue { display: flex; align-items: flex-start; gap: 6px; font-size: var(--text-xs); line-height: 1.45; color: var(--text-muted); }
+.stream-plan__issue svg { flex: none; margin-top: 2px; }
+.stream-plan__issue[data-level="error"] { color: var(--danger); }
+.stream-plan__issue[data-level="warning"] svg { color: var(--warning); }
+
+.stream-plan-list { display: grid; gap: 8px; }
+.stream-plan-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.stream-plan-list__row { display: flex; align-items: flex-start; gap: 8px; font-size: var(--text-sm); }
+.stream-plan-list__mark { flex: none; margin-top: 1px; color: var(--success); display: inline-flex; }
+.stream-plan-list__row[data-bad="true"] .stream-plan-list__mark { color: var(--danger); }
+.stream-plan-list__body { display: grid; gap: 2px; min-width: 0; }
+.stream-plan-list__what { font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--text-muted); overflow-wrap: anywhere; }
+.stream-plan-list__problem { font-size: var(--text-xs); color: var(--text-muted); }
+.stream-plan-list__problem[data-level="error"] { color: var(--danger); }
+
+/* A running stream as one line in a table cell: it never wraps, it is cut with an ellipsis. */
+.stream-live-line { max-width: 100%; }
+.stream-live-line__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* The pipeline page's one-line way into a stream's monitor (it is a page now, not a dock tab). */
+.stream-launcher { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; padding: 14px 20px; font-size: var(--text-sm); color: var(--text); }
+.stream-launcher__text { font-weight: var(--weight-medium); }
+.stream-launcher__sub { color: var(--text-muted); font-size: var(--text-xs); }
+.stream-launcher__actions { display: inline-flex; align-items: center; gap: 14px; margin-left: auto; }
+.stream-launcher__link { display: inline-flex; align-items: center; gap: 4px; color: var(--primary); text-decoration: none; font-weight: var(--weight-medium); }
+.stream-launcher__link:hover { text-decoration: underline; }
+.stream-launcher__link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+.stream-live-line__link { color: inherit; text-decoration: none; max-width: 100%; }
+.stream-live-line__link:hover .stream-live-line__text { text-decoration: underline; }
+.stream-live-line__link:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }

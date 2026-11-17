@@ -151,7 +151,11 @@ A stream node
    * - ``input``
      - The source: ``format`` (``kafka``, ``kinesis``, ``delta_stream``,
        ``file_stream`` with ``file_format``, ``rate``, ``socket``), ``options``
-       passed to Spark, and for file streams a ``schema``. A ``delta_stream``
+       passed to Spark, and for file streams a ``schema`` (a DDL string such as
+       ``"id INT, ts TIMESTAMP"``). A ``kafka`` source with ``parse_json: true`` and a
+       ``json_schema`` (a DDL string) parses the message ``value`` into columns, next
+       to ``timestamp``, ``topic``, ``partition`` and ``offset``; without a valid
+       ``json_schema`` the raw Kafka columns are kept and a warning is logged. A ``delta_stream``
        streams the table's appended data; set ``options: {readChangeFeed: true}`` to
        stream its change data feed instead (``auto_enable_cdf``, on by default,
        then turns the feed on for a table without it — Ducta never alters a table
@@ -167,7 +171,8 @@ A stream node
        the query starts; a restart resolves it again.
    * - ``output``
      - The sink: ``format`` (``delta``, ``parquet``, ``json``, ``csv``, ``kafka``,
-       ``console``, ``memory``), ``path`` and ``options``.
+       ``console``, ``memory``), ``path``, ``options`` and, for the file and Delta
+       sinks, ``partitionBy`` (a column name or a list of them).
    * - ``streaming``
      - ``checkpoint_location``, ``output_mode``, ``trigger`` and
        ``watermark``. Omitted keys default to a ``processing_time`` trigger
@@ -292,6 +297,111 @@ append is a Spark job). Checks that cannot run at all — a misspelled ``severit
 broken gate, an unknown profile — stop the query instead of letting the batch through
 unchecked.
 
+Aggregations and output modes
+-----------------------------
+
+A node that aggregates (``groupBy`` with a window, ``dropDuplicates`` with a
+watermark) keeps **state**: Spark holds each open window until the watermark passes
+it. Which ``streaming.output_mode`` a sink takes is Spark's rule, and Ducta checks it
+before the query starts (``ducta stream plan`` reports it as an error):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Sink
+     - Output modes
+   * - ``parquet``, ``json``, ``csv``
+     - ``append`` (a window is written once, when the watermark closes it)
+   * - ``delta``, ``memory``
+     - ``append``, ``complete``
+   * - ``kafka``, ``console``
+     - ``append``, ``update``, ``complete``
+   * - any sink with ``merge``, ``quarantine`` or ``quality``
+     - all three (written per micro-batch)
+
+To keep a table of running totals up to date (each batch upserts the windows or
+keys it changed), use ``output_mode: update`` with a Delta ``merge`` on the
+grouping columns:
+
+.. code-block:: yaml
+
+   orders_per_minute:
+     kind: stream
+     stream:
+       transform: {key: count_per_minute, module: pipelines.transforms}
+       input: {format: kafka, options: {kafka.bootstrap.servers: localhost:9092, subscribe: orders}}
+       output:
+         format: delta
+         path: ${paths.output}/${env}/gold/orders_per_minute
+         mode: merge
+         merge: {keys: [window_start, region]}
+       streaming:
+         output_mode: update
+         watermark: {column: event_time, delay: 10 minutes}
+         shuffle_partitions: 16
+
+**Set** ``shuffle_partitions`` **on a stateful node.** Spark fixes the state's
+partition count in the checkpoint on the first run and ignores later changes; the
+default is twice the cores of the machine that ran first, so a laptop run would pin
+a production query to it. ``ducta stream plan`` warns about a stateful node without
+it (``streaming.shuffle_partitions`` or ``settings.streaming_shuffle_partitions``).
+
+The ``continuous`` trigger writes only to ``kafka``, ``console`` and ``memory``, and
+runs neither micro-batches (merge, quarantine, quality) nor event-time state; Ducta
+rejects those combinations.
+
+**What the state looks like while it runs.** For every node, the status
+(``StreamingPipelineManager.get_pipeline_status``, the server's
+``GET /executions/{id}/streaming``) and each journal line carry what Spark reports:
+``watermark``, ``state_rows`` and ``state_memory_bytes`` (rows and bytes held in
+state), ``late_rows_dropped`` (rows that arrived after the watermark and were
+discarded), ``source_lag`` (Kafka offsets, or Delta files, not read yet) and
+``sources`` (what the query reads). A node's journal summary, and so its
+certificate entry, keeps the last state and the total of late rows. A growing
+``state_rows`` means the watermark is not advancing; a growing ``source_lag`` means
+the node cannot keep up with its input.
+
+Joins
+-----
+
+A node declares one ``input``. A join is written in its transform, which receives
+the input as a DataFrame and can read anything else through
+``df.sparkSession``:
+
+.. code-block:: python
+
+   from pyspark.sql import functions as F
+
+   def enrich_orders(df, params):
+       # Stream-static: the dimension is read again on every batch (Delta: its latest version).
+       customers = df.sparkSession.read.format("delta").load(params["customers_path"])
+       return df.join(customers, "customer_id", "left")
+
+   def match_payments(df, params):
+       # Stream-stream: a watermark on both sides and a time bound in the condition,
+       # or Spark keeps both sides in state for ever.
+       payments = (
+           df.sparkSession.readStream.format("kafka")
+           .option("kafka.bootstrap.servers", params["servers"])
+           .option("subscribe", "payments")
+           .load()
+           .select(F.from_json(F.col("value").cast("string"), params["schema"]).alias("p"))
+           .select("p.*")
+           .withWatermark("paid_at", "15 minutes")
+       )
+       return df.join(
+           payments,
+           F.expr("order_id = payment_order_id AND "
+                  "paid_at BETWEEN created_at AND created_at + interval 1 hour"),
+       )
+
+The node's own ``streaming.watermark`` applies to its declared input (``created_at``
+above); the other side sets its own in the transform. One checkpoint covers both
+sources. The node's ``sources`` (status and journal) lists what Spark really reads,
+so a join shows two sources where the node declares one. Options a transform passes
+to a reader (broker credentials) come from ``params`` or the environment: they are
+not read from the node's ``input``.
+
 Running
 -------
 
@@ -331,6 +441,51 @@ ui``, or ``POST .../pipelines/{name}/execute``): ``GET
 /api/executions/{id}/cancel`` stops it. ``ducta stream status`` and ``ducta
 stream stop`` only see streams of their own process — a stream started by
 another command or by the server is not visible to them.
+
+Streaming settings
+~~~~~~~~~~~~~~~~~~
+
+Under ``settings`` (or an environment's ``settings``). The restart, health,
+alert, adaptive-trigger and quality-report settings are described where they
+apply below; these are the rest:
+
+.. list-table::
+   :widths: 38 62
+   :header-rows: 1
+
+   * - Setting
+     - Effect (default)
+   * - ``max_streaming_pipelines``
+     - Streaming pipelines one process runs at the same time (5).
+   * - ``checkpoints_base``
+     - Base folder for the checkpoints of nodes that set no
+       ``checkpoint_location`` (``<paths.output>/<env>/streaming_checkpoints``). It is
+       scoped by environment even if you do not write ``${env}`` in it.
+   * - ``streaming_node_start_retries`` / ``streaming_node_start_retry_delay_seconds``
+     - Attempts to start a node's query, and seconds between them (45 and 2).
+       This is what rides out a Delta table that is not initialised yet.
+   * - ``streaming_node_start_parallelism``
+     - Nodes of one wave started at the same time (8).
+   * - ``streaming_status_cache_ttl_seconds``
+     - How long a status snapshot is reused before Spark is asked again (2).
+   * - ``streaming_disable_backpressure_defaults``
+     - ``false`` (default): a source that sets no rate limit gets Ducta's
+       (``maxFilesPerTrigger``, ``maxOffsetsPerTrigger``) so a large backlog is
+       read in steps. ``true`` leaves every source as you wrote it.
+   * - ``stream_journal_dir``
+     - Where runs are journaled (``<paths.output>/<env>/.ducta/streams``).
+
+A ``kafka`` source or sink needs Spark's Kafka connector, which Ducta does **not**
+add for you (it does add Delta's). Put the package for your Spark in
+``spark_config``, with the Scala suffix of your build (``_2.12`` for Spark 3.5,
+``_2.13`` for Spark 4)::
+
+   settings:
+     spark_config:
+       spark.jars.packages: org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0
+
+Without it the first start fails with ``Failed to find data source: kafka`` and the
+message names the coordinate to use.
 
 Terminating runs (backfills and CI)
 -----------------------------------
@@ -408,6 +563,17 @@ Fault tolerance
   initialised).
 - **A node that ends can start again**: a query that failed or finished frees its
   checkpoint, so ``restart_node`` (and the next run) can start it again.
+- **A query that fails while running is restarted**: after
+  ``streaming_restart_backoff_seconds`` (default 10), doubled for each next attempt
+  up to 300 seconds, at most ``streaming_restart_max_attempts`` times (default 3; 0
+  turns it off). It resumes from its checkpoint, so nothing is lost or read twice.
+  Meanwhile the node reads ``restarting`` and the run stays up. A failure that comes
+  back every time (a record a transform cannot handle) ends in ``failed_nodes`` as
+  ``gave up after N restart(s): <error>``, with the ``stream_failed`` alert. Each
+  restart is a ``restart`` line in the journal and a ``stream_restarted`` event; a
+  query that then runs ten minutes without failing starts its count again. A stop
+  cancels a scheduled restart, and a query that ends cleanly (``once``,
+  ``available_now``) is not restarted.
 - **A failed terminating upstream stops its dependants**: nodes ordered ``after`` a
   ``once``/``available_now`` node that died are skipped, not started on its
   partial output.
@@ -426,9 +592,11 @@ Fault tolerance
   and its rows read, written and quarantined.
 - **Live alerts**: ``alerts:`` rules can name ``stream_failed``,
   ``stream_stalled`` and ``stream_quarantine``. They are sent while the stream
-  runs: a failure or stall once until it recovers, and quarantine at once, then at
+  runs: a failure (once the restarts are used up) or stall once until it recovers,
+  and quarantine at once, then at
   most every ``streaming_quarantine_alert_interval_seconds``. Health is checked
-  every ``streaming_health_interval_seconds``, not only when someone asks for it.
+  every ``streaming_health_interval_seconds`` (default 30; 0 turns it off), not
+  only when someone asks for it.
 
 From Python
 -----------

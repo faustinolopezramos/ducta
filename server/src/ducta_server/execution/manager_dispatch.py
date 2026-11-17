@@ -471,7 +471,7 @@ class _DispatchMixin(_Base):
         if original.status not in _TERMINAL_STATUSES:
             raise ValueError(
                 f"Cannot retry execution in state '{original.status.value}'; "
-                "only terminal executions (success, failed, cancelled) can be retried."
+                "only terminal executions (success, failed, cancelled, interrupted) can be retried."
             )
         return self.execute(
             source_path=source_path,

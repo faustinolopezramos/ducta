@@ -242,6 +242,9 @@
   margin: -12px 0 16px;
 }
 
+.projects-modal__kind { margin-bottom: 8px; }
+.projects-modal__hint--below { margin-top: 0; }
+
 .projects-modal__actions {
   display: flex;
   gap: 10px;

@@ -11,6 +11,8 @@ export * from './codeIndex';
 export * from './problems';
 export * from './staleness';
 export * from './nodeConfig';
+export * from './streamPlan';
+export * from './streamRows';
 export * from './nodeTests';
 export * from './comments';
 export * from './nodeQuality';

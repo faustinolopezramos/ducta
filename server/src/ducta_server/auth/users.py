@@ -55,7 +55,7 @@ class UserStore:
         settings = get_settings()
         admin_password = resolve_admin_password(
             os.environ.get("DUCTA_ADMIN_PASSWORD"),
-            is_production=settings.is_production(),
+            strict=settings.requires_strong_credentials(),
         )
 
         self._add_user(

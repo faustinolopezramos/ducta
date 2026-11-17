@@ -362,6 +362,18 @@ class GlobalConfigSchema(BaseModel):
         "which the 'stream_failed'/'stream_stalled' alerts report (default 30; 0 turns "
         "the check off).",
     )
+    streaming_restart_max_attempts: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="How many times a stream node whose query fails while running is "
+        "started again before it is failed for good (default 3; 0 turns restarts off).",
+    )
+    streaming_restart_backoff_seconds: Optional[float] = Field(
+        default=None,
+        ge=0,
+        description="Wait before a node's first automatic restart; doubled for each "
+        "next one, at most 300 seconds (default 10).",
+    )
     streaming_quarantine_alert_interval_seconds: Optional[float] = Field(
         default=None,
         description="A node's first quarantined batch is reported at once; later ones "
@@ -634,10 +646,7 @@ class QualityGateSchema(BaseModel):
     )
     consume_from: Optional[str] = Field(
         default=None,
-        description=(
-            "Source of quality reports for gate evaluation: 'memory' (realtime) "
-            "or 'persisted' (from storage). If None, falls back to memory."
-        ),
+        description="Accepted but not used: the engine does not read it",
     )
     behavior: Literal["skip_downstream", "stop_all", "warn_only"] = Field(
         default="skip_downstream",

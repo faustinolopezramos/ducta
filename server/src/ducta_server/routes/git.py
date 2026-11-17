@@ -57,6 +57,7 @@ from ducta_server.models.git_sync import (
     GitSyncStatus,
     GitWorkingDiffResponse,
 )
+from ducta_server.workspace.manager import SecretFileError
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
 
@@ -72,6 +73,18 @@ def _validate_sha(sha: str) -> None:
 def _safe_rel(root, path: str) -> str:
     with http_error_on(400):
         return str(safe_path(root, path).relative_to(root))
+
+
+def _refuse_unreadable(manager, path: str) -> None:
+    """403 for a path the file API refuses to read (``.env``, ``.git/``): git must not serve it either."""
+    with http_error_on(403, SecretFileError):
+        manager.ensure_readable(path)
+
+
+def _refuse_unwritable(manager, path: str) -> None:
+    """403 for a path the file API refuses to write (secrets, ``.git/``, ``.ducta/``)."""
+    with http_error_on(403, SecretFileError):
+        manager.ensure_writable(path)
 
 
 def _build_git_status(status: dict) -> GitSyncStatus:
@@ -169,6 +182,8 @@ async def get_diff_between(
     _validate_sha(sha1)
     _validate_sha(sha2)
     safe_file_path = _safe_rel(manager.root, path) if path else None
+    if safe_file_path:
+        _refuse_unreadable(manager, safe_file_path)
     diff_text = manager.get_git_diff(sha1, sha2, path=safe_file_path)
     return DiffResponse(commit_a=sha1, commit_b=sha2, path=safe_file_path, diff=diff_text)
 
@@ -181,6 +196,7 @@ async def get_diff_between(
 async def revert_file(body: RevertRequest, manager: WorkspaceManagerDep) -> RevertResponse:
     _validate_sha(body.commit)
     safe_file_path = _safe_rel(manager.root, body.path)
+    _refuse_unwritable(manager, safe_file_path)
     with http_error_on(400):
         new_sha = manager.revert_file(safe_file_path, body.commit, message=body.message)
     return RevertResponse(path=safe_file_path, restored_from=body.commit, new_commit_sha=new_sha)
@@ -193,6 +209,7 @@ async def revert_file(body: RevertRequest, manager: WorkspaceManagerDep) -> Reve
 )
 async def git_blame(path: str, manager: WorkspaceManagerDep) -> BlameResponse:
     safe_file_path = _safe_rel(manager.root, path)
+    _refuse_unreadable(manager, safe_file_path)
     with http_error_on(400):
         lines = [BlameLine(**line) for line in manager.get_file_blame(safe_file_path)]
     return BlameResponse(path=safe_file_path, lines=lines)
@@ -358,9 +375,12 @@ def _changes(git_sync) -> GitChangesResponse:
     summary="A file at HEAD and on disk, for a side-by-side diff",
     dependencies=[Depends(require_permission("git.read"))],
 )
-async def get_working_diff(path: str, git_sync: GitSyncManagerDep) -> GitWorkingDiffResponse:
+async def get_working_diff(
+    path: str, git_sync: GitSyncManagerDep, manager: WorkspaceManagerDep
+) -> GitWorkingDiffResponse:
     with http_error_on(400):
         safe_path(git_sync.workspace_root, path)
+    _refuse_unreadable(manager, path)  # git would hand over the .env the file API refuses
     if not git_sync.is_available():
         raise HTTPException(status_code=409, detail="Git is not available in this workspace")
     result = await run_in_threadpool(git_sync.working_diff, path)
@@ -391,10 +411,13 @@ class GitFileAtResponse(BaseModel):
     summary="A file as it was at a commit",
     dependencies=[Depends(require_permission("git.read"))],
 )
-async def get_file_at(path: str, rev: str, git_sync: GitSyncManagerDep) -> GitFileAtResponse:
+async def get_file_at(
+    path: str, rev: str, git_sync: GitSyncManagerDep, manager: WorkspaceManagerDep
+) -> GitFileAtResponse:
     with http_error_on(400):
         safe_path(git_sync.workspace_root, path)
         _validate_sha(rev)
+    _refuse_unreadable(manager, path)
     if not git_sync.is_available():
         raise HTTPException(status_code=409, detail="Git is not available in this workspace")
     content = await run_in_threadpool(git_sync.file_at, path, rev)

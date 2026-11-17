@@ -85,3 +85,22 @@ def test_governance_warnings_and_turning_them_off(batch):
         text + "\ngovernance:\n  warnings: {missing_owner: false, missing_contract: false}\n"
     )
     assert governance_problems(validate_project(batch)) == []
+
+
+def test_sweep_route_refuses_a_developer_in_prod(tmp_path, monkeypatch):
+    """`/sweep` launches real runs: it takes the same protected-environment check as `/execute`."""
+    from ducta.console.templates import TemplateGenerator, TemplateType
+
+    monkeypatch.chdir(tmp_path)
+    root = tmp_path / "proj"
+    TemplateGenerator(root).generate_project(TemplateType.MEDALLION_BASIC, "proj")
+    body = {"env": "prod", "sweep": {"alpha": [1, 2]}}
+    url = "/api/projects/proj/pipelines/etl/sweep"
+    with _client(["developer"]) as c:
+        r = c.post(url, params={"source": str(root)}, json=body)
+        assert r.status_code == 403, r.text
+        assert "protected" in r.text
+        # A role with the permission passes the check (whatever the pipeline then does).
+    with _client(["operator"]) as c:
+        r = c.post(url, params={"source": str(root)}, json=body)
+        assert r.status_code != 403, r.text

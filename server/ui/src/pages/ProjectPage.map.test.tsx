@@ -101,6 +101,7 @@ vi.mock("../api/queries", () => ({
 vi.mock("../api/mutations", () => ({
   useCreatePipeline: () => ({ mutate: vi.fn(), isPending: false }),
   useDeletePipeline: () => ({ mutate: vi.fn(), isPending: false }),
+  useCancelExecution: () => ({ mutate: vi.fn(), isPending: false, variables: undefined }),
   apiErrorMessage: (_err: unknown, fallback: string) => fallback,
 }));
 
@@ -145,7 +146,7 @@ describe("Project map", () => {
     renderMap();
     // One accessible button per pipeline, named for what clicking it does.
     expect(await screen.findByRole("button", { name: "Open pipeline ingest, 2 nodes" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open pipeline enrich, 1 nodes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Open pipeline enrich, 1 node" })).toBeTruthy();
   });
 
   it("opens the pipeline when the card itself is clicked", async () => {

@@ -11,6 +11,8 @@ import "./executionTable.css";
 export interface ExecutionListItem {
   id: string;
   status: string;
+  /** `cli`: started with `ducta start`, known only from its certificate. */
+  origin?: "server" | "cli";
   pipeline_name: string;
   node_name?: string;
   project_id?: string;
@@ -76,8 +78,10 @@ function ExecutionActions({
   const { mutate: cancel, isPending: isCancelling } = useCancelExecution();
   const { mutate: retry, isPending: isRetrying } = useRetryExecution();
 
-  const active = isActiveExecution(execution);
-  const retryable = ["failed", "cancelled", "skipped"].includes(execution.status);
+  const cli = execution.origin === "cli";
+  const active = !cli && isActiveExecution(execution);
+  // A CLI run is not the server's to retry: it has no request to repeat.
+  const retryable = !cli && ["failed", "cancelled", "skipped"].includes(execution.status);
   const shortId = execution.id.slice(0, 8);
 
   return (
@@ -166,6 +170,11 @@ export function executionColumns(
           {isStuckQueued(ex) && (
             <span className="exec-stuck" title="Queued for more than 10 minutes — its worker may be gone. Cancel it and run again.">
               stuck
+            </span>
+          )}
+          {ex.origin === "cli" && (
+            <span className="exec-origin" title="Started with ducta start: known from its Run Certificate, without server logs">
+              CLI
             </span>
           )}
         </span>

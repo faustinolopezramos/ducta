@@ -1,11 +1,26 @@
-# Pre-commit hooks for Ducta: Python core (ruff) + basic hygiene + UI quality gate.
+# Pre-commit hooks for Ducta: Python (ruff) + hygiene + the checks CI would
+# otherwise fail on later + UI quality gate.
 #
 # Setup (one-time, per machine):
 #   pip install pre-commit   # or: poetry install (it's in the dev dependency group)
-#   pre-commit install       # wires this into .git/hooks/pre-commit
+#   pre-commit install       # wires up the commit AND push hooks (see below)
 #
 # Run on demand against everything already tracked:
 #   pre-commit run --all-files
+#   pre-commit run --all-files --hook-stage pre-push     # the slower ones (mypy)
+#
+# Two stages, so a commit stays fast:
+#   commit    ruff, hygiene, secrets, the skill's CLI reference, the lock file, the UI
+#   pre-push  mypy over the engine and the server (the CI "mypy" step, blocking)
+#
+# Formatting is `ruff format` alone: it is the formatter CI enforces
+# (`ruff format --check`), and it is Black-compatible at this line length. Adding
+# Black next to it would make the two rewrite each other's output on the cases
+# they differ on, so a commit would never settle.
+#
+# The `python`-based local hooks below use the Python on your PATH, so run `git`
+# from the environment where Ducta's dev dependencies are installed (a Poetry shell
+# or a conda env with `pip install -e ".[all]"` and the dev group).
 #
 # NOTE: the ruff-pre-commit `rev` below MUST stay in sync with the `ruff` version
 # resolved in poetry.lock (currently 0.4.10) — that is the one CI runs, and
@@ -15,6 +30,10 @@
 # rejected 58 files, failing `ruff format --check` on code nobody had touched.
 # To upgrade, bump BOTH together: edit pyproject's pin, run `poetry lock`, then
 # set this rev to the same tag and re-run `ruff format`.
+minimum_pre_commit_version: "3.2.0"
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.4.10
@@ -35,11 +54,47 @@ repos:
         args: [--maxkb=1000]
       - id: check-yaml
       - id: check-toml
+      - id: check-json
       - id: check-case-conflict
+      - id: mixed-line-ending
+        args: [--fix=no]
+      # Test fixtures hold fake keys on purpose (the redaction tests).
+      - id: detect-private-key
+        exclude: ^tests/
+      - id: debug-statements
+        files: ^(src|server/src)/.*\.py$
 
-  # UI checks only run when something under server/ui/ changes.
   - repo: local
     hooks:
+      # The skill's CLI reference is generated from the argument parser; a test and
+      # CI fail when it is stale. This says so at commit time, with the fix.
+      - id: skill-cli-reference
+        name: skill CLI reference is up to date
+        entry: python scripts/gen_skill_cli_reference.py --check
+        language: system
+        files: ^(src/ducta/console/|src/ducta/skills/ducta/references/cli\.md|scripts/gen_skill_cli_reference\.py)
+        pass_filenames: false
+
+      # A dependency edit without `poetry lock` is what leaves CI with a stale lock.
+      - id: poetry-lock-in-sync
+        name: poetry.lock matches pyproject.toml
+        entry: poetry check --lock
+        language: system
+        files: ^(pyproject\.toml|poetry\.lock)$
+        pass_filenames: false
+
+      # The CI "mypy" step, blocking for every module. Pre-push: the first run is
+      # slow, later ones use .mypy_cache.
+      - id: mypy
+        name: mypy (engine + server)
+        entry: python -m mypy src/ducta server/src/ducta_server
+        language: system
+        types: [python]
+        files: ^(src|server/src)/
+        pass_filenames: false
+        stages: [pre-push]
+
+      # UI checks only run when something under server/ui/ changes.
       - id: ui-quality
         name: ui quality gate (WCAG contrast + design tokens)
         entry: bash -c 'cd server/ui && npm run ui:quality'

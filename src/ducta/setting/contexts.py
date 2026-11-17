@@ -311,9 +311,37 @@ class Context(MLConfigMixin):
         """Lazily create (or reuse, via SparkSessionManager's cache) the Spark
         session for this context's execution_mode.
         """
+        self._prepare_jdbc_drivers()
         return SparkSessionFactory.get_session(
             self.execution_mode, ml_config=self._get_spark_ml_config()
         )
+
+    def _prepare_jdbc_drivers(self) -> None:
+        """Download the project's JDBC drivers *before* the local JVM starts.
+
+        A driver JAR can only join the classpath when the session is created. The
+        session factory looks for the drivers of ``config/sources.yaml``; a project
+        that keeps its connections elsewhere (``settings.ingestion.sources_path``)
+        got no JAR on a first run, and the JAR its ingestion node then downloaded
+        arrived too late: ``ClassNotFoundException`` for the driver, fixed only by
+        running again. Best effort: a missing or unreadable file changes nothing.
+        """
+        if str(self.execution_mode).lower() != "local":
+            return
+        try:
+            from pathlib import Path
+
+            from ducta.gate.gateway.spark_setup import collect_jdbc_jars
+
+            paths = getattr(self, "config_paths", None) or {}
+            setting = (self.global_config.get("ingestion") or {}).get("sources_path")
+            chosen = (
+                paths.get("sources_config_path") if isinstance(paths, dict) else None
+            ) or setting
+            if chosen:
+                collect_jdbc_jars(sources_path=Path(chosen))
+        except Exception as error:  # noqa: BLE001 — the ingestion node reports a real failure
+            logger.debug("Could not prepare the JDBC drivers before the session: {}", error)
 
     def has_spark_session(self) -> bool:
         """True if `.spark` has already been materialized for this context."""

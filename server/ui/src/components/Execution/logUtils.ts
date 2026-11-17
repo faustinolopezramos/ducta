@@ -40,7 +40,7 @@ export interface Section {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 export const fmt = (ts: number) =>
-  new Date(ts).toLocaleTimeString([], {
+  new Date(ts).toLocaleTimeString("en", {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
 

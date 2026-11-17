@@ -27,7 +27,7 @@ export function FailingRows({
   return (
     <div className="failing-rows">
       <p className="failing-rows__count">
-        {data.failing.toLocaleString()} of {data.scanned.toLocaleString()} rows fail <span className="mono">{check}</span>
+        {data.failing.toLocaleString("en")} of {data.scanned.toLocaleString("en")} rows fail <span className="mono">{check}</span>
         {data.failing > data.rows.length ? ` — the first ${data.rows.length}` : ""}
       </p>
       {data.rows.length > 0 && (

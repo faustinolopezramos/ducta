@@ -51,7 +51,7 @@ export function DataPreview({
         <>
           <p className="data-preview__meta">
             {scratch ? "Sample run · " : ""}
-            {data.total_rows != null ? `${data.total_rows.toLocaleString()} rows` : "rows"} · {data.columns.length} columns · {data.format} · {env}
+            {data.total_rows != null ? `${data.total_rows.toLocaleString("en")} rows` : "rows"} · {data.columns.length} columns · {data.format} · {env}
           </p>
           <div className="data-preview__scroll">
             <table className="data-preview__table">

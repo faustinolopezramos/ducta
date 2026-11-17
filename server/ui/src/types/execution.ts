@@ -27,6 +27,8 @@ export interface Execution {
   sweep_id?: string;
   sweep_index?: number;
   certificate_run_id?: string;
+  /** `cli`: a run started with `ducta start`, known only from its certificate (no logs, no actions). */
+  origin?: "server" | "cli";
   /** What the pipeline's `retrain:` did after this run; absent when it did not retrain. */
   retrain?: RunRetrain | null;
 }

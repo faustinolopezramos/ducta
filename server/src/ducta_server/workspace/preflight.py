@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
-from typing import Any, Dict, List, Set, cast
+from typing import Any, Dict, List, Optional, Set, cast
 
 from loguru import logger
 
@@ -250,6 +250,41 @@ _DEEP_PREFLIGHT_MARKER = "DUCTA_PREFLIGHT_JSON:"
 _DEEP_PREFLIGHT_TIMEOUT_S = 180
 
 
+def _run_snippet(
+    exec_source: Path, snippet: str, marker: str, timeout: int
+) -> "tuple[Optional[Dict[str, Any]], Optional[str]]":
+    """Run *snippet* in a fresh interpreter inside the project and read back the JSON it
+    prints after *marker*: ``(payload, None)``, or ``(None, why it failed)``.
+
+    The project's module-level code runs there, so not in the API process and not
+    with this server's secrets.
+    """
+    import json
+    import subprocess
+    import sys
+
+    from ducta_server.execution.child_runner import child_environment
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", snippet],
+            cwd=str(exec_source),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=child_environment(),
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"timed out after {timeout}s"
+
+    for line in reversed((proc.stdout or "").splitlines()):
+        if line.startswith(marker):
+            return cast(Dict[str, Any], json.loads(line[len(marker) :])), None
+
+    tail = ((proc.stderr or "") + (proc.stdout or ""))[-2000:]
+    return None, f"subprocess failed (exit {proc.returncode}): {tail.strip()}"
+
+
 def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[str, Any]:
     """Run the same checks as ``ducta config validate`` in a fresh subprocess.
 
@@ -260,9 +295,6 @@ def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[
     Returns ``{"ok", "errors", "warnings"}``. *env* must already be validated
     (it is interpolated into the snippet, although through ``repr``).
     """
-    import json
-    import subprocess
-    import sys
     import textwrap
 
     snippet = textwrap.dedent(
@@ -278,28 +310,51 @@ def run_deep_preflight(exec_source: Path, pipeline_name: str, env: str) -> Dict[
         ))
         """
     )
-    try:
-        proc = subprocess.run(
-            [sys.executable, "-c", snippet],
-            cwd=str(exec_source),
-            capture_output=True,
-            text=True,
-            timeout=_DEEP_PREFLIGHT_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired:
-        return {
-            "ok": False,
-            "errors": [f"Preflight timed out after {_DEEP_PREFLIGHT_TIMEOUT_S}s"],
-            "warnings": [],
-        }
+    payload, failure = _run_snippet(
+        exec_source, snippet, _DEEP_PREFLIGHT_MARKER, _DEEP_PREFLIGHT_TIMEOUT_S
+    )
+    if payload is not None:
+        return payload
+    return {"ok": False, "errors": [f"Preflight {failure}"], "warnings": []}
 
-    for line in reversed((proc.stdout or "").splitlines()):
-        if line.startswith(_DEEP_PREFLIGHT_MARKER):
-            return cast(Dict[str, Any], json.loads(line[len(_DEEP_PREFLIGHT_MARKER) :]))
 
-    tail = ((proc.stderr or "") + (proc.stdout or ""))[-2000:]
+_STREAM_PLAN_MARKER = "DUCTA_STREAM_PLAN_JSON:"
+_STREAM_PLAN_TIMEOUT_S = 60
+
+
+def run_stream_plan(exec_source: Path, pipeline_name: str, env: str) -> Dict[str, Any]:
+    """What a streaming pipeline would do (`ducta stream plan`), without starting it.
+
+    Per node: what it reads and writes, how often it fires, its checkpoint, and
+    what would stop it. Importing the transform modules runs their top-level code,
+    so this runs in a subprocess like the deep preflight. *env* must already be
+    validated.
+
+    Returns the plan as ``PipelinePlan.to_dict()``, or ``{"ok": False, "nodes": [],
+    "issues": [{"level": "error", "text": why}]}`` when the plan could not be made.
+    """
+    import textwrap
+
+    snippet = textwrap.dedent(
+        f"""
+        import json, sys
+        sys.path.insert(0, {str(exec_source)!r})
+        from ducta.setting.project.context import load_project_context
+        from ducta.stream.plan import plan_pipeline
+        _, ctx = load_project_context(env={env!r}, chdir=True)
+        plan = plan_pipeline(ctx, {pipeline_name!r})
+        print({_STREAM_PLAN_MARKER!r} + json.dumps(plan.to_dict(), default=str))
+        """
+    )
+    payload, failure = _run_snippet(
+        exec_source, snippet, _STREAM_PLAN_MARKER, _STREAM_PLAN_TIMEOUT_S
+    )
+    if payload is not None:
+        return payload
     return {
+        "pipeline": pipeline_name,
+        "env": env,
         "ok": False,
-        "errors": [f"Preflight subprocess failed (exit {proc.returncode}): {tail.strip()}"],
-        "warnings": [],
+        "nodes": [],
+        "issues": [{"level": "error", "text": f"The plan could not be made: {failure}"}],
     }

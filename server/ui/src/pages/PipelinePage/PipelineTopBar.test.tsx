@@ -102,6 +102,31 @@ describe("PipelineTopBar for a streaming pipeline", () => {
     expect(screen.getByRole("status")).toHaveTextContent("1 of 2 nodes running");
   });
 
+  it("names the failed node count and colours the dot, instead of only a colour", () => {
+    renderBar({
+      ...stream,
+      isExecuting: true,
+      streamSummary: { status: "partial_failure", up: 2, total: 3, rate: 980, failed: 1, stalled: 0 },
+    } as never);
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("1 of 3 nodes failed · 980 rows/s");
+    expect(status).toHaveAttribute("data-state", "partial_failure");
+  });
+
+  it("names a stalled node too", () => {
+    renderBar({
+      ...stream,
+      isExecuting: true,
+      streamSummary: { status: "running", up: 3, total: 3, rate: 40, failed: 0, stalled: 1 },
+    } as never);
+    expect(screen.getByRole("status")).toHaveTextContent("1 of 3 nodes stalled · 40 rows/s");
+  });
+
+  it("says how many queries are starting", () => {
+    renderBar({ ...stream, isExecuting: true, streamNodeCount: 3 } as never);
+    expect(screen.getByRole("status")).toHaveTextContent("Starting 3 queries…");
+  });
+
   it("says it is starting before the first status arrives", () => {
     renderBar({ ...stream, isExecuting: true } as never);
     expect(screen.getByRole("status")).toHaveTextContent("Starting…");

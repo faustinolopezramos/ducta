@@ -60,6 +60,14 @@ def _node_status(node: str, snapshot: Dict[str, Any]) -> StreamingNodeStatus:
         model=(snapshot.get("served_models") or {}).get(node),
         rows_quarantined=micro.get("rows_quarantined"),
         gate=_text(micro.get("gate")),
+        restarts=state.restarts,
+        next_restart_in_seconds=state.next_restart_in_seconds,
+        watermark=state.watermark,
+        state_rows=state.state_rows,
+        state_memory_bytes=state.state_memory_bytes,
+        late_rows_dropped=state.late_rows_dropped,
+        source_lag=state.source_lag,
+        sources=state.sources,
     )
 
 
@@ -78,6 +86,9 @@ def pipeline_status(snapshot: Dict[str, Any]) -> StreamingPipelineStatus:
         nodes=[_node_status(node, snapshot) for node in nodes],
         run_id=_text(snapshot.get("run_id")),
     )
+
+
+_UNFINISHED_JOURNAL_STATES = frozenset({"running", "pending", "starting", "active"})
 
 
 def journal_pipeline_status(run: Dict[str, Any]) -> StreamingPipelineStatus:
@@ -103,10 +114,11 @@ def journal_pipeline_status(run: Dict[str, Any]) -> StreamingPipelineStatus:
                 gate="block" if gates.get("block") else (next(iter(gates), None)),
             )
         )
+    status = str(run.get("status") or "unknown")
     return StreamingPipelineStatus(
         stream_execution_id=str(run.get("execution_id") or ""),
         pipeline_name=_text(run.get("pipeline")),
-        status=str(run.get("status") or "unknown"),
+        status=status,
         error=_text(run.get("error")),
         nodes=nodes,
         run_id=_text(run.get("run_id")),
@@ -133,6 +145,24 @@ def journal_lookup(
     except Exception:  # noqa: BLE001 - no journal is an answer, not an error
         return []
     return [journal_pipeline_status(run)] if run else []
+
+
+def settle_interrupted(
+    status: StreamingStatusResponse, run_finished: bool
+) -> StreamingStatusResponse:
+    """A journal that never recorded an end, for a run that is over, says ``interrupted``.
+
+    Read from the journal means no engine holds the stream. While the run itself is
+    still queued or running that can be a moment between phases, so it is left
+    alone; once the run is over (or was found orphaned), "running" was a lie the
+    stream page showed in green next to every node stopped.
+    """
+    if status.active or not run_finished:
+        return status
+    for pipeline in status.pipelines:
+        if pipeline.status in _UNFINISHED_JOURNAL_STATES:
+            pipeline.status = "interrupted"
+    return status
 
 
 def streaming_status(

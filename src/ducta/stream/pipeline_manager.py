@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import os
+import re
 import shutil
 import time
 import uuid
@@ -69,6 +70,30 @@ _TRANSIENT_DELTA_ERROR_TOKENS = frozenset(
         "NO SUCH FILE OR DIRECTORY",
     }
 )
+
+
+_PYTHON_ERROR_LINE = re.compile(r"^\s*([A-Za-z_][\w.]*(?:Error|Exception)): (.+)$")
+
+
+def short_error(error: Any, limit: int = 500) -> str:
+    """One readable line for a query's failure.
+
+    Spark wraps an error raised in a Python UDF/transform in a JVM stack trace whose
+    first thousand characters never reach the Python line that says what happened
+    (``ValueError: poison record 5``); that line is kept next to the first one.
+    """
+    text = str(error or "")
+    lines = [line for line in text.splitlines() if line.strip()]
+    first = lines[0].strip() if lines else ""
+    cause = None
+    for line in reversed(lines):
+        match = _PYTHON_ERROR_LINE.match(line)
+        if match and not match.group(1).startswith(("org.", "java.", "scala.")):
+            cause = f"{match.group(1)}: {match.group(2).strip()}"
+            break
+    if cause and cause not in first:
+        first = f"{cause} ({first[: max(0, limit - len(cause) - 3)]})"
+    return first[:limit]
 
 
 class QueryHealthMonitor:
@@ -229,17 +254,29 @@ class StreamingPipelineManager:
         # quarantine counts not yet reported. Checked by a daemon every interval.
         self._alerted: Dict[Tuple[str, str], str] = {}
         self._quarantine_pending: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        self.health_interval_seconds = float(
-            settings.get("streaming_health_interval_seconds", 30.0) or 30.0
-        )
+        # 0 turns the check off (as documented); `or 30.0` used to turn 0 into 30.
+        health = settings.get("streaming_health_interval_seconds")
+        self.health_interval_seconds = float(30.0 if health is None else health)
         self.quarantine_alert_interval_seconds = float(
             settings.get("streaming_quarantine_alert_interval_seconds", 900.0) or 900.0
         )
         self._health_thread: Optional[Thread] = None
+        # A query that dies while running is started again after a backoff that
+        # doubles each time (capped), up to this many times; 0 turns it off.
+        max_restarts = settings.get("streaming_restart_max_attempts")
+        self.restart_max_attempts = max(0, int(3 if max_restarts is None else max_restarts))
+        backoff = settings.get("streaming_restart_backoff_seconds")
+        self.restart_backoff_seconds = max(0.0, float(10.0 if backoff is None else backoff))
 
     #: Finished executions kept for status queries; older ones are dropped when a
     #: new pipeline starts, so a long-lived manager does not grow without bound.
     MAX_FINISHED_EXECUTIONS = 50
+
+    #: The longest wait between two automatic restarts of a node.
+    RESTART_BACKOFF_CAP_SECONDS = 300.0
+
+    #: A restarted query that runs this long without failing starts its count again.
+    RESTART_RESET_SECONDS = 600.0
 
     #: A running query is called stalled after this long without any progress
     #: report; raised for triggers that fire less often than this.
@@ -542,8 +579,11 @@ class StreamingPipelineManager:
             return True
         if status == "partial_failure":
             # Some nodes failed or stalled; the pipeline is active only while a
-            # query is still up (when every node failed there is none).
-            return any(self.query_manager._is_query_active(q) for q in queries)
+            # query is still up (when every node failed there is none), or one is
+            # about to be restarted (its checkpoint is still in use).
+            return any(
+                self.query_manager._is_query_active(q) for q in queries
+            ) or self._restart_pending(execution_id)
         return False
 
     def _signal_pipeline_done(self, execution_id: str) -> None:
@@ -598,6 +638,11 @@ class StreamingPipelineManager:
             return
 
         while not event.is_set() and not self._shutdown_event.is_set():
+            wait = self._supervise_restarts(execution_id)
+            if wait is not None:
+                # A node that failed is restarted after its backoff: not finished.
+                event.wait(min(poll_seconds, wait))
+                continue
             with self._lock:
                 info = self._running_pipelines.get(execution_id)
                 queries = list(info.get("queries", {}).values()) if info else []
@@ -621,6 +666,155 @@ class StreamingPipelineManager:
                 return
 
             event.wait(poll_seconds)
+
+    # ── automatic restarts ───────────────────────────────────────────────────
+
+    def _restart_delay(self, attempts_done: int) -> float:
+        """Seconds before restart number ``attempts_done + 1``: doubles, capped."""
+        return float(
+            min(self.RESTART_BACKOFF_CAP_SECONDS, self.restart_backoff_seconds * (2**attempts_done))
+        )
+
+    def _supervise_restarts(self, execution_id: str) -> Optional[float]:
+        """Schedule, run or give up the restart of each node whose query died.
+
+        A query that ended with an exception is started again (``restart_node``)
+        after a backoff, at most ``streaming_restart_max_attempts`` times; then the
+        node is failed for good (``failed_nodes``, the ``stream_failed`` alert). A
+        query that ended cleanly (``once``/``available_now``) is left alone, and
+        nothing is restarted once a stop was asked for. Returns None when no restart
+        is pending, else the seconds until the next one is due: the watcher does not
+        close the execution meanwhile, and wakes up for it.
+        """
+        if self.restart_max_attempts <= 0:
+            return None
+        now = time.time()
+        due: List[Tuple[str, int, str]] = []
+        gave_up: List[Tuple[str, int, str]] = []
+        next_due: Optional[float] = None
+        with self._lock:
+            info = self._running_pipelines.get(execution_id)
+            if info is None:
+                return None
+            restarts = info.setdefault("restarts", {})
+            if self._stop_requested_locked(execution_id):
+                for record in restarts.values():
+                    record["pending"] = False
+                return None
+            queries = dict(info.get("queries") or {})
+        for node, query in queries.items():
+            active = self.query_manager._is_query_active(query)
+            error = None if active else get_query_exception(query)
+            with self._lock:
+                record = restarts.get(node)
+                if active:
+                    if (
+                        record
+                        and not record.get("pending")
+                        and now - float(record.get("restarted_at") or now)
+                        >= self.RESTART_RESET_SECONDS
+                    ):
+                        restarts.pop(node, None)  # stable again: a fresh count
+                    continue
+                if error is None or (record and record.get("gave_up")):
+                    continue
+                if record and record.get("pending"):
+                    next_at = float(record.get("next_at") or 0)
+                    if now >= next_at:
+                        record["pending"] = False
+                        record["attempts"] = int(record.get("attempts") or 0) + 1
+                        due.append((node, record["attempts"], str(record.get("last_error"))))
+                    else:
+                        next_due = min(next_due or next_at, next_at)
+                    continue
+                attempts = int((record or {}).get("attempts") or 0)
+                message = short_error(error)
+                if attempts >= self.restart_max_attempts:
+                    restarts[node] = {
+                        **(record or {}),
+                        "attempts": attempts,
+                        "pending": False,
+                        "gave_up": True,
+                        "last_error": message,
+                    }
+                    reason = f"gave up after {attempts} restart(s): {message}"
+                    info.setdefault("failed_nodes", {})[node] = reason
+                    info["error"] = reason
+                    gave_up.append((node, attempts, message))
+                    continue
+                delay = self._restart_delay(attempts)
+                restarts[node] = {
+                    "attempts": attempts,
+                    "pending": True,
+                    "next_at": now + delay,
+                    "last_error": message,
+                }
+                next_due = min(next_due or now + delay, now + delay)
+                logger.warning(
+                    "Stream node '{}' failed: {}. Restart {}/{} in {:.0f}s",
+                    node,
+                    message,
+                    attempts + 1,
+                    self.restart_max_attempts,
+                    delay,
+                )
+        for node, attempts, message in gave_up:
+            logger.error(
+                f"Stream node '{node}' failed again after {attempts} restart(s): {message}"
+            )
+        for node, attempt, message in due:
+            self._restart_failed_node(execution_id, node, attempt, message)
+        if due:
+            return 0.0  # look again at once: a restart that did not start is rescheduled
+        return None if next_due is None else max(0.0, next_due - time.time())
+
+    def _restart_failed_node(self, execution_id: str, node: str, attempt: int, error: str) -> None:
+        """Run restart *attempt* of *node*; journal it and tell the listeners."""
+        ok = self.restart_node(execution_id, node)
+        with self._lock:
+            info = self._running_pipelines.get(execution_id) or {}
+            record = (info.get("restarts") or {}).get(node)
+            if record is not None:
+                record["restarted_at"] = time.time()
+            journal = self._journals.get(execution_id)
+            run_id, pipeline = info.get("run_id"), info.get("pipeline_name")
+        line = {"node": node, "attempt": attempt, "started": ok, "error": error[:500]}
+        if journal is not None:
+            journal.record("restart", line)
+        if ok:
+            logger.info(f"Stream node '{node}' restarted (attempt {attempt})")
+        self._emit(
+            {
+                "kind": "stream_restarted",
+                "execution_id": execution_id,
+                "run_id": run_id,
+                "pipeline": pipeline,
+                **line,
+            }
+        )
+
+    def _restart_will_handle(self, execution_id: str, node: str, status: Dict[str, Any]) -> bool:
+        """Whether *node*'s failure is a running query that died and will be restarted.
+
+        A start failure (``failed_nodes`` without a restart record) and a node the
+        manager gave up on are real failures; so is anything once a stop was asked.
+        """
+        if self.restart_max_attempts <= 0 or node not in (status.get("query_statuses") or {}):
+            return False
+        record = (status.get("restarts") or {}).get(node) or {}
+        if record.get("gave_up"):
+            return False
+        if node in (status.get("failed_nodes") or {}) and not record:
+            return False
+        with self._lock:
+            return not self._stop_requested_locked(execution_id) and (
+                execution_id not in self._finished
+            )
+
+    def _restart_pending(self, execution_id: str) -> bool:
+        with self._lock:
+            info = self._running_pipelines.get(execution_id) or {}
+            return any(r.get("pending") for r in (info.get("restarts") or {}).values())
 
     @staticmethod
     def _collect_query_exceptions(queries: List[Any]) -> List[str]:
@@ -686,7 +880,7 @@ class StreamingPipelineManager:
     ) -> str:
         """Start one node's query and do its bookkeeping. Returns the outcome."""
         try:
-            logger.info(f"Starting node '{node_name}' in pipeline '{execution_id}'")
+            logger.debug(f"Starting node '{node_name}' in pipeline '{execution_id}'")
             query = self._start_node_query_with_retry(
                 execution_id=execution_id,
                 pipeline_name=pipeline_name,
@@ -1028,6 +1222,14 @@ class StreamingPipelineManager:
                 "trigger_ms": summary.get("triggerExecutionMs"),
                 "input_rows_per_second": summary.get("inputRowsPerSecond"),
                 "processed_rows_per_second": summary.get("processedRowsPerSecond"),
+                # Stateful queries and their sources (None when Spark has nothing).
+                "watermark": summary.get("watermark"),
+                "state_rows": summary.get("stateRows"),
+                "state_memory_bytes": summary.get("stateMemoryBytes"),
+                "late_rows_dropped": summary.get("lateRowsDropped"),
+                "source_lag": summary.get("sourceLag"),
+                # What Spark reads: more than the node declares when its transform joins.
+                "sources": summary.get("sources"),
             },
         )
 
@@ -1156,6 +1358,8 @@ class StreamingPipelineManager:
         """Emit stream_failed / stream_stalled once per episode, and stream_recovered."""
         for name in node_names(status):
             state = derive_node_state(name, status)
+            if state.state == "failed" and self._restart_will_handle(execution_id, name, status):
+                continue  # the watcher schedules its restart within a second
             if state.state == "failed":
                 kind: Optional[str] = "stream_failed"
             elif state.health == "stalled":
@@ -1310,6 +1514,10 @@ class StreamingPipelineManager:
                 self._running_pipelines[execution_id]["failed_queries"] = len(failed_queries)
                 if failed_queries:
                     self._running_pipelines[execution_id]["failed_query_errors"] = failed_queries
+                for record in (
+                    self._running_pipelines[execution_id].get("restarts") or {}
+                ).values():
+                    record["pending"] = False  # a stop cancels any scheduled restart
 
             # Drop monitors under the same lock that guards _query_monitors elsewhere.
             for query_name in stopped_queries:
@@ -1457,6 +1665,11 @@ class StreamingPipelineManager:
                     if k not in ("queries", "pipeline_config")
                 }
                 status["execution_id"] = execution_id
+                if pipeline_info.get("restarts"):
+                    # A copy: the watcher keeps changing the manager's own records.
+                    status["restarts"] = {
+                        node: dict(record) for node, record in pipeline_info["restarts"].items()
+                    }
                 queries_snapshot = dict(pipeline_info.get("queries", {}))
 
             query_statuses, active_queries, failed_queries = self._collect_query_statuses(
@@ -1841,7 +2054,11 @@ class StreamingPipelineManager:
                 status = self.get_pipeline_status(execution_id)
                 if not status:
                     continue
-                if status.get("status") == "partial_failure" and not status.get("active_queries"):
+                if (
+                    status.get("status") == "partial_failure"
+                    and not status.get("active_queries")
+                    and not any(r.get("pending") for r in (status.get("restarts") or {}).values())
+                ):
                     continue
                 pipelines.append(status)
             return pipelines

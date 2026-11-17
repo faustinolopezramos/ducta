@@ -43,7 +43,7 @@ Ducta API is the service layer, implementing:
 *   **Execution engine**: an in-memory `ExecutionManager` with a bounded queue, concurrent-run limits, log buffering, and optional DB-backed persistence layered transparently (`execution/`).
 *   **Source resolution with SSRF defense**: per-request local paths are security-validated; Git clones are host-allow-listed and reject internal/non-routable targets (loopback, private, link-local metadata endpoint) (`source/resolver.py`).
 *   **Persistence & repositories**: optional SQLAlchemy-async engine, Alembic-style migrations, and repository/store abstractions for projects, nodes, and execution history (`db/`, `repositories/`, `repository/`).
-*   **Project files**: `repositories/v2_store.py` (`V2ProjectStore`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and does **not** commit (committing is the user's call: the Changes panel, or git). The optimistic-concurrency token, still named `commit_sha`, is a hash of the file's content (`content_version` in `utils/git_utils.py`). A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`).
+*   **Project files**: `ducta.project_store` (`store.py`, `V2ProjectStore`; the engine's package, shared with the CLI and `ducta ai`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and does **not** commit (committing is the user's call: the Changes panel, or git). The optimistic-concurrency token, still named `commit_sha`, is a hash of the file's content (`content_version` in `ducta/project_store/fileops.py`). A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`).
 *   **Middleware**: request-ID tagging, CORS, and configurable per-IP rate limiting (in-memory or Redis) (`middleware/`).
 
 ---
@@ -57,7 +57,7 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `HOST` / `PORT` | `127.0.0.1` / `8000` | Bind address (non-local without auth triggers a warning) |
 | `ENVIRONMENT` | `development` | `production` enforces auth + a non-default JWT secret |
 | `AUTH_ENABLED` | `false` | Require JWT authentication |
-| `JWT_SECRET_KEY` | `change-me-in-production` | HS256 signing key (must be overridden in prod) |
+| `JWT_SECRET_KEY` | `change-me-in-production` | HS256 signing key (must be overridden in prod, and with auth on at any non-loopback `HOST`; `DUCTA_ADMIN_PASSWORD` too) |
 | `JWT_EXPIRATION_HOURS` | `24` | Access-token lifetime |
 | `DATABASE_URL` | `""` (in-memory) | `sqlite+aiosqlite:///...` or `postgresql+asyncpg://...` |
 | `RUNS_DIR` | `~/.ducta/runs` | Where the file-based execution store writes `meta.json` + `logs.jsonl` per run. Empty disables file persistence (memory-only) |
@@ -80,13 +80,13 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `viewer` | read only (`*.read`, including `project.read`) |
 
 Some routes need more than their name suggests:
-- The preflight needs `pipeline.execute`, because it imports project code.
+- The preflight and the stream plan (`POST .../pipelines/{name}/stream-plan`) need `pipeline.execute`, because they import project code (in a subprocess).
 - A Git URL as `source` needs `repository.write`, because the server clones it.
 - Promoting a model needs `model.promote`; deleting a version or running gc needs `model.delete`.
 - Testing an unsaved ingestion connection needs `ingestion.write`.
 - Running or retrying in a protected environment (`governance.protected_environments` in `ducta.yaml`, `[prod, production]` by default) needs `pipeline.execute.protected`: operators and admins have it, developers do not.
 
-`GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/api/test_rbac.py` fails if a route that writes is reachable by a viewer.
+`GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/server/test_rbac.py` fails if a route that writes is reachable by a viewer.
 
 **Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, and either bind to `127.0.0.1` or place the server behind an authenticating proxy.
 

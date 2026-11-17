@@ -37,7 +37,10 @@ interface Row {
 export function RunsPanel({ active, attention, projectName, loading = false, onCancelStuck }: RunsPanelProps) {
   if (loading) return null;
 
-  const historyLink = (run: RunLike) => `/workspace/executions?run=${encodeURIComponent(run.id)}`;
+  const historyLink = (run: RunLike) =>
+    run.origin === "cli" && run.project_id
+      ? routes.runOrCertificate(run.project_id, run)
+      : `/workspace/executions?run=${encodeURIComponent(run.id)}`;
 
   // Stuck runs of one pipeline read as one problem, not as N identical rows.
   const stuckGroups = new Map<string, RunLike[]>();

@@ -11,12 +11,17 @@ import { Skeleton } from "../../components/ui/Skeleton";
 
 export function ChecksCard() {
   const { data: checks, isLoading } = useQualityChecks();
+  // A reference, not a result: folded, so the page leads with the datasets.
   return (
     <Panel>
       {sectionTitle(<IconListCheck size={16} color={colors.accent} />, "Registered checks")}
       {isLoading && <Skeleton variant="text" width="60%" />}
       {checks && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        <details className="checks-card">
+          <summary style={{ cursor: "pointer", fontSize: "var(--text-sm)", color: colors.textMuted }}>
+            {checks.length} check types available
+          </summary>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 8 }}>
           {checks.map((c) => (
             <span
               key={c.name}
@@ -35,6 +40,7 @@ export function ChecksCard() {
             </span>
           ))}
         </div>
+        </details>
       )}
     </Panel>
   );

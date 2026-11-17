@@ -70,6 +70,36 @@ def warn_if_insecure_exposure(settings: "Settings") -> bool:
     return False
 
 
+def check_default_credentials(settings: "Settings") -> bool:
+    """With accounts on, refuse the published JWT key and admin password where others can connect.
+
+    Both defaults are public, so a server that keeps either is open to whoever reaches
+    it: a token signed with the default key is accepted as admin, and ``admin/admin``
+    logs in. On a bind address other machines can reach this raises; on loopback (a
+    developer's own machine, nobody else connects) it warns. Production already refuses
+    them in ``Settings``. Returns ``True`` when a warning was emitted.
+    """
+    from ducta_server.config import default_credentials
+
+    defaults = default_credentials(settings)
+    if not defaults:
+        return False
+    if settings.is_exposed():
+        raise RuntimeError(
+            f"Refusing to start on {settings.host} with accounts enabled but default "
+            "credentials: "
+            + "; ".join(defaults)
+            + ". Set JWT_SECRET_KEY to a long random value and DUCTA_ADMIN_PASSWORD to a "
+            "password of your own, or bind to 127.0.0.1."
+        )
+    logger.warning(
+        "SECURITY: accounts are enabled with default credentials ({found}). Fine on this "
+        "machine alone; set JWT_SECRET_KEY and DUCTA_ADMIN_PASSWORD before exposing the server.",
+        found="; ".join(defaults),
+    )
+    return True
+
+
 def warn_if_hosts_unchecked(settings: "Settings") -> bool:
     """Warn when the server answers to any ``Host``: bound to every interface, no ALLOWED_HOSTS.
 
@@ -141,6 +171,7 @@ def create_app() -> FastAPI:
         )
 
         # ── Security posture warning ────────────────────────────────────────
+        check_default_credentials(settings)
         warn_if_insecure_exposure(settings)
         warn_if_hosts_unchecked(settings)
         warn_about_in_process_runs(settings)

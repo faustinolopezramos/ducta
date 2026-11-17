@@ -9,6 +9,7 @@ import {
   IconBan,
   IconPlayerPause,
   IconPlayerSkipForward,
+  IconCircleDashed,
 } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 
@@ -40,6 +41,7 @@ export type Status =
   | "skipped"
   | "gate_blocked"
   | "paused"
+  | "interrupted"
   | "stopped";
 
 // Tabler icon components are forwardRef exotics; ComponentType<any> avoids the
@@ -82,6 +84,9 @@ export const STATUS_META: Record<Status, StatusMeta> = {
   gate_blocked:    { label: "Gate blocked",    Icon: IconAlertTriangle,     glyph: "!", color: colors.amber,     tone: "warn" },
   // At a data breakpoint: alive, waiting to be continued or stopped.
   paused:          { label: "Paused",          Icon: IconPlayerPause,       glyph: "⏸", color: colors.blue,      tone: "warn" },
+  // Never finished: the server (or its process) stopped while the run was queued
+  // or running. Not a failure of the run itself, but nobody will finish it.
+  interrupted:     { label: "Interrupted",     Icon: IconCircleDashed,      glyph: "◌", color: colors.amber,     tone: "warn" },
   stopped:         { label: "Stopped",         Icon: IconBan,               glyph: "■", color: colors.textMuted, tone: "neutral" },
 };
 
@@ -103,6 +108,7 @@ export const EXECUTION_STATUSES = [
   "skipped",
   "gate_blocked",
   "paused",
+  "interrupted",
 ] as const;
 
 export type ExecutionStatus = (typeof EXECUTION_STATUSES)[number];

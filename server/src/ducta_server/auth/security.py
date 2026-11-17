@@ -28,21 +28,24 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 
-def resolve_admin_password(env_password: Optional[str], *, is_production: bool) -> str:
-    """Apply the shared admin-password production-safety rule.
+def resolve_admin_password(env_password: Optional[str], *, strict: bool) -> str:
+    """Apply the shared admin-password safety rule.
 
-    Returns the password to seed the admin user with. In production, a
-    missing or insecure-default (``"admin"``) password is a hard error;
-    outside production, an unset password defaults to ``"admin"``.
+    Returns the password to seed the admin user with. When *strict* (production, or
+    accounts on a server other machines can reach: ``Settings.requires_strong_credentials``)
+    a missing or insecure-default (``"admin"``) password is a hard error; otherwise an
+    unset password defaults to ``"admin"``.
     """
-    if is_production:
+    if strict:
         if not env_password:
             raise RuntimeError(
-                "DUCTA_ADMIN_PASSWORD must be set in production when auth is enabled."
+                "DUCTA_ADMIN_PASSWORD must be set in production, or when auth is enabled on "
+                "an address other machines can reach."
             )
         if env_password == "admin":
             raise RuntimeError(
-                "DUCTA_ADMIN_PASSWORD cannot use insecure default value in production."
+                "DUCTA_ADMIN_PASSWORD cannot use the insecure default value 'admin' in "
+                "production, or when auth is enabled on an address other machines can reach."
             )
     return env_password or "admin"
 

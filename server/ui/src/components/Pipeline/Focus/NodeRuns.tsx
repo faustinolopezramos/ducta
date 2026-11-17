@@ -62,7 +62,7 @@ export function NodeRuns({
             return (
               <li key={run.id}>
                 {projectId ? (
-                  <Link className="focus-run" to={routes.run(projectId, run.id)} title={run.error_message ?? run.id}>
+                  <Link className="focus-run" to={routes.runOrCertificate(projectId, run)} title={run.error_message ?? run.id}>
                     {label}
                   </Link>
                 ) : (

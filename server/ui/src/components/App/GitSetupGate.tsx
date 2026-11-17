@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useGitConfigStore } from "../../store/gitConfig";
+import { useAuthStore } from "../../store/auth";
 import { useWorkspaceSelection } from "../../hooks/useWorkspaceSelection";
 import { GitSetupWizard } from "../GitSetup/GitSetupWizard";
 
@@ -21,7 +22,14 @@ export function GitSetupGate({ children }: Readonly<{ children: React.ReactNode 
 
   // `/setup?connect=1` is "connect another workspace": the form, not the wizard.
   const connecting = location.pathname === "/setup" && new URLSearchParams(location.search).has("connect");
-  const showWizard = Boolean(selectedSource) && !connecting && (!setupComplete || location.pathname === "/setup");
+  // Not over the sign-in page: setup is for someone who is in.
+  const signedIn = Boolean(useAuthStore((s) => s.token));
+  const showWizard =
+    signedIn &&
+    location.pathname !== "/login" &&
+    Boolean(selectedSource) &&
+    !connecting &&
+    (!setupComplete || location.pathname === "/setup");
 
   const handleClose = () => {
     if (location.pathname === "/setup") {

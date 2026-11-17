@@ -94,3 +94,29 @@ def test_an_up_to_date_database_is_not_backed_up(tmp_path):
     _migrate(db)
     _migrate(db)
     assert not list(tmp_path.glob("*.bak-*"))
+
+
+@pytest.mark.parametrize("old", ["0002", "0003", "0004"])
+def test_a_database_left_by_ducta_0_2_0_is_restamped_not_refused(tmp_path, old):
+    """0.2.0's chain ran to 0004; 0002-0004 were folded into 0001 afterwards. Such a database
+    already has 0001's schema: it starts, keeps its rows, and a copy is kept."""
+    db = tmp_path / "from_0_2_0.db"
+    _migrate(db)
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "insert into users (id, username, email, password_hash) values ('admin', 'admin', 'a@b.c', 'x')"
+        )
+    _stamp(db, old)
+
+    _migrate(db)  # used to raise "migrated by a newer Ducta (migration 0004)"
+
+    assert _version(db) == [("0001",)]
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("select username from users").fetchall() == [("admin",)]
+    backup = tmp_path / f"from_0_2_0.db.bak-{old}"
+    assert backup.is_file()
+    assert len(list(tmp_path.glob("*.bak-*"))) == 1  # once, not again for the new mark
+
+    _migrate(db)  # and the next start is the ordinary no-op
+    assert _version(db) == [("0001",)]
+    assert len(list(tmp_path.glob("*.bak-*"))) == 1

@@ -103,6 +103,16 @@ def _extract_token(request: Request) -> Optional[str]:
     return request.cookies.get("access_token")
 
 
+class AuthConfigResponse(BaseModel):
+    auth_enabled: bool = Field(description="False when the server runs without authentication")
+
+
+@router.get("/config")
+async def get_auth_config(settings: SettingsDependency) -> AuthConfigResponse:
+    """Whether this server asks for credentials. Public: the login page needs it."""
+    return AuthConfigResponse(auth_enabled=settings.auth_enabled)
+
+
 @router.post("/login")
 async def login(
     body: LoginRequest,
@@ -173,6 +183,14 @@ async def refresh_token(
     store: UserStoreDep,
     settings: SettingsDependency,
 ) -> TokenResponse:
+    if not settings.auth_enabled:
+        # Authentication is off (local use): every request already acts as the
+        # dev admin, so the web app gets a session without a login page that
+        # asked for credentials nobody had been told. No cookie: the server
+        # ignores tokens in this mode, and the next reload asks again.
+        from ducta_server.dependencies import _dev_admin_user
+
+        return _build_token_response(_dev_admin_user(), auth_svc)
     token = _extract_token(request)
     if not token:
         raise HTTPException(

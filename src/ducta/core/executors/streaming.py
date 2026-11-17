@@ -62,6 +62,61 @@ def record_stream_outcome(context: Any, event: Dict[str, Any]) -> None:
                 **(node.get("journal") or {}),
             },
         )
+    fingerprint_stream_sinks(context, event)
+
+
+#: Sinks that are a table or files at a path, which a fingerprint can read back.
+_FILE_SINK_FORMATS = frozenset({"delta", "parquet", "json", "csv", "orc"})
+
+
+def fingerprint_stream_sinks(context: Any, event: Dict[str, Any]) -> None:
+    """Put what each stream sink holds when its run ended into the run's evidence.
+
+    A batch write is fingerprinted as it happens; a stream sink never was, so a
+    hybrid or streaming certificate listed the batch tables and not the one table
+    the stream produced, and still read ``evidence_complete: true``. The sink is read
+    back once, at the end (a Delta table by its commit version, not by scanning its
+    history). A sink that cannot be read is a gap in the evidence, not a silent
+    omission. Kafka, console and other non-file sinks have nothing to read back.
+    """
+    from ducta.core.ledger import ledger_for
+    from ducta.gate.context_manager import ContextManager
+    from ducta.stream.query_manager import single_spec
+
+    manager = ContextManager(context)
+    if not manager.get_nested("global_config.enable_data_fingerprinting", True):
+        return
+    ledger = ledger_for(context)
+    nodes_config = getattr(context, "nodes_config", None) or {}
+    for name, node in (event.get("nodes") or {}).items():
+        if str(node.get("state")) in ("failed", "skipped"):
+            continue
+        spec = single_spec(nodes_config.get(name) or {}, "output")
+        if not isinstance(spec, dict):
+            continue
+        fmt = str(getattr(spec.get("format"), "value", spec.get("format")) or "").lower()
+        path = spec.get("path")
+        if fmt not in _FILE_SINK_FORMATS or not isinstance(path, str) or not path:
+            continue
+        key = f"stream.{name}"
+        try:
+            from ducta.gate.fingerprinting import compute_fingerprint, delta_identity
+
+            spark = manager.get_spark()
+            if spark is None:
+                raise RuntimeError("the Spark session is already gone")
+            frame = spark.read.format(fmt).load(path)
+            delta = delta_identity(spark, path) if fmt == "delta" else None
+            fingerprint = compute_fingerprint(
+                manager, key=key, identifier=path, dataframe=frame, delta=delta
+            )
+            fingerprint.details.update({"scope": "stream sink at the end of the run"})
+            store = manager.get_or_create_dict("_output_fingerprints")
+            if store is None:
+                raise RuntimeError("the run context cannot hold it")
+            store[key] = fingerprint.to_dict()
+        except Exception as error:  # noqa: BLE001 — evidence is best-effort, and says so
+            ledger.note_gap(f"stream sink fingerprint for '{name}': {error}")
 
 
 class StreamingExecutor(BaseExecutor):

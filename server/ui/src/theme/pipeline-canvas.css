@@ -1051,6 +1051,7 @@
   flex-shrink: 0;
 }
 .middle-trunc__dots {
+  flex-shrink: 0;
   margin-right: -0.18em;
 }
 /* Cut in JS: the head is exactly as long as fits, so its own CSS ellipsis

@@ -11,6 +11,9 @@ import {
 } from "../../components/Pipeline";
 import { useDatasetPreview, useMlPlan } from "../../api/queries";
 import { useExecutionStreaming } from "../../api/queries/executions";
+import { useStreamPlan } from "../../api/queries/streamPlan";
+import type { StreamPlan } from "../../api/queries/streamPlan";
+import { StreamStartCheck } from "../../components/Execution/StreamStartCheck";
 import { streamBadges, streamSummary } from "../../utils/streaming";
 import { NodeCodePane } from "../../components/Pipeline/NodeCodePane";
 import { externalEnds } from "./canvasExternals";
@@ -24,9 +27,9 @@ import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { AIDraftDialog } from "../../components/AI/AIDraftDialog";
 import { PipelineReview } from "../../components/AI/PipelineReview";
-import { PermittedButton } from "../../components/ui/PermittedButton";
 import { usePermission } from "../../hooks/usePermission";
-import { IconChecklist, IconPlus, IconSparkles } from "@tabler/icons-react";
+import { IconChecklist, IconChevronDown, IconPlus, IconSparkles } from "@tabler/icons-react";
+import { Menu } from "../../components/ui/Menu";
 import { IconFolderOff, IconSitemap, IconCircleDotted } from "@tabler/icons-react";
 import { colors } from "../../theme/tokens";
 import { lensEdgeClass } from "../../utils/lineage";
@@ -37,6 +40,7 @@ import { countBySeverity, nodesWithProblems, useProblemsStore } from "../../stor
 import { usePreflightPipeline } from "../../api/certificatesApi";
 import type { Problem } from "../../api/queries/problems";
 import { useApplyFix } from "../../hooks/useApplyFix";
+import { useStreamHistory } from "../../hooks/useStreamHistory";
 import { BreakpointBanner } from "../../components/Pipeline/BreakpointBanner";
 import { DebugPanel } from "../../components/Debug/DebugPanel";
 import { PipelineDock } from "./PipelineDock";
@@ -179,32 +183,39 @@ export function PipelinePage() {
     [searchParams, setSearchParams],
   );
   const [extendRequest, setExtendRequest] = useState<string | null>(null);
+  // One entry for the AI: two ghost buttons side by side ("Review pipeline",
+  // "Add nodes with AI") were the widest part of an already crowded top bar.
   const aiActions =
     canUseAI && pipelineId ? (
-      <>
-        <PermittedButton
-          permission="ai.use"
-          variant="ghost"
-          size="sm"
-          onClick={() => setReviewOpen(true)}
-          leftIcon={<IconChecklist size={15} stroke={1.75} />}
-          aria-label="Review pipeline"
-          title="Review pipeline"
-        >
-          <span className="pipeline-action-label">Review pipeline</span>
-        </PermittedButton>
-        <PermittedButton
-          permission="ai.use"
-          variant="ghost"
-          size="sm"
-          onClick={() => setExtendRequest("")}
-          leftIcon={<IconPlus size={15} stroke={1.75} />}
-          aria-label="Add nodes with AI"
-          title="Add nodes with AI"
-        >
-          <span className="pipeline-action-label">Add nodes with AI</span>
-        </PermittedButton>
-      </>
+      <Menu
+        align="end"
+        triggerClassName="tui-btn tui-btn--ghost tui-btn--sm pipeline-ai-trigger"
+        triggerLabel="AI: review this pipeline or add nodes"
+        triggerTitle="AI"
+        trigger={
+          <>
+            <IconSparkles size={15} stroke={1.75} aria-hidden="true" />
+            <span className="pipeline-action-label">AI</span>
+            <IconChevronDown size={13} stroke={1.75} aria-hidden="true" />
+          </>
+        }
+        items={[
+          {
+            key: "review",
+            label: "Review pipeline",
+            hint: "What to fix or improve, with a reason for each",
+            icon: <IconChecklist size={15} stroke={1.75} />,
+            onSelect: () => setReviewOpen(true),
+          },
+          {
+            key: "extend",
+            label: "Add nodes with AI",
+            hint: "Describe what to add; you review the draft",
+            icon: <IconPlus size={15} stroke={1.75} />,
+            onSelect: () => setExtendRequest(""),
+          },
+        ]}
+      />
     ) : null;
   const openProblems = useCallback(() => {
     setBottomPanelTab("problems");
@@ -351,13 +362,44 @@ export function PipelinePage() {
   // A streaming (or hybrid) run: the top bar says how many queries are up, and each
   // stream node on the canvas shows its own query. Same poll as the status panel's.
   const pipelineKind = (rawPipelineSpec?.type ?? "batch").toLowerCase();
-  const { data: streamingData } = useExecutionStreaming(
+  const { data: streamingData, dataUpdatedAt: streamingUpdatedAt } = useExecutionStreaming(
     activeExecutionId ?? "",
     isExecuting && (pipelineKind === "streaming" || pipelineKind === "hybrid"),
+  );
+  // Kept here, not in the Stream tab: closing the tab must not forget the last minutes.
+  const streamHistory = useStreamHistory(streamingData, streamingUpdatedAt, activeExecutionId ?? "");
+  // The queries this stream starts (the canvas may also draw an upstream chain): named while it starts.
+  const ownNodeNames = useMemo(
+    () =>
+      (pipelineNodes as Array<{ id: string; name?: string; pipeline?: string }>)
+        .filter((n) => !n.pipeline || n.pipeline === pipelineId)
+        .map((n) => n.name ?? n.id),
+    [pipelineNodes, pipelineId],
   );
   const streamStates = useMemo(() => streamBadges(streamingData), [streamingData]);
   const runStreamSummary = useMemo(() => streamSummary(streamingData), [streamingData]);
   const isStreamPipeline = pipelineKind === "streaming" || pipelineKind === "hybrid";
+  // What the stream would do, per node, before it starts (`ducta stream plan`). Only for a pure
+  // stream: a hybrid pipeline's batch phase may be what creates its streams' sources.
+  const isPlainStream = pipelineKind === "streaming";
+  const { data: streamPlan, refetch: refetchStreamPlan, isFetching: streamPlanChecking } = useStreamPlan(
+    projectId ?? "",
+    pipelineId ?? "",
+    activeEnv || "base",
+    isPlainStream,
+  );
+  // Start asks the plan first: a stream that cannot start says why instead of failing after it.
+  const [startCheck, setStartCheck] = useState<StreamPlan | null>(null);
+  const startStream = useCallback(async () => {
+    if (isPlainStream) {
+      const { data: fresh } = await refetchStreamPlan();
+      if (fresh && !fresh.ok) {
+        setStartCheck(fresh);
+        return;
+      }
+    }
+    handleExecute();
+  }, [isPlainStream, refetchStreamPlan, handleExecute]);
   const restartStreamingNode = useRestartStreamingNode();
   const streamNodeStatus = useMemo(
     () =>
@@ -367,6 +409,10 @@ export function PipelinePage() {
             .find((n) => n.node === selectedNodeId) ?? null
         : null,
     [selectedNodeId, streamingData],
+  );
+  const streamPlanNode = useMemo(
+    () => (selectedNodeId && isPlainStream ? streamPlan?.nodes.find((n) => n.name === (schemaById.get(selectedNodeId)?.name ?? selectedNodeId)) ?? null : null),
+    [selectedNodeId, isPlainStream, streamPlan, schemaById],
   );
   const streamPipelineStatus = useMemo(
     () =>
@@ -797,6 +843,7 @@ export function PipelinePage() {
       }
       splitEnforcement={mlPlan?.split_enforcement}
       streamStatus={streamNodeStatus}
+      streamTrend={selectedNodeId ? streamHistory.nodes[selectedNodeId]?.slice(-24) : undefined}
       isStreamPipeline={isStreamPipeline}
       onRestartStreamNode={
         activeExecutionId && streamPipelineStatus && streamNodeStatus
@@ -810,6 +857,10 @@ export function PipelinePage() {
           : undefined
       }
       isRestartingStream={restartStreamingNode.isPending}
+      streamPlanNode={streamPlanNode}
+      isStreamNode={isPlainStream || Boolean(streamNodeStatus)}
+      onStartStream={guard(startStream)}
+      startBlocked={runBlocked}
     />
   );
 
@@ -837,7 +888,7 @@ export function PipelinePage() {
         pipelineType={rawPipelineSpec?.type ?? "batch"}
         hasNodes={pipelineNodes.length > 0}
         isExecuting={isExecuting}
-        onExecute={guard(handleExecute)}
+        onExecute={guard(startStream)}
         onValidate={runPreflight}
         onCancel={handleCancel}
         chain={chainStrip}
@@ -846,9 +897,9 @@ export function PipelinePage() {
         runBlocked={runBlocked}
         aiActions={aiActions}
         streamSummary={runStreamSummary}
+        streamNodeCount={ownNodeNames.length}
         onOpenStream={() => {
-          setLogsOpen(true);
-          setBottomPanelTab("stream");
+          if (projectId && activeExecutionId) navigate(routes.stream(projectId, activeExecutionId));
         }}
       />
       {reviewOpen && projectId && pipelineId && (
@@ -1135,6 +1186,9 @@ export function PipelinePage() {
               executionStates={executionStates}
               isStreamPipeline={isStreamPipeline}
               streamSummary={runStreamSummary}
+              streamNodeNames={ownNodeNames}
+              onStartStream={guard(startStream)}
+              startBlocked={runBlocked}
               lastRun={lastRun}
               lastServedRun={lastServedRun}
             />
@@ -1153,6 +1207,20 @@ export function PipelinePage() {
         )}
       </div>
 
+      {startCheck && (
+        <StreamStartCheck
+          plan={streamPlan && !streamPlan.ok ? streamPlan : startCheck}
+          pipeline={pipelineId ?? ""}
+          env={activeEnv || "base"}
+          checking={streamPlanChecking}
+          onCheckAgain={async () => {
+            const { data: fresh } = await refetchStreamPlan();
+            if (fresh?.ok) setStartCheck(null);
+            else if (fresh) setStartCheck(fresh);
+          }}
+          onClose={() => setStartCheck(null)}
+        />
+      )}
       <PipelineDialogs
         extractDialog={extractDialog}
         subDialog={subDialog}

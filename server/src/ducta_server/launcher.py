@@ -42,14 +42,24 @@ _DEFAULT_DB_PATH = state.user_dir("executions.db")
 def refuse_open_bind(host: str, allow_unauthenticated: bool) -> Optional[str]:
     """Why the server must not start on ``host`` with authentication off, else None."""
     try:
-        from ducta_server.config import LOCAL_HOSTS, get_settings
+        from ducta_server.config import LOCAL_HOSTS, default_credentials, get_settings
 
         get_settings.cache_clear()  # HOST was just set; a cached Settings still has the old one
         settings = get_settings()
     except Exception as exc:  # noqa: BLE001 — an unreadable configuration fails on its own at startup
         logger.debug("Could not read the API settings to check the bind address: {}", exc)
         return None
-    if settings.auth_enabled or host in LOCAL_HOSTS:
+    if settings.auth_enabled:
+        defaults = default_credentials(settings)
+        if defaults and host not in LOCAL_HOSTS:
+            return (
+                f"Refusing to serve on {host} with accounts enabled but default credentials: "
+                + "; ".join(defaults)
+                + ". Set JWT_SECRET_KEY to a long random value and DUCTA_ADMIN_PASSWORD to a "
+                "password of your own, or bind to 127.0.0.1."
+            )
+        return None
+    if host in LOCAL_HOSTS:
         return None
     if allow_unauthenticated:
         logger.warning(

@@ -28,5 +28,10 @@ from ducta_server.models.execution import ExecutionStatus
 #: (when to stop the SSE log stream) — kept here, not in either mixin file,
 #: to avoid an import cycle between the two.
 _TERMINAL_STATUSES = frozenset(
-    {ExecutionStatus.SUCCESS, ExecutionStatus.FAILED, ExecutionStatus.CANCELLED}
+    {
+        ExecutionStatus.SUCCESS,
+        ExecutionStatus.FAILED,
+        ExecutionStatus.CANCELLED,
+        ExecutionStatus.INTERRUPTED,
+    }
 )

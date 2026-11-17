@@ -38,7 +38,15 @@ describe("fitHead", () => {
     expect(head).toBe("golden.tran…");
   });
 
-  it("never cuts the head shorter than its first segment", () => {
-    expect(fitHead("silver.clean_education", "_education", 5, measure)).toBe("silver.…");
+  it("keeps the head's first segment when there is room for it", () => {
+    expect(fitHead("silver.clean_education", "_education", 18, measure)).toBe("silver.…");
+  });
+
+  it("cuts into the first segment when even it does not fit, so the … stays in view", () => {
+    // 820 px: "silver." + "…" + "_education" did not fit, the head was clipped
+    // and the name read "silv_education".
+    const head = fitHead("silver.clean_education", "_education", 14, measure)!;
+    expect(head).toBe("sil…");
+    expect(head + "_education").toHaveLength(14);
   });
 });

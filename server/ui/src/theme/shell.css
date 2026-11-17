@@ -260,7 +260,7 @@ button.stream-pill--interactive:focus-visible {
   position: relative;
   width: 7px; height: 7px; border-radius: 50%; background: var(--success);
 }
-.stream-pill[data-state="running"] .stream-pill-dot::after {
+.stream-pill-wrap[data-state="running"] .stream-pill-dot::after {
   content: "";
   position: absolute;
   inset: -2px;
@@ -273,10 +273,10 @@ button.stream-pill--interactive:focus-visible {
   0% { transform: scale(1); opacity: 0.9; }
   100% { transform: scale(2.2); opacity: 0; }
 }
-.stream-pill[data-state="starting"] .stream-pill-dot { background: var(--text-dim); }
-.stream-pill[data-state="partial_failure"] .stream-pill-dot { background: var(--warning); }
-.stream-pill[data-state="failed"] .stream-pill-dot,
-.stream-pill[data-state="error"] .stream-pill-dot { background: var(--danger); }
+.stream-pill-wrap[data-state="starting"] .stream-pill-dot { background: var(--text-dim); }
+.stream-pill-wrap[data-state="partial_failure"] .stream-pill-dot { background: var(--warning); }
+.stream-pill-wrap[data-state="failed"] .stream-pill-dot,
+.stream-pill-wrap[data-state="error"] .stream-pill-dot { background: var(--danger); }
 
 /* Toolbar labels never wrap inside their buttons. */
 .canvas-controls .canvas-text-btn, .canvas-controls .canvas-segment { white-space: nowrap; }
@@ -298,15 +298,6 @@ button.stream-pill--interactive:focus-visible {
 .pipeline-dock__count.is-warn { background: var(--warning); }
 .pipeline-dock__count.is-good { background: var(--success); }
 
-.stream-idle-panel {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  padding: var(--space-4);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
 .pipeline-dock__close {
   margin-left: auto; width: 24px; height: 24px; border: 0; border-radius: var(--radius-sm);
   background: none; color: var(--text-muted); cursor: pointer; font-size: var(--text-lg); line-height: 1;
@@ -476,7 +467,8 @@ button.stream-pill--interactive:focus-visible {
 .file-compare__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-2); }
 .file-compare__main > :last-child { flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
 .file-compare__note { margin: 0; font-size: var(--text-xs); color: var(--text-muted); }
-.code-page__modes { display: flex; gap: 2px; padding: var(--space-1) var(--space-2) 0; }
+.code-page__modes { display: flex; gap: 2px; align-items: center; padding: var(--space-1) var(--space-2) 0; }
+.code-page__modes-note { margin-left: var(--space-2); color: var(--text-dim); font-size: var(--text-2xs); }
 .code-page__mode { height: 26px; padding: 0 10px; border: 1px solid transparent; border-radius: var(--radius-sm); background: none; color: var(--text-muted); font-size: var(--text-xs); cursor: pointer; }
 .code-page__mode.is-active { border-color: var(--border); background: var(--surface); color: var(--text); }
 .code-page__mode:focus-visible { outline: 2px solid var(--primary); }
@@ -525,6 +517,7 @@ button.stream-pill--interactive:focus-visible {
 .sparkline__bar { fill: color-mix(in srgb, var(--success) 70%, transparent); }
 .sparkline__bar.is-failed { fill: var(--danger); }
 .sparkline-empty { color: var(--text-dim); }
+
 .project-health { margin-bottom: var(--space-5); }
 .project-health__h { font-size: var(--text-xs); text-transform: uppercase; letter-spacing: var(--tracking-wider); color: var(--text-muted); margin: 0 0 var(--space-2); }
 .project-health__table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }

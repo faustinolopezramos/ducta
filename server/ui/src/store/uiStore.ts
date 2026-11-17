@@ -28,6 +28,12 @@ interface UIState {
   sidebarCollapsed: boolean;
   /** Top-to-bottom layers by default; left-to-right for people who read a chain that way. */
   pipelineOrientation: PipelineOrientation;
+  /**
+   * The project map's own direction. Left-to-right by default: a project is a
+   * few pipelines in a long chain, and top-to-bottom framed it at 30% in a wide
+   * window.
+   */
+  mapOrientation: PipelineOrientation;
   /** The lens a pipeline opens in when the URL does not name one. */
   pipelineLens: PipelineLens;
   /** The project last opened, so workspace-wide pages can lead back to it. */
@@ -50,6 +56,7 @@ interface UIState {
   setSidebarCollapsed: (collapsed: boolean) => void;
   toggleSidebar: () => void;
   setPipelineOrientation: (orientation: PipelineOrientation) => void;
+  setMapOrientation: (orientation: PipelineOrientation) => void;
   setPipelineLens: (lens: PipelineLens) => void;
   setLastProjectId: (id: string | null) => void;
   toggleExplorer: () => void;
@@ -69,6 +76,7 @@ export const useUIStore = create<UIState>()(
       themeChosen: false,
       sidebarCollapsed: false,
       pipelineOrientation: "vertical",
+      mapOrientation: "horizontal",
       pipelineLens: "flow",
       lastProjectId: null,
       explorerOpen: true,
@@ -91,6 +99,7 @@ export const useUIStore = create<UIState>()(
       setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setPipelineOrientation: (pipelineOrientation) => set({ pipelineOrientation }),
+      setMapOrientation: (mapOrientation) => set({ mapOrientation }),
       setPipelineLens: (pipelineLens) => set({ pipelineLens }),
       setLastProjectId: (lastProjectId) => set({ lastProjectId }),
       toggleExplorer: () => set((state) => ({ explorerOpen: !state.explorerOpen })),

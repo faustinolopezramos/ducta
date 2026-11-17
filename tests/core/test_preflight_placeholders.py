@@ -55,3 +55,15 @@ def test_a_streaming_nodes_inline_paths_are_checked():
 
 def test_a_dataset_the_catalog_does_not_have_is_left_to_the_io_key_check():
     assert not _check(NODE).errors
+
+
+def test_a_stream_node_with_inline_endpoint_dicts_does_not_crash():
+    # `ducta check` died with "unhashable type: 'dict'" on the streaming template:
+    # its input/output are inline endpoints, not catalog keys.
+    node = {
+        "type": "streaming",
+        "input": [{"format": "file_stream", "path": "${paths.x}/e"}],
+        "output": [{"format": "parquet", "path": "data/out"}],
+    }
+    report = _check(node)
+    assert report.errors == [] or all("unhashable" not in e for e in report.errors)

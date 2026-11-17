@@ -88,6 +88,9 @@ class PipelinePlan:
     env: Optional[str]
     nodes: List[NodePlan]
     issues: List[Issue] = field(default_factory=list)  # pipeline-level (not tied to a node)
+    #: A ``type: hybrid`` pipeline: the batch nodes that run to the end before any
+    #: query starts. They are not stream nodes, so they are not planned here.
+    batch_phase: List[str] = field(default_factory=list)
 
     @property
     def errors(self) -> List[str]:
@@ -110,6 +113,7 @@ class PipelinePlan:
             "ok": not self.errors,
             "nodes": [asdict(n) for n in self.nodes],
             "issues": [asdict(i) for i in self.issues],
+            "batch_phase": list(self.batch_phase),
         }
 
 
@@ -272,6 +276,30 @@ def _resolve_nodes(context: Any, pipeline_config: Dict[str, Any]) -> List[Dict[s
     return resolved
 
 
+def _split_hybrid(
+    context: Any, node_configs: List[Dict[str, Any]]
+) -> "tuple[List[Dict[str, Any]], List[str]]":
+    """The stream nodes of a ``type: hybrid`` pipeline, and the names of its batch nodes.
+
+    The run decides the same way (``PipelineValidator._is_streaming_node``): planning
+    every node as a stream reported a missing input format and an unregistered
+    transform for each batch node.
+    """
+    from ducta.core.pipeline_validator import PipelineValidator
+    from ducta.setting.validators import FormatPolicy
+
+    policy = get_context_value(context, "format_policy", None) or FormatPolicy()
+    streams: List[Dict[str, Any]] = []
+    batch: List[str] = []
+    for cfg in node_configs:
+        # An undefined node stays with the streams: the plan reports it.
+        if cfg.get("_missing") or PipelineValidator._is_streaming_node(cfg, policy):
+            streams.append(cfg)
+        else:
+            batch.append(str(cfg.get("name")))
+    return streams, batch
+
+
 def _load_transforms(registry: TransformationRegistry, modules: Iterable[str]) -> Dict[str, str]:
     """Import each module and let it register; returns ``{module: problem}``."""
     problems: Dict[str, str] = {}
@@ -315,6 +343,13 @@ def plan_pipeline(
     if not node_configs:
         plan.issues.append(Issue(ERROR, "the pipeline has no nodes"))
         return plan
+
+    pipeline_type = pipeline_config.get("type") or ""
+    if str(getattr(pipeline_type, "value", pipeline_type)).lower() == "hybrid":
+        node_configs, plan.batch_phase = _split_hybrid(context, node_configs)
+        if not node_configs:
+            plan.issues.append(Issue(ERROR, "the hybrid pipeline has no streaming nodes"))
+            return plan
 
     validator = StreamingValidator(get_context_value(context, "format_policy", None))
 
@@ -361,6 +396,24 @@ def plan_pipeline(
             why = f" ({module} {module_problems[module]})" if module in module_problems else ""
             node.issues.append(Issue(ERROR, f"transform '{node.transform}' is not registered{why}"))
 
+        streaming = cfg.get("streaming") or {}
+        stateful = bool(streaming.get("watermark")) or str(
+            streaming.get("output_mode") or "append"
+        ).lower() in ("update", "complete")
+        if (
+            stateful
+            and streaming.get("shuffle_partitions") is None
+            and global_config.get("streaming_shuffle_partitions") is None
+        ):
+            node.issues.append(
+                Issue(
+                    WARNING,
+                    "keeps state, and its first run fixes the state's partition count in "
+                    "the checkpoint for good (by default twice this machine's cores); set "
+                    "streaming.shuffle_partitions to the value production needs",
+                )
+            )
+
         source = single_spec(cfg, "input")
         if isinstance(source, dict) and str(source.get("format")).lower() in (
             "file_stream",
@@ -388,7 +441,9 @@ def plan_pipeline(
         plan.nodes.append(node)
 
     try:
-        order = validator.topological_sort({c["name"]: c for c in node_configs})
+        order = validator.topological_sort(
+            {c["name"]: c for c in node_configs}, satisfied_dependencies=set(plan.batch_phase)
+        )
         plan.nodes.sort(key=lambda n: order.index(n.name) if n.name in order else len(order))
     except StreamingError as e:
         plan.issues.append(Issue(ERROR, e.message))

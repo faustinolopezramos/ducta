@@ -9,10 +9,11 @@ import { computeLineage, lensEdgeClass } from "../../utils/lineage";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { DagCanvas } from "../../components/Pipeline/DagCanvas";
+import { lensTitle } from "../../utils/lineage";
 import { formatGlyph } from "../../utils/nodePresentation";
 import { dependsOnFromEdges } from "../../utils/pipelineChain";
 import { useUIStore } from "../../store/uiStore";
-import { IconSitemap, IconArrowRight, IconZoomIn, IconZoomOut } from "@tabler/icons-react";
+import { IconSitemap, IconArrowRight, IconArrowDown, IconZoomIn, IconZoomOut } from "@tabler/icons-react";
 import { ZoomReadout } from "../../components/Pipeline/HUDToolbar";
 import type { CanvasViewport } from "../../components/Pipeline/useCanvasViewport";
 import { routes } from "../../utils/routes";
@@ -69,8 +70,9 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
   const { data: datasetsData } = useProjectDatasets(projectId);
   /** Pipeline under the cursor or keyboard focus — drives the lens, not selection. */
   const [focused, setFocused] = useState<string | null>(null);
-  /** The same layer direction the viewer chose on the pipeline canvas. */
-  const orientation = useUIStore((s) => s.pipelineOrientation);
+  /** The map's own direction (left-to-right unless the viewer turned it). */
+  const orientation = useUIStore((s) => s.mapOrientation);
+  const setOrientation = useUIStore((s) => s.setMapOrientation);
 
   const { items, labels, parents } = useMemo(() => {
     const pipelines = Object.keys(data?.pipelines ?? {});
@@ -176,7 +178,11 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
 
   return (
     <div className="project-map">
-      <MapViewportControls viewport={viewport} />
+      <MapViewportControls
+        viewport={viewport}
+        orientation={orientation}
+        onOrientation={setOrientation}
+      />
       <DagCanvas
         items={items}
         // Framed whole when it reads at that zoom; from the top, readable, when
@@ -205,7 +211,7 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
             <div
               role="button"
               tabIndex={0}
-              aria-label={`Open pipeline ${item.id}, ${item.nodeCount} nodes`}
+              aria-label={`Open pipeline ${item.id}, ${item.nodeCount} ${item.nodeCount === 1 ? "node" : "nodes"}`}
               className={`pipeline-supernode ${isFocused ? "focused" : ""} ${dimmed ? "dag-dimmed" : ""} ${lensDir ? `lens-${lensDir}` : ""}`}
               onClick={() => open(item.id)}
               onKeyDown={(e) => {
@@ -220,7 +226,10 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
               onBlur={() => setFocused((cur) => (cur === item.id ? null : cur))}
             >
               {lensDir && lensDepth != null && (
-                <span className={`lens-tag lens-tag-${lensDir}`}>
+                <span
+                  className={`lens-tag lens-tag-${lensDir}`}
+                  title={lensTitle(lensDir, lensDepth)}
+                >
                   {lensDir === "up" ? "\u2191" : "\u2193"}{lensDepth}
                 </span>
               )}
@@ -258,7 +267,16 @@ export function ProjectDependenciesView({ projectId }: { projectId: string }) {
  * The map's viewport controls, as on the pipeline canvas: it opened on part of
  * a tall project with no way to zoom out or frame it but the wheel.
  */
-function MapViewportControls({ viewport }: { viewport: React.MutableRefObject<CanvasViewport | null> }) {
+function MapViewportControls({
+  viewport,
+  orientation,
+  onOrientation,
+}: {
+  viewport: React.MutableRefObject<CanvasViewport | null>;
+  orientation: "vertical" | "horizontal";
+  onOrientation: (o: "vertical" | "horizontal") => void;
+}) {
+  const next = orientation === "horizontal" ? "vertical" : "horizontal";
   return (
     <div className="canvas-controls canvas-controls--bottom-left project-map-controls" role="group" aria-label="Map viewport" data-no-pan>
       <button type="button" className="canvas-icon-btn" onClick={() => viewport.current?.zoomOut()} title="Zoom out" aria-label="Zoom out">
@@ -271,6 +289,16 @@ function MapViewportControls({ viewport }: { viewport: React.MutableRefObject<Ca
       <span className="canvas-controls-sep" aria-hidden="true" />
       <button type="button" className="canvas-text-btn" onClick={() => viewport.current?.fitCanvas()} title="Fit the map" aria-label="Fit map">
         Fit
+      </button>
+      <span className="canvas-controls-sep" aria-hidden="true" />
+      <button
+        type="button"
+        className="canvas-icon-btn"
+        onClick={() => onOrientation(next)}
+        title={next === "vertical" ? "Lay out top to bottom" : "Lay out left to right"}
+        aria-label={next === "vertical" ? "Lay out top to bottom" : "Lay out left to right"}
+      >
+        {next === "vertical" ? <IconArrowDown size={16} stroke={1.75} /> : <IconArrowRight size={16} stroke={1.75} />}
       </button>
     </div>
   );

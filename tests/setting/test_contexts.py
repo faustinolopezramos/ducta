@@ -269,6 +269,70 @@ class TestContextLazySpark:
         assert ctx.spark is injected
         mock_get_session.assert_not_called()
 
+    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
+    @patch("ducta.gate.gateway.spark_setup.collect_jdbc_jars")
+    def test_jdbc_drivers_are_prepared_before_the_session_from_the_projects_sources(
+        self, mock_collect, mock_get_session
+    ):
+        """A driver JAR only joins the classpath when the JVM starts: a project whose
+        connections are not in config/sources.yaml got none on a first run."""
+        order = []
+        mock_collect.side_effect = lambda **kw: order.append(("drivers", kw["sources_path"]))
+        mock_get_session.side_effect = lambda *a, **kw: order.append(("session",)) or MagicMock()
+        ctx = _make_bare_context(
+            global_config={
+                "input_path": "/in",
+                "output_path": "/out",
+                "mode": "local",
+                "ingestion": {"sources_path": "sources.yaml"},
+            },
+            pipelines_config={},
+            nodes_config={},
+            input_config={},
+            output_config={},
+        )
+        ctx.spark  # noqa: B018 — trigger lazy creation
+        assert [step[0] for step in order] == ["drivers", "session"]
+        assert str(order[0][1]) == "sources.yaml"
+
+    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
+    @patch("ducta.gate.gateway.spark_setup.collect_jdbc_jars")
+    def test_no_driver_preparation_without_sources_or_off_local(
+        self, mock_collect, mock_get_session
+    ):
+        for mode, extra in (
+            ("local", {}),
+            ("databricks", {"ingestion": {"sources_path": "s.yaml"}}),
+        ):
+            ctx = _make_bare_context(
+                global_config={"input_path": "/in", "output_path": "/out", "mode": mode, **extra},
+                pipelines_config={},
+                nodes_config={},
+                input_config={},
+                output_config={},
+            )
+            ctx.spark  # noqa: B018
+        mock_collect.assert_not_called()
+
+    @patch("ducta.setting.contexts.SparkSessionFactory.get_session")
+    @patch("ducta.gate.gateway.spark_setup.collect_jdbc_jars", side_effect=OSError("offline"))
+    def test_a_failed_driver_download_does_not_stop_the_session(
+        self, mock_collect, mock_get_session
+    ):
+        ctx = _make_bare_context(
+            global_config={
+                "input_path": "/in",
+                "output_path": "/out",
+                "mode": "local",
+                "ingestion": {"sources_path": "sources.yaml"},
+            },
+            pipelines_config={},
+            nodes_config={},
+            input_config={},
+            output_config={},
+        )
+        assert ctx.spark is mock_get_session.return_value
+
 
 def _documents(**global_overrides):
     return dict(

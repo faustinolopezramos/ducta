@@ -328,6 +328,9 @@ Sentinel watches a project's runs once the project turns it on:
      enabled: true
      environments: [dev]        # where it may re-run — never a protected one
      retry_infra: {max_attempts: 2, backoff_seconds: [60, 300]}
+     wait_for_upstream: {max_wait_minutes: 60}   # how long a run lacking upstream data waits
+     rerun_stale: false         # re-run nodes whose code changed since their last success
+     catch_up: false            # run a pipeline that is late for its SLA, instead of escalating
      max_actions_per_day: 10
      propose: {explain: true, fix_draft: true, remote: false}
 
@@ -337,7 +340,8 @@ model — chooses what to do: a transient infrastructure failure (not missing
 credentials, a missing driver or a full disk) is re-run after a backoff when
 every output it re-writes is overwritten or merged (never when one is appended:
 rows would be written twice); a run that lacked its upstream's data waits for that
-pipeline and is re-run when it succeeds; code, configuration and quality-gate
+pipeline (at most ``wait_for_upstream.max_wait_minutes``, 60) and is re-run when it
+succeeds; code, configuration and quality-gate
 failures go to a person, with an explanation and a fix draft from the model when
 one is configured — never applied. Unasked, only a **local** model proposes: a
 remote one would receive the failing pipeline's code and the run's error without
@@ -347,7 +351,8 @@ at that moment (enabled, the environment listed and not protected, the pipeline
 matching, not paused, budget left); otherwise the incident is escalated with the
 reason. Late (``metadata.sla``) and unusually slow runs (more than 1.5 times the
 pipeline's p95, once it has five runs) open incidents too — a run the server
-started as well as one seen in a scan — and an alert rule with ``when: [sentinel]``
+started as well as one seen in a scan. A late pipeline is run now when ``catch_up``
+is on, and escalated otherwise. An alert rule with ``when: [sentinel]``
 hears about escalations and recoveries.
 
 It runs inside the server (each finished run at once, and a pass every

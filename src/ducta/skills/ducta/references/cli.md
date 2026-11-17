@@ -85,7 +85,7 @@ Manage real-time streaming pipelines
 
 ### ducta stream run
 
-Run streaming pipeline
+Start a streaming pipeline and keep it running in this terminal. It prints what each node reads and writes, then a table of rows per second every 30 s and whenever a node changes state. Ctrl+C stops the queries after their current batch and prints a closing summary. `ducta stream plan` shows what would start without starting it.
 
 | Option | What it does |
 |---|---|
@@ -93,8 +93,6 @@ Run streaming pipeline
 | `--pipeline`, `-p` | Pipeline name to execute — *(required)* |
 | `--env`, `-e` | Execution environment (base, dev, prod, …) — default `base` |
 | `--mode`, `-m` | Either way the command runs while the queries do (they live in its process): 'async' (default) reports their status and stops them on Ctrl+C; 'sync' waits inside the engine — one of `sync`, `async`; default `async` |
-| `--model-version` | Model version for ML pipelines |
-| `--hyperparams` | Hyperparameters as JSON string |
 | `--transforms-module` | Python module path(s) to import before starting the pipeline. Each module must expose a register_transforms(registry) function. Example: src.streaming_fraud_realtime |
 
 ### ducta stream plan

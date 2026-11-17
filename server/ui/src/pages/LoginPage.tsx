@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useState, type FormEvent } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate, useLocation, Navigate } from "react-router-dom";
-import { useAuthStore } from "../store/auth";
+import { restoreSession, useAuthStore } from "../store/auth";
 import client from "../api/client";
 import { apiErrorMessage } from "../api/mutations";
 import type { AxiosError } from "axios";
@@ -39,8 +39,30 @@ export function LoginPage() {
     },
   });
 
+  // With authentication off (a local server) there are no credentials to ask
+  // for: the server already treats every request as its admin. The page asked
+  // anyway and said "contact your administrator" to the only person there.
+  const { data: authConfig } = useQuery<{ auth_enabled: boolean }>({
+    queryKey: ["auth", "config"],
+    queryFn: () => client.get("/auth/config").then((r) => r.data),
+    staleTime: Infinity,
+    retry: false,
+  });
+  const authOff = authConfig?.auth_enabled === false;
+  /** The automatic sign-in failed: show the form rather than a blank page. */
+  const [autoFailed, setAutoFailed] = useState(false);
+  useEffect(() => {
+    if (!authOff) return;
+    restoreSession().then((ok) => {
+      if (ok) navigate(from, { replace: true });
+      else setAutoFailed(true);
+    });
+  }, [authOff, from, navigate]);
+
   // Already authenticated — go to app
-  if (token) return <Navigate to="/" replace />;
+  if (token) return <Navigate to={from} replace />;
+  // Signing in on its own: nothing to show meanwhile.
+  if (authOff && !autoFailed) return null;
 
   const handleLoginSubmit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

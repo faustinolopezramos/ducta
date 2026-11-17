@@ -29,6 +29,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 _migration_lock = threading.Lock()
 _migrations_run = False
 
+#: Revisions of the chain Ducta 0.2.0 used. On 2026-10-29 migrations 0002-0004 (the execution
+#: owner, the sweep columns, the users' e-mail NOT NULL) were folded into ``0001``, so a database
+#: that 0.2.0 left stamped ``0002``..``0004`` already has exactly the schema ``0001`` creates:
+#: only its version mark is one this Ducta no longer knows.
+_FOLDED_REVISIONS = frozenset({"0002", "0003", "0004"})
+_FOLDED_INTO = "0001"
+
 
 async def run_migrations(engine: AsyncEngine) -> None:
     """Apply any pending Alembic migrations against *engine* synchronously.
@@ -83,14 +90,33 @@ def _apply_migrations(connection, alembic_cfg, url: str) -> None:
     current = MigrationContext.configure(connection).get_current_revision()
     script = ScriptDirectory.from_config(alembic_cfg)
     head = script.get_current_head()
-    if current is not None and current not in {rev.revision for rev in script.walk_revisions()}:
-        # A newer Ducta migrated it: Alembic alone says "Can't locate revision".
-        raise RuntimeError(
-            f"The database {url} was migrated by a newer Ducta (migration {current}); "
-            f"this Ducta knows migrations up to {head}. Upgrade Ducta "
-            "(pip install -U ducta) or point it at another database."
-        )
-    if current is not None and current != head:
+    known = {rev.revision for rev in script.walk_revisions()}
+    backed_up = False
+    if current is not None and current not in known:
+        if current in _FOLDED_REVISIONS and _FOLDED_INTO in known:
+            # Not a newer Ducta: an older one (0.2.0), whose migrations were folded into 0001
+            # since. The schema is already 0001's; only the version mark has to change.
+            _back_up_before_migrating(url, current)
+            backed_up = True
+            # purge: Alembic cannot resolve the mark being replaced, which is the whole point.
+            command.stamp(alembic_cfg, _FOLDED_INTO, purge=True)
+            logger.warning(
+                "The database {} was left at migration {} by an older Ducta, whose migrations "
+                "were folded into {}: its version mark was changed to {} (a copy was kept)",
+                url,
+                current,
+                _FOLDED_INTO,
+                _FOLDED_INTO,
+            )
+            current = _FOLDED_INTO
+        else:
+            # A newer Ducta migrated it: Alembic alone says "Can't locate revision".
+            raise RuntimeError(
+                f"The database {url} was migrated by a newer Ducta (migration {current}); "
+                f"this Ducta knows migrations up to {head}. Upgrade Ducta "
+                "(pip install -U ducta) or point it at another database."
+            )
+    if current is not None and current != head and not backed_up:
         _back_up_before_migrating(url, current)
     command.upgrade(alembic_cfg, "head")
 

@@ -155,6 +155,24 @@ backend options of the MLOps module are read from environment variables by
    * - ``DUCTA_MLOPS_CIRCUIT_BREAKER``
      - ``false``
      - Protect the system during backend outages.
+   * - ``DUCTA_MLOPS_REGISTRY_PATH`` / ``DUCTA_MLOPS_TRACKING_PATH``
+     - ``model_registry`` / ``experiment_tracking``
+     - Sub-folders of the root above for the model registry and for experiment tracking.
+   * - ``DUCTA_MLOPS_ENABLE_RETRY``
+     - ``true``
+     - Retry a failed storage call.
+   * - ``DUCTA_MLOPS_MAX_RETRIES`` / ``DUCTA_MLOPS_RETRY_DELAY``
+     - ``3`` / ``1.0``
+     - Attempts (at least 1) and seconds before the first retry.
+   * - ``DUCTA_MLOPS_MAX_ACTIVE_RUNS``
+     - ``100``
+     - Runs a process may have open at once; one more is refused.
+   * - ``DUCTA_MLOPS_AUTO_CLEANUP``
+     - ``true``
+     - When that limit is reached, drop the runs that went stale first, then refuse.
+   * - ``DUCTA_MLOPS_STALE_RUN_AGE``
+     - ``3600``
+     - Seconds an open run may sit untouched before it counts as stale.
    * - ``DATABRICKS_CATALOG`` / ``DATABRICKS_SCHEMA`` / ``DATABRICKS_VOLUME``
      - ``main`` / ``ml_tracking`` / ``mlops_artifacts``
      - Unity Catalog location for the Databricks backend.

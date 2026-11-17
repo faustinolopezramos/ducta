@@ -1,15 +1,18 @@
 import { useMemo, useState } from "react";
 import type { Pipeline, ProjectSummary } from "../../types";
 import { useExecutionList } from "../../api/queries";
+import { useCancelExecution } from "../../api/mutations";
+import { StreamLiveLine } from "../../components/Execution/StreamLiveLine";
+import { routes } from "../../utils/routes";
 import { Button } from "../../components/ui/Button";
 import { DataTable, type DataTableColumn } from "../../components/ui/DataTable";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { StatusBadge } from "../../components/ui/StatusBadge";
 import { compactDuration } from "../../utils/nodePresentation";
 import { activityWindowStart, runTimestamp, type RunLike } from "../../utils/dashboardStats";
-import { FAILURE_STATUSES } from "../../components/ui/statusMeta";
+import { ACTIVE_STATUSES, FAILURE_STATUSES } from "../../components/ui/statusMeta";
 import { formatRelative } from "../../utils/timeLabels";
-import { IconPlus, IconTrash, IconPlayerPlay, IconSitemap } from "@tabler/icons-react";
+import { IconPlus, IconTrash, IconPlayerPlay, IconPlayerStop, IconSitemap } from "@tabler/icons-react";
 
 export interface PipelineSpecLike {
   type?: string;
@@ -23,6 +26,8 @@ interface PipelineRow {
   description?: string;
   nodes: number;
   lastRun: RunLike | null;
+  /** A stream that is up right now: it has no "last run", it is running. */
+  live: RunLike | null;
   runsThisWeek: number;
 }
 
@@ -54,6 +59,7 @@ export function PipelinesView({
   // Fixed for the life of the view so the query key does not change every render.
   const [since] = useState(activityWindowStart);
   const { data: runsData, isLoading } = useExecutionList({ project_id: projectId, since, limit: 200 });
+  const { mutate: cancelRun, isPending: stopping, variables: stoppingId } = useCancelExecution();
 
   const rows = useMemo<PipelineRow[]>(() => {
     const runs = ((runsData?.executions ?? []) as RunLike[])
@@ -62,6 +68,10 @@ export function PipelinesView({
     return pipelines.map((pipeline) => {
       const spec = specs[pipeline.id];
       const own = runs.filter((x) => x.run.pipeline_name === pipeline.id);
+      const type = (spec?.type ?? pipeline.type ?? "batch").toLowerCase();
+      // Only a pure stream is "up": a hybrid pipeline's run also ends, with its batch phase.
+      const live =
+        type === "streaming" ? own.find((x) => ACTIVE_STATUSES.has(x.run.status) && !x.run.node_name)?.run ?? null : null;
       return {
         id: pipeline.id,
         name: pipeline.name || pipeline.id,
@@ -69,6 +79,7 @@ export function PipelinesView({
         description: spec?.description ?? pipeline.description,
         nodes: pipeline.nodes.length,
         lastRun: own[0]?.run ?? null,
+        live,
         runsThisWeek: own.length,
       };
     });
@@ -95,9 +106,11 @@ export function PipelinesView({
     {
       key: "last",
       header: "Last run",
-      width: "230px",
+      width: "290px",
       cell: (r) =>
-        r.lastRun ? (
+        r.live ? (
+          <StreamLiveLine executionId={r.live.id} startedAt={r.live.started_at} href={routes.stream(projectId, r.live.id)} />
+        ) : r.lastRun ? (
           <span className="dash-table-last">
             <StatusBadge status={r.lastRun.status} size="sm" />
             <span>
@@ -106,7 +119,7 @@ export function PipelinesView({
             </span>
           </span>
         ) : (
-          <span className="dash-muted">{isLoading ? "…" : "No runs this week"}</span>
+          <span className="dash-muted">{isLoading ? "…" : r.type.toLowerCase() === "streaming" ? "Not running" : "No runs this week"}</span>
         ),
     },
     { key: "runs", header: "Runs · 7 d", align: "right", mono: true, width: "96px", cell: (r) => r.runsThisWeek },
@@ -118,18 +131,34 @@ export function PipelinesView({
       width: "96px",
       cell: (r) => (
         <span className="project-list-actions">
-          <button
-            type="button"
-            className="dash-menu-trigger"
-            aria-label={`Run ${r.name}`}
-            title="Run pipeline"
-            onClick={(e) => {
-              e.stopPropagation();
-              onRun(r.id);
-            }}
-          >
-            <IconPlayerPlay size={15} stroke={1.75} />
-          </button>
+          {r.live ? (
+            <button
+              type="button"
+              className="dash-menu-trigger"
+              aria-label={`Stop ${r.name}`}
+              title="Stop the stream: the queries finish their current batch and stop"
+              disabled={stopping && stoppingId === r.live.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                cancelRun(r.live!.id);
+              }}
+            >
+              <IconPlayerStop size={15} stroke={1.75} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="dash-menu-trigger"
+              aria-label={`${r.type.toLowerCase() === "streaming" ? "Start stream" : "Run"} ${r.name}`}
+              title={r.type.toLowerCase() === "streaming" ? "Start stream" : "Run pipeline"}
+              onClick={(e) => {
+                e.stopPropagation();
+                onRun(r.id);
+              }}
+            >
+              <IconPlayerPlay size={15} stroke={1.75} />
+            </button>
+          )}
           <button
             type="button"
             className="dash-menu-trigger project-list-delete"
@@ -177,7 +206,7 @@ export function PipelinesView({
           rowClassName={(r) =>
             r.lastRun && FAILURE_STATUSES.has(r.lastRun.status) ? "dash-row--failing" : undefined
           }
-          minWidth={760}
+          minWidth={820}
           caption={`Pipelines of ${project.name}`}
         />
       )}

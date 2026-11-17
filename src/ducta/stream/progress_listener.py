@@ -91,6 +91,62 @@ class StreamingProgressSink:
             return progress.get(name)
         return getattr(progress, name, None)
 
+    @classmethod
+    def _state_metrics(cls, progress: Any) -> Dict[str, Any]:
+        """What a stateful query (aggregation, join, dedupe) and its sources report.
+
+        Event time and watermark, rows/memory held in state, rows dropped as late,
+        how far the query is behind its sources, and what it reads. Every value is
+        None when Spark does not report it (a stateless query, an older Spark).
+        """
+        out: Dict[str, Any] = {
+            "watermark": None,
+            "eventTimeMax": None,
+            "stateRows": None,
+            "stateMemoryBytes": None,
+            "lateRowsDropped": None,
+            "sourceLag": None,
+            "sources": None,
+        }
+        try:
+            event_time = cls._attr(progress, "eventTime") or {}
+            if hasattr(event_time, "get"):
+                out["watermark"] = event_time.get("watermark")
+                out["eventTimeMax"] = event_time.get("max")
+        except Exception:
+            pass
+        try:
+            operators = list(cls._attr(progress, "stateOperators") or [])
+            if operators:
+                out["stateRows"] = sum(int(cls._attr(o, "numRowsTotal") or 0) for o in operators)
+                out["stateMemoryBytes"] = sum(
+                    int(cls._attr(o, "memoryUsedBytes") or 0) for o in operators
+                )
+                out["lateRowsDropped"] = sum(
+                    int(cls._attr(o, "numRowsDroppedByWatermark") or 0) for o in operators
+                )
+        except Exception:
+            pass
+        try:
+            sources = list(cls._attr(progress, "sources") or [])
+            if sources:
+                out["sources"] = [str(cls._attr(s, "description") or "?") for s in sources]
+                lags = []
+                for source in sources:
+                    metrics = cls._attr(source, "metrics") or {}
+                    for key in ("maxOffsetsBehindLatest", "numFilesOutstanding"):
+                        value = metrics.get(key) if hasattr(metrics, "get") else None
+                        if value is None or value == "":
+                            continue
+                        try:
+                            lags.append(float(value))
+                        except (TypeError, ValueError):
+                            pass
+                out["sourceLag"] = max(lags) if lags else None
+        except Exception:
+            pass
+        return out
+
     def register_history_key(self, query_name: str, history_key: str) -> None:
         """Window *query_name*'s batch durations under *history_key*.
 
@@ -121,6 +177,7 @@ class StreamingProgressSink:
                 "getBatchMs": self._duration(progress, "getBatch"),
                 "queryPlanningMs": self._duration(progress, "queryPlanning"),
                 "walCommitMs": self._duration(progress, "walCommit"),
+                **self._state_metrics(progress),
             }
 
             now = time.time()

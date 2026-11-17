@@ -46,7 +46,7 @@ function TestChip({ state }: { state?: TestState }) {
   const Icon = state.ok ? IconCircleCheck : IconCircleX;
   return (
     <span
-      title={`Last test ${state.ok ? "succeeded" : "failed"} at ${new Date(state.at).toLocaleTimeString()}`}
+      title={`Last test ${state.ok ? "succeeded" : "failed"} at ${new Date(state.at).toLocaleTimeString("en")}`}
       style={{
         display: "inline-flex",
         alignItems: "center",

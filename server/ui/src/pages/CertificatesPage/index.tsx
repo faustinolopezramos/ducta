@@ -21,7 +21,7 @@ const FETCH_LIMIT = 200;
  * `certificate_run_id` + `project_id`) rather than a separate aggregation —
  * filtered down to runs that actually emitted one.
  */
-export function CertificatesPage() {
+export function CertificatesPage({ projectId }: { projectId?: string } = {}) {
   const navigate = useNavigate();
   const projectName = useProjectName();
   const { data, isLoading, error } = useExecutionList({ limit: FETCH_LIMIT });
@@ -33,7 +33,10 @@ export function CertificatesPage() {
   // environment, in the same controls the Runs page uses.
   const { projects } = useProjectList();
   const [q, setQ] = useState("");
-  const [project, setProject] = useState<string | undefined>();
+  // Under a project (/p/:id/certificates) the list is that project's; the rail
+  // led to a workspace-wide page that dropped the project from the breadcrumb.
+  const [pickedProject, setProject] = useState<string | undefined>();
+  const project = projectId ?? pickedProject;
   const [env, setEnv] = useState<string | undefined>();
   const envs = useMemo(() => [...new Set(all.map((ex) => ex.env).filter(Boolean) as string[])].sort(), [all]);
   const rows = useMemo(() => {
@@ -45,13 +48,17 @@ export function CertificatesPage() {
         (!needle || `${ex.pipeline_name} ${ex.certificate_run_id} ${ex.id}`.toLowerCase().includes(needle)),
     );
   }, [all, q, project, env]);
-  const filtering = Boolean(q || project || env);
+  const filtering = Boolean(q || pickedProject || env);
 
   return (
     <PageContainer>
       <PageHeader
         title="Certificates"
-        description="The proof artifact every terminating run emits — what ran, against which data, with what result."
+        description={
+          projectId
+            ? "This project's runs, each with its proof: what ran, against which data, with what result."
+            : "The proof artifact every terminating run emits — what ran, against which data, with what result."
+        }
       />
 
       <div className="run-filters" role="search" aria-label="Filter certificates">
@@ -65,7 +72,7 @@ export function CertificatesPage() {
             aria-label="Search certificates"
           />
         </label>
-        {projects.length > 1 && (
+        {!projectId && projects.length > 1 && (
           <FilterMenu
             label="Project"
             options={projects.map((p) => ({ value: p.id, label: p.name }))}

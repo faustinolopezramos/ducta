@@ -6,6 +6,7 @@ import { usePermission } from "../../hooks/usePermission";
 import { useQuery } from "@tanstack/react-query";
 import client from "../../api/client";
 import { useDiagnosis, useExecutionLogs, useExecutionStatus } from "../../api/queries";
+import { useServerProjectPipelines } from "../../api/queries/projectPipelines";
 import { useCertificate, useReproduceCertificate } from "../../api/certificatesApi";
 import { RunOptionsDialog } from "../../components/Execution/RunOptionsDialog";
 import { useCallback, useState } from "react";
@@ -83,6 +84,8 @@ export function RunPage() {
   const { data: diagnosis } = useDiagnosis(isShortId ? "" : runId, failed);
   const { data: certificate } = useCertificate(projectId, run?.certificate_run_id ?? null);
   const { data: logsData } = useExecutionLogs(isShortId ? "" : runId);
+  // A stream (or a hybrid pipeline) has a live monitor of its own.
+  const { data: pipelineSpecs } = useServerProjectPipelines(projectId);
   const { mutate: retry } = useRetryExecution();
   const { mutate: cancel, isPending: cancelling } = useCancelExecution();
   const { mutate: execute } = useExecutePipeline();
@@ -166,6 +169,11 @@ export function RunPage() {
                 Fix with AI
               </Button>
             )}
+            {["streaming", "hybrid"].includes(String(pipelineSpecs?.pipelines?.[run.pipeline_name]?.type ?? "").toLowerCase()) && (
+              <Link className="run-page__open" to={routes.stream(projectId, run.id)}>
+                {run.status === "running" ? "Open the live monitor" : "Open the stream monitor"}
+              </Link>
+            )}
             <Link className="run-page__open" to={routes.pipeline(projectId, run.pipeline_name)}>
               Open the pipeline
             </Link>
@@ -186,6 +194,11 @@ export function RunPage() {
           <dd className="run-page__status">
             <StatusBadge status={run.status} size="sm" />
             {stuck && <span className="run-page__stuck" title="Queued for over 10 minutes — its worker is gone or the queue is wedged">Stuck in queue</span>}
+            {run.status === "interrupted" && (
+              <span className="run-page__stuck" title={run.error_message ?? undefined}>
+                The server stopped before it finished
+              </span>
+            )}
           </dd>
         </div>
         <div><dt>Environment</dt><dd className="mono">{run.env}</dd></div>

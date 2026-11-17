@@ -20,6 +20,8 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import os
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Collection, Dict, List, Optional, Set
@@ -28,7 +30,7 @@ from loguru import logger  # type: ignore
 
 from ducta_server.exceptions import ExecutionNotFoundError
 from ducta_server.execution.error_recovery import load_error_log_summary
-from ducta_server.models.execution import ExecutionResponse, LogEntry
+from ducta_server.models.execution import ExecutionResponse, ExecutionStatus, LogEntry
 from ducta_server.utils.pagination import paginate
 
 if TYPE_CHECKING:
@@ -55,6 +57,48 @@ def ran_in(
     ran = Path(execution.workspace)
     here = Path(workspace).resolve()
     return ran == here or ran.is_relative_to(here) or here.is_relative_to(ran)
+
+
+INTERRUPTED_MESSAGE = "The server stopped before this run finished."
+
+_UNFINISHED = frozenset({ExecutionStatus.PENDING, ExecutionStatus.RUNNING, ExecutionStatus.PAUSED})
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, OSError):
+        return True  # exists, owned by someone else
+    return True
+
+
+def as_interrupted_if_orphaned(
+    record: ExecutionResponse, owner: Optional[Dict[str, Any]]
+) -> ExecutionResponse:
+    """*record*, as ``interrupted`` when it says queued/running but nothing runs it.
+
+    Only called for records this process does not hold in memory: a run this
+    server is executing is always there. A record left unfinished by another
+    process is orphaned unless that process is still alive on this machine (two
+    servers sharing a runs directory), or it was written on another machine,
+    which this one cannot check.
+    """
+    if record.status not in _UNFINISHED:
+        return record
+    if owner:
+        pid, host = owner.get("pid"), owner.get("host")
+        if host and host != socket.gethostname():
+            return record
+        if isinstance(pid, int) and pid != os.getpid() and _pid_alive(pid):
+            return record
+    return record.model_copy(
+        update={
+            "status": ExecutionStatus.INTERRUPTED,
+            "error_message": record.error_message or INTERRUPTED_MESSAGE,
+        }
+    )
 
 
 def _project_ids(workspace: Path) -> Optional[Set[str]]:
@@ -137,7 +181,9 @@ class _ReadsMixin(_Base):
             for persisted in file_store.list_runs():
                 if persisted.id not in seen:
                     seen.add(persisted.id)
-                    all_executions.append(persisted)
+                    all_executions.append(
+                        as_interrupted_if_orphaned(persisted, file_store.read_owner(persisted.id))
+                    )
         if user_id:
             return [e for e in all_executions if e.user_id == user_id]
         return all_executions
@@ -162,6 +208,12 @@ class _ReadsMixin(_Base):
         if workspace is not None:
             ids = _project_ids(workspace)
             all_executions = [e for e in all_executions if ran_in(e, workspace, ids)]
+            # Runs started from the CLI have a certificate and no server record.
+            from ducta_server.execution.cli_runs import workspace_cli_runs
+
+            known = {e.certificate_run_id for e in all_executions if e.certificate_run_id}
+            known.update(e.id for e in all_executions)
+            all_executions.extend(workspace_cli_runs(Path(workspace), known))
         if pipeline_name:
             all_executions = [e for e in all_executions if e.pipeline_name == pipeline_name]
         if node_name:
@@ -311,8 +363,16 @@ class _ReadsMixin(_Base):
             try:
                 record = await self._db_store.peek(execution_id)
                 if record is not None:
-                    return _fill_missing(record, meta)
+                    return as_interrupted_if_orphaned(
+                        _fill_missing(record, meta), self._read_owner(execution_id)
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("DB record read failed for {id}: {exc}", id=execution_id, exc=exc)
 
-        return meta
+        if meta is None:
+            return None
+        return as_interrupted_if_orphaned(meta, self._read_owner(execution_id))
+
+    def _read_owner(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        store = self._file_log_store
+        return store.read_owner(execution_id) if store is not None else None

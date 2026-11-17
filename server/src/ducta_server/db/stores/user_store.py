@@ -119,7 +119,7 @@ class DatabaseUserStore:
         # been changed some other way (e.g. directly in the DB) on every restart.
         explicit_password = bool(env_password)
         admin_password = resolve_admin_password(
-            env_password, is_production=settings.is_production()
+            env_password, strict=settings.requires_strong_credentials()
         )
 
         hashed = self._svc.hash_password(admin_password)

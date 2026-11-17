@@ -555,8 +555,14 @@ def _check_unresolved_placeholders(
     literally, so it is a warning.
     """
     sources: List[Tuple[str, Any]] = [
-        *((key, input_config.get(key)) for key in _input_keys(node_config)),
-        *((key, output_config.get(key)) for key in _output_keys(node_config)),
+        # A stream node's `input`/`output` are inline endpoint dicts, not catalog
+        # keys: only a string can name a dataset (the inline blocks are scanned below).
+        *((key, input_config.get(key)) for key in _input_keys(node_config) if isinstance(key, str)),
+        *(
+            (key, output_config.get(key))
+            for key in _output_keys(node_config)
+            if isinstance(key, str)
+        ),
     ]
     for stream_key in ("stream", "streaming"):
         inline = node_config.get(stream_key)

@@ -13,20 +13,20 @@ from ducta_server.auth.security import probe_or_verify, resolve_admin_password
 class TestResolveAdminPassword:
     def test_missing_password_in_production_raises(self):
         with pytest.raises(RuntimeError, match="must be set in production"):
-            resolve_admin_password(None, is_production=True)
+            resolve_admin_password(None, strict=True)
 
     def test_insecure_default_password_in_production_raises(self):
         with pytest.raises(RuntimeError, match="insecure default value"):
-            resolve_admin_password("admin", is_production=True)
+            resolve_admin_password("admin", strict=True)
 
     def test_missing_password_outside_production_defaults_to_admin(self):
-        assert resolve_admin_password(None, is_production=False) == "admin"
+        assert resolve_admin_password(None, strict=False) == "admin"
 
     def test_explicit_password_outside_production_is_used_as_is(self):
-        assert resolve_admin_password("s3cr3t", is_production=False) == "s3cr3t"
+        assert resolve_admin_password("s3cr3t", strict=False) == "s3cr3t"
 
     def test_explicit_strong_password_in_production_is_accepted(self):
-        assert resolve_admin_password("s3cr3t", is_production=True) == "s3cr3t"
+        assert resolve_admin_password("s3cr3t", strict=True) == "s3cr3t"
 
 
 class TestProbeOrVerify:

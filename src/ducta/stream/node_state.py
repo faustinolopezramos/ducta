@@ -25,8 +25,9 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import math
+import time
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 #: An active query that has reported no input rows for this long is called idle.
 IDLE_AFTER_SECONDS = 60.0
@@ -48,7 +49,8 @@ def _text(value: Any) -> Optional[str]:
 @dataclass
 class NodeState:
     node: str
-    #: active · failed · skipped (never started) · stopped
+    #: active · restarting (failed, a restart is scheduled) · failed · skipped (never
+    #: started) · stopped
     state: str
     error: Optional[str] = None
     #: "stalled" (no progress report: a hang) or "idle" (no input rows for a while:
@@ -60,6 +62,17 @@ class NodeState:
     processed_rows_per_second: Optional[float] = None
     trigger_execution_ms: Optional[float] = None
     idle_seconds: Optional[float] = None
+    #: Automatic restarts so far (this failure episode) and seconds to the next one.
+    restarts: Optional[int] = None
+    next_restart_in_seconds: Optional[float] = None
+    #: A stateful query (aggregation, join, dedupe) and its sources, from Spark's
+    #: progress report; None when Spark reports nothing of the kind.
+    watermark: Optional[str] = None
+    state_rows: Optional[float] = None
+    state_memory_bytes: Optional[float] = None
+    late_rows_dropped: Optional[float] = None
+    source_lag: Optional[float] = None
+    sources: Optional[List[str]] = None
 
 
 def derive_node_state(node: str, snapshot: Dict[str, Any]) -> NodeState:
@@ -69,12 +82,17 @@ def derive_node_state(node: str, snapshot: Dict[str, Any]) -> NodeState:
     progress = (snapshot.get("progress_metrics") or {}).get(node) or {}
     failed = snapshot.get("failed_nodes") or {}
     skipped = snapshot.get("skipped_nodes") or {}
+    restart = (snapshot.get("restarts") or {}).get(node) or {}
 
     error = _text(query.get("exception") or query.get("error") or failed.get(node))
     health_error = _text(health.get("error"))
     error = error or health_error
     if query.get("isActive"):
         state = "active"
+    elif restart.get("pending"):
+        # Failed, and the manager restarts it after a backoff: not (yet) a failure.
+        state = "restarting"
+        error = _text(restart.get("last_error")) or error
     elif error:
         state = "failed"
     elif node in skipped:
@@ -105,6 +123,18 @@ def derive_node_state(node: str, snapshot: Dict[str, Any]) -> NodeState:
         processed_rows_per_second=finite_number(progress.get("processedRowsPerSecond")),
         trigger_execution_ms=finite_number(progress.get("triggerExecutionMs")),
         idle_seconds=idle,
+        restarts=int(restart["attempts"]) if restart.get("attempts") else None,
+        next_restart_in_seconds=(
+            max(0.0, float(restart["next_at"]) - time.time())
+            if state == "restarting" and finite_number(restart.get("next_at")) is not None
+            else None
+        ),
+        watermark=_text(progress.get("watermark")),
+        state_rows=finite_number(progress.get("stateRows")),
+        state_memory_bytes=finite_number(progress.get("stateMemoryBytes")),
+        late_rows_dropped=finite_number(progress.get("lateRowsDropped")),
+        source_lag=finite_number(progress.get("sourceLag")),
+        sources=list(progress["sources"]) if progress.get("sources") else None,
     )
 
 

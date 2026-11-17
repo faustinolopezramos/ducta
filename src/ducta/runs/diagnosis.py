@@ -39,6 +39,21 @@ _KINDS = (
             r"preflight",
         ),
     ),
+    # Unmistakable infrastructure failures, before the data patterns: a refused JDBC
+    # connection raised inside Spark's schema resolution says "schema" in its own
+    # message, and it is the network, not the data.
+    (
+        "infra",
+        (
+            r"connection (refused|reset|timed out)",
+            r"TCP/IP",
+            r"ConnectException",
+            r"UnknownHostException",
+            r"OutOfMemory",
+            r"No space left",
+            r"Permission denied",
+        ),
+    ),
     (
         "data",
         (
@@ -92,9 +107,16 @@ def _node_in(text: str) -> Optional[str]:
     return m["n"] if m else None
 
 
+#: A Java stack frame (``\tat org.apache.spark…getSchema(JDBCRelation.scala:241)``). The
+#: method names in a trace say where the code was, not what went wrong: "getSchema" in
+#: a connection failure made it a data failure.
+_JAVA_FRAME = re.compile(r"^[ \t]+at [\w$.<>/-]+\([^)\n]*\)[ \t]*$", re.MULTILINE)
+
+
 def classify(text: str) -> str:
+    text = _JAVA_FRAME.sub("", text or "")
     for kind, patterns in _KINDS:
-        if any(re.search(p, text or "", re.IGNORECASE) for p in patterns):
+        if any(re.search(p, text, re.IGNORECASE) for p in patterns):
             return kind
     return "unknown"
 

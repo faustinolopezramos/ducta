@@ -308,7 +308,7 @@ function Timeline({ incident }: { incident: IncidentModel }) {
   if (!incident.timeline?.length) return null;
   const time = (iso: string) => {
     const d = new Date(iso);
-    return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    return Number.isNaN(d.getTime()) ? iso : d.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" });
   };
   return (
     <section className="rel-section">

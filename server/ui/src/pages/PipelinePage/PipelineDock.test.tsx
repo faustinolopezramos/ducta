@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { PipelineDock, type PipelineDockProps } from "./PipelineDock";
 
 // The panels have their own tests and data hooks; here only the tab logic matters.
@@ -10,7 +11,7 @@ vi.mock("../../components/Pipeline/SamplePreview", () => ({
   SamplePreview: () => <div>sample body</div>,
 }));
 vi.mock("../../components/Execution/StreamingStatusPanel", () => ({
-  StreamingStatusPanel: ({ fullView }: { fullView?: boolean }) => <div>streaming panel {fullView ? "full" : "compact"}</div>,
+  StreamingStatusPanel: () => <div>streaming panel</div>,
 }));
 vi.mock("../../components/Execution/InlineLogs", () => ({
   InlineLogs: ({ logs, finalStatus }: { logs?: unknown[]; finalStatus?: string }) => (
@@ -49,7 +50,7 @@ function renderDock(props: Partial<PipelineDockProps>) {
     pipelineNodes: [],
     executionStates: {},
   };
-  return render(<PipelineDock {...defaults} {...props} />);
+  return render(<MemoryRouter><PipelineDock {...defaults} {...props} /></MemoryRouter>);
 }
 
 describe("PipelineDock tabs", () => {
@@ -87,7 +88,71 @@ describe("PipelineDock tabs", () => {
 
     expect(screen.getByRole("tab", { name: /Stream/ })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByText("3/3")).toBeInTheDocument();
-    expect(screen.getByText("streaming panel full")).toBeInTheDocument();
+    // The monitor is its own page: the tab is one line and a way in.
+    expect(screen.getByRole("status")).toHaveTextContent("3 nodes running · 250 rows/s");
+    expect(screen.getByRole("link", { name: /Open monitor/ })).toHaveAttribute("href", "/p/p1/streams/e1");
+    expect(screen.queryByText("streaming panel")).toBeNull();
+  });
+});
+
+describe("PipelineDock Stream tab around the run", () => {
+  const stream = { tab: "stream" as const, isStreamPipeline: true };
+
+  it("names the queries while the stream starts, before its first status", () => {
+    renderDock({ ...stream, isExecuting: true, activeExecutionId: "e1", streamNodeNames: ["ingest", "enrich", "publish"] });
+    expect(screen.getByRole("status")).toHaveTextContent("Starting 3 queries…");
+    expect(screen.getByRole("link", { name: /Open monitor/ })).toHaveAttribute("href", "/p/p1/streams/e1");
+    expect(screen.queryByText(/streaming panel/)).toBeNull();
+  });
+
+  it("says nothing was started yet, and offers to start", () => {
+    const onStartStream = vi.fn();
+    renderDock({ ...stream, onStartStream });
+    expect(screen.getByText("Stream not started")).toBeInTheDocument();
+    screen.getByRole("button", { name: "Start stream" }).click();
+    expect(onStartStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a run, says how it went: length, how it ended and how long ago", () => {
+    const now = Date.now();
+    renderDock({
+      ...stream,
+      onStartStream: () => {},
+      lastRun: {
+        status: "cancelled",
+        started_at: new Date(now - (134 + 14) * 60_000).toISOString(),
+        finished_at: new Date(now - 14 * 60_000).toISOString(),
+      },
+    });
+    expect(screen.getByText("Stream stopped")).toBeInTheDocument();
+    expect(screen.getByText("Last run: 2h 14m · cancelled · 14 min ago")).toBeInTheDocument();
+  });
+
+  it("does not offer to start what may not be started, and says why", () => {
+    renderDock({ ...stream, onStartStream: () => {}, startBlocked: "prod is protected" });
+    const start = screen.getByRole("button", { name: "Start stream" });
+    expect(start).toBeDisabled();
+    expect(start).toHaveAttribute("title", "prod is protected");
+  });
+
+  it("says how the stream is once the first status is in", () => {
+    renderDock({
+      ...stream,
+      isExecuting: true,
+      activeExecutionId: "e1",
+      streamSummary: { status: "running", up: 1, total: 1, rate: 10 },
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("1 node running · 10 rows/s");
+  });
+
+  it("after a run, offers its monitor too: the journal and the last rows stay readable", () => {
+    renderDock({ ...stream, onStartStream: () => {}, lastRun: { id: "e0", status: "cancelled", finished_at: new Date().toISOString() } });
+    expect(screen.getByRole("link", { name: /Open last monitor/ })).toHaveAttribute("href", "/p/p1/streams/e0");
+  });
+
+  it("does not leave a stopped stream's tab blank", () => {
+    renderDock({ ...stream, activeExecutionId: "e1", isExecuting: false });
+    expect(screen.getByText("Stream not started")).toBeInTheDocument();
   });
 });
 

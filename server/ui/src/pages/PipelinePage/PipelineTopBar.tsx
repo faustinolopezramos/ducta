@@ -7,7 +7,7 @@ import { useSourceStore } from "../../store/workspace";
 import { routes } from "../../utils/routes";
 import { useCommandMenu } from "../../components/Shell/commandStore";
 import { Menu } from "../../components/ui/Menu";
-import { formatRowRate, runningText, type StreamSummary } from "../../utils/streaming";
+import { startingText, streamChip, type StreamSummary } from "../../utils/streaming";
 
 interface PipelineTopBarProps {
   projectId: string;
@@ -35,6 +35,8 @@ interface PipelineTopBarProps {
   aiActions?: ReactNode;
   /** A streaming pipeline that is running: how many queries are up and what they process. */
   streamSummary?: StreamSummary | null;
+  /** How many queries the stream starts, for the line shown before the first status arrives. */
+  streamNodeCount?: number;
   /** Open the dedicated streaming telemetry tab in the dock. */
   onOpenStream?: () => void;
 }
@@ -99,6 +101,38 @@ function RunMenu({ options }: { options: RunOption[] }) {
   );
 }
 
+/** The live line of a running stream: a dot and a sentence that names what is wrong, if anything. */
+function StreamPill({
+  summary,
+  nodeCount,
+  onOpen,
+}: {
+  summary: StreamSummary | null;
+  nodeCount?: number;
+  onOpen?: () => void;
+}) {
+  const chip = summary ? streamChip(summary) : null;
+  const content = (
+    <>
+      <span className="stream-pill-dot" aria-hidden="true" />
+      {chip ? chip.text : startingText(nodeCount)}
+    </>
+  );
+  return (
+    <span className="stream-pill-wrap" role="status" data-state={chip?.state ?? "starting"}>
+      {onOpen ? (
+        <button type="button" className="stream-pill stream-pill--interactive" onClick={onOpen} title="Click to open live stream monitor">
+          {content}
+        </button>
+      ) : (
+        <span className="stream-pill" title="Live state of the stream's queries">
+          {content}
+        </span>
+      )}
+    </span>
+  );
+}
+
 /**
  * The pipeline page's one bar: where you are, the chain a run of it belongs to,
  * and what running it will do — in which environment, validate first, run or
@@ -121,6 +155,7 @@ export function PipelineTopBar({
   chainStatus,
   runOptions,
   streamSummary = null,
+  streamNodeCount,
   onOpenStream,
 }: PipelineTopBarProps) {
   // A stream is started and stopped, not run: it has no end, no dates and no "only what
@@ -180,39 +215,7 @@ export function PipelineTopBar({
           <span className="pipeline-action-label">Validate</span>
         </Button>
         {isStream && isExecuting && (
-          <span
-            className="stream-pill-wrap"
-            role="status"
-            data-state={streamSummary?.status ?? "starting"}
-          >
-            {onOpenStream ? (
-              <button
-                type="button"
-                className="stream-pill stream-pill--interactive"
-                onClick={onOpenStream}
-                title="Click to open live stream monitor"
-              >
-                <span className="stream-pill-dot" aria-hidden="true" />
-                {streamSummary
-                  ? `${runningText(streamSummary.up, streamSummary.total)}${
-                      streamSummary.rate != null ? ` · ${formatRowRate(streamSummary.rate)}` : ""
-                    }`
-                  : "Starting…"}
-              </button>
-            ) : (
-              <span
-                className="stream-pill"
-                title="Live state of the stream's queries"
-              >
-                <span className="stream-pill-dot" aria-hidden="true" />
-                {streamSummary
-                  ? `${runningText(streamSummary.up, streamSummary.total)}${
-                      streamSummary.rate != null ? ` · ${formatRowRate(streamSummary.rate)}` : ""
-                    }`
-                  : "Starting…"}
-              </span>
-            )}
-          </span>
+          <StreamPill summary={streamSummary} nodeCount={streamNodeCount} onOpen={onOpenStream} />
         )}
         {isExecuting ? (
           <Button
@@ -291,7 +294,7 @@ function ChainStrip({
       if (sum(widths) <= room) setFold(0);
       else if (CHAIN_SUMMARY_W + sum([mine, ...after]) <= room || downstream.length === 0) setFold(1);
       else if (mine + 2 * (CHAIN_SUMMARY_W + CHAIN_GAP) <= room) setFold(2);
-      // Narrower still: the folds shrink to their counts ("+2 ▾"); this pipeline stays whole.
+      // Narrower still: the folds shrink to "2 up ▾" / "3 down ▾"; this pipeline stays whole.
       else setFold(3);
     };
     const observer = new ResizeObserver(decide);
@@ -319,7 +322,8 @@ function ChainStrip({
     <Menu
       trigger={
         <>
-          {fold === 3 ? `+${pipelines.length}` : `${pipelines.length} ${side}`} <span aria-hidden="true">▾</span>
+          {/* Tightest fold: still says which side ("+2" said nothing). */}
+          {fold === 3 ? `${pipelines.length} ${side === "upstream" ? "up" : "down"}` : `${pipelines.length} ${side}`} <span aria-hidden="true">▾</span>
         </>
       }
       triggerLabel={`${pipelines.length} ${side} pipeline${pipelines.length === 1 ? "" : "s"}: ${pipelines.join(", ")}`}

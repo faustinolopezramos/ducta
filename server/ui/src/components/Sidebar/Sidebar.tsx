@@ -53,7 +53,7 @@ export function railItems(projectId: string | null, opts: { hasModels?: boolean 
           also: ["/workspace/quality"],
         },
         ...(opts.hasModels ? [{ label: "Models", icon: IconFlask, path: routes.section(projectId, "models"), also: ["/workspace/mlops"] }] : []),
-        { label: "Certificates", icon: IconCertificate, path: "/workspace/certificates", also: ["/verify-certificate"] },
+        { label: "Certificates", icon: IconCertificate, path: routes.certificates(projectId), also: ["/workspace/certificates", "/verify-certificate"] },
         { label: "Git", icon: IconGitBranch, path: "/workspace/git" },
         { label: "Settings", icon: IconSettings, path: routes.section(projectId, "settings"), divideBefore: true },
       ]

@@ -477,8 +477,10 @@ Operating streams
   new checkpoint location; Spark refuses incompatible changes to a checkpoint.
 - **Two queries never share a checkpoint**: Ducta rejects the second one
   instead of letting both corrupt it.
-- ``stream status`` reports input and processing rates per query; a query that
-  stops making progress shows up there first.
+- ``stream run`` prints the rows per second of each query every 30 seconds and
+  whenever one changes state, and the web app's Stream tab draws the same
+  figures; a query that stops making progress shows up there first.
+  ``stream status`` only sees streams of its own process.
 
 Next steps
 ----------

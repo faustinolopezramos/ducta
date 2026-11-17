@@ -11,9 +11,6 @@ import {
   IconFlask,
   IconDots,
   IconBoxMultiple,
-  IconAlertTriangle,
-  IconCheck,
-  IconCopy,
   IconRefresh,
   IconWaveSine,
 } from "@tabler/icons-react";
@@ -27,7 +24,11 @@ import { ConfirmDialog } from "../../ui/ConfirmDialog";
 import { Skeleton } from "../../ui/Skeleton";
 import { useBuilderStore } from "../../../store/builderStore";
 import { capitalize, compactDuration, medallionLayer } from "../../../utils/nodePresentation";
-import { formatIdle, formatLatency, formatRate, formatRowRate, isBackpressured } from "../../../utils/streaming";
+import { formatRowRate, streamNodeDot, streamNodeStateWord } from "../../../utils/streaming";
+import { Sparkline } from "../../ui/Sparkline";
+import { StreamNodeDetail } from "../../Execution/StreamNodeDetail";
+import { StreamPlanFacts } from "../../Execution/StreamPlanCard";
+import type { StreamPlanNode } from "../../../api/queries/streamPlan";
 import type { DagCanvasItem } from "../types";
 import { FAILURE_STATUSES } from "../../ui/statusMeta";
 import { statusTone } from "../../ui/StatusBadge";
@@ -114,10 +115,20 @@ interface NodeFocusProps {
   streamStatus?: StreamingNodeStatus | null;
   /** Whether this pipeline is configured as a stream pipeline. */
   isStreamPipeline?: boolean;
+  /** Processed rows per second over the last polls of this node's query, oldest first. */
+  streamTrend?: number[];
   /** Restart this streaming node query. */
   onRestartStreamNode?: () => void;
   /** True while the restart mutation is in flight. */
   isRestartingStream?: boolean;
+  /** What this stream node would do when the stream starts (`stream plan`), while none runs. */
+  streamPlanNode?: StreamPlanNode | null;
+  /** The node is a stream node: it starts with its stream, it is not run on its own. */
+  isStreamNode?: boolean;
+  /** Start the whole stream (a stream node has no "Run node"). */
+  onStartStream?: () => void;
+  /** Why the stream cannot be started right now, when it cannot. */
+  startBlocked?: string | null;
 }
 
 type NodeTab = "overview" | "config" | "quality" | "review" | "data" | "runs" | "comments";
@@ -209,11 +220,15 @@ export function NodeFocus({
   onRunSample,
   streamStatus = null,
   isStreamPipeline = false,
+  streamTrend = [],
   onRestartStreamNode,
   isRestartingStream = false,
+  streamPlanNode = null,
+  isStreamNode = false,
+  onStartStream,
+  startBlocked = null,
 }: NodeFocusProps) {
   const [tab, setTab] = useState<NodeTab>("overview");
-  const [copiedCkpt, setCopiedCkpt] = useState(false);
   const isDirty = useBuilderStore((s) => s.isDirty);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
 
@@ -296,6 +311,7 @@ export function NodeFocus({
         </>
       ) : tab === "config" && projectId ? (
         <>
+          {streamPlanNode && <StreamPlanFacts node={streamPlanNode} variant="grid" />}
           <NodeConnection projectId={projectId} pipeline={pipelineId} node={name} onSet={onSetKey} />
           <NodeConfig projectId={projectId} pipeline={pipelineId} node={name} activeEnv={activeEnv} onSet={onSetKey} />
         </>
@@ -379,69 +395,24 @@ export function NodeFocus({
           <div className="focus-stream-card" role="region" aria-label="Streaming Query Status">
             <div className="focus-stream-card__head">
               <span className="focus-stream-card__badge" data-state={streamStatus.state} data-health={streamStatus.health ?? "healthy"}>
-                <span className={`stream-dot stream-dot--${streamStatus.state === "failed" ? "failed" : streamStatus.state === "active" ? (streamStatus.health ?? "active") : "stopped"}`} aria-hidden="true" />
-                {streamStatus.state === "active"
-                  ? streamStatus.health === "idle"
-                    ? `Idle (${formatIdle(streamStatus.idle_seconds)})`
-                    : streamStatus.health === "stalled"
-                      ? "Stalled query"
-                      : "Active query"
-                  : capitalize(streamStatus.state)}
+                <span className={`stream-dot stream-dot--${streamNodeDot(streamStatus)}`} aria-hidden="true" />
+                {streamNodeStateWord(streamStatus)}
               </span>
               {streamStatus.processed_rows_per_second != null && (
-                <span className="focus-stream-card__rate">
-                  {formatRowRate(streamStatus.processed_rows_per_second)}
-                </span>
+                <span className="focus-stream-card__rate">{formatRowRate(streamStatus.processed_rows_per_second)}</span>
               )}
             </div>
 
-            <div className="focus-stream-metrics">
-              {streamStatus.input_rows_per_second != null && (
-                <div className="focus-stream-metric">
-                  <span className="focus-stream-metric-label">Input</span>
-                  <span className="focus-stream-metric-val">{formatRate(streamStatus.input_rows_per_second)}</span>
-                </div>
-              )}
-              {streamStatus.last_batch_id != null && (
-                <div className="focus-stream-metric">
-                  <span className="focus-stream-metric-label">Batch</span>
-                  <span className="focus-stream-metric-val">#{streamStatus.last_batch_id}</span>
-                </div>
-              )}
-              {streamStatus.trigger_execution_ms != null && (
-                <div className="focus-stream-metric">
-                  <span className="focus-stream-metric-label">Latency</span>
-                  <span className="focus-stream-metric-val">{formatLatency(streamStatus.trigger_execution_ms)}</span>
-                </div>
-              )}
-            </div>
-
-            {isBackpressured(streamStatus.input_rows_per_second, streamStatus.processed_rows_per_second) && (
-              <div className="focus-stream-backpressure">
-                <IconAlertTriangle size={13} stroke={2} aria-hidden="true" />
-                <span>Input rate exceeds processing capacity</span>
-              </div>
+            {streamStatus.state === "active" && !streamStatus.health && streamTrend.length >= 2 && (
+              <Sparkline
+                points={streamTrend.map((seconds) => ({ seconds, status: "success" }))}
+                width={120}
+                height={16}
+                label="Processed rows per second, recent polls"
+              />
             )}
 
-            {streamStatus.checkpoint && (
-              <div className="focus-stream-ckpt">
-                <span className="focus-stream-ckpt-label">Checkpoint:</span>
-                <code className="focus-stream-ckpt-val" title={streamStatus.checkpoint}>{streamStatus.checkpoint}</code>
-                <button
-                  type="button"
-                  className="stream-copy-btn"
-                  title="Copy checkpoint path"
-                  onClick={() => {
-                    void navigator.clipboard?.writeText?.(streamStatus.checkpoint!);
-                    setCopiedCkpt(true);
-                    setTimeout(() => setCopiedCkpt(false), 2000);
-                  }}
-                >
-                  {copiedCkpt ? <IconCheck size={12} stroke={2} aria-hidden="true" /> : <IconCopy size={12} stroke={1.8} aria-hidden="true" />}
-                  <span>{copiedCkpt ? "Copied" : "Copy"}</span>
-                </button>
-              </div>
-            )}
+            <StreamNodeDetail node={streamStatus} />
 
             {onRestartStreamNode && (streamStatus.state === "failed" || streamStatus.health === "stalled") && (
               <Button
@@ -460,10 +431,14 @@ export function NodeFocus({
             <div className="focus-stream-card__head">
               <span className="focus-stream-card__badge" data-state="stopped">
                 <IconWaveSine size={14} stroke={2} aria-hidden="true" />
-                <span>Streaming Node</span>
+                <span>{streamPlanNode ? "Stream not running" : "Streaming Node"}</span>
               </span>
             </div>
-            <p className="focus-desc">Continuous streaming node. Run the streaming pipeline to view live throughput, micro-batches and checkpoints.</p>
+            {streamPlanNode ? (
+              <StreamPlanFacts node={streamPlanNode} />
+            ) : (
+              <p className="focus-desc">Continuous streaming node. Start the stream to see live throughput, micro-batches and checkpoints.</p>
+            )}
           </div>
         ) : null}
 
@@ -506,28 +481,47 @@ export function NodeFocus({
         {mlPlan && <MLPlanBlock plan={mlPlan} enforcement={splitEnforcement} />}
 
         <div className="focus-actions">
-          <PermittedButton
-            permission="pipeline.execute"
-            variant="primary"
-            size="sm"
-            disabled={isRunningThis}
-            loading={isRunningThis}
-            onClick={handleRunClick}
-            leftIcon={<IconPlayerPlay size={14} />}
-          >
-            {isRunningThis ? "Running…" : "Run node"}
-          </PermittedButton>
-          {onRunSample && (
-            <PermittedButton
-              permission="pipeline.execute"
-              variant="secondary"
-              size="sm"
-              onClick={onRunSample}
-              leftIcon={<IconFlask size={14} />}
-              title="Run on the first 100 rows of each input; outputs go to .ducta/scratch"
-            >
-              Sample
-            </PermittedButton>
+          {isStreamNode ? (
+            !streamStatus &&
+            onStartStream && (
+              <PermittedButton
+                permission="pipeline.execute"
+                variant="primary"
+                size="sm"
+                disabled={Boolean(startBlocked)}
+                onClick={onStartStream}
+                leftIcon={<IconPlayerPlay size={14} />}
+                title={startBlocked ?? "Start every query of this stream"}
+              >
+                Start stream
+              </PermittedButton>
+            )
+          ) : (
+            <>
+              <PermittedButton
+                permission="pipeline.execute"
+                variant="primary"
+                size="sm"
+                disabled={isRunningThis}
+                loading={isRunningThis}
+                onClick={handleRunClick}
+                leftIcon={<IconPlayerPlay size={14} />}
+              >
+                {isRunningThis ? "Running…" : "Run node"}
+              </PermittedButton>
+              {onRunSample && (
+                <PermittedButton
+                  permission="pipeline.execute"
+                  variant="secondary"
+                  size="sm"
+                  onClick={onRunSample}
+                  leftIcon={<IconFlask size={14} />}
+                  title="Run on the first 100 rows of each input; outputs go to .ducta/scratch"
+                >
+                  Sample
+                </PermittedButton>
+              )}
+            </>
           )}
           {codeData?.code && (
             <Button

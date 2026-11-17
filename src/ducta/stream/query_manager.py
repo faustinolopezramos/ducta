@@ -326,7 +326,7 @@ class StreamingQueryManager:
             self.validator.validate_streaming_node_config(node_config)
 
             node_name = node_config.get("name", "unknown")
-            logger.info(f"Creating streaming query for node '{node_name}'")
+            logger.debug(f"Creating streaming query for node '{node_name}'")
 
             input_df = self._load_streaming_input(node_config)
             models, serving = self._serving_model(node_config)
@@ -355,7 +355,7 @@ class StreamingQueryManager:
 
             qid = self._get_query_id(query)
             qname = self._get_query_name(query) or node_name
-            logger.info(f"Streaming query '{qname}' started with ID: {qid}")
+            logger.debug(f"Streaming query '{qname}' started with ID: {qid}")
             return query
 
         except Exception as e:
@@ -541,7 +541,7 @@ class StreamingQueryManager:
 
                     logger.info("No transformation function: scoring with the built-in scorer")
                     return cast(DataFrame, score(input_df, serving))
-                logger.info("No transformation function specified, using input DataFrame as-is")
+                logger.debug("No transformation function specified, using input DataFrame as-is")
                 return input_df
 
             transform_func = self._get_transform_function(function_config)
@@ -589,7 +589,7 @@ class StreamingQueryManager:
                     },
                 )
 
-            logger.info("Transformation applied successfully")
+            logger.debug("Transformation applied successfully")
             return transformed_df
 
         except Exception as e:
@@ -776,7 +776,7 @@ class StreamingQueryManager:
                 config_value=transformation_key,
                 context={"available_transformations": available, "registration_hint": hint},
             ) from e
-        logger.info(f"Applying transformation: '{transformation_key}'")
+        logger.debug(f"Applying transformation: '{transformation_key}'")
         return transform_func
 
     def _configure_and_start_query(
@@ -847,7 +847,7 @@ class StreamingQueryManager:
                     key if value is True else f"{key} {value}"
                     for key, value in (trigger or {}).items()
                 )
-                logger.info(
+                logger.debug(
                     f"Configuring streaming query '{query_name}': mode={output_mode}, "
                     f"trigger={trigger_text or 'default'}, checkpoint={checkpoint_location}"
                 )

@@ -155,3 +155,31 @@ def test_a_project_that_does_not_load_is_listed_as_invalid(root):
     assert project["id"] == "proj"
     assert project["config_status"] == "invalid"
     assert "nodez" in project["config_error"]
+
+
+def test_get_workspace_source_url_needs_the_git_source_permission(monkeypatch):
+    """`GET /api/workspace?source=<git url>` cloned for a viewer: it takes the same
+    `repository.write` as every other route that is given a Git URL."""
+    from fastapi.testclient import TestClient
+
+    from ducta_server.dependencies import get_current_user
+    from ducta_server.main import create_app
+    from ducta_server.models.auth import User
+    from ducta_server.source import resolver
+
+    cloned = []
+    monkeypatch.setattr(
+        resolver.SourceResolver, "get_info", classmethod(lambda cls, src: cloned.append(src) or {})
+    )
+
+    def client(role):
+        app = create_app()
+        app.dependency_overrides[get_current_user] = lambda: User(
+            id="u", username="u", email="u@example.com", roles=[role]
+        )
+        return TestClient(app)
+
+    url = "https://github.com/example/repo.git"
+    r = client("viewer").get("/api/workspace", params={"source": url})
+    assert r.status_code == 403, r.text
+    assert cloned == []

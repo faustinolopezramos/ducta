@@ -122,10 +122,39 @@ class _LifecycleMixin(_Base):
 
         if self._file_log_store is not None:
             self._log_manager.set_entry_observer(self._file_log_store.append)
+            self._settle_orphaned_runs()
 
         if self._maintenance_task is None or self._maintenance_task.done():
             loop = asyncio.get_running_loop()
             self._maintenance_task = loop.create_task(self._maintenance_loop())
+
+    def _settle_orphaned_runs(self) -> None:
+        """Rewrite, once, the records a previous process left queued or running.
+
+        Reads already show them as ``interrupted``; writing it down keeps them so
+        even if that pid is later reused by another process.
+        """
+        from ducta_server.execution.manager_reads import as_interrupted_if_orphaned
+
+        store = self._file_log_store
+        if store is None:
+            return
+        settled = 0
+        try:
+            for record in store.list_runs():
+                if self._store.contains(record.id):
+                    continue
+                fixed = as_interrupted_if_orphaned(record, store.read_owner(record.id))
+                if fixed is not record:
+                    store.mark_interrupted(fixed)
+                    settled += 1
+        except Exception as exc:  # noqa: BLE001 — never block startup on history
+            logger.warning("Could not settle interrupted runs: {exc}", exc=exc)
+            return
+        if settled:
+            logger.info(
+                "Marked {n} run(s) left unfinished by a previous server as interrupted", n=settled
+            )
 
     def shutdown(self) -> None:
         if self._maintenance_task is not None:

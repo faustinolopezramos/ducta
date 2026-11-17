@@ -63,7 +63,7 @@ function WorkspaceMenu() {
     <Menu
       align="start"
       triggerClassName="context-item"
-      triggerLabel="Workspace"
+      triggerLabel={current ? `Workspace: ${sourceLabel(current)}` : "Workspace"}
       triggerTitle={current || "No workspace"}
       items={items}
       trigger={

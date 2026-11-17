@@ -30,6 +30,7 @@ from fastapi import (  # type: ignore
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     WebSocket,
     WebSocketDisconnect,
 )
@@ -62,6 +63,7 @@ from ducta_server.models.execution import (
     QueueStatusResponse,
     StreamingRestartResponse,
     StreamingStatusResponse,
+    StreamRowsResponse,
 )
 
 _WS_HEARTBEAT_INTERVAL = 30
@@ -152,6 +154,46 @@ async def get_execution(
     return await exec_manager.load_execution(execution_id, user_id=user_id)
 
 
+async def _streaming_status_of(
+    execution_id: str,
+    exec_manager: ExecutionManager,
+    current_user: Any,
+    source_path: Optional[Path],
+) -> Any:
+    """The streams of an execution: from its engine, or from its journal once it has none."""
+    from ducta_server.models.execution import ExecutionStatus
+    from ducta_server.services.streaming_status import (
+        journal_lookup,
+        settle_interrupted,
+        streaming_status,
+    )
+
+    user_id = current_user.id if current_user else None
+    record = await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
+    engine = exec_manager.get_active_engine(execution_id)
+
+    def from_journal() -> List[Any]:
+        # Without a source the project (so its journals) cannot be located.
+        if not source_path:
+            return []
+        return journal_lookup(
+            source_path,
+            getattr(record, "project_id", None),
+            str(getattr(record, "env", "")),
+            str(getattr(record, "pipeline_name", "")),
+            execution_id,
+        )
+
+    status = await run_in_threadpool(streaming_status, execution_id, engine, from_journal)
+    raw = record.get("status") if isinstance(record, dict) else getattr(record, "status", None)
+    finished = str(getattr(raw, "value", raw)) not in {
+        ExecutionStatus.PENDING.value,
+        ExecutionStatus.RUNNING.value,
+        ExecutionStatus.PAUSED.value,
+    }
+    return record, settle_interrupted(status, finished)
+
+
 @router.get(
     "/{execution_id}/streaming",
     response_model=StreamingStatusResponse,
@@ -171,25 +213,71 @@ async def get_execution_streaming_status(
     current_user: CurrentUserDep,
     source_path: OptionalSourcePathDep = None,
 ) -> StreamingStatusResponse:
-    from ducta_server.services.streaming_status import journal_lookup, streaming_status
+    _, status = await _streaming_status_of(execution_id, exec_manager, current_user, source_path)
+    return cast(StreamingStatusResponse, status)
 
-    user_id = current_user.id if current_user else None
-    record = await exec_manager.load_execution(execution_id, user_id=user_id)  # 404 / ownership
-    engine = exec_manager.get_active_engine(execution_id)
 
-    def from_journal() -> List[Any]:
-        # Without a source the project (so its journals) cannot be located.
-        if not source_path:
-            return []
-        return journal_lookup(
-            source_path,
-            getattr(record, "project_id", None),
-            str(getattr(record, "env", "")),
-            str(getattr(record, "pipeline_name", "")),
-            execution_id,
+@router.get(
+    "/{execution_id}/streaming/nodes/{node}/rows",
+    response_model=StreamRowsResponse,
+    dependencies=[Depends(require_permission("execution.read"))],
+    summary="The newest rows a streaming node has written",
+    description=(
+        "Reads the end of the node's sink (parquet, Delta, json or csv files in the "
+        "project, newest file first, newest row first): the data the stream is landing "
+        "right now. It reads files, not the query, so it works for a stopped run too. "
+        "`available` is false, with a `reason`, for a sink with no files to read (kafka, "
+        "console, memory, remote storage) or one that has written nothing yet."
+    ),
+)
+async def get_streaming_node_rows(
+    execution_id: str,
+    node: str,
+    exec_manager: ExecutionManagerDep,
+    current_user: CurrentUserDep,
+    source_path: OptionalSourcePathDep = None,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> StreamRowsResponse:
+    from ducta.runs.dataset_preview import PreviewUnavailable, sink_location, tail_rows
+    from ducta_server.workspace.manager import WorkspaceManager
+
+    record, status = await _streaming_status_of(
+        execution_id, exec_manager, current_user, source_path
+    )
+    found = next(
+        (n for p in status.pipelines for n in p.nodes if n.node == node),
+        None,
+    )
+    if found is None:
+        raise HTTPException(status_code=404, detail=f"No streaming node '{node}' in this execution")
+    if not source_path or not getattr(record, "project_id", None):
+        return StreamRowsResponse(
+            node=node,
+            available=False,
+            reason="The project of this run is not known",
+            sink=found.sink,
         )
+    project_dir = WorkspaceManager(source_path).for_project(record.project_id).root
+    env = str(getattr(record, "env", "") or "base")
 
-    return await run_in_threadpool(streaming_status, execution_id, engine, from_journal)
+    def read() -> Dict[str, Any]:
+        fmt, path = sink_location(project_dir, env, found.sink or "")
+        return tail_rows(str(path), fmt, limit)
+
+    try:
+        data = await asyncio.to_thread(read)
+    except PreviewUnavailable as e:
+        return StreamRowsResponse(node=node, available=False, reason=str(e), sink=found.sink)
+    return StreamRowsResponse(
+        node=node,
+        available=True,
+        sink=found.sink,
+        format=data["format"],
+        columns=data["columns"],
+        rows=data["rows"],
+        total_rows=data["total_rows"],
+        newest_at=data["newest_at"],
+    )
 
 
 @router.post(
@@ -471,7 +559,7 @@ async def retry_execution(
         return exec_manager.retry(execution_id, source_path=source_path, user_id=user_id)
 
 
-_TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled"})
+_TERMINAL_STATUSES = frozenset({"success", "failed", "cancelled", "interrupted"})
 
 ws_router = APIRouter(prefix="/ws", tags=["WebSocket"])
 

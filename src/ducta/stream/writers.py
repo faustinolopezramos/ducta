@@ -199,7 +199,7 @@ class BasePathStreamingWriter(BaseStreamingWriter):
                     f"{format_name} path must be a non-empty string, got: {repr(path)}"
                 )
 
-            logger.info(f"Starting {format_name} streaming writer to path: {path}")
+            logger.debug(f"Starting {format_name} streaming writer to path: {path}")
 
             writer = write_stream.format(format_name)
             writer = self._apply_common(writer, config)

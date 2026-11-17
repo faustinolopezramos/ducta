@@ -20,6 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -27,7 +28,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 FIXTURES_DIR = Path("tests") / "fixtures"
 
@@ -202,9 +203,22 @@ def tests_for(project_root: Path, node: str, function: str) -> List[str]:
 
 
 def run_tests(
-    project_root: Path, targets: List[str], timeout: int = 600, python: str = sys.executable
+    project_root: Path,
+    targets: List[str],
+    timeout: int = 600,
+    python: str = sys.executable,
+    env: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Run pytest on *targets* in the project; per-test outcomes with file:line."""
+    """Run pytest on *targets* in the project; per-test outcomes with file:line.
+
+    The tests are the project's own code, so they get this process's environment
+    minus the server's secrets (``JWT_SECRET_KEY``, the admin password, …) unless
+    *env* is given.
+    """
+    if env is None:
+        from ducta.server_secrets import is_server_secret
+
+        env = {k: v for k, v in os.environ.items() if not is_server_secret(k)}
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "report.xml"
         cmd = [
@@ -213,7 +227,12 @@ def run_tests(
         ]  # fmt: skip
         try:
             proc = subprocess.run(
-                cmd, cwd=project_root, capture_output=True, text=True, timeout=timeout
+                cmd,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=dict(env),
             )
         except subprocess.TimeoutExpired:
             return {

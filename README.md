@@ -603,6 +603,9 @@ flowchart TD
 | [`console`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/console/README.md) | The `ducta` executable: run, scaffold, inspect, verify. | CLI |
 | [`ducta_server`](https://github.com/faustinolopezramos/ducta/blob/main/server/src/ducta_server/README.md) | REST + WebSocket over the engine; serves the bundled web app. A separate package, `ducta-server`. | Service |
 | [`ai`](https://github.com/faustinolopezramos/ducta/blob/main/src/ducta/ai/README.md) | A local or remote model drafts, fixes, reviews and explains pipelines (`ducta ai`); every draft is validated, and nothing is written until a person accepts it. Also ships the agent skill (`ducta skill`). | Authoring assistance |
+| `runs` | What a finished run leaves behind and how to read it: run records, certificates, the run table, failure diagnosis (what failed, where, what changed), alerts. Shared by the CLI, `ducta ai` and the server. | Run evidence |
+| `project_store` | Reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/` in place (comments kept), validates every edit, and checks drafts. Shared by `ducta ai` and the server. | Project files |
+| `skills` | The agent skill (`ducta skill install`): Ducta's reference for Claude Code and other agents. | Agent skill |
 
 ### The public API
 
@@ -640,13 +643,12 @@ and stays usable on a bare `pip install ducta` with no Spark present.
 Direction, not commitments — Ducta is alpha and priorities move. The
 [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) is the record of what actually shipped.
 
-**Now (in flight toward `0.4.0`, see `[Unreleased]` in the CHANGELOG)**
+**Shipped in `0.3.0`** (see the CHANGELOG)
 
 - Streams with the guarantees of a batch run: per-batch MERGE into Delta,
   quarantine of the rows a rule rejects (or of a batch the quality gate blocks),
   the node's quality checks on every batch, a run journal that outlives the
   process, a certificate for every streaming run, and alerts while it runs.
-- Showing a stream node's quarantine and gate verdicts in the web app.
 - A model reaches production only through the project's promotion policy (from the
   training node, the CLI or the web app, every decision audit-logged), a scoring
   pipeline's `retrain:` runs the training when its drift checks fail, and the ML
@@ -654,6 +656,8 @@ Direction, not commitments — Ducta is alpha and priorities move. The
 
 **Next**
 
+- Showing a stream node's quarantine and gate verdicts in the web app (it shows the
+  plan and the live counters today, not the verdicts).
 - **`pip install ducta && ducta demo`** — a zero-configuration first run with no
   Spark and no scaffolding, printing each stage as it happens and ending at a
   certificate path. The blocker is narrow and known: `pandas` is already a core

@@ -288,7 +288,16 @@ def _merge_totals(a: Optional[Dict[str, Any]], b: Dict[str, Any]) -> Dict[str, A
     gate = dict(a.get("gate") or {})
     for verdict, count in (b.get("gate") or {}).items():
         gate[verdict] = gate.get(verdict, 0) + count
+    extra: Dict[str, Any] = {}
+    for key in ("restarts", "late_rows_dropped"):  # counts: added up
+        if a.get(key) or b.get(key):
+            extra[key] = int(a.get(key) or 0) + int(b.get(key) or 0)
+    for key in ("watermark", "state_rows", "state_memory_bytes", "sources"):  # newest (b)
+        value = b.get(key) if b.get(key) is not None else a.get(key)
+        if value is not None:
+            extra[key] = value
     return {
+        **extra,
         "batches": int(a.get("batches") or 0) + int(b.get("batches") or 0),
         "first_batch": min(firsts) if firsts else None,
         "last_batch": max(lasts) if lasts else None,
@@ -327,9 +336,20 @@ def _summarize_lines(lines: Iterator[Dict[str, Any]]) -> Dict[str, Dict[str, Any
             },
         )
         batch_id = line.get("batch_id")
+        if line.get("kind") == "restart":
+            node["restarts"] = int(node.get("restarts") or 0) + 1
+            continue
         if line.get("kind") == "progress":
             node["batches"] += 1
             node["rows_in"] += int(line.get("rows") or 0)
+            if line.get("late_rows_dropped"):
+                node["late_rows_dropped"] = int(node.get("late_rows_dropped") or 0) + int(
+                    line["late_rows_dropped"]
+                )
+            # The state a stateful node held at its last batch, and its watermark.
+            for key in ("watermark", "state_rows", "state_memory_bytes", "sources"):
+                if line.get(key) is not None:
+                    node[key] = line[key]
         elif line.get("kind") == "batch":
             node["rows_written"] = (node["rows_written"] or 0) + int(line.get("rows_written") or 0)
             node["rows_quarantined"] += int(line.get("rows_quarantined") or 0)

@@ -192,6 +192,19 @@ class WorkspaceManager:
             raise SecretFileError(f"'{rel_path}' holds secrets; edit it outside Ducta")
         return target
 
+    def ensure_readable(self, rel_path: str) -> Path:
+        """Refuse a path the file API would not serve (a ``.env`` file, ``.git/``).
+
+        For callers that return a file's content by other means — the git routes' diffs,
+        blame, ``file-at``: they read the file themselves, so without this check a viewer
+        got through git what the file browser answers 403.
+        """
+        return self._browsable(rel_path)
+
+    def ensure_writable(self, rel_path: str) -> Path:
+        """Refuse a path the file API would not write (secrets, ``.git/``, ``.ducta/``)."""
+        return self._browsable(rel_path, write=True)
+
     def list_directory(self, rel_path: str = "") -> List[Dict[str, Any]]:
         """Return sorted directory entries (dirs first) for *rel_path* inside the workspace."""
         if rel_path:

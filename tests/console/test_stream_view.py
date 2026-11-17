@@ -120,6 +120,24 @@ class TestLiveTable:
         assert "clean: no new input for 3m (a quiet source, not a failure)" in text
         assert "! clean" not in text
 
+    def test_an_idle_node_shows_no_throughput_from_its_last_batch(self):
+        snap = {**SNAPSHOT}
+        snap["progress_metrics"] = {
+            "ingest": {
+                "batchId": 4,
+                "inputRowsPerSecond": 6.1,
+                "processedRowsPerSecond": 6.1,
+                "numInputRows": 0,
+                "idleSeconds": 25.0,  # not "idle" yet (60 s), but the batch is long gone
+            },
+        }
+        row = next(
+            line
+            for line in render_live_table(snap).splitlines()
+            if line.strip().startswith("ingest")
+        )
+        assert "6.1" not in row and "0.00/s" in row
+
     def test_a_failed_node_names_how_many_failed_and_why(self):
         snap = {
             **SNAPSHOT,

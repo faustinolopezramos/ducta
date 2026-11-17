@@ -14,7 +14,7 @@ interface CodeToolbarProps {
 
 function formatTime(date: Date | null): string | null {
   if (!date) return null;
-  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return date.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export function CodeToolbar({

@@ -173,9 +173,20 @@ def _state_cell(state: NodeState) -> str:
     return state.state
 
 
+#: Without input rows for this long, the table shows 0/s instead of the last batch's rate.
+_RATE_STALE_AFTER_SECONDS = 10.0
+
+
 def _rate_cell(state: NodeState) -> str:
     """Rows per second processed; the input rate too, only when the node falls behind it."""
     processed, incoming = state.processed_rows_per_second, state.input_rows_per_second
+    if state.state == "active" and (
+        state.health == "idle"
+        or (state.idle_seconds is not None and state.idle_seconds >= _RATE_STALE_AFTER_SECONDS)
+    ):
+        # No rows for a while: Spark publishes no progress for empty triggers and keeps
+        # the last batch's rate, which would read as throughput that no longer happens.
+        return format_rate(0.0)
     text = format_rate(processed)
     if (
         processed is not None
@@ -330,6 +341,9 @@ def render_plan(plan: PipelinePlan) -> str:
         f"Plan {dot} {plan.pipeline} {dot} env {plan.env or '-'} {dot} nothing was started",
         "",
     ]
+    if plan.batch_phase:
+        lines.append(f"  batch phase {dot} runs to the end first: {', '.join(plan.batch_phase)}")
+        lines.append("")
     for node in plan.nodes:
         after = f"  (after {', '.join(node.after)})" if node.after else ""
         lines.append(f"  {node.name}{after}")

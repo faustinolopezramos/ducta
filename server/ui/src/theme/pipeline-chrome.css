@@ -671,6 +671,10 @@
   .pipeline-trail-sep--root { display: none; }
 }
 
+/* The AI menu's trigger: a Menu button styled as a ghost Button, which gets
+   its spacing from Button's own markup — given here instead. */
+.pipeline-ai-trigger { gap: var(--space-1); }
+
 @media (max-width: 1024px) {
   /* The secondary actions go icon-only (each keeps its name as a tooltip and
      aria-label) so Run, the page's main action, is never pushed off screen. */

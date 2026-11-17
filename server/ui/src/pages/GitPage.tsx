@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { colors, styles } from "../theme/tokens";
 import { PermittedButton } from "../components/ui/PermittedButton";
 import { PageHeader } from "../components/ui/PageHeader";
@@ -89,6 +90,9 @@ export function GitPage() {
       <PageHeader
         title="Git"
         description="Stage, commit, and push your workspace changes."
+        // The setup wizard was the only place to set the commit author, and
+        // nothing led back to it once skipped.
+        actions={gitAvailable ? <Link to="/setup" className="tui-btn tui-btn--secondary tui-btn--sm">Author name &amp; email</Link> : undefined}
       />
 
       {gitAvailable === false ? (

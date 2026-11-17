@@ -21,6 +21,9 @@ export interface RunLike {
   finished_at?: string | null;
   duration_seconds?: number | null;
   error_message?: string | null;
+  /** `cli`: known only from its Run Certificate. */
+  origin?: string | null;
+  certificate_run_id?: string | null;
 }
 
 

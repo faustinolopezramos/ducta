@@ -10,10 +10,10 @@
 |---|---|
 | **Purpose** | Draft new pipelines, and fixes for broken ones, with an LLM — validated, reviewable, opt-in |
 | **Layer** | Authoring assistance (sits beside `setting`; never on the execution path) |
-| **Depends on** | `setting` (project loader), `core` (`DuctaError`), `check` (profiling, validation); lazily `api` (`validate_draft`, `code_index`, `v2_store`, metrics, the execution manager) and `console` (`TemplateCommand`, for evals) |
+| **Depends on** | `setting` (project loader), `core` (`DuctaError`), `check` (profiling, validation); `runs` (run records, diagnosis); lazily `project_store` (`validate_draft`, `V2ProjectStore`, `code_index`) and `console` (`TemplateCommand`, for evals) |
 | **Used by** | `console` (`ducta ai …`), the web server `ducta_server` (`/api/ai/*`, `/api/projects/{id}/ai/*`; a separate package) |
 | **Key entry points** | `load_config`, `make_provider`, `generate`, `fix`, `apply_draft`, `build_context` |
-| **Install** | `pip install "ducta[ai]"` — brings `httpx`, `anthropic`, `keyring`, `ruamel.yaml`; the validator needs nothing from the `api` extra |
+| **Install** | `pip install "ducta[ai]"` — brings `httpx`, `anthropic`, `keyring`, `ruamel.yaml`; the validator needs nothing from `ducta-server` |
 
 ## Where it fits
 
@@ -334,7 +334,7 @@ All errors derive from `AIError` (a `DuctaError`, so the API maps them to a stat
 | `AINotFoundError` | 404 | Unknown draft or pipeline |
 | `AIConflictError` | 409 | Draft already applied, a file it touches changed since, or a path outside the project |
 | `AIPolicyError` | 403 | The project's `ai:` block does not allow it (AI off, or a remote model where only a local one is allowed) |
-| `AIEnvironmentError` | 500 | Ducta cannot do it here: the `ai`/`api` extra is not installed, or a file cannot be written |
+| `AIEnvironmentError` | 500 | Ducta cannot do it here: the `ai` extra is not installed, or a file cannot be written |
 
 If the model fails **after** at least one attempt, the loop keeps the last draft and records why in `draft.notes` instead of losing it.
 
@@ -362,10 +362,10 @@ If the model fails **after** at least one attempt, the loop keeps the last draft
 | `errors.py` | `AIError` and its subclasses |
 | `agents/` | Ducta's agents — see §10 |
 | `agents/architect/` | `blueprint.py` (shape, `check_blueprint`, `render`), `design.py` (`design`, `check`, `NeedsAnswers`), `build.py` (`build`, `scaffold`, `module_problems`), `verify.py` |
-| `agents/sentinel/` | `triage.py` (`decide`: the runbook table), `policy.py` (`may_act`), `actions.py` (CLI and server executors), `propose.py` (L2), `incidents.py`, `engine.py` (`Sentinel`, `watch`), `server.py` (hook and periodic pass) |
+| `agents/sentinel/` | `triage.py` (`decide`: the runbook table), `policy.py` (`may_act`), `actions.py` (CLI and server executors), `propose.py` (L2), `incidents.py`, `engine.py` (`Sentinel`, `watch`); the server's hook and periodic pass live in `ducta_server/sentinel_hooks.py` |
 | `agents/definitions/` | `ducta-architect.md`, `ducta-sentinel.md`: the agents for Claude Code (`ducta skill install --agents`) |
 
-Tests: `tests/ai/` (parsing, scopes, the loop, fixes, drafts, config, keys, each protocol over a mock transport; `tests/ai/agents/` for Architect, Sentinel and their CLI), `tests/api/test_ai_routes.py` and `tests/api/test_agents_routes.py`. They use a canned provider: no network, no model.
+Tests: `tests/ai/` (parsing, scopes, the loop, fixes, drafts, config, keys, each protocol over a mock transport; `tests/ai/agents/` for Architect, Sentinel and their CLI), `tests/server/test_ai_routes.py`, `tests/server/test_ai_eval_routes.py` and `tests/server/test_agents_routes.py`. They use a canned provider: no network, no model.
 
 ---
 

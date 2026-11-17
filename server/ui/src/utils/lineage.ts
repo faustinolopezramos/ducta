@@ -64,3 +64,11 @@ export function lensEdgeClass(lineage: Lineage | null, from: string, to: string)
   if (inDownPath) return "dag-edge-down";
   return "dag-edge-dimmed";
 }
+
+/** Hover text of a lens tag (↑2 / ↓1): where this item sits from the one in focus. */
+export function lensTitle(dir: "up" | "down" | string, depth: number): string {
+  const steps = `${depth} ${depth === 1 ? "step" : "steps"}`;
+  return dir === "up"
+    ? `Upstream: ${steps} before the one in focus`
+    : `Downstream: ${steps} after the one in focus`;
+}

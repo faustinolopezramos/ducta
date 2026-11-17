@@ -104,6 +104,23 @@ from `settings.streaming_transform_modules`, or `ducta stream run --transforms-m
 Omit `transform` to copy the stream as-is; add `model:` (as in [mlops](mlops.md)) to
 score each micro-batch.
 
+## Aggregations and joins
+
+- A sink takes only some `streaming.output_mode`s (checked by `stream plan`):
+  parquet/json/csv `append`; delta/memory `append`, `complete`; kafka/console all; any
+  node with merge/quarantine/quality all. Running totals in a table: `output_mode: update`
+  + `output: {format: delta, mode: merge, merge: {keys: [<grouping columns>]}}`.
+- A stateful node (watermark, aggregation) should set `streaming.shuffle_partitions`: the
+  first run fixes it in the checkpoint for good (`stream plan` warns).
+- `continuous` writes only to kafka/console/memory, without micro-batches or watermarks.
+- Joins go in the transform: read the other side with `df.sparkSession.read` (stream-static)
+  or `df.sparkSession.readStream` with its own `withWatermark` and a time bound in the join
+  condition (stream-stream). The node still declares one `input`; its `sources` in the
+  status list both.
+- Status and journal carry `watermark`, `state_rows`, `state_memory_bytes`,
+  `late_rows_dropped`, `source_lag`: a growing `state_rows` = watermark stuck; a growing
+  `source_lag` = the node cannot keep up.
+
 ## Running
 
 ```bash
@@ -114,7 +131,9 @@ ducta stream run --pipeline events --env dev   # runs until the queries end, or 
 The queries live in the command's process, so it keeps running while they do; Ctrl+C
 stops them gracefully. `ducta start --pipeline events` behaves the same.
 While it runs, `stream run` prints a small table (node, state, rows/s, batch) every 30 s
-(`DUCTA_STREAM_REPORT_SECONDS`) and when a node changes state, and a summary when it ends; `idle` is a quiet source, `stalled` a query reporting nothing.
+(`DUCTA_STREAM_REPORT_SECONDS`) and when a node changes state, and a summary when it ends; `idle` is a quiet source, `stalled` a query reporting nothing, `restarting` a query that
+failed and is started again from its checkpoint (`streaming_restart_max_attempts`, default
+3, backoff `streaming_restart_backoff_seconds` 10 s doubling; 0 attempts = off).
 `ducta stream status` / `stop` only see streams of their own process. A stream that
 must outlive a terminal is started from the server (`ducta ui`, or
 `POST .../pipelines/{name}/execute`): `GET /api/executions/{id}/streaming` shows it,
@@ -134,6 +153,8 @@ environments:
 | Symptom | Fix |
 |---|---|
 | "checkpoint already in use" | another *running* query uses that checkpoint: give each node (and environment) its own |
+| node `failed` with "gave up after N restart(s): ValueError: …" | the same input fails every time (a record the transform cannot handle): make the transform handle it (`quarantine.reject_when` runs after the transform, so it cannot catch it); the next run resumes from the checkpoint |
+| `stream plan`: "sink does not support output_mode" | see "Aggregations and joins": use merge into delta for `update` |
 | run ends `partial_failure` / exit code 1 | a node did not start or was skipped behind a failed one: see `failed_nodes` / `skipped_nodes` in the status |
 | transform not found | the module is not imported or does not call `registry.register` with that key |
 | `trigger` / `checkpoint_location` "not allowed here" | move it under `stream.streaming` |

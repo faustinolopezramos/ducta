@@ -247,14 +247,42 @@ describe("NodeFocus", () => {
     const streamRegion = screen.getByRole("region", { name: "Streaming Query Status" });
     expect(streamRegion).toHaveTextContent("Failed");
     expect(streamRegion).toHaveTextContent("1.2k rows/s");
-    expect(streamRegion).toHaveTextContent("1.5k/s"); // input
-    expect(streamRegion).toHaveTextContent("#12"); // batch
-    expect(streamRegion).toHaveTextContent("180 ms"); // latency
-    expect(streamRegion).toHaveTextContent("data/_ckpt/clean");
+    expect(streamRegion).toHaveTextContent("batch 12 · last 180 ms"); // the same detail as a row of the Stream tab
+    expect(streamRegion).toHaveTextContent("checkpoint data/_ckpt/clean");
 
     const restartBtn = screen.getByRole("button", { name: "Restart query" });
     fireEvent.click(restartBtn);
     expect(onRestartStreamNode).toHaveBeenCalled();
+  });
+
+  it("says the same things as a row of the Stream tab: what it reads and writes, and its trend", () => {
+    renderFocus({
+      isStreamPipeline: true,
+      streamStatus: {
+        node: "clean_results",
+        state: "active",
+        processed_rows_per_second: 980,
+        source: "delta data/bronze",
+        sink: "delta data/silver",
+        trigger: "every 5 seconds",
+      },
+      streamTrend: [900, 950, 980],
+    });
+    const region = screen.getByRole("region", { name: "Streaming Query Status" });
+    expect(region).toHaveTextContent("Running");
+    expect(region).toHaveTextContent("980 rows/s");
+    expect(region).toHaveTextContent("reads delta data/bronze · writes delta data/silver");
+    expect(region).toHaveTextContent("every 5 seconds");
+    expect(screen.getByRole("img", { name: /Processed rows per second/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restart query" })).toBeNull();
+  });
+
+  it("warns about backpressure in the same words as the Stream tab", () => {
+    renderFocus({
+      isStreamPipeline: true,
+      streamStatus: { node: "clean_results", state: "active", input_rows_per_second: 4000, processed_rows_per_second: 900 },
+    });
+    expect(screen.getByRole("region", { name: "Streaming Query Status" })).toHaveTextContent("Backpressure: input (4.0k/s) outpaces processing (900/s)");
   });
 
   it("shows streaming node card when in a stream pipeline but idle", () => {
@@ -262,5 +290,65 @@ describe("NodeFocus", () => {
     const streamRegion = screen.getByRole("region", { name: "Streaming Query Status" });
     expect(streamRegion).toHaveTextContent("Streaming Node");
     expect(streamRegion).toHaveTextContent("Continuous streaming node");
+  });
+
+  describe("a stream node before its stream starts", () => {
+    const planNode = {
+      name: "clean_results",
+      source: "file_stream parquet data/dev/bronze/events",
+      sink: "parquet data/dev/silver/events",
+      trigger: "every 5 seconds",
+      output_mode: "append",
+      checkpoint: "data/dev/_ckpt/clean_results/events_stream/clean_results",
+      after: ["ingest"],
+      transform: "clean_events",
+      issues: [{ level: "warning" as const, text: "source path 'data/dev/bronze/events' does not exist yet" }],
+    };
+
+    it("says what it would do: reads, transform, writes, how often it fires, its checkpoint and its problems", () => {
+      renderFocus({ isStreamPipeline: true, isStreamNode: true, streamStatus: null, streamPlanNode: planNode });
+      const region = screen.getByRole("region", { name: "Streaming Query Status" });
+      expect(region).toHaveTextContent("Stream not running");
+      expect(region).toHaveTextContent("file_stream parquet data/dev/bronze/events");
+      expect(region).toHaveTextContent("clean_events");
+      expect(region).toHaveTextContent("every 5 seconds · append");
+      expect(region).toHaveTextContent("ingest"); // After
+      expect(region).toHaveTextContent("…/events_stream/clean_results"); // the end of the checkpoint
+      expect(region).not.toHaveTextContent("data/dev/_ckpt/clean_results/events_stream/clean_results");
+      expect(region).toHaveTextContent("does not exist yet");
+    });
+
+    it("starts the stream instead of offering to run the node or a sample of it", () => {
+      const onStartStream = vi.fn();
+      renderFocus({ isStreamPipeline: true, isStreamNode: true, streamStatus: null, streamPlanNode: planNode, onStartStream, onRunSample: vi.fn() });
+      expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Sample" })).toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Start stream" }));
+      expect(onStartStream).toHaveBeenCalledTimes(1);
+    });
+
+    it("cannot start a stream that is blocked, and says why", () => {
+      renderFocus({ isStreamPipeline: true, isStreamNode: true, streamStatus: null, onStartStream: vi.fn(), startBlocked: "prod is protected" });
+      const button = screen.getByRole("button", { name: "Start stream" });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("title", "prod is protected");
+    });
+
+    it("offers no Start while its stream is up: the live card takes over", () => {
+      renderFocus({
+        isStreamPipeline: true,
+        isStreamNode: true,
+        streamStatus: { node: "clean_results", state: "active", processed_rows_per_second: 10 },
+        onStartStream: vi.fn(),
+      });
+      expect(screen.queryByRole("button", { name: "Start stream" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Run node" })).toBeNull();
+    });
+
+    it("keeps Run node for a batch node, even in a hybrid pipeline", () => {
+      renderFocus({ isStreamPipeline: true, isStreamNode: false, streamStatus: null, onStartStream: vi.fn() });
+      expect(screen.getByRole("button", { name: "Run node" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Start stream" })).toBeNull();
+    });
   });
 });

@@ -8,7 +8,7 @@
 |---|---|
 | **Purpose** | Human/CI entry point: run pipelines, scaffold projects, inspect configs and quality |
 | **Layer** | Interface (CLI) |
-| **Depends on** | `core`, `setting`, `check`, `mlrun`, `stream`, `ai` (`ducta ai …`), `project_store` and `runs` (shared services), `skills`; `ducta ui` hands over to the separate `ducta-server` package, never imports it |
+| **Depends on** | `core`, `setting`, `check`, `mlrun`, `stream`, `ai` (`ducta ai …`), `runs` (run records and diagnosis), `skills`; `ducta ui` hands over to the separate `ducta-server` package, never imports it |
 | **Used by** | End users & CI (the `ducta` command); `api` and `ai` reuse its presentation and templates |
 | **Key entry points** | `ducta` console script → `UnifiedCLI`, subcommands (`start`, `stream`, `template`, `quality`, …) |
 | **Install** | Bundled with the core engine (`pip install ducta`) |

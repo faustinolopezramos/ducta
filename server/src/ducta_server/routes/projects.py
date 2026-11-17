@@ -64,7 +64,11 @@ from ducta_server.services.node_schema_service import NodeSchemaService
 from ducta_server.services.project import ProjectService
 from ducta_server.utils.validators import validate_environment_name, validate_identifier
 from ducta_server.workspace.manager import WorkspaceManager
-from ducta_server.workspace.preflight import PreflightValidator, run_deep_preflight
+from ducta_server.workspace.preflight import (
+    PreflightValidator,
+    run_deep_preflight,
+    run_stream_plan,
+)
 
 if TYPE_CHECKING:
     from ducta_server.services.comments import LocalCommentStore
@@ -1004,7 +1008,9 @@ async def run_project_tests(
         target = (root / t.split("::")[0]).resolve()
         if root.resolve() not in target.parents:
             raise HTTPException(status_code=400, detail=f"{t} is outside the project")
-    return await asyncio.to_thread(run_tests, root, targets)
+    from ducta_server.execution.child_runner import child_environment
+
+    return await asyncio.to_thread(run_tests, root, targets, env=child_environment())
 
 
 # ── Quality: a node's checks, tried on its data ──────────
@@ -1703,9 +1709,17 @@ async def preflight_project_pipeline(
     env: str = "base",
 ) -> PreflightResponse:
     svc.get_pipeline(project_id, name)
+    _check_subprocess_env(manager, env)
 
-    # Defense in depth: `env` reaches a subprocess snippet. Validate its shape
-    # and, when the workspace declares environments, that it is a known one.
+    exec_source = manager.for_project(project_id).root
+    result = await asyncio.to_thread(run_deep_preflight, exec_source, name, env)
+    problems = problem_models(result.get("errors", []), result.get("warnings", []), "preflight")
+    return PreflightResponse(pipeline=name, problems=problems, **result)
+
+
+def _check_subprocess_env(manager: WorkspaceManager, env: str) -> None:
+    """Defense in depth: `env` reaches a subprocess snippet. Validate its shape and, when
+    the workspace declares environments, that it is a known one."""
     with http_error_on(400):
         validate_environment_name(env)
     try:
@@ -1718,10 +1732,66 @@ async def preflight_project_pipeline(
             detail=f"Unknown environment '{env}'. Available: {', '.join(sorted(known_envs))}.",
         )
 
+
+# ── Stream plan ───────────────────────────────────────────
+
+
+class StreamPlanIssue(BaseModel):
+    level: str = Field(description="error | warning")
+    text: str
+
+
+class StreamPlanNode(BaseModel):
+    name: str
+    source: str
+    sink: str
+    trigger: str
+    output_mode: str
+    checkpoint: Optional[str] = None
+    after: List[str] = Field(default_factory=list)
+    transform: Optional[str] = None
+    quarantine: Optional[str] = None
+    quality: Optional[str] = None
+    issues: List[StreamPlanIssue] = Field(default_factory=list)
+
+
+class StreamPlanResponse(BaseModel):
+    """What a streaming pipeline would do, without starting it (`ducta stream plan`)."""
+
+    pipeline: str
+    env: Optional[str] = None
+    ok: bool = Field(description="True when nothing would stop the stream from starting")
+    nodes: List[StreamPlanNode] = Field(default_factory=list)
+    issues: List[StreamPlanIssue] = Field(
+        default_factory=list, description="Problems not tied to one node"
+    )
+
+
+@router.post(
+    "/{project_id}/pipelines/{name}/stream-plan",
+    response_model=StreamPlanResponse,
+    summary="What a streaming pipeline would do, without starting it",
+    description=(
+        "Per node: what it reads and writes, how often it fires, where its checkpoint "
+        "will be, and what would stop it (a transform that is not registered, a source "
+        "path that does not exist, two nodes sharing a checkpoint). Starts no Spark. "
+        "Importing the transform modules runs their top-level code, in a fresh "
+        "subprocess, so this needs the same permission as running the pipeline."
+    ),
+    dependencies=[Depends(require_permission("pipeline.execute"))],
+)
+async def stream_plan(
+    project_id: str,
+    name: str,
+    manager: WorkspaceManagerDep,
+    svc: ProjectServiceDep,
+    env: str = "base",
+) -> StreamPlanResponse:
+    svc.get_pipeline(project_id, name)
+    _check_subprocess_env(manager, env)
     exec_source = manager.for_project(project_id).root
-    result = await asyncio.to_thread(run_deep_preflight, exec_source, name, env)
-    problems = problem_models(result.get("errors", []), result.get("warnings", []), "preflight")
-    return PreflightResponse(pipeline=name, problems=problems, **result)
+    result = await asyncio.to_thread(run_stream_plan, exec_source, name, env)
+    return StreamPlanResponse.model_validate(result)
 
 
 # ── ML plan ───────────────────────────────────────────────
@@ -1901,6 +1971,9 @@ async def sweep_project_pipeline(
     svc: ProjectServiceDep,
     current_user: CurrentUserDep,
 ) -> SweepResponse:
+    from ducta_server.services.governance import check_can_run
+
+    check_can_run(current_user, body.env, svc.store(project_id).root)
     exec_source = _prepare_run(project_id, name, body.node_name, svc, manager)
     with http_error_on(422, ValueError, KeyError):
         return exec_manager.execute_sweep(

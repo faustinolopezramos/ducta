@@ -45,6 +45,7 @@ const SentinelPage           = lazy(() => import("./pages/SentinelPage")        
 
 const DatasetPage            = lazy(() => import("./pages/DatasetPage")                                .then(m => ({ default: m.DatasetPage })));
 const CodePage               = lazy(() => import("./pages/CodePage")                                   .then(m => ({ default: m.CodePage })));
+const StreamPage             = lazy(() => import("./pages/StreamPage")                                 .then(m => ({ default: m.StreamPage })));
 const RunPage                = lazy(() => import("./pages/RunPage")                                    .then(m => ({ default: m.RunPage })));
 const ProjectSettingsPage    = lazy(() => import("./pages/ProjectSettingsPage")                        .then(m => ({ default: m.ProjectSettingsPage })));
 
@@ -88,7 +89,7 @@ function ProjectRunsRoute() {
       header={{
         title: "Runs",
         // Every Runs tab has a line here, so switching tabs never moves the tabs.
-        description: "Every run of this project. Click a row for its logs.",
+        description: "Every run of this project. Click a row for its logs; a CLI run opens its certificate.",
         tabs: <RunsTabs projectId={projectId} current="history" />,
       }}
     />
@@ -121,6 +122,11 @@ function ProjectReliabilityRoute() {
       }}
     />
   );
+}
+
+function ProjectCertificatesRoute() {
+  const { projectId = "" } = useParams<{ projectId: string }>();
+  return <CertificatesPage projectId={projectId} />;
 }
 
 // ── Main content shell ────────────────────────────────────────────────────────
@@ -219,7 +225,9 @@ export default function App() {
                     { path: "datasets/:dataset", handle: { breadcrumb: (d: any) => `Dataset: ${d?.params?.dataset}` }, element: <DatasetPage /> },
                     { path: "code/*", handle: { breadcrumb: () => "Code", hideTrail: true }, element: <CodePage /> },
                     { path: "runs", handle: { breadcrumb: () => "Runs" }, element: <ProjectRunsRoute /> },
+                    { path: "streams/:runId", handle: { breadcrumb: (d: any) => `Stream ${d?.params?.runId?.slice(0, 8)}`, hideTrail: true }, element: <StreamPage /> },
                     { path: "runs/:runId", handle: { breadcrumb: (d: any) => `Run ${d?.params?.runId?.slice(0, 8)}`, hideTrail: true }, element: <RunPage /> },
+                    { path: "certificates", handle: { breadcrumb: () => "Certificates" }, element: <ProjectCertificatesRoute /> },
                     { path: "quality", handle: { breadcrumb: () => "Quality" }, element: <WithProjectParam><QualityPage /></WithProjectParam> },
                     { path: "models", handle: { breadcrumb: () => "Models" }, element: <WithProjectParam><MLOpsPage /></WithProjectParam> },
                     { path: "schedules", handle: { breadcrumb: () => "Runs · Schedules" }, element: <ProjectSchedulesRoute /> },

@@ -21,6 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 import json
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, List, Literal, Optional
@@ -415,10 +416,38 @@ class Settings(BaseSettings):
     def is_development(self) -> bool:
         return self.environment == "development"
 
+    def is_exposed(self) -> bool:
+        """Whether the bind address is reachable from other machines."""
+        return self.host not in LOCAL_HOSTS
+
+    def requires_strong_credentials(self) -> bool:
+        """Production, or accounts on a server other machines can reach: no published defaults."""
+        return self.is_production() or (self.auth_enabled and self.is_exposed())
+
 
 #: Bind addresses that only this machine can reach. Not "": uvicorn binds an empty host
 #: to every interface.
 LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+_DEFAULT_JWT_SECRET = "change-me-in-production"
+
+
+def default_credentials(settings: "Settings") -> list[str]:
+    """What an account-protected server still has at its published default.
+
+    With ``AUTH_ENABLED`` the signing key and the admin password are all that stand
+    between the network and every endpoint; both defaults are public (this source
+    tree), so a server that keeps either is open to anyone who reads it. Empty when
+    accounts are off (nothing to protect with them).
+    """
+    if not settings.auth_enabled:
+        return []
+    found: list[str] = []
+    if settings.jwt_secret_key == _DEFAULT_JWT_SECRET:
+        found.append("JWT_SECRET_KEY is the default (anyone can sign a token as admin)")
+    if os.environ.get("DUCTA_ADMIN_PASSWORD", "") in ("", "admin"):
+        found.append("DUCTA_ADMIN_PASSWORD is unset or 'admin' (the admin account is admin/admin)")
+    return found
 
 
 @lru_cache(maxsize=1)

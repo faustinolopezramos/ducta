@@ -36,9 +36,12 @@ execution hot path.
 
 from __future__ import annotations
 
+import json
+import os
+import socket
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, TextIO
+from typing import Any, Dict, List, Optional, TextIO
 
 from loguru import logger
 
@@ -197,6 +200,21 @@ class FileLogStore:
             )
             return None
 
+    def read_owner(self, execution_id: str) -> Optional[Dict[str, Any]]:
+        """The ``owner`` (pid, host) that last wrote the run's meta.json, if recorded."""
+        if not self._is_safe_id(execution_id):
+            return None
+        try:
+            raw = json.loads((self._run_dir(execution_id) / _META_FILENAME).read_text("utf-8"))
+        except (OSError, ValueError):
+            return None
+        owner = raw.get("owner") if isinstance(raw, dict) else None
+        return owner if isinstance(owner, dict) else None
+
+    def mark_interrupted(self, record: ExecutionResponse) -> None:
+        """Persist *record* (already marked interrupted) so it stays that way."""
+        self._write_meta(record)
+
     def read_logs(self, execution_id: str) -> List[LogEntry]:
         """Return every persisted log entry for a run, oldest first.
 
@@ -260,9 +278,18 @@ class FileLogStore:
             run_dir = self._run_dir(record.id)
             run_dir.mkdir(parents=True, exist_ok=True)
             meta_path = run_dir / _META_FILENAME
-            atomic_write_json(meta_path, record.model_dump(mode="json"))
+            data = record.model_dump(mode="json")
+            # Which process wrote it: a queued or running record whose process is
+            # gone never finishes, and this is how a later reader can tell.
+            data["owner"] = current_owner()
+            atomic_write_json(meta_path, data)
         except OSError as exc:  # noqa: BLE001
             logger.warning("FileLogStore meta write failed for {id}: {exc}", id=record.id, exc=exc)
+
+
+def current_owner() -> Dict[str, Any]:
+    """This process, as recorded in the meta.json files it writes."""
+    return {"pid": os.getpid(), "host": socket.gethostname()}
 
 
 def build_file_log_store(runs_dir: str) -> Optional[FileLogStore]:

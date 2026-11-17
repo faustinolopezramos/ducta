@@ -6,11 +6,12 @@ import {
   qualitySummary,
   type ZoomTier,
 } from "../../utils/nodePresentation";
-import { formatRate } from "../../utils/streaming";
+import { streamNodeDot, streamNodeFact } from "../../utils/streaming";
 
 /** `execState` for a node the run being shown did not include. */
 export const NOT_RUN = "not_run";
 import { MiddleTruncate } from "./MiddleTruncate";
+import { lensTitle } from "../../utils/lineage";
 import type { DagCanvasItem, StreamNodeBadge } from "./types";
 
 interface NodeCardProps {
@@ -61,23 +62,6 @@ function groupSummary(members: number, state: string | undefined): string {
   return `${members} node${members === 1 ? "" : "s"}${how ? ` · ${how}` : ""}`;
 }
 
-/** The dot of a live stream node: its query's state, or what deserves a look about it. */
-function streamDot(stream: StreamNodeBadge): string {
-  if (stream.state === "failed") return "failed";
-  if (stream.state !== "active") return stream.state; // skipped · stopped
-  return stream.health ?? "active";
-}
-
-/** The one fact a live stream node shows: its throughput, or why there is none. */
-function streamFact(stream: StreamNodeBadge): string {
-  if (stream.state === "failed") return "failed";
-  if (stream.state === "skipped") return "skipped";
-  if (stream.state !== "active") return "stopped";
-  if (stream.health === "stalled") return "stalled";
-  if (stream.health === "idle") return "idle";
-  return formatRate(stream.rate);
-}
-
 /**
  * A node on the canvas, reduced to what you scan a graph for: which function,
  * and how it went.
@@ -113,7 +97,7 @@ export function NodeCard({
 
   // A live stream query outranks the run's own state: the run is "running" for as long
   // as the stream lives, which says nothing about whether this node is healthy.
-  const live = stream ? streamDot(stream) : null;
+  const live = stream ? streamNodeDot(stream) : null;
   // A run's graph shows every node of the pipeline; the ones that run left out
   // say so instead of looking exactly like the ones it ran.
   const notRun = execState === NOT_RUN;
@@ -122,7 +106,7 @@ export function NodeCard({
   const fact = notRun
     ? "not in this run"
     : stream
-    ? streamFact(stream)
+    ? streamNodeFact(stream)
     : failed
       ? "failed"
       : execState === "running"
@@ -180,6 +164,7 @@ export function NodeCard({
           aria-label={
             lensDir === "up" ? `Dependency, ${lensDepth} away` : `Consumer, ${lensDepth} away`
           }
+          title={lensTitle(lensDir, lensDepth)}
         >
           {lensDir === "up" ? "↑" : "↓"}
           {lensDepth}

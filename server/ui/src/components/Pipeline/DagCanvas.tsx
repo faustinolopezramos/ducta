@@ -904,6 +904,9 @@ function DagCanvasInner({
         nodesDraggable={false}
         // The card is the node's one focus stop; React Flow's wrapper made it two.
         nodesFocusable={false}
+        // Edges cannot be edited or deleted here (datasets ride on them as their
+        // own focusable chips); focusable, each announced "press delete to remove it".
+        edgesFocusable={false}
         nodesConnectable={Boolean(onConnectNodes)}
         onConnect={onConnectNodes ? (c) => c.source && c.target && onConnectNodes(c.source, c.target) : undefined}
         isValidConnection={

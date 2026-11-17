@@ -28,6 +28,7 @@ import { statusMetaFor } from "../../components/ui/statusMeta";
 import { DatasetDetail } from "./DatasetDetail";
 import { ScoreSection, scorePercent } from "./ScoreSection";
 import { ChecksCard } from "./ChecksCard";
+import { SegmentedControl } from "../../components/ui/SegmentedControl";
 
 // ─────────────────────────────────────────────
 // PAGE
@@ -247,20 +248,18 @@ export default function QualityPage() {
               ))}
             </Select>
           )}
-          {/* The environment is the header's; this only picks pipeline runs vs ad-hoc checks.
-              No floating "Reports" label: the option says what it shows. */}
-            <Select
-              size="sm"
-              fullWidth={false}
-              style={{ minWidth: 160 }}
-              value={adhoc ? ADHOC_ENV : env}
-              onChange={(e) => handleEnvChange(e.target.value)}
-              aria-label="Quality reports source"
-            >
-              <option value={activeEnv}>Runs in {activeEnv}</option>
-              {!adhoc && env !== activeEnv && <option value={env}>Runs in {env}</option>}
-              <option value={ADHOC_ENV}>{ADHOC_LABEL}s (ad-hoc)</option>
-            </Select>
+          {/* The environment is the header's alone; this only picks pipeline runs vs
+              manual checks. It used to be a select reading "Runs in dev", which
+              looked like a second environment switch next to the header's. */}
+          <SegmentedControl<"runs" | "adhoc">
+            aria-label="Quality reports source"
+            options={[
+              { value: "runs", label: "Pipeline runs", title: `Reports from pipeline runs in ${env || activeEnv}` },
+              { value: "adhoc", label: `${ADHOC_LABEL}s`, title: "Checks run by hand (Run checks), outside any pipeline" },
+            ]}
+            value={adhoc ? "adhoc" : "runs"}
+            onChange={(v) => handleEnvChange(v === "adhoc" ? ADHOC_ENV : activeEnv)}
+          />
         </div>
 
         {project && !adhoc && datasets.length === 0 && !summary.isLoading && <EnvHint projectId={project} />}

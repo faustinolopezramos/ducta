@@ -187,7 +187,7 @@ export function SchedulePicker({
           </p>
           {nextRun && (
             <p className="projects-modal__hint" style={{ margin: "4px 0 0 0", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-              Next run: <strong>{formatUtc(nextRun.toISOString())}</strong> ({nextRun.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} local)
+              Next run: <strong>{formatUtc(nextRun.toISOString())}</strong> ({nextRun.toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit" })} local)
             </p>
           )}
         </div>

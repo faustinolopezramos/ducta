@@ -95,8 +95,12 @@ async def auto_detect_workspace() -> dict:
 )
 async def get_source_info(
     source: Annotated[str, Query(description="Source path (local directory or Git URL)")],
+    user: CurrentUserDep,
 ) -> SourceInfo:
     """Resolve a source path/URL and return its metadata."""
+    # A Git URL is cloned onto the server: the same permission as every other route that
+    # takes one (this is a GET, so the Origin guard does not cover it either).
+    check_git_source(source, user)
     with http_error_on(400, ValueError), http_error_on(500, RuntimeError):
         return SourceResolver.get_info(source)
 

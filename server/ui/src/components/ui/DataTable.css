@@ -5,6 +5,8 @@
 .tui-table-scroll {
   width: 100%;
   overflow-x: auto;
+  /* Lets the empty/error message size itself to what is visible (below). */
+  container-type: inline-size;
 }
 
 .tui-table-scroll--sticky {
@@ -134,6 +136,15 @@
 }
 
 .tui-table__message--error { color: var(--danger); }
+
+/* A table wider than the screen (minWidth) centred its message on the whole
+   table, half of it off-screen on a phone: keep it on the visible part. */
+.tui-table__message > * {
+  position: sticky;
+  left: 0;
+  max-width: 100cqi;
+  box-sizing: border-box;
+}
 
 /* ── Density ────────────────────────────────────────────────────────────── */
 

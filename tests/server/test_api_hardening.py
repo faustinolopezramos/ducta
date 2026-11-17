@@ -60,6 +60,12 @@ class TestRefreshRotation:
         app.include_router(auth_routes.router, prefix="/api")
         app.dependency_overrides[get_auth_service] = lambda: svc
         app.dependency_overrides[get_user_store] = lambda: _Store()
+        # Rotation is the authenticated path: with auth off, refresh hands out a
+        # dev-admin session without looking at the presented token.
+        from ducta_server.config import get_settings
+
+        on = get_settings().model_copy(update={"auth_enabled": True})
+        app.dependency_overrides[get_settings] = lambda: on
         client = TestClient(app)
 
         old = svc.create_access_token("u1", "alice", ["admin"])

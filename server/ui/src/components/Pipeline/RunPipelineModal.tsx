@@ -8,6 +8,8 @@ import { requiresPermission, usePermission } from "../../hooks/usePermission";
 import { useSourceStore } from "../../store/workspace";
 import { useEnvironments } from "../../api/queries";
 import { useExecutePipeline, apiErrorMessage } from "../../api/mutations";
+import { fetchStreamPlan, type StreamPlan } from "../../api/queries/streamPlan";
+import { StreamPlanList } from "../Execution/StreamPlanCard";
 import "../ui/Input.css";
 
 /**
@@ -18,10 +20,13 @@ import "../ui/Input.css";
 export function RunPipelineModal({
   projectId,
   pipelineName,
+  streaming = false,
   onClose,
 }: {
   projectId: string;
   pipelineName: string;
+  /** A stream is started, not run, and its plan is checked first: it must not fail on a typo. */
+  streaming?: boolean;
   onClose: () => void;
 }) {
   const defaultEnv = useSourceStore((s) => s.activeEnv) ?? "base";
@@ -30,8 +35,25 @@ export function RunPipelineModal({
   const [env, setEnv] = useState(defaultEnv);
   const canRun = usePermission("pipeline.execute");
   const execute = useExecutePipeline();
+  const [checking, setChecking] = useState(false);
+  const [blocked, setBlocked] = useState<StreamPlan | null>(null);
 
-  const submit = () => {
+  const submit = async () => {
+    if (streaming) {
+      setChecking(true);
+      try {
+        const plan = await fetchStreamPlan(projectId, pipelineName, env);
+        if (!plan.ok) {
+          setBlocked(plan);
+          return;
+        }
+        setBlocked(null);
+      } catch {
+        // The plan is a courtesy: if it cannot be made, starting reports the real problem.
+      } finally {
+        setChecking(false);
+      }
+    }
     execute.mutate(
       { projectId, pipelineName, env },
       {
@@ -47,7 +69,7 @@ export function RunPipelineModal({
   };
 
   return (
-    <Modal title={`Run ${pipelineName}`} onClose={onClose} width={420}>
+    <Modal title={`${streaming ? "Start stream" : "Run"} ${pipelineName}`} onClose={onClose} width={streaming ? 480 : 420}>
       <div style={{ display: "grid", gap: 14 }}>
         <Field label="Environment">
           <select
@@ -61,6 +83,15 @@ export function RunPipelineModal({
           </select>
         </Field>
 
+        {blocked && (
+          <>
+            <p className="projects-modal__hint projects-modal__hint--below">
+              It would fail on what is marked below. Fix it, then start again.
+            </p>
+            <StreamPlanList plan={blocked} />
+          </>
+        )}
+
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <Button variant="ghost" size="sm" onClick={onClose}>
             Cancel
@@ -69,11 +100,11 @@ export function RunPipelineModal({
             variant="primary"
             size="sm"
             onClick={submit}
-            disabled={execute.isPending || !canRun}
+            disabled={execute.isPending || checking || !canRun}
             title={canRun ? undefined : requiresPermission("pipeline.execute")}
             leftIcon={<IconPlayerPlay size={15} />}
           >
-            {execute.isPending ? "Starting…" : "Run"}
+            {execute.isPending || checking ? (streaming && checking ? "Checking…" : "Starting…") : streaming ? "Start stream" : "Run"}
           </Button>
         </div>
       </div>

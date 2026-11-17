@@ -62,6 +62,22 @@ export const routes = {
     withQuery(`/p/${enc(projectId)}/runs`, query),
   run: (projectId: string, runId: string, query?: { node?: string | null }) =>
     withQuery(`/p/${enc(projectId)}/runs/${enc(runId)}`, query),
+  /** A stream's live monitor: its figures, nodes and the data it is landing. `node` selects one. */
+  stream: (projectId: string, runId: string, query?: { node?: string | null }) =>
+    withQuery(`/p/${enc(projectId)}/streams/${enc(runId)}`, query),
+  /**
+   * Where a run opens: its page, or — for a run started with `ducta start`, which
+   * the server knows only from its certificate — that certificate.
+   */
+  runOrCertificate: (
+    projectId: string,
+    run: { id: string; origin?: string | null; certificate_run_id?: string | null },
+  ) =>
+    run.origin === "cli"
+      ? routes.certificate(projectId, run.certificate_run_id ?? run.id)
+      : routes.run(projectId, run.id),
+  /** The project's Run Certificates. */
+  certificates: (projectId: string) => `/p/${enc(projectId)}/certificates`,
   /** A run's certificate; `projectId` "." when the run belongs to no known project. */
   certificate: (projectId: string, certificateRunId: string) =>
     `/workspace/certificates/${enc(projectId)}/${enc(certificateRunId)}`,

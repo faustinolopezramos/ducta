@@ -61,7 +61,10 @@ Key API resources:
    * - ``/health``, ``/health/ready``, ``/health/platform``
      - Liveness/readiness probes and platform info (no auth, no ``/api`` prefix).
    * - ``/api/auth``
-     - Login, logout, token refresh and the current user (JWT).
+     - Login, logout, token refresh and the current user (JWT). ``GET /api/auth/config``
+       (no auth) says whether the server asks for credentials; with authentication off,
+       ``POST /api/auth/refresh`` hands out a session for the development admin, so the
+       web app opens without a login page.
    * - ``/api/workspace``
      - Connect a workspace (local path or Git URL), auto-detect, browse
        directories; ``/api/workspace/files`` lists its files.
@@ -81,6 +84,10 @@ Key API resources:
    * - ``/api/executions``
      - List, inspect, cancel, retry and bulk-cancel executions; their logs and
        errors. Live logs over WebSocket at ``/api/ws/logs/{execution_id}``.
+       Given a workspace, the list also carries the runs started from the CLI, read
+       from their Run Certificates (``origin: "cli"``; their id is the certificate's
+       ``run_id``, and they have no logs here). A run left ``pending`` or ``running``
+       by a server that stopped is ``interrupted``.
        ``GET .../{id}/diagnosis`` says why a run failed — the kind of failure,
        where, and what changed since the last good run; ``POST .../{id}/resume``
        continues a run paused at a data breakpoint.
@@ -88,7 +95,8 @@ Key API resources:
        hybrid run: per pipeline its status and uptime, per node its query's state
        (``active``, ``failed``, ``skipped``, ``stopped``), the latest batch's
        throughput and the model it scores with. ``active`` turns false once the
-       run holds no engine.
+       run holds no engine; a run that is over while its journal never recorded an
+       end reports ``interrupted``.
    * - ``/api/projects/{id}/certificates``, ``/api/certificates/verify``
      - Run Certificates: list, show, verify, diff and reproduce; verify an
        uploaded certificate.
@@ -176,7 +184,7 @@ and none commits.
      - Move a node into ``templates/nodes/`` (``use``/``with``) or several nodes
        into ``templates/pipelines/`` (``use: pipeline:<name>``), in one validated
        transaction. ``GET .../templates/nodes`` and ``.../templates/pipelines``
-       list them. See ADR 0001 in ``docs/adr/``.
+       list them.
    * - ``GET .../schema``, ``.../locations``, ``.../code-index``, ``.../ruff-config``
      - Editor support: the format-2 JSON Schema; where each dataset, pipeline and
        node is written (file:line, for go-to-definition); which function each node
@@ -294,12 +302,14 @@ warnings — and work through this checklist:
    * - ``JWT_SECRET_KEY``
      - strong random value
      - Signs access tokens. The default ``change-me-in-production`` is refused
-       in production.
+       in production, and with ``AUTH_ENABLED=true`` on any bind address other
+       than ``127.0.0.1``/``localhost``/``::1`` (on loopback it only warns).
    * - ``DUCTA_ADMIN_PASSWORD``
      - strong password
      - Password of the ``admin`` user that is created at startup when auth is on.
-       Outside production an unset value falls back to ``admin``; in production
-       an unset value, or ``admin``, stops the server from starting.
+       On loopback outside production an unset value falls back to ``admin``;
+       in production, or with auth on and a bind address other machines can
+       reach, an unset value or ``admin`` stops the server from starting.
    * - ``CORS_ORIGINS``
      - explicit allow-list
      - Avoid ``*``; wildcard origins with credentials are always refused. A
@@ -327,6 +337,13 @@ warnings — and work through this checklist:
      - ``true``
      - Enables the in-process sliding-window limiter. Also put a WAF / proxy
        rate limit in front.
+   * - ``LOGIN_MAX_ATTEMPTS`` / ``LOGIN_WINDOW_SECONDS`` / ``LOGIN_LOCKOUT_SECONDS``
+     - ``5`` / ``900`` / ``300``
+     - Login throttle: that many wrong passwords for one user from one address,
+       within the window, refuse that pair's logins for the lockout (``429`` with
+       ``Retry-After``). ``0`` for either the attempts or the lockout turns it off.
+       The count is per process: with several workers, also limit
+       ``/api/auth/login`` in the reverse proxy.
    * - ``DATABASE_URL``
      - PostgreSQL DSN
      - Persists executions, logs, and users. Unset, ``ducta-server``/``ducta ui``
@@ -452,6 +469,16 @@ Some routes need more than their name suggests:
 - **Preflight** (``POST .../pipelines/{name}/preflight``) needs
   ``pipeline.execute``. Its deep check imports the project's modules, and
   importing a module runs its top-level code.
+- **Stream plan** (``POST .../pipelines/{name}/stream-plan``) needs
+  ``pipeline.execute`` for the same reason: it imports the stream's transform
+  modules, in a subprocess, and starts no Spark. It answers what ``ducta stream
+  plan`` prints, per node: what it reads and writes, how often it fires, where it
+  checkpoints and what would stop it.
+- **Stream rows** (``GET /api/executions/{id}/streaming/nodes/{node}/rows``) needs
+  ``execution.read``, like the dataset preview. It reads the end of the node's sink
+  (parquet, Delta, json or csv files, newest file and newest row first) and refuses a
+  sink that lies outside the project or its configured input/output folders. A kafka,
+  console, memory or remote sink answers ``available: false`` with a ``reason``.
 - **A Git URL as source** (``?source=`` / ``X-Source-Path``, or
   ``POST /api/workspace/select``) needs ``repository.write``, because the server
   clones it. The operator's ``DUCTA_WORKSPACE`` is not checked.
@@ -471,7 +498,7 @@ Some routes need more than their name suggests:
 - **Testing an unsaved ingestion connection** needs ``ingestion.write``. The
   server connects to whatever host and port the caller sends.
 
-A test (``tests/api/test_rbac.py``) walks every route and fails if a route that
+A test (``tests/server/test_rbac.py``) walks every route and fails if a route that
 writes is reachable by a viewer, so a new route cannot ship without a permission.
 
 See ``SECURITY.md`` in the repository root for the vulnerability-reporting

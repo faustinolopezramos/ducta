@@ -14,7 +14,8 @@ const ELLIPSIS = "…";
 
 /**
  * The head to show so `head + "…" + tail` fills `width` exactly: the longest
- * prefix that fits, never shorter than the name's first segment ("silver.").
+ * prefix that fits, and no shorter than the name's first segment ("silver.")
+ * unless even that does not fit.
  * Null when the whole name fits.
  */
 export function fitHead(
@@ -26,13 +27,18 @@ export function fitHead(
   if (measure(text) <= width + 0.5) return null;
   const head = text.slice(0, text.length - tail.length);
   const dot = head.indexOf(".");
-  const minKeep = Math.min(head.length, dot > 0 ? dot + 1 : 1);
+  const fits = (n: number) => measure(head.slice(0, n) + ELLIPSIS + tail) <= width + 0.5;
+  // Keep the first segment ("silver.") when there is room for it. In a box too
+  // narrow even for that, holding on to it pushed the "…" out of view and the
+  // name read as another one ("silv_education").
+  const preferred = Math.min(head.length, dot > 0 ? dot + 1 : 1);
+  const minKeep = fits(preferred) ? preferred : 1;
   let lo = minKeep;
   let hi = head.length - 1;
   let best = minKeep;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (measure(head.slice(0, mid) + ELLIPSIS + tail) <= width + 0.5) {
+    if (fits(mid)) {
       best = mid;
       lo = mid + 1;
     } else {
@@ -129,10 +135,9 @@ export function MiddleTruncate({ text, className }: { text: string; className?: 
   return (
     <span ref={ref} className={classes} title={text} data-text={text}>
       <span className="middle-trunc__text">
-        <span className="middle-trunc__head">
-          {cut ? head.slice(0, -1) : head}
-          {cut && <span className="middle-trunc__dots">{ELLIPSIS}</span>}
-        </span>
+        <span className="middle-trunc__head">{cut ? head.slice(0, -1) : head}</span>
+        {/* Outside the head, which clips: inside it the "…" was the first thing cut. */}
+        {cut && <span className="middle-trunc__dots">{ELLIPSIS}</span>}
         {tail && <span className="middle-trunc__tail">{tail}</span>}
       </span>
     </span>

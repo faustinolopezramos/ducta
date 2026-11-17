@@ -3,8 +3,10 @@ import { colors, styles } from "../../theme/tokens";
 import { Button } from "../ui";
 import { Field } from "../ui/Field";
 import "../ui/Input.css"; // .input-field/.input-error, reused on the bare <input> below
-import { usePlatformInfo, useGitConfig } from "../../api/queries";
+import { IconBox } from "@tabler/icons-react";
+import { usePlatformInfo, useGitConfig, useGitAvailable } from "../../api/queries";
 import { useSetGitConfig } from "../../api/mutations";
+import { apiErrorMessage } from "../../api/mutations/errors";
 import { useGitConfigStore } from "../../store/gitConfig";
 import { useToastStack } from "../../hooks/useModalStack";
 import { ICONS } from "../icons";
@@ -20,10 +22,18 @@ import { ICONS } from "../icons";
 //
 // "Skip" persists the decision so the wizard
 // disappears and only reappears when the user
-// manually resets from Settings > Git.
+// opens /setup again (Git page).
 // ─────────────────────────────────────────────
 
 const STEP_COUNT = 2; // Steps 1–2 (step 3 is the success screen)
+
+/** "Darwin Kernel Version 27.2.0: Wed Oct 14…" -> "Darwin 27.2.0"; other strings up to 32 chars. */
+export function shortOsVersion(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const kernel = /^(\w+) Kernel Version ([\d.]+)/.exec(raw);
+  if (kernel) return `${kernel[1]} ${kernel[2]}`;
+  return raw.length > 32 ? `${raw.slice(0, 31)}…` : raw;
+}
 
 // ── Step 1: Platform info ─────────────────────────────────────────────────────
 
@@ -32,8 +42,12 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
 
   const rows = platform
     ? [
-        { label: "Operating System", value: `${platform.os} ${platform.arch}` },
-        { label: "OS Version",       value: platform.os_version || "—" },
+        {
+          label: "OS",
+          value: `${platform.os} ${platform.arch}${shortOsVersion(platform.os_version) ? ` · ${shortOsVersion(platform.os_version)}` : ""}`,
+          // The kernel's own line is long ("Darwin Kernel Version 27.2.0: Wed Oct…"): kept on hover.
+          title: platform.os_version || undefined,
+        },
         { label: "Python",           value: platform.python },
         {
           label: "Git",
@@ -98,8 +112,9 @@ function PlatformStep({ onNext }: { onNext: () => void }) {
                 borderBottom: i < rows.length - 1 ? `1px solid ${colors.border}` : "none",
               }}
             >
-              <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted }}>{row.label}</span>
+              <span style={{ ...styles.fontSans, fontSize: "var(--text-xs)", color: colors.textMuted, whiteSpace: "nowrap", marginRight: 16 }}>{row.label}</span>
               <span
+                title={"title" in row ? row.title : undefined}
                 style={{
                   ...styles.fontMono,
                   fontSize: "var(--text-xs)",
@@ -154,6 +169,9 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
   const { data: existing } = useGitConfig();
   const { mutate: setConfig, isPending } = useSetGitConfig();
   const { show } = useToastStack();
+  // Identity lives in the repository's .git/config: without a repository there is
+  // nowhere to write it, and asking for it only ended in "Failed to save".
+  const gitAvailable = useGitAvailable();
 
   const [name,  setName]  = useState(existing?.name  ?? "");
   const [email, setEmail] = useState(existing?.email ?? "");
@@ -180,19 +198,30 @@ function GitIdentityStep({ onNext, onBack }: { onNext: () => void; onBack: () =>
           onNext();
         },
         onError: (err: unknown) => {
-          const axErr = err as { response?: { data?: { detail?: string } } };
-          const detail = axErr?.response?.data?.detail;
-          if (detail?.includes("no git repo")) {
-            // Non-fatal: workspace may not have git yet. Let user proceed anyway.
-            show("Git not available in this workspace — identity will be set when a repo is initialised.", "warn");
-            onNext();
-          } else {
-            setErrors({ api: detail ?? "Failed to save git identity" });
-          }
+          setErrors({ api: apiErrorMessage(err, "Failed to save git identity") });
         },
       }
     );
   };
+
+  if (gitAvailable === false) {
+    return (
+      <div>
+        <h2 style={{ ...styles.fontSans, fontSize: "var(--text-lg)", fontWeight: 700, color: colors.text, margin: "0 0 6px" }}>
+          Git identity
+        </h2>
+        <p style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, margin: "0 0 24px" }}>
+          This workspace isn&apos;t a Git repository, so there is nothing to commit to yet. Run{" "}
+          <code>git init</code> in the workspace folder when you want version history; you can set
+          your author name and email then, from the <strong>Git</strong> page.
+        </p>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+          <Button variant="ghost" onClick={onBack}>← Back</Button>
+          <Button variant="ghost" onClick={onNext}>Continue →</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -265,8 +294,7 @@ function SuccessStep({ onClose }: { onClose: () => void }) {
         Setup complete
       </h2>
       <p style={{ ...styles.fontSans, fontSize: "var(--text-sm)", color: colors.textMuted, margin: "0 0 32px" }}>
-        Ducta is ready. Your git identity has been saved to the workspace config.
-        You can update it anytime from <strong>Settings → Git</strong>.
+        Ducta is ready. You can change your git author anytime from the <strong>Git</strong> page.
       </p>
       <Button variant="ghost" onClick={onClose}>Open workspace</Button>
     </div>
@@ -340,7 +368,7 @@ export function GitSetupWizard({ onClose }: { onClose?: () => void }) {
         {/* Header */}
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <span style={{ ...styles.fontMono, fontSize: "var(--text-lg)" }}>{ICONS.NODES}</span>
+            <IconBox size={20} stroke={1.6} color="var(--primary)" aria-hidden="true" />
             <span style={{ ...styles.fontSans, fontSize: "var(--text-sm)", fontWeight: 600, color: colors.textMuted }}>
               Ducta · Setup
             </span>

@@ -1,16 +1,17 @@
 # Ducta Test Suite
 
-Real, executable unit tests for the Ducta modules. The suite is **engine-light**:
-almost every test exercises pure Python logic (config parsing/validation,
+Executable tests for every module. The suite is **engine-light**: almost every
+test exercises pure Python logic (configuration parsing and validation,
 dependency resolution, security sanitizers, data-quality checks over pandas,
 MLOps bookkeeping, JWT/auth, SSRF guards) and runs **without a PySpark/JVM
 environment**. Tests that genuinely need Spark are marked `@pytest.mark.spark`
-and skip automatically when `pyspark` is absent.
+and skip automatically when `pyspark` is absent; tests that touch the network
+are marked `network`.
 
 ## Running
 
 ```bash
-# Everything
+# Everything, in one process
 poetry run pytest
 
 # A single module's suite
@@ -21,37 +22,42 @@ poetry run pytest tests/check tests/mlrun tests/stream tests/console tests/serve
 poetry run pytest --cov=ducta --cov-report=term-missing
 ```
 
-`pyproject.toml` sets `pythonpath = ["src"]`, so tests always run against the
-local working copy regardless of any editable install.
+`pyproject.toml` sets `pythonpath = ["src", "server/src", "."]`, so tests always
+run against the local working copy (the engine and the server package) regardless
+of any editable install.
 
 ## Layout
 
 | Path | Module under test | Focus |
 |------|-------------------|-------|
-| `tests/core/` | `ducta.core` | dependency DAG resolution, retry policy, sweep expansion, **Run Certificate** hashing/signing/tamper-detection, secure module import |
-| `tests/check/` | `ducta.check` | `DFAdapter` (pandas), built-in quality checks, `QualityGateEvaluator` scoring & blocking |
-| `tests/mlrun/` | `ducta.mlrun` | data fingerprinting, reproducible splits (random/temporal/group/stratified), `MLOpsConfig`, `FileLock`, hyperparameter grids |
-| `tests/stream/` | `ducta.stream` | topological sort + cycle detection, traversal-safe checkpoint paths, `QueryHealthMonitor`, error helpers |
-| `tests/console/` | `ducta.console` | CLI argument validators, date parsing, exit codes |
-| `tests/server/` | `ducta_server` (the `ducta-server` package; `poetry install --with server`) | `AuthService` (bcrypt + JWT), **SSRF** host guards, production config guards, `/health` smoke test |
-| `tests/setting/`, `tests/gate/` | `ducta.setting`, `ducta.gate` | pre-existing suites (see note below) |
+| `tests/core/` | `ducta.core` | dependency DAG resolution, retry policy, sweep expansion, **Run Certificate** hashing/signing/tamper-detection, executors, secure module import |
+| `tests/setting/` | `ducta.setting` | the strict project schema, loaders, `Context`, settings and environment variables |
+| `tests/gate/` | `ducta.gate` | readers, writers, connections, SQL sanitizer, JDBC drivers |
+| `tests/check/` | `ducta.check` | `DFAdapter` (pandas), built-in quality checks, `QualityGateEvaluator` scoring and blocking |
+| `tests/mlrun/` | `ducta.mlrun` | data fingerprinting, reproducible splits, `MLOpsConfig`, the model registry, hyperparameter search |
+| `tests/stream/` | `ducta.stream` | the plan, topological sort and cycle detection, checkpoint paths, `QueryHealthMonitor`, restarts, the journal |
+| `tests/console/` | `ducta.console` | CLI parsers and commands, date parsing, exit codes |
+| `tests/runs/` | `ducta.runs` | run records, the run ledger, failure diagnosis, the run table |
+| `tests/project_store/` | `ducta.project_store` | reading and writing a project's files, draft validation, template extraction |
+| `tests/ai/` | `ducta.ai` | providers over a mock transport, the draft loop, the Architect and Sentinel agents |
+| `tests/skill/` | `ducta.skills` | the agent skill and its evals |
+| `tests/server/` | `ducta_server` (the `ducta-server` package) | routes and RBAC, auth (bcrypt + JWT), SSRF guards, execution manager, schedules, `/health` |
+| `tests/integration/` | engine end to end | pipeline runs, Delta merge, fingerprints, I/O round trips (need Spark) |
+| `tests/test_*.py` | the package as a whole | architecture (import rules), public API, server/engine split, packaging, runtime checks |
 
 ## Environment notes
 
 - Required test deps: `poetry install --with server` (the dev group plus the web
   server's dependencies, which `tests/server/` needs: FastAPI, SQLAlchemy, PyJWT,
   bcrypt…). The engine's tests need only the dev group.
-- Optional deps that gate some tests: `pyspark`, `polars`, `sqlglot` (absent →
-  the relevant paths are skipped or exercised via their pure-Python fallbacks).
+- Optional deps that gate some tests: `pyspark`, `delta-spark`, `polars`,
+  `sqlglot`, `mlflow` (absent → the relevant paths are skipped or exercised via
+  their pure-Python fallbacks).
 - Fixtures that write data use CSV (parquet needs `pyarrow`/`fastparquet`).
 
 ## A note on the `setting`/`gate` suites
 
-The `tests/setting/` and `tests/gate/` directories use an older mock-based
-design (they inject fake `pydantic`/`pyspark`/`ducta.*` modules into
-`sys.modules` at import time). That approach conflicts with the real-dependency
-style used everywhere else, so a handful of those tests fail when the whole
-suite runs in one process (real pydantic actually validates; import order
-changes which Spark stub is bound). They are **not** part of the newly authored
-suites and were already failing before. Converting them to the real-dependency
-style is a recommended follow-up.
+Their `conftest.py` files install stand-ins for **missing** optional packages
+(`pyspark`, `polars`…) so the modules import; a package that is installed is
+never replaced. Run in one process with the real dependencies installed, the whole
+suite passes.

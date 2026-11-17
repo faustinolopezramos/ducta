@@ -196,6 +196,9 @@ Orchestrators can act on the exit code of ``ducta start``:
    * - 7
      - **Locked**: another run is writing one of this pipeline's outputs.
        Nothing ran; retry later (see ``settings.run_lock``).
+   * - 143
+     - Ended by ``SIGTERM`` (``docker stop``, systemd, Kubernetes): the run is
+       never recorded as a success. Ctrl+C is handled the same way and exits ``1``.
 
 ``ducta init project`` — create a project
 -----------------------------------------

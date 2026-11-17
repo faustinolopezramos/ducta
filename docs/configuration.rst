@@ -229,8 +229,9 @@ environment variable, never written in the file:
   ``SLA_CHECK_MINUTES`` or by ``POST .../alerts/check``;
 - ``sentinel`` — Ducta Sentinel escalated an incident to a person, or saw it
   recover (see :doc:`ai`).
-- ``stream_failed`` / ``stream_stalled`` — a stream node's query failed or
-  stalled. Sent while the stream runs, once until the node recovers;
+- ``stream_failed`` / ``stream_stalled`` — a stream node's query failed (after its
+  automatic restarts, ``streaming_restart_max_attempts``) or stalled. Sent while the
+  stream runs, once until the node recovers;
 - ``stream_quarantine`` — a stream node set rows aside (``quarantine`` or its
   quality gate): the first batch at once, then one summary at most every
   ``streaming_quarantine_alert_interval_seconds`` (see :doc:`streaming`).
@@ -294,6 +295,39 @@ list; the ones most projects touch:
      - ``DEBUG``, ``INFO`` (default), ``WARNING``, ``ERROR``.
    * - ``mlops_enabled`` / ``mlflow``
      - Experiment tracking and the model registry — see :doc:`mlops`.
+   * - ``fail_on_error``
+     - ``true`` (default): a dataset the node could not write fails the node.
+       ``false``: the error is logged, the node carries on, and the certificate
+       records an evidence gap for each output that was not written.
+   * - ``fill_none_on_error``
+     - A dataset that fails to load aborts the node (``false``, default). With
+       ``true`` the node receives ``None`` for it instead, and the certificate
+       records an evidence gap.
+   * - ``max_input_workers``
+     - Datasets a node loads at the same time (the number of inputs, at most 4).
+   * - ``preflight_enabled``
+     - Validate the project before a run and stop on errors (``true``, default).
+       ``false`` skips it; ``ducta config validate`` still works.
+   * - ``delta_package``
+     - Maven coordinate of the Delta Lake jar a **local** session loads, e.g.
+       ``io.delta:delta-spark_2.12:3.2.1``. By default Ducta picks the build that
+       matches the installed PySpark; set it only when yours has none.
+   * - ``ml_default_sanity_checks``
+     - ML nodes without a ``sanity_checks`` block get a minimal one
+       (``empty_dataset``) (``true``, default). ``false`` turns that off for the
+       project; ``sanity_checks: {enabled: false}`` turns it off for one node.
+   * - ``default_model_version``
+     - The ``model_version`` of an ML node that sets none (its own, nor its
+       pipeline's).
+   * - ``mlops_storage_path``
+     - Where ``ducta experiment``, ``ducta model`` and the server look for
+       tracking when the project has no ``mlops_path`` (tried before
+       ``DUCTA_MLOPS_PATH``).
+   * - ``format_policy``
+     - Which formats streams may use: ``supported_inputs``, ``supported_outputs``,
+       ``compatibility_map`` (which stream sources can read a batch output of
+       each format, for hybrid pipelines) and ``checkpoint_required_inputs``.
+       Each key you write replaces the built-in list.
 
 catalog.yaml
 ------------

@@ -205,6 +205,7 @@ export function ProjectPage() {
         <RunPipelineModal
           projectId={projectId}
           pipelineName={runPipelineId}
+          streaming={(serverPipelines?.pipelines?.[runPipelineId]?.type ?? "").toLowerCase() === "streaming"}
           onClose={() => setRunPipelineId(null)}
         />
       )}
@@ -288,12 +289,12 @@ function ProjectHealthPane({ projectId }: { projectId: string }) {
         {runsLoading ? (
           <Skeleton variant="block" height="120px" />
         ) : runs.length === 0 ? (
-          <p className="overview-muted">No runs yet. Open a pipeline and run it to see it here.</p>
+          <p className="overview-muted">No runs yet. Open a pipeline and run it, or run it with ducta start, to see it here.</p>
         ) : (
           <ul className="overview-list">
             {runs.slice(0, 8).map((r) => (
               <li key={r.id}>
-                <Link to={routes.run(projectId, r.id)} className="overview-row">
+                <Link to={routes.runOrCertificate(projectId, r)} className="overview-row">
                   <StatusBadge status={r.status} size="sm" variant="dot" />
                   <span className="overview-row-text mono">{r.pipeline_name}</span>
                   <span className="overview-muted">{r.env}</span>

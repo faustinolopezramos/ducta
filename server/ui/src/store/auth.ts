@@ -69,7 +69,9 @@ export const useAuthStore = create<AuthState>()(
           const newToken = response.data?.access_token ?? response.data?.token ?? null;
           if (!newToken) throw new Error('Refresh endpoint did not return a token');
 
-          set({ token: newToken });
+          // The response names the user too: a session restored with no stored
+          // user (a first visit with authentication off) needs it for the header.
+          set({ token: newToken, ...(response.data?.user ? { user: response.data.user } : {}) });
         } catch (error) {
           // Refresh failed (no valid session) → logout user.
           get().logout();
