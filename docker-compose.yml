@@ -19,6 +19,14 @@
 #   open http://localhost:8000/          # the Ducta UI
 #   #    http://localhost:8000/docs      # API docs   ·   /health = liveness
 # Optional: copy .env.example to .env to override ports / settings.
+#
+# With accounts (AUTH_ENABLED=true) keep them in PostgreSQL, not in the SQLite file:
+# pipelines run as the container's user and could rewrite that file (roles included),
+# so the server refuses SQLite with accounts in production. In .env:
+#   AUTH_ENABLED=true  JWT_SECRET_KEY=<long random>  DUCTA_ADMIN_PASSWORD=<yours>
+#   POSTGRES_PASSWORD=<yours>
+#   DATABASE_URL=postgresql+asyncpg://ducta:<POSTGRES_PASSWORD>@postgres:5432/ducta
+# and start with:  docker compose --profile accounts up --build
 # ==============================================================================
 
 services:
@@ -66,5 +74,26 @@ services:
           cpus: '1'
           memory: 512M
 
+  # ---------------------------------------------------------------
+  # PostgreSQL for accounts and run history (profile "accounts"). Its URL is
+  # withheld from pipeline processes, unlike a SQLite file on their disk.
+  # ---------------------------------------------------------------
+  postgres:
+    image: postgres:16
+    profiles: ["accounts"]
+    environment:
+      - POSTGRES_USER=ducta
+      - POSTGRES_DB=ducta
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}   # postgres refuses to start without one
+    volumes:
+      - ducta-pg:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ducta -d ducta"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
   ducta-data:
+  ducta-pg:

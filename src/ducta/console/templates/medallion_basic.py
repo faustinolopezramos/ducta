@@ -111,8 +111,9 @@ source_data:
   # A contract: checked every time a node reads this dataset, before it runs.
   quality:
     fail_fast: true
-    empty_dataset: true
-    schema: {expected_columns: [order_id, category, amount, order_date]}
+    checks:
+      empty_dataset: true
+      schema: {expected_columns: [order_id, category, amount, order_date]}
 
 # The format of bronze.*, silver.* and gold.* comes from `defaults.catalog` in
 # ducta.yaml; a dataset states only what is its own. Datasets are overwritten on
@@ -156,13 +157,14 @@ nodes:
     # the run before gold exists.
     quality:
       fail_fast: false
-      null_rate: {columns: [amount], threshold: 0.0}
-      duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
-      # A negative amount is a refund or an entry error, not a missing value:
-      # null_rate and duplicates both pass on it, so only this check notices.
-      range: {column: amount, min: 0}
-      # A floor, not a ceiling: catches a transform that drops most rows.
-      row_count: {min: 400}
+      checks:
+        null_rate: {columns: [amount], threshold: 0.0}
+        duplicates: {columns: [order_id], max_duplicate_rate: 0.0}
+        # A negative amount is a refund or an entry error, not a missing value:
+        # null_rate and duplicates both pass on it, so only this check notices.
+        range: {column: amount, min: 0}
+        # A floor, not a ceiling: catches a transform that drops most rows.
+        row_count: {min: 400}
       # skip_downstream: gold is skipped and nothing bad is written.
       # Use stop_all to abort the whole run instead.
       gate: {max_errors: 0, on_fail: skip_downstream}
@@ -173,8 +175,9 @@ nodes:
     inputs: {clean_data: silver.etl.clean_data}
     outputs: [gold.etl.final_output]
     quality:
-      empty_dataset: true
-      row_count: {min: 1}
+      checks:
+        empty_dataset: true
+        row_count: {min: 1}
 """
         }
 
@@ -296,7 +299,7 @@ environments:
 
 ```bash
 ducta config list-pipelines                  # what is defined here
-ducta config validate                        # config check, no Spark
+ducta check                                  # config check, no Spark
 ducta config schema --out .                  # refresh the editor schemas
 ducta server start --port 8000               # web UI (pip install ducta-server)
 ```

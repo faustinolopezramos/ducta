@@ -75,8 +75,8 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | Role | Permissions |
 |------|-------------|
 | `admin` | `*` |
-| `operator` | read, plus run pipelines (`pipeline.execute`, `pipeline.execute.protected`), `execution.write` and `quality.run` — runs what is there, including in protected environments, but does not change projects or code |
-| `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete` |
+| `operator` | read, plus run pipelines (`pipeline.execute`, `pipeline.execute.protected`), `execution.write`, `quality.run` and the rows of protected environments (`data.read.protected`) — runs what is there, including in protected environments, but does not change projects or code |
+| `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete`, `data.read.pii` |
 | `viewer` | read only (`*.read`, including `project.read`) |
 
 Some routes need more than their name suggests:
@@ -84,6 +84,7 @@ Some routes need more than their name suggests:
 - A Git URL as `source` needs `repository.write`, because the server clones it.
 - Promoting a model needs `model.promote`; deleting a version or running gc needs `model.delete`.
 - Testing an unsaved ingestion connection needs `ingestion.write`.
+- Rows of a protected environment (preview, failing rows, stream rows, trying checks) need `data.read.protected`; the columns a dataset lists in `metadata.pii` read `••••` without `data.read.pii`, and a check naming one is refused.
 - Running or retrying in a protected environment (`governance.protected_environments` in `ducta.yaml`, `[prod, production]` by default) needs `pipeline.execute.protected`: operators and admins have it, developers do not.
 
 `GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/server/test_rbac.py` fails if a route that writes is reachable by a viewer.

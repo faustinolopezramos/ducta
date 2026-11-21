@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { projectIdFromPath, routes } from "./routes";
+import { projectIdFromPath, rememberedProject, routes } from "./routes";
 
 describe("routes", () => {
   it("puts everything a project owns under /p/:projectId", () => {
@@ -29,5 +29,17 @@ describe("routes", () => {
   it("reads the project back from a path", () => {
     expect(projectIdFromPath("/p/a%20b/pipelines/c")).toBe("a b");
     expect(projectIdFromPath("/workspace/git")).toBeNull();
+  });
+
+  it("offers the remembered project only while the server still has it", () => {
+    const list = { projects: [{ id: "batch" }], total: 1 };
+    expect(rememberedProject("batch", list)).toBe("batch");
+    // Started in another workspace: the old project is forgotten, not fetched.
+    expect(rememberedProject("streaming", list)).toBeNull();
+    // Still loading: wait instead of asking for a project that may be gone.
+    expect(rememberedProject("streaming", undefined)).toBeUndefined();
+    // One page of a longer list cannot rule it out.
+    expect(rememberedProject("streaming", { projects: [{ id: "batch" }], total: 80 })).toBe("streaming");
+    expect(rememberedProject(null, list)).toBeNull();
   });
 });

@@ -618,16 +618,24 @@ class PipelineExecutor:
                 mlops_run_id=mlops_run_id,
                 run_window=run_window,
             )
-            signing_key = cert_mod.resolve_signing_key(self.context)
+            server_signs = cert_mod.signed_by_server()
+            signing_key = None if server_signs else cert_mod.resolve_signing_key(self.context)
             if signing_key is not None:
                 cert.sign(signing_key)
+            elif server_signs:
+                pass  # signed by the API server once this process ends (TO_SIGN_ATTR)
             elif self.settings.evidence_level == EVIDENCE_SIGNED:
                 reason = "evidence_level is 'signed' but no signing key is configured"
                 logger.error("Run Certificate NOT written for run {}: {}", run_id, reason)
                 return None, reason
             run_dir = cert_mod.certificate_dir(self.context, run_id)
             path = cert_mod.write_certificate(cert, run_dir)
+            if server_signs:
+                pending = list(get_context_value(self.context, cert_mod.TO_SIGN_ATTR) or [])
+                set_context_value(self.context, cert_mod.TO_SIGN_ATTR, [*pending, str(path)])
             logger.info("Run Certificate written: {} (run_id={}, status={})", path, run_id, status)
+            # Step 3 of the README; the run id was only inside the line above.
+            logger.info("  verify it: ducta certify verify --run-id {}", run_id)
             return str(path), None
         except Exception as e:  # noqa: BLE001 — a certificate must never break a run
             logger.opt(exception=True).error(

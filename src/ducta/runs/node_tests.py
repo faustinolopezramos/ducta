@@ -58,6 +58,82 @@ def _write_parquet(df: Any, path: Path) -> None:
     pq.write_table(table, path, coerce_timestamps="us", allow_truncated_timestamps=True)
 
 
+def pii_columns_of(project_root: Path, env: str, dataset: str) -> List[str]:
+    """The columns the catalog lists in *dataset*'s ``metadata.pii`` (empty when none)."""
+    try:
+        from ducta.setting.project.loader import validate_project
+
+        entry = (validate_project(Path(project_root), env).catalog or {}).get(dataset)
+    except Exception:  # noqa: BLE001 — an unreadable project failed earlier, louder
+        return []
+    metadata = getattr(entry, "metadata", None) if entry is not None else None
+    items = metadata.get("pii") if isinstance(metadata, dict) else None
+    return [str(c) for c in items or [] if c]
+
+
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def _stand_in(value: Any, n: int, col: str) -> Any:
+    """The *n*-th stand-in of column *col*, of *value*'s kind: an email stays an email, a
+    number a number, a date a date — so the node's code runs on it as on the real one."""
+    import datetime as dt
+
+    if isinstance(value, bool):
+        return value  # one bit: nothing to tell, and its type is all a test needs
+    if isinstance(value, str):
+        return f"{col}_{n}@example.invalid" if _EMAIL.match(value.strip()) else f"{col}_{n}"
+    if isinstance(value, int):
+        return n
+    if isinstance(value, float):
+        return float(n)
+    if isinstance(value, dt.datetime):
+        return dt.datetime(2000, 1, 1) + dt.timedelta(days=n)
+    if isinstance(value, dt.date):
+        return dt.date(2000, 1, 1) + dt.timedelta(days=n)
+    return None
+
+
+def mask_pii(df: Any, pii: List[str]) -> tuple[Any, List[str]]:
+    """``(df, masked columns)``: the *pii* columns of *df* (names matched case-insensitively)
+    with each value replaced by a stand-in of the same kind (``email_1@example.invalid``,
+    ``name_2``, ``3``, ``2000-01-04``): the same value, the same stand-in, so duplicates and
+    joins behave. Nulls stay null and the column keeps its type.
+
+    Fixtures go into the repository and to whoever reads its files: personal data has no
+    place there, and a node test (it pins the output's columns) does not need it.
+    """
+    import pandas as pd
+
+    wanted = {c.lower() for c in pii}
+    masked = [c for c in df.columns if str(c).lower() in wanted]
+    if not masked:
+        return df, []
+    df = df.copy()
+    for col in masked:
+        seen: Dict[Any, Any] = {}
+
+        def stand_in(value: Any, col: Any = col, seen: Dict[Any, Any] = seen) -> Any:
+            if value is None or value is pd.NaT or (isinstance(value, float) and value != value):
+                return value
+            if hasattr(value, "to_pydatetime"):
+                value = value.to_pydatetime()
+            try:
+                if value not in seen:
+                    seen[value] = _stand_in(value, len(seen) + 1, str(col))
+                return seen[value]
+            except TypeError:  # a list or a map: no stand-in of its kind, so none at all
+                return None
+
+        dtype = df[col].dtype
+        out = df[col].astype(object).map(stand_in)
+        try:
+            df[col] = out.astype(dtype)
+        except (TypeError, ValueError):  # a stand-in the old type cannot hold: keep it as is
+            df[col] = out
+    return df, [str(c) for c in masked]
+
+
 def render_test(
     *,
     node: str,
@@ -160,8 +236,12 @@ def generate_snapshot_test(
     _df, out_columns, _ = frame(output, 1)
     fixtures = _safe(node)
     written: List[str] = []
+    masked: Dict[str, List[str]] = {}
     for alias, dataset in inputs.items():
         df, _cols, _ = frame(dataset, rows)
+        df, hidden = mask_pii(df, pii_columns_of(project_root, env, dataset))
+        if hidden:
+            masked[dataset] = hidden
         target = project_root / FIXTURES_DIR / fixtures / f"{_safe(alias)}.parquet"
         _write_parquet(df, target)
         written.append(str(target.relative_to(project_root)))
@@ -186,6 +266,8 @@ def generate_snapshot_test(
         "fixtures": written,
         "columns": [c["name"] for c in out_columns],
         "rows": rows,
+        # The metadata.pii columns written as stand-ins, per input dataset.
+        "masked": masked,
     }
 
 
@@ -212,13 +294,13 @@ def run_tests(
     """Run pytest on *targets* in the project; per-test outcomes with file:line.
 
     The tests are the project's own code, so they get this process's environment
-    minus the server's secrets (``JWT_SECRET_KEY``, the admin password, …) unless
-    *env* is given.
+    minus the server's secrets (``JWT_SECRET_KEY``, the admin password, the certificate
+    signing key, …) unless *env* is given.
     """
     if env is None:
-        from ducta.server_secrets import is_server_secret
+        from ducta.server_secrets import withheld_from_runs
 
-        env = {k: v for k, v in os.environ.items() if not is_server_secret(k)}
+        env = {k: v for k, v in os.environ.items() if not withheld_from_runs(k)}
     with tempfile.TemporaryDirectory() as tmp:
         report = Path(tmp) / "report.xml"
         cmd = [

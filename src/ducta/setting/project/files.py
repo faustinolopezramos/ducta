@@ -130,11 +130,32 @@ def parse(path: Path, text: str) -> Any:
             data = tomllib.loads(text)
         else:
             data = json.loads(text, object_pairs_hook=_unique_json_object) if text.strip() else None
-    except (yaml.YAMLError, ValueError) as e:  # TOML/JSON decode errors are ValueErrors
+    except yaml.YAMLError as e:
+        raise ValueError(_yaml_problem(e)) from e
+    except ValueError as e:  # TOML/JSON decode errors are ValueErrors
         raise ValueError(f"not valid {kind} — {e}") from e
     if isinstance(data, dict):
         data.pop("$schema", None)  # JSON has no comments: this is how it names its schema
     return data if data is not None else {}
+
+
+def _yaml_problem(e: "yaml.YAMLError") -> str:
+    """``not valid YAML at line L, column C — problem``, then the offending line.
+
+    ``str(e)`` names the source ``"<unicode string>"`` (the text is parsed
+    from memory) and often points a second time, at the end of the file.
+    """
+    mark = getattr(e, "problem_mark", None)
+    problem = getattr(e, "problem", None)
+    if mark is None or not problem:
+        return f"not valid YAML — {e}"
+    context = getattr(e, "context", None)
+    context_mark = getattr(e, "context_mark", None)
+    if context and context_mark is not None:
+        problem = f"{problem} ({context} at line {context_mark.line + 1})"
+    message = f"not valid YAML at line {mark.line + 1}, column {mark.column + 1} — {problem}"
+    snippet = mark.get_snippet() if hasattr(mark, "get_snippet") else None
+    return message + (f"\n{snippet}" if snippet and snippet.strip(" ^\n") else "")
 
 
 def load(path: Path) -> Any:

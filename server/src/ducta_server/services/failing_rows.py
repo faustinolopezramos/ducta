@@ -21,8 +21,9 @@ The rows a quality check objects to. Checks report counts and rates; when
 something fails, the next question is "which rows?" — answered here for the
 checks whose verdict is about rows, on the dataset as materialized.
 
-SQL business rules are evaluated with sqlglot's executor over the sampled
-rows (a SQL WHERE clause, the same text the Spark run evaluates).
+SQL business rules (a WHERE clause, the same text the Spark run evaluates) are
+interpreted over the sampled rows by :mod:`ducta_server.services.sql_rules`,
+which never runs code built from the rule.
 """
 
 from __future__ import annotations
@@ -64,16 +65,15 @@ def failing_mask(df: Any, check: str, params: Dict[str, Any]) -> Any:
     if check == "business_rules":
         if (params.get("rule_type") or "sql") != "sql":
             raise ValueError("Only SQL business rules can show their failing rows here")
-        from sqlglot.executor import execute
+        from ducta_server.services.sql_rules import rule_mask
 
-        records = json.loads(df.to_json(orient="records", date_format="iso"))
-        for i, r in enumerate(records):
-            r["__row"] = i
-        failing: set = set()
-        for rule in params.get("rules") or []:
-            result = execute(f"SELECT __row FROM t WHERE NOT ({rule})", tables={"t": records})
-            failing.update(row[0] for row in result.rows)
-        return pd.Series([i in failing for i in range(len(df))], index=df.index)
+        rules = params.get("rules") or []
+        if not isinstance(rules, list):
+            raise ValueError("'rules' must be a list of SQL conditions")
+        mask = pd.Series(False, index=df.index)
+        for rule in rules:
+            mask |= rule_mask(df, rule)
+        return mask
     raise ValueError(f"'{check}' does not judge rows one by one")
 
 

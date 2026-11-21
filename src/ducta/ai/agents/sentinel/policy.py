@@ -54,7 +54,10 @@ class Settings:
             project = validate_project(root).project
         except ProjectConfigError:
             return None
-        return cls(project.sentinel, list(project.governance.protected_environments))
+        from ducta.project_store.governance import with_floor
+
+        # The floor too: a project file cannot unprotect what the server protects.
+        return cls(project.sentinel, with_floor(list(project.governance.protected_environments)))
 
 
 def paused_path(root: Path) -> Path:
@@ -86,7 +89,9 @@ def may_act(root: Path, settings: Settings, env: str, pipeline: str) -> Tuple[bo
     policy = settings.policy
     if not policy.enabled:
         return False, "sentinel.enabled is false"
-    if env in settings.protected:
+    from ducta.project_store.governance import is_protected
+
+    if is_protected(env, protected=settings.protected):
         return False, f"{env} is a protected environment: Sentinel only observes and proposes there"
     if env not in policy.environments:
         return False, f"{env} is not in sentinel.environments ({', '.join(policy.environments)})"

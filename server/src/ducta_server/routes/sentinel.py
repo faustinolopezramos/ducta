@@ -265,7 +265,9 @@ def _retry(root: Path, incident_id: str, who: str, user_id: str, project_id: str
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Incident {incident_id} is {found.status}",
             )
-        if found.env in settings.protected:
+        from ducta.project_store.governance import is_protected
+
+        if is_protected(found.env, protected=settings.protected):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"{found.env} is protected: run it from the run page, where its permission applies",

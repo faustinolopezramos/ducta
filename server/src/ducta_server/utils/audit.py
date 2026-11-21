@@ -24,7 +24,7 @@ import json
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -43,6 +43,7 @@ def write_audit_entry(
     request_id: Optional[str] = None,
     audit_log_path: Optional[Path] = None,
     username_attempted: Optional[str] = None,
+    data_reads: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Append a single JSON audit entry to audit_log_path."""
     if audit_log_path is None:
@@ -62,6 +63,10 @@ def write_audit_entry(
         # Set for a failed /auth/login (no authenticated user to attribute
         # the attempt to) — the attempted username, never the password.
         entry["username_attempted"] = username_attempted
+    if data_reads:
+        # What sensitive data the request was allowed to see: a protected environment's
+        # rows or files, or a dataset's metadata.pii columns unmasked.
+        entry["data_reads"] = data_reads
 
     try:
         audit_log_path.parent.mkdir(parents=True, exist_ok=True)

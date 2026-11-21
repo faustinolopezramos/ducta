@@ -21,7 +21,7 @@ SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from loguru import logger
 
@@ -76,9 +76,66 @@ def protected_dir(rel_path: str, folders: "frozenset[str]") -> "str | None":
 _ENV_TEMPLATES = frozenset({".env.example", ".env.sample", ".env.template", ".env.dist"})
 
 
+#: Files that are credentials by name: private keys, keystores, password files.
+_SECRET_NAMES = frozenset(
+    {
+        ".pgpass",
+        ".netrc",
+        "_netrc",
+        ".pypirc",
+        ".npmrc",
+        ".htpasswd",
+        "credentials",  # ~/.aws/credentials copied into a project
+        "credentials.json",
+        "service-account.json",
+        "id_rsa",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+    }
+)
+_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore", ".kdbx")
+
+
 def is_secret_file(name: str) -> bool:
-    """Whether a file name is a ``.env`` file with real values (``.env``, ``.env.local``…)."""
-    return (name == ".env" or name.startswith(".env.")) and name not in _ENV_TEMPLATES
+    """Whether a file name holds secrets: a ``.env`` file with real values (``.env``,
+    ``.env.local``…), a private key or keystore (``*.pem``, ``*.key``, ``*.jks``, ``*.p12``…)
+    or a credentials file (``.pgpass``, ``.netrc``, ``credentials.json``, ``id_rsa``…)."""
+    name = str(name).rsplit("/", 1)[-1]
+    lower = name.lower()
+    if lower == ".env" or lower.startswith(".env."):
+        return lower not in _ENV_TEMPLATES
+    return lower in _SECRET_NAMES or lower.endswith(_SECRET_SUFFIXES)
+
+
+def _hidden_in_diff(rel_path: str) -> bool:
+    """A path a diff must leave out: what the file API refuses to read."""
+    return is_secret_file(rel_path) or protected_dir(rel_path, _READ_PROTECTED_DIRS) is not None
+
+
+def _diff_without_secrets(
+    repo: Any, commit_a: str, commit_b: str, hide: Optional[Callable[[str], bool]] = None
+) -> str:
+    """``git diff commit_a commit_b`` without the files the file API refuses to read.
+
+    A ``.env`` (or a key) committed once was otherwise handed whole to anyone who can read
+    the history. The files are listed first (``-z``: names as they are, unquoted) and
+    excluded by literal pathspec, so the diff itself never contains them.
+    """
+    names = [
+        n
+        for n in str(repo.git.diff(commit_a, commit_b, "--name-only", "-z", "--no-renames")).split(
+            "\0"
+        )
+        if n
+    ]
+    hidden = [n for n in names if _hidden_in_diff(n) or (hide is not None and hide(n))]
+    if not hidden:
+        return str(repo.git.diff(commit_a, commit_b))
+    if len(hidden) == len(names):
+        return ""
+    excludes = [f":(top,exclude,literal){n}" for n in hidden]
+    return str(repo.git.diff(commit_a, commit_b, "--", ":/", *excludes))
 
 
 class WorkspaceManager:
@@ -291,22 +348,25 @@ class WorkspaceManager:
         commit_a: str,
         commit_b: str = "HEAD",
         path: Optional[str] = None,
+        hide: Optional[Callable[[str], bool]] = None,
     ) -> str:
+        """``git diff``, without secret files and, given *hide*, without the paths it names."""
         if not GIT_AVAILABLE or not is_git_repo(self.root):
             return ""
         if path:
             safe_path(self.root, path)
         try:
             repo = get_repo(self.root)
-            args = [commit_a, commit_b]
             if path:
-                args += ["--", path]
-            return str(repo.git.diff(*args))
+                return str(repo.git.diff(commit_a, commit_b, "--", path))
+            return _diff_without_secrets(repo, commit_a, commit_b, hide)
         except Exception as exc:
             logger.debug("get_git_diff failed: {exc}", exc=exc)
             return ""
 
-    def get_commit_diff(self, sha: str) -> tuple[str, str]:
+    def get_commit_diff(
+        self, sha: str, hide: Optional[Callable[[str], bool]] = None
+    ) -> tuple[str, str]:
         _EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
         if not GIT_AVAILABLE or not is_git_repo(self.root):
             raise ValueError("Git not available in this workspace")
@@ -318,7 +378,7 @@ class WorkspaceManager:
             raise ValueError(f"Commit '{sha}' not found: {exc}") from exc
 
         parent_sha = commit.parents[0].hexsha if commit.parents else _EMPTY_TREE
-        return repo.git.diff(parent_sha, sha), parent_sha
+        return _diff_without_secrets(repo, parent_sha, sha, hide), parent_sha
 
     def revert_file(self, path: str, commit: str, message: Optional[str] = None) -> str:
         safe_path(self.root, path)

@@ -88,7 +88,9 @@ export function useLogsWebSocket(executionId: string | null) {
           break;
 
         case "CLOSE":
-          if (code === 1000 || code === 1001) return;
+          // 1008: refused (a protected environment's logs, a revoked token): retrying
+          // gets the same answer.
+          if (code === 1000 || code === 1001 || code === 1008) return;
           if (retryCountRef.current < MAX_RECONNECT_ATTEMPTS) {
             const delay = 1000 * Math.pow(2, retryCountRef.current);
             retryCountRef.current += 1;

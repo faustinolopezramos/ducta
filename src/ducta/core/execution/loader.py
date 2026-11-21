@@ -161,7 +161,9 @@ class FunctionLoader:
             return func
 
         except ModuleImportError as e:
-            logger.error("Security validation failed for module '{}': {}", module_path, e)
+            # Most of these are a name that does not exist (a typo in `run:`);
+            # the message says which, the log line need not sound like an attack.
+            logger.error("Cannot load '{}' from module '{}': {}", function_name, module_path, e)
             raise ValueError(f"Cannot load node function: {e}") from e
         except Exception as e:
             logger.error(

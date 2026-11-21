@@ -32,6 +32,7 @@ import json
 import sys
 from pathlib import Path
 
+from ducta.core.certificate import TO_SIGN_ATTR
 from ducta.core.context_utils import get_context_value
 from ducta.core.ledger import RETRAIN_ATTR, RUN_ID_ATTR
 
@@ -68,6 +69,7 @@ def main(argv: list) -> int:
                     "outcome": outcome,
                     "error": error,
                     "certificate_run_id": get_context_value(ctx, RUN_ID_ATTR),
+                    "certificates_to_sign": get_context_value(ctx, TO_SIGN_ATTR) or [],
                     "retrain": get_context_value(ctx, RETRAIN_ATTR),
                 },
                 default=str,

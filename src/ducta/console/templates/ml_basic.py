@@ -63,7 +63,7 @@ class MLBasicTemplate(BaseTemplate):
             "ducta start -e dev -p churn_runs",
             "",
             "# Check the project without running it (no Spark)",
-            "ducta config validate -e dev",
+            "ducta check -e dev",
         ]
 
     def project_yaml(self) -> str:
@@ -135,9 +135,10 @@ customers:
   # A contract: checked every time a node reads this dataset, before it runs.
   quality:
     fail_fast: true
-    empty_dataset: true
-    schema:
-      expected_columns: [customer_id, tenure_months, monthly_spend, support_calls, plan, churned]
+    checks:
+      empty_dataset: true
+      schema:
+        expected_columns: [customer_id, tenure_months, monthly_spend, support_calls, plan, churned]
 
 silver.churn.features:
   description: Clean, de-duplicated model inputs
@@ -183,11 +184,12 @@ nodes:
     outputs: [silver.churn.features]
     # Checks on this node's OUTPUT, before it is written.
     quality:
-      empty_dataset: true
-      null_rate: {columns: [tenure_months, monthly_spend, plan, churned], threshold: 0.0}
-      duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
-      range: {column: tenure_months, min: 0}
-      row_count: {min: 500}
+      checks:
+        empty_dataset: true
+        null_rate: {columns: [tenure_months, monthly_spend, plan, churned], threshold: 0.0}
+        duplicates: {columns: [customer_id], max_duplicate_rate: 0.0}
+        range: {column: tenure_months, min: 0}
+        row_count: {min: 500}
       gate: {max_errors: 0, on_fail: skip_downstream}
 
   train:
@@ -465,7 +467,7 @@ of the data it ran on, and its certificate id. It is ordered by validation AUC; 
 ```bash
 ducta certify list                       # every run recorded here
 ducta certify show   --run-id <run-id>   # what ran, on which data, with which split
-ducta config validate                    # config check, no Spark
+ducta check                              # config check, no Spark
 ```
 
 ## Project structure

@@ -150,6 +150,11 @@ jobs:
       - name: Publish to PyPI
         if: github.event.inputs.target != 'testpypi'
         uses: pypa/gh-action-pypi-publish@release/v1
+        # PyPI never accepts a file twice and twine stops at the first refusal, so
+        # an upload cut short (e.g. one project without a trusted publisher) can
+        # only be completed by skipping what is already there.
+        with:
+          skip-existing: true
 
   # Attach the constraints files to the GitHub release of the tag, so
   #   pip install "ducta[all]==X.Y.Z" "ducta-server==X.Y.Z" -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt

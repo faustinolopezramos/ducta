@@ -172,6 +172,7 @@ class _DispatchMixin(_Base):
             debug=debug,
             pause_after=pause_after,
             reproduce_of=reproduce_of,
+            started_by=user_id,
         )
         task = asyncio.create_task(self._run_execution(execution_id, spec))
         with self._task_lock:

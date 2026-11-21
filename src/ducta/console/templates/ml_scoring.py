@@ -127,9 +127,10 @@ customers:
   path: data/customers.csv
   options: {header: true, inferSchema: true}
   quality:
-    empty_dataset: true
-    schema:
-      expected_columns: [customer_id, tenure_months, monthly_spend, support_calls, churned]
+    checks:
+      empty_dataset: true
+      schema:
+        expected_columns: [customer_id, tenure_months, monthly_spend, support_calls, churned]
 
 # What the score pipeline scores: the same features, no outcome yet.
 new_customers:
@@ -138,9 +139,10 @@ new_customers:
   path: data/new_customers.csv
   options: {header: true, inferSchema: true}
   quality:
-    empty_dataset: true
-    schema:
-      expected_columns: [customer_id, tenure_months, monthly_spend, support_calls]
+    checks:
+      empty_dataset: true
+      schema:
+        expected_columns: [customer_id, tenure_months, monthly_spend, support_calls]
 
 gold.churn.validation_scores:
   description: The promoted model's scores on its validation set - the reference
@@ -205,15 +207,16 @@ nodes:
     outputs: [gold.churn.scores]
     # Is the model behaving? Checked before the scores are written.
     quality:
-      prediction_contract: {column: churn_score, min: 0, max: 1}
-      # A model that suddenly flags everyone (or no one) has a broken input.
-      prediction_rate: {column: churn_score, threshold: 0.5, min: 0.05, max: 0.6}
-      # Scores distributed as they were when the model was validated.
-      prediction_drift:
-        column: churn_score
-        reference: gold.churn.validation_scores
-        method: psi
-        threshold: 0.2
+      checks:
+        prediction_contract: {column: churn_score, min: 0, max: 1}
+        # A model that suddenly flags everyone (or no one) has a broken input.
+        prediction_rate: {column: churn_score, threshold: 0.5, min: 0.05, max: 0.6}
+        # Scores distributed as they were when the model was validated.
+        prediction_drift:
+          column: churn_score
+          reference: gold.churn.validation_scores
+          method: psi
+          threshold: 0.2
       gate: {max_errors: 0}
 """,
         }

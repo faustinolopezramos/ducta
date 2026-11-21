@@ -51,12 +51,52 @@ def test_only_an_operator_or_admin_runs_in_prod(batch):
     check_can_run(developer, "dev", batch)
 
 
-def test_protected_environments_are_the_projects_choice(batch):
-    from ducta.project_store.governance import protected_environments
+def test_a_project_adds_protected_environments_but_cannot_remove_the_floor(batch, monkeypatch):
+    from ducta.project_store.governance import FLOOR_ENV, protected_environments
 
+    monkeypatch.delenv(FLOOR_ENV, raising=False)
     text = (batch / "ducta.yaml").read_text()
     (batch / "ducta.yaml").write_text(text + "\ngovernance:\n  protected_environments: [sandbox]\n")
-    assert protected_environments(batch) == ["sandbox"]
+    assert protected_environments(batch) == ["prod", "production", "sandbox"]
+
+
+def test_the_floor_is_the_servers_setting(batch, monkeypatch):
+    from ducta.project_store.governance import FLOOR_ENV, protected_environments
+
+    text = (batch / "ducta.yaml").read_text()
+    (batch / "ducta.yaml").write_text(text + "\ngovernance:\n  protected_environments: []\n")
+    monkeypatch.setenv(FLOOR_ENV, "live, prod")
+    assert protected_environments(batch) == ["live", "prod"]
+    monkeypatch.setenv(FLOOR_ENV, "")
+    assert protected_environments(batch) == []
+
+
+def test_a_developer_cannot_unprotect_prod_by_editing_the_project(batch, monkeypatch):
+    """Found 2026-11-20: `protected_environments: [nothing]` in ducta.yaml, then 202 in prod."""
+    from ducta.project_store.governance import FLOOR_ENV
+
+    monkeypatch.delenv(FLOOR_ENV, raising=False)
+    monkeypatch.chdir(batch.parent)
+    text = (batch / "ducta.yaml").read_text()
+    (batch / "ducta.yaml").write_text(text + "\ngovernance:\n  protected_environments: [nothing]\n")
+    with _client(["developer"]) as c:
+        r = c.post(
+            "/api/projects/batch/pipelines/silver.clean/execute",
+            params={"source": str(batch)},
+            json={"env": "prod", "dry_run": True},
+        )
+    assert r.status_code == 403, r.text
+
+
+def test_sentinel_keeps_out_of_the_floor_too(batch, monkeypatch):
+    from ducta.ai.agents.sentinel.policy import Settings as SentinelSettings
+    from ducta.project_store.governance import FLOOR_ENV
+
+    monkeypatch.delenv(FLOOR_ENV, raising=False)
+    text = (batch / "ducta.yaml").read_text()
+    (batch / "ducta.yaml").write_text(text + "\ngovernance:\n  protected_environments: []\n")
+    settings = SentinelSettings.of(batch)
+    assert settings is not None and "prod" in settings.protected
 
 
 def test_execute_route_refuses_a_developer_in_prod(batch, monkeypatch):

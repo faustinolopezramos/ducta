@@ -18,8 +18,10 @@ under the License.
 SPDX-License-Identifier: Apache-2.0
 """
 
+import difflib
 import importlib
 import importlib.util
+import inspect
 import os
 import re
 import sys
@@ -286,14 +288,20 @@ class SecureModuleImporter:
         module = self.import_module(module_path)
 
         if not hasattr(module, function_name):
+            # The module's own functions only: `dir()` listed what it imports
+            # too (`Any`, `Optional`), which reads as if those were nodes.
             available_functions = [
                 name
-                for name in dir(module)
-                if callable(getattr(module, name)) and not name.startswith("_")
+                for name, obj in vars(module).items()
+                if inspect.isfunction(obj)
+                and not name.startswith("_")
+                and getattr(obj, "__module__", None) == module.__name__
             ]
+            close = difflib.get_close_matches(function_name, available_functions, n=1)
             raise ModuleImportError(
-                f"Function '{function_name}' not found in module '{module_path}'. "
-                f"Available functions: {', '.join(available_functions[:10])}"
+                f"Function '{function_name}' not found in module '{module_path}'."
+                + (f" Did you mean '{close[0]}'?" if close else "")
+                + f" Functions defined there: {', '.join(available_functions[:10]) or 'none'}"
                 + (
                     f" (and {len(available_functions) - 10} more)"
                     if len(available_functions) > 10

@@ -26,11 +26,12 @@ A trimmed real certificate, from a batch ingestion run:
 .. code-block:: json
 
    {
-     "schema_version": "1.10",
+     "schema_version": "1.11",
      "run_id": "f9fb815596a74bf2a66d6cf3570b5493",
      "pipeline": "bronze.ingestion",
      "environment_name": "base",
      "status": "success",
+     "started_by": { "via": "cli", "user": "ana" },
      "config_fingerprint": "sha256:aa6f58fe...",
      "environment": {
        "python_version": "3.13.14",
@@ -83,6 +84,12 @@ certificate:
      - Per-dataset fingerprints: ``row_count``, ``schema_hash``,
        ``algorithm``, ``mode``, ``content_hash``. This is the part that
        actually proves something about the *data*, not just that a node ran.
+   * - ``started_by``
+     - Who started the run: ``{"via": "server", "user_id": ...}`` for a run the API
+       server started (no ``user_id`` with auth off), ``{"via": "cli", "user": ...}``
+       (the OS login) for one started from the command line. Covered by the hash
+       and the signature like every other field; a CLI login is what the machine
+       said, not an authenticated identity.
    * - ``mlops_run_id``
      - Only on ML pipelines: the id of the tracked run (``ducta experiment show``) this
        certificate attests. The run carries the certificate's ``run_id`` as its
@@ -139,6 +146,14 @@ The source is blunt about the first point, and it's worth repeating exactly:
 this ran the way we said it did" — set the signing key.** An unsigned
 certificate is a checksum against accidents, not a claim you can defend
 against someone who edited it on purpose.
+
+A signed certificate records *that* it was signed inside the hashed content,
+so deleting the signature to pass it off as merely unsigned does not work
+either: ``verify`` rejects it with or without the key. Certificates written
+before schema ``1.3`` carry no such marker, so ``verify`` cannot tell "never
+signed" from "signature removed" for them: given a key, it reports them as
+*unverifiable* rather than passing them. Verify them without a key to check
+their integrity alone.
 
 Configuring certification
 ---------------------------
@@ -228,6 +243,15 @@ do — a key in a config file is usually committed to version control, and a
 short, human-chosen value is brute-forceable from the certificate's public
 ``key_id``. Prefer the environment variable.
 
+On the API server (``ducta-server`` with ``RUN_ISOLATION=process``, the default
+once authentication is on), set the key in the server's environment. The run's
+own process never gets it: the run writes its certificate unsigned and the
+server signs it when that process ends, after checking that it is the
+certificate of the run it started, unaltered. So a pipeline's code cannot sign
+a certificate for a run that never happened. (A key in
+``settings.certificate_signing_key`` is readable by that code, being in the
+project.)
+
 Fingerprint modes: what "exact" is buying you
 ------------------------------------------------
 
@@ -274,6 +298,16 @@ The legacy aliases ``fast`` and ``full`` still parse — they map to
 "the quick version of exact" and is actually "hash a 100-row
 sample"; a project that sets it without realizing what it maps to ends up
 with certificates that look complete and aren't.
+
+**``exact`` is for accidents, ``exact_crypto`` for adversaries.**
+``xxhash64`` catches any *accidental* change — a bad merge, a partial reload, a
+drifted upstream — at a cost you can afford on every run, but it is a fast,
+non-cryptographic hash: someone who can already write the dataset could in
+principle construct rows that land on the same digest with different content.
+Where the certificate has to survive an adversary — the same place you want
+the signing key — use ``exact_crypto``: same order-independence, same
+distributed aggregation, no collecting rows to the driver; you pay a SHA-256
+per row.
 
 ``sample``/``schema`` are legitimate choices when a full scan is too
 expensive for a given project's data volume — that's a real trade-off, not

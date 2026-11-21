@@ -56,9 +56,19 @@ function useWidth() {
     if (!el) return;
     setWidth(el.clientWidth);
     if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => setWidth(el.clientWidth));
+    // Next frame, not inside the callback: re-rendering at the new width can
+    // resize the box again in the same frame ("ResizeObserver loop completed
+    // with undelivered notifications").
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => setWidth(el.clientWidth));
+    });
     observer.observe(el);
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
   return { ref, width };
 }

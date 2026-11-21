@@ -1150,8 +1150,8 @@ class UnifiedArgumentParser:
             help="Create a project with the recommended layout",
             description=(
                 "Create a new Ducta project: ducta.<ext>, catalog/<layer>.<ext>, "
-                "quality/profiles.<ext>, pipelines/<layer>.<domain>.<ext>, the Python the "
-                "nodes run, and the editor schemas. `ducta template` writes the same "
+                "quality/profiles.<ext>, pipelines/<pipeline>.<ext> (one file per pipeline), "
+                "the Python the nodes run, and the editor schemas. `ducta template` writes the same "
                 "projects with every dataset in one catalog file (--layout single here)."
             ),
         )

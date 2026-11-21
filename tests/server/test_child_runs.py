@@ -534,3 +534,142 @@ def test_deep_preflight_subprocess_does_not_get_the_servers_secrets(monkeypatch,
     assert "DUCTA_ADMIN_PASSWORD" not in env
     assert "DATABASE_URL" not in env
     assert env["DUCTA_TEST_ORDINARY_VAR"] == "kept"
+
+
+# ── 2026-11-20 security review: the signing key stays with the server ──
+
+
+def test_the_child_environment_withholds_the_signing_key_and_ai_keys(monkeypatch):
+    monkeypatch.setattr(child_runner, "_ai_key_env", lambda: "MY_GATEWAY_KEY")
+    base = {"DUCTA_CERTIFICATE_KEY": "c", "OPENAI_API_KEY": "o", "ANTHROPIC_API_KEY": "a",
+            "DUCTA_AI_PROVIDER": "openai", "MY_GATEWAY_KEY": "g", "WAREHOUSE_PASSWORD": "w"}  # fmt: skip
+    env = child_runner.child_environment(base)
+    env.pop("PYTHONPATH", None)
+    assert env == {"WAREHOUSE_PASSWORD": "w"}
+
+
+def _written_certificate(tmp_path):
+    from ducta.core import certificate as cert_mod
+
+    cert = cert_mod.RunCertificate(run_id="r1", pipeline="etl", environment_name="dev",
+                                   status="success", started_at="a", ended_at="b", ducta_version="t")  # fmt: skip
+    return cert_mod.write_certificate(cert, tmp_path / "r1")
+
+
+def test_the_server_signs_what_the_run_wrote_and_verify_accepts_it(tmp_path):
+    from ducta.core.certificate import verify_certificate
+
+    path = _written_certificate(tmp_path)
+    child_runner.sign_child_certificates(
+        {"certificate_run_id": "r1", "certificates_to_sign": [str(path)]}, b"k" * 32
+    )
+    result = verify_certificate(path, b"k" * 32)
+    assert (result.ok, result.signature) == (True, "valid")
+
+
+@pytest.mark.parametrize("tamper", ["content", "other_run", "already_signed"])
+def test_the_server_signs_nothing_else(tmp_path, tamper):
+    import json
+
+    from ducta.core.certificate import sign_certificate_file, verify_certificate
+
+    path = _written_certificate(tmp_path)
+    data = json.loads(path.read_text())
+    if tamper == "content":
+        data["status"] = "failed"  # hash left as written: altered after the run
+        path.write_text(json.dumps(data))
+    elif tamper == "already_signed":
+        data["signature"] = "hmac-sha256:forged"
+        path.write_text(json.dumps(data))
+    run_id = "r2" if tamper == "other_run" else "r1"
+    with pytest.raises(ValueError):
+        sign_certificate_file(path, b"k" * 32, run_id)
+    # sign_child_certificates logs the refusal and leaves the file unsigned
+    child_runner.sign_child_certificates(
+        {"certificate_run_id": run_id, "certificates_to_sign": [str(path)]}, b"k" * 32
+    )
+    assert verify_certificate(path, b"k" * 32).signature != "valid"
+
+
+def test_the_signer_flag_is_read_from_the_environment(tmp_path, monkeypatch):
+    from ducta.core import certificate as cert_mod
+
+    monkeypatch.setenv(cert_mod.SIGNER_ENV, "server")
+    monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "must-not-be-used")
+    assert cert_mod.signed_by_server()
+    monkeypatch.delenv(cert_mod.SIGNER_ENV)
+    assert not cert_mod.signed_by_server()
+
+
+def test_a_real_run_cannot_read_the_signing_key_and_its_certificate_is_signed(
+    tmp_path, monkeypatch
+):
+    pytest.importorskip("pyspark")
+    from fastapi.testclient import TestClient
+
+    from ducta.console.templates import TemplateGenerator, TemplateType
+    from ducta.core.certificate import verify_certificate
+    from ducta_server.config import get_settings
+    from ducta_server.main import create_app
+
+    key = "server-certificate-key-under-test-0123456789"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RUN_ISOLATION", "process")
+    monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", key)
+    monkeypatch.setenv("DUCTA_WORKSPACE", str(tmp_path))
+    get_settings.cache_clear()
+    root = tmp_path / "proj"
+    TemplateGenerator(root).generate_project(TemplateType.MEDALLION_BASIC, "proj")
+    etl = root / "pipelines" / "etl.py"
+    etl.write_text(
+        etl.read_text(encoding="utf-8")
+        + "\nimport os as _os\nprint('PEEK', _os.environ.get('DUCTA_CERTIFICATE_KEY'))\n",
+        encoding="utf-8",
+    )
+    try:
+        with TestClient(create_app()) as client:
+            client.params = {"source": str(root)}  # type: ignore[assignment]
+            listed = client.get("/api/projects").json()
+            project = (listed.get("projects") if isinstance(listed, dict) else listed)[0]["id"]
+            started = client.post(
+                f"/api/projects/{project}/pipelines/etl/execute", json={"env": "dev"}
+            )
+            assert started.status_code == 202, started.text
+            execution_id = started.json()["id"]
+            for _ in range(600):
+                record = client.get(f"/api/executions/{execution_id}").json()
+                if record["status"] not in ("pending", "running"):
+                    break
+                time.sleep(0.2)
+            logs = client.get(f"/api/executions/{execution_id}/logs").json()
+    finally:
+        get_settings.cache_clear()
+
+    assert record["status"] == "success", record
+    (peek,) = [e["message"] for e in logs if e["message"].startswith("PEEK")]
+    assert peek.split()[1] == "None"
+    run_id = record["certificate_run_id"]
+    (path,) = [p for p in root.rglob("certificate.json") if p.parent.name == run_id]
+    result = verify_certificate(path, key.encode())
+    assert (result.ok, result.signature) == (True, "valid"), result.reason
+
+
+def test_run_logs_mask_credentials_on_every_path():
+    """Viewers read run logs: the server masks them as the CLI masks its log file."""
+    from datetime import datetime
+
+    from ducta_server.execution.log_sink import log_entry
+    from ducta_server.execution.output_capture import append_output_line
+
+    entry = log_entry(datetime.now(), "INFO", "connecting postgresql://etl:hunter2@db/sales", None)
+    assert "hunter2" not in entry.message and "***" in entry.message
+
+    class _M:
+        lines: list = []
+
+        def _append_process_output(self, execution_id, line, level):
+            self.lines.append(line)
+
+    m = _M()
+    append_output_line(m, "e1", "print: PASSWORD=hunter2 token")
+    assert m.lines == ["print: PASSWORD=*** token"]

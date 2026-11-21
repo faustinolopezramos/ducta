@@ -20,6 +20,8 @@ SPDX-License-Identifier: Apache-2.0
 
 from __future__ import annotations
 
+from typing import Any, Dict, List, Optional
+
 from fastapi import Request, Response
 from fastapi.concurrency import run_in_threadpool
 
@@ -37,6 +39,7 @@ async def maybe_write_audit(
     response: Response,
     settings: Settings,
     request_id: str,
+    data_reads: Optional[List[Dict[str, Any]]] = None,
 ) -> None:
     """Write an audit log entry if the request qualifies.
 
@@ -46,8 +49,10 @@ async def maybe_write_audit(
     recorded requests that *succeeded*, and had no record of failed login
     attempts or rejected/forbidden requests at all.
     """
+    # A read is audited when it reached a protected environment's rows or files, or
+    # personal data (``data_reads``, noted by the guards that allowed it).
     if (
-        request.method not in _AUDIT_METHODS
+        (request.method not in _AUDIT_METHODS and not data_reads)
         or any(request.url.path.startswith(p) for p in _AUDIT_EXCLUDE_PREFIXES)
         or not settings.auth_enabled
     ):
@@ -88,6 +93,7 @@ async def maybe_write_audit(
             request_id=request_id,
             audit_log_path=audit_log_path,
             username_attempted=username_attempted,
+            data_reads=data_reads or None,
         )
     except Exception:  # noqa: BLE001
         pass  # Audit failure must never break the response

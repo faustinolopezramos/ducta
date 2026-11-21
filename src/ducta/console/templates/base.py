@@ -70,8 +70,6 @@ class BaseTemplate:
     #: Descriptive only: written to the project's ``metadata``.
     TEMPLATE_TYPE = "base"
     ARCHITECTURE = "generic"
-    #: What `pip install -r requirements.txt` installs.
-    REQUIREMENTS = "ducta[spark]>=0.1.1\n"
     #: Appended to the generated ``.gitignore``.
     GITIGNORE_EXTRA = ""
 
@@ -91,6 +89,10 @@ class BaseTemplate:
         match = re.match(r"\d+(?:\.\d+)*", str(__version__))
         release = match.group(0) if match else ""
         return release if release and release.strip("0.") else fallback
+
+    #: What `pip install -r requirements.txt` installs: this release as the floor
+    #: (it was ">=0.1.1", which let pip pick a release older than the project's code).
+    REQUIREMENTS = f"ducta[spark]>={this_release()}\n"
 
     def __init__(self, project_name: str, config_format: ConfigFormat = ConfigFormat.YAML):
         self.project_name = project_name
@@ -144,7 +146,7 @@ class BaseTemplate:
             f"ducta start -e dev -p {pipeline} -v",
             "",
             "# Check the project without running it (no Spark)",
-            "ducta config validate -e dev",
+            "ducta check -e dev",
         ]
 
     # ── shared by the texts ──────────────────────────────────────────────────

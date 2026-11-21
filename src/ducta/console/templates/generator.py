@@ -395,8 +395,8 @@ Steps to activate a custom check
            extensions:
              - pipelines.checks.custom_checks
 
-4. Use the check in any node's ``quality`` block (or a dataset's ``checks`` in
-   ``catalog.yaml``):
+4. Use the check in any node's ``quality`` block (or a dataset's ``quality`` in
+   the catalog):
 
    .. code-block:: yaml
 

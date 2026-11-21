@@ -26,8 +26,9 @@ no backports to earlier versions.
 
 | Version | Supported |
 |---|---|
-| 0.1.x | ✅ |
-| < 0.1.1 | ❌ — upgrade; `0.1.1` carries security fixes |
+| 0.3.1 and later 0.3.x | ✅ |
+| 0.3.0 | ❌ — upgrade to 0.3.1: its API server lets any signed-in account (a `viewer`) run code in the server process through `POST /api/projects/{id}/quality/failing-rows`, and so sign itself an admin token. |
+| ≤ 0.2.x | ❌ — upgrade: the same flaw. |
 
 ## Threat model
 
@@ -36,10 +37,9 @@ exposure.
 
 **The CLI and the engine** (`ducta start`, `ducta certify`, the `core`,
 `gate`, `check`, `stream`, `mlrun`, `setting` modules) run *your* configuration
-and *your* Python on *your* machine. Configuration is code here: `nodes.yaml`
-points at Python functions, business rules are evaluated expressions, and
-`.py` config files execute on load. Ducta does not sandbox any of that, and is
-not trying to. **Treat a Ducta project directory with exactly the trust you
+and *your* Python on *your* machine. Configuration is code here: a pipeline's
+nodes point at Python functions and business rules are evaluated expressions.
+Ducta does not sandbox any of that, and is not trying to. **Treat a Ducta project directory with exactly the trust you
 would give a repository of Python scripts** — because that is what it is.
 
 **The API server** (the `ducta-server` package: `ducta-server`, `ducta ui`, the web app)
@@ -54,6 +54,20 @@ and — when explicitly enabled — hand out a shell.
 - SSRF via git clone sources, or injection into the JDBC gateway.
 - Bypassing the SQL sanitizer (`ducta.gate.sql`) or the business-rule
   expression validator (`ducta.check.checks.business`).
+- Running code in the server process through a request. What the server
+  evaluates itself from a request (SQL rules on sampled rows,
+  `ducta_server.services.sql_rules`) is interpreted against a short list of
+  operations, never turned into code.
+- A role seeing what its permissions withhold: rows of a protected environment
+  without `data.read.protected` (through any route: preview, the file API, git),
+  values of `metadata.pii` columns without
+  `data.read.pii`, or the content of a secret file (`.env`, private keys,
+  keystores, `.pgpass`, `credentials.json` …) through any route, git history
+  included.
+- A role changing what its permissions withhold: a protected environment's data
+  files without `data.write.protected`, the Production model without
+  `model.promote.production`, or the protected environments themselves below
+  `DUCTA_PROTECTED_ENVIRONMENTS`.
 - Cross-origin access to the API from a web page (CORS, WebSocket origin).
 - Certificate forgery against a *signed* certificate — see below.
 - Credentials leaking into logs, argv, certificates, or error responses.
@@ -61,8 +75,9 @@ and — when explicitly enabled — hand out a shell.
 ### Out of scope
 
 - **Arbitrary code execution through project configuration.** A node's
-  `module`/`function`, a `.py` config file, and a Python business rule all
-  execute by design. This is the documented model, not a vulnerability.
+  `module`/`function` and a Python business rule execute by design, in the run's
+  own process. This is the documented model, not a vulnerability. Writing that
+  configuration takes `pipeline.write` (developer, admin).
 - **Forging an unsigned run certificate.** `certificate_hash` is a keyless
   SHA-256: it detects corruption, not a motivated editor, who can recompute it.
   Set `DUCTA_CERTIFICATE_KEY` for tamper-evidence — a forgery against a signed
@@ -109,7 +124,21 @@ refuses to boot otherwise.
       server's OS user: pass `JWT_SECRET_KEY` and `DATABASE_URL` as environment
       variables (not a `.env` next to the server), use PostgreSQL rather than
       SQLite, or run the server in its own container. On macOS a run can also
-      list the server's environment (`ps eww`); Linux blocks that.
+      list the server's environment (`ps eww`); Linux blocks that. A server
+      others can reach refuses accounts in SQLite (a run could rewrite the
+      `users` table, roles included) unless `ALLOW_SQLITE_WITH_ACCOUNTS=true`;
+      with Docker, `docker compose --profile accounts` adds PostgreSQL.
+- [ ] **Credentials per environment, not one `.env` for all.** A developer's
+      code runs as the server's user in any environment it may run in, and can
+      read the project's `.env`. "Protected environment" is enforced by the API
+      (who may start a run, read rows or files), not by the operating system:
+      keep production credentials out of the workspace developers write to — in
+      the environment of the server that runs prod, or a secret store that only
+      prod runs reach.
+- [ ] **`DUCTA_PROTECTED_ENVIRONMENTS`** lists every environment that holds
+      real data (default `prod,production`). It is the floor: a project's
+      `governance.protected_environments` can add to it, never remove from it,
+      because developers edit the project's files.
 - [ ] **`RATE_LIMIT_ENABLED=true`** (auto-enabled with auth, but set it
       explicitly), and `RATE_LIMIT_REDIS_URL` if you run more than one worker —
       the in-memory limiter is per-process, so the effective limit otherwise
@@ -130,8 +159,33 @@ refuses to boot otherwise.
       deliberately, never to everything.
 - [ ] **`TERMINAL_ENABLED`** left off unless you genuinely need a browser
       shell. It is arbitrary command execution on the host by design.
-- [ ] **`DUCTA_CERTIFICATE_KEY`** set, if run certificates are meant to be
-      evidence rather than checksums.
+- [ ] **`DUCTA_CERTIFICATE_KEY`** set in the server's environment, if run
+      certificates are meant to be evidence rather than checksums. With
+      `RUN_ISOLATION=process` the key never reaches a run: the run writes its
+      certificate unsigned and the server signs it when the run's process ends,
+      so a pipeline's code cannot sign a certificate for a run that never
+      happened. The keys of Ducta's AI model (`OPENAI_API_KEY`,
+      `ANTHROPIC_API_KEY`, `DUCTA_AI_*`) are withheld from runs too. The
+      signature is HMAC: whoever holds the key to verify can also sign, so give
+      it only to the server and to auditors you trust with that.
+- [ ] **`metadata.pii`** on the datasets that hold personal data. The API masks
+      those columns (`••••`) in previews, failing rows and stream rows for
+      roles without `data.read.pii` (operator, viewer), and refuses them a check
+      or rule that names one. Rows of a protected environment (`prod`) take
+      `data.read.protected` (operator, admin), in the preview and as files (the
+      file API, git diffs, blame); changing those files takes
+      `data.write.protected` (admin); deleting that environment's quality
+      reports takes `pipeline.execute.protected` (operator, admin). Snapshot-test
+      fixtures and AI proposals measured there take `data.read.protected`;
+      fixtures write `metadata.pii` columns as stand-ins of the same kind. A
+      protected run's logs, errors and diagnosis stay visible to whoever sees the
+      run (they may quote data: keep `print(df)` out of prod code). With auth on,
+      each read of a protected environment's rows, files or run output, and each
+      unmasked read of PII, is written to `.ducta/audit.log` (`data_reads`).
+      `ducta check` warns of a `metadata.pii` column the dataset does not state.
+      Promoting a model to Production takes
+      `model.promote.production` (admin). Permissions are global, not per
+      project: a role reads every project in the workspace.
 - [ ] **`DATABASE_URL`** pointing at PostgreSQL rather than SQLite when
       `WORKERS > 1`; SQLite has no concurrent writers.
 - [ ] **A reverse proxy terminating TLS.** Ducta speaks plain HTTP; a JWT over

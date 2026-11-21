@@ -123,9 +123,14 @@ class LocalLanguageServerPool:
         if self._slots.locked():
             raise PoolFull(f"{self._limit} language servers are already running")
         async with self._slots:
+            from ducta_server.execution.child_runner import child_environment
+
             proc = await asyncio.create_subprocess_exec(
                 *argv,
                 cwd=str(root),
+                # Not the server's secrets: a language server loads plugins and project
+                # configuration (pylsp, mypy plugins), which a developer writes.
+                env=child_environment(),
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,

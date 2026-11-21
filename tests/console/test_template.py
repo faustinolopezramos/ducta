@@ -131,3 +131,16 @@ class TestAFailedGenerationLeavesNothingBehind:
             make.return_value = self._failing_generator(target)
             TemplateCommand()._generate_template("medallion_basic", "proj", str(target), True)
         assert target.is_dir() and list(target.iterdir()) == []
+
+
+class TestListTemplatesIsPlainStdout:
+    """`--list-templates` went through the logger: every line carried the
+    `Ducta: [hh:mm] INFO` prefix and long descriptions were wrapped."""
+
+    def test_list_is_printed_without_log_prefix(self, capsys):
+        assert TemplateCommand().handle_template_command(list_templates=True) == 0
+        out = capsys.readouterr().out
+        assert "medallion_basic" in out
+        assert "INFO" not in out
+        line = next(ln for ln in out.splitlines() if "bronze/silver/gold" in ln)
+        assert "block on real defects" in line

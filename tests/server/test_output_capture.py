@@ -62,3 +62,29 @@ class TestServerTrafficStaysOutOfRunLogs:
             keep({"name": "ducta_server.execution.manager", "message": "Executing shutdown step"})
             is True
         )
+
+
+class TestQualityTableRowsLevel:
+    """A green run showed "8 err" in the web UI: every passing check row has a
+    Severity column that reads ERROR, and the level was found by keyword."""
+
+    def test_passing_check_with_error_severity_is_not_an_error(self):
+        from ducta_server.execution.output_capture import infer_process_output_level
+
+        row = "│ empty_dataset │ ✓ PASS │ ERROR    │ Dataset has 508 rows              │"
+        assert infer_process_output_level(row) == "INFO"
+
+    def test_failing_check_takes_its_severity(self):
+        from ducta_server.execution.output_capture import infer_process_output_level
+
+        assert (
+            infer_process_output_level("│ range │ ✗ FAIL │ ERROR │ 3 rows out of range │")
+            == "ERROR"
+        )
+        assert infer_process_output_level("│ nulls │ ✗ FAIL │ WARN  │ 2% nulls │") == "WARNING"
+
+    def test_plain_lines_keep_keyword_detection(self):
+        from ducta_server.execution.output_capture import infer_process_output_level
+
+        assert infer_process_output_level("Traceback (most recent call last):") == "ERROR"
+        assert infer_process_output_level("26/11/18 WARN Utils: hostname") == "WARNING"

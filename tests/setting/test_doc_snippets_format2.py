@@ -2,7 +2,8 @@
 
 A snippet takes part when its first line names the file it belongs to —
 ``# ducta.yaml``, ``# catalog.yaml`` (or ``# catalog/<layer>.yaml``),
-``# quality/profiles.yaml`` or ``# pipelines/<name>.yaml``. Docs and
+``# quality/profiles.yaml``, ``# pipelines/<name>.yaml`` or
+``# intents/<name>.intent.yaml`` (read as Ducta reads an intent). Docs and
 code drifted apart before (a README example used a module path the importer
 rejects); this keeps the examples honest.
 """
@@ -28,7 +29,7 @@ DOCS = [
 ]
 _HEADER = re.compile(
     r"^#\s*(ducta\.yaml|catalog\.yaml|catalog/[\w.-]+\.yaml|quality/profiles\.yaml"
-    r"|pipelines/[\w.-]+\.yaml)\b"
+    r"|pipelines/[\w.-]+\.yaml|intents/[\w-]+\.intent\.yaml)\b"
 )
 
 
@@ -83,6 +84,12 @@ def test_snippet_validates(where, kind, block):
 
         for name, profile in data.items():
             QualityProfileSchema.model_validate(profile)
+    elif kind.startswith("intents/"):
+        from ducta.ai.intent.spec import parse_intent
+
+        name = kind.split("/", 1)[1].split(".", 1)[0]
+        intent, problems = parse_intent(name, data)
+        assert intent is not None, problems
     else:
         PipelineFile.model_validate(data)
 

@@ -23,9 +23,10 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from ducta.project_store.errors import ConcurrencyError
-from ducta_server.dependencies import WorkspaceManagerDep, require_permission
+from ducta_server.dependencies import CurrentUserDep, WorkspaceManagerDep, require_permission
 from ducta_server.exceptions import http_error_on
 from ducta_server.models.workspace import FileContentResponse, FilesListResponse, WriteFileRequest
+from ducta_server.services.data_access import refuse_protected_data
 from ducta_server.workspace.manager import FileTooLargeError, SecretFileError
 
 router = APIRouter(prefix="/workspace/files", tags=["Files"])
@@ -53,9 +54,11 @@ async def list_directory(
 )
 async def read_file(
     manager: WorkspaceManagerDep,
+    user: CurrentUserDep,
     path: str = Query(description="File path relative to workspace root"),
 ) -> FileContentResponse:
     """Read a text file from the workspace."""
+    refuse_protected_data(user, manager.root, path)
     with (
         http_error_on(404),
         http_error_on(413, FileTooLargeError),
@@ -72,8 +75,11 @@ async def read_file(
     status_code=204,
     dependencies=[Depends(require_permission("workspace.write"))],
 )
-async def write_file(body: WriteFileRequest, manager: WorkspaceManagerDep) -> None:
+async def write_file(
+    body: WriteFileRequest, manager: WorkspaceManagerDep, user: CurrentUserDep
+) -> None:
     """Create or overwrite a text file in the workspace."""
+    refuse_protected_data(user, manager.root, body.path, write=True)
     if body.expected_version is not None:
         try:
             current = manager.read_file(body.path)
@@ -103,8 +109,10 @@ def text_version(text: str) -> str:
 )
 async def delete_file(
     manager: WorkspaceManagerDep,
+    user: CurrentUserDep,
     path: str = Query(description="File path relative to workspace root"),
 ) -> None:
     """Delete a file from the workspace."""
+    refuse_protected_data(user, manager.root, path, write=True)
     with http_error_on(404), http_error_on(403, SecretFileError):
         manager.delete_file(path)

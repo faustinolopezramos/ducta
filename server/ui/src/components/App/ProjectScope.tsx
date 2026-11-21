@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import type React from "react";
 import { Navigate, Outlet, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { useUIStore } from "../../store/uiStore";
+import { useServerProjects } from "../../api/queries";
+import { rememberedProject } from "../../utils/routes";
 
 /**
  * The `/p/:projectId` subtree. Remembers the project so the rail can offer it
@@ -51,13 +53,17 @@ export function LegacyRedirect({ to }: { to: (params: Record<string, string | un
 /**
  * A workspace-wide copy of a project section (`/workspace/quality`, …): the
  * rail no longer offers it, so an old link goes to that section of the last
- * project opened — or shows the workspace-wide page when there is none yet.
+ * project opened — or shows the workspace-wide page when there is none yet,
+ * or when this server does not have that project (another workspace).
  */
 export function ToLastProject({ to, fallback }: { to: (projectId: string) => string; fallback: React.ReactNode }) {
   const lastProjectId = useUIStore((s) => s.lastProjectId);
+  const { data: projects, isError } = useServerProjects();
   const { search, hash } = useLocation();
-  if (!lastProjectId) return <>{fallback}</>;
-  const target = to(lastProjectId);
+  const remembered = rememberedProject(lastProjectId, projects);
+  if (remembered === undefined && !isError) return null;
+  if (!remembered) return <>{fallback}</>;
+  const target = to(remembered);
   const joiner = target.includes("?") ? "&" : "?";
   return <Navigate to={`${target}${search ? joiner + search.slice(1) : ""}${hash}`} replace />;
 }

@@ -105,3 +105,29 @@ def test_a_failed_debug_run_fails_the_run(monkeypatch, tmp_path):
     spec = runner.RunSpec(source_path=tmp_path, pipeline_name="p", env="dev", debug=True)
     with pytest.raises(RuntimeError, match="G4"):
         runner._run_debug_child("e1", spec, tmp_path, _Manager())
+
+
+def test_a_debug_run_gets_the_same_environment_as_any_run(monkeypatch, tmp_path):
+    """2026-11-20 security review: it used to get the server's whole environment."""
+    import subprocess
+
+    from ducta_server.execution import runner
+
+    seen = {}
+    proc_cls = _fake_popen(0, {"outcome": None})
+
+    def popen(cmd, **kw):
+        seen["env"] = kw.get("env")
+        return proc_cls(cmd, **kw)
+
+    monkeypatch.setattr(subprocess, "Popen", popen)
+    monkeypatch.setattr(debugger, "available", lambda: True)
+    monkeypatch.setenv("JWT_SECRET_KEY", "server-jwt")
+    monkeypatch.setenv("DUCTA_CERTIFICATE_KEY", "server-cert-key")
+    monkeypatch.setenv("WAREHOUSE_PASSWORD", "pipeline-own")
+    spec = runner.RunSpec(source_path=tmp_path, pipeline_name="p", env="dev", debug=True)
+    runner._run_debug_child("e1", spec, tmp_path, _Manager())
+    env = seen["env"]
+    assert "JWT_SECRET_KEY" not in env and "DUCTA_CERTIFICATE_KEY" not in env
+    assert env["WAREHOUSE_PASSWORD"] == "pipeline-own"
+    assert env["DUCTA_CERTIFICATE_SIGNER"] == "server"  # the server signs its certificate

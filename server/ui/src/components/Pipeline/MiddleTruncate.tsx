@@ -99,9 +99,15 @@ export function MiddleTruncate({ text, className }: { text: string; className?: 
       setFit({ head: fitHead(text, tail, width, measure) });
     };
     let width = 0;
+    let frame = 0;
+    // Re-fit on the next frame: the new text can change the box's size, and a
+    // state update inside the callback re-enters the observer in the same frame
+    // ("ResizeObserver loop completed with undelivered notifications").
     const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return;
       width = entry.contentRect.width;
-      measureAndFit(width);
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => measureAndFit(width));
     });
     observer.observe(el);
     // A measurement taken before the web font arrived used the fallback face,
@@ -112,6 +118,7 @@ export function MiddleTruncate({ text, className }: { text: string; className?: 
     fonts?.addEventListener?.("loadingdone", refit);
     void fonts?.ready?.then(refit);
     return () => {
+      cancelAnimationFrame(frame);
       observer.disconnect();
       fonts?.removeEventListener?.("loadingdone", refit);
     };

@@ -29,7 +29,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ducta.check.service import QualityService
 from ducta.project_store.fileops import safe_path
-from ducta_server.dependencies import WorkspaceManagerDep, require_permission
+from ducta_server.dependencies import CurrentUserDep, WorkspaceManagerDep, require_permission
 from ducta_server.exceptions import http_error_on
 from ducta_server.models.quality import (
     QualityCheckInfo,
@@ -80,6 +80,24 @@ def _resolve_storage_from_env(manager: WorkspaceManagerDep, env: Optional[str]) 
     context = manager.load_context(env)
     normalize_execution_context_paths(context, manager.root)
     return ValidationPhaseRunner(context=context).storage
+
+
+def _refuse_deleting_protected(user: Any, root: Path, env: Optional[str]) -> None:
+    """403 when *env* is protected and *user* may not operate it (``pipeline.execute.protected``:
+    operator, admin). A protected environment's quality reports are evidence of its runs:
+    whoever runs there may tidy them (the deletion is audited), a developer may not."""
+    from ducta.project_store.governance import PROTECTED_PERMISSION, is_protected
+
+    if user is None or not env or user.has_permission(PROTECTED_PERMISSION):
+        return
+    if is_protected(env, root):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"'{env}' is a protected environment: deleting its quality reports takes "
+                f"the '{PROTECTED_PERMISSION}' permission (operator or admin)"
+            ),
+        )
 
 
 def _split_qualified(entry: str, pipeline_name: Optional[str]) -> QualityDatasetRef:
@@ -153,7 +171,16 @@ async def get_summary(
     dependencies=[Depends(require_permission("quality.run"))],
     summary="Run quality checks on a workspace data file",
 )
-async def run_checks(body: RunChecksRequest, manager: WorkspaceManagerDep) -> Dict[str, Any]:
+async def run_checks(
+    body: RunChecksRequest, manager: WorkspaceManagerDep, user: CurrentUserDep
+) -> Dict[str, Any]:
+    from ducta_server.services.data_access import (
+        hidden_columns_of_file,
+        names_in,
+        refuse_hidden,
+        refuse_protected_data,
+    )
+
     if not body.config_path and not body.checks:
         raise HTTPException(status_code=422, detail="Provide either 'config_path' or 'checks'")
 
@@ -161,6 +188,10 @@ async def run_checks(body: RunChecksRequest, manager: WorkspaceManagerDep) -> Di
         input_abs = safe_path(manager.root, body.input_path)
     if not input_abs.is_file():
         raise HTTPException(status_code=404, detail=f"Input file not found: {body.input_path}")
+    # The same guards as the dataset routes: this one reads any workspace file, and it
+    # answered a developer's checks on prod's data and an operator's on PII columns.
+    refuse_protected_data(user, manager.root, body.input_path)
+    hidden = hidden_columns_of_file(user, manager.root, body.input_path)
 
     tmp_config: Optional[Path] = None
     try:
@@ -172,7 +203,14 @@ async def run_checks(body: RunChecksRequest, manager: WorkspaceManagerDep) -> Di
                     status_code=404, detail=f"Config file not found: {body.config_path}"
                 )
             config_path = str(config_abs)
+            if hidden:
+                try:
+                    named = yaml.safe_load(config_abs.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001 — unreadable: refused, it may name anything
+                    named = sorted(hidden)
+                refuse_hidden(names_in(named), hidden)
         else:
+            refuse_hidden(names_in(body.checks), hidden)
             # Inline checks — materialise to a temp file for QualityService.
             fd = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".yaml", delete=False, encoding="utf-8"
@@ -236,12 +274,14 @@ async def delete_report(
     dataset: str,
     run_id: str,
     manager: WorkspaceManagerDep,
+    user: CurrentUserDep,
     env: Optional[str] = _ENV_QUERY,
     pipeline_name: Optional[str] = _PIPELINE_QUERY,
     project: Optional[str] = _PROJECT_QUERY,
 ) -> None:
     try:
         manager = manager.for_project(project)
+        _refuse_deleting_protected(user, manager.root, env)
         storage = _resolve_storage_from_env(manager, env)
         QualityService.delete_report(
             dataset=dataset,

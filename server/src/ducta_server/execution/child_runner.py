@@ -21,7 +21,10 @@ Runs in their own process (``RUN_ISOLATION=process``), seen from the server.
 
 A run's code then cannot read this process's memory — its settings, the JWT
 signing key — and its environment does not carry the server's own secrets
-(:data:`SERVER_SECRETS`). Cancelling or timing out a run stops its process
+(:data:`SERVER_SECRETS`), the Run Certificate signing key or the AI model's keys
+(:func:`ducta.server_secrets.withheld_from_runs`). The run writes its certificate
+unsigned and the server signs it when the process ends (:func:`sign_child_certificates`),
+so a pipeline's code cannot sign a certificate for a run that never happened. Cancelling or timing out a run stops its process
 (and the Spark JVM it started), which a thread could not do, and runs no
 longer wait for each other: ``MAX_CONCURRENT_EXECUTIONS`` is what bounds them.
 
@@ -51,6 +54,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from ducta.server_secrets import SERVER_SECRETS as _SERVER_SECRETS
+from ducta.server_secrets import withheld_from_runs
 from ducta_server.execution.child import CONTROL_FD_ENV
 
 #: The server's own secrets (one list, in :mod:`ducta.server_secrets`), never handed to
@@ -86,10 +90,16 @@ def isolation_mode(settings: Any) -> str:
 
 
 def child_environment(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
-    """The environment a run's process gets: this one's, minus the server's secrets."""
+    """The environment a run's process gets: this one's, minus the server's secrets.
+
+    Also withheld: the certificate signing key, Ducta's AI settings and model keys, and
+    the variable the server's AI configuration reads its key from (``api_key_env``).
+    """
     env = dict(os.environ if base is None else base)
-    for name in SERVER_SECRETS:
-        env.pop(name, None)
+    ai_key_env = _ai_key_env()
+    for name in list(env):
+        if withheld_from_runs(name) or (ai_key_env and name == ai_key_env):
+            env.pop(name, None)
     # The run's process must run this server's Ducta. A server started from a source
     # tree (not an installed package) would otherwise get whatever Ducta the
     # interpreter has installed, or none. An installed one is found anyway, and a
@@ -107,6 +117,48 @@ def child_environment(base: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     if entries:
         env["PYTHONPATH"] = os.pathsep.join(entries)
     return env
+
+
+def _ai_key_env() -> Optional[str]:
+    """The variable the server's AI configuration names for its key, if any."""
+    try:
+        from ducta.ai.config import load_config
+
+        return load_config().api_key_env or None
+    except Exception:  # noqa: BLE001 — no AI configured (or unreadable): nothing more to withhold
+        return None
+
+
+def server_signing_key(source_path: Path) -> Optional[bytes]:
+    """The key the server signs this project's Run Certificates with (None: unsigned)."""
+    try:
+        from ducta.core.certificate import resolve_signing_key_from_dir
+
+        return resolve_signing_key_from_dir(source_path)
+    except Exception as e:  # noqa: BLE001 — never block a run on reading the key
+        logger.warning("Could not resolve the certificate signing key: {}", e)
+        return None
+
+
+def sign_child_certificates(result: Dict[str, Any], key: Optional[bytes]) -> None:
+    """Sign the certificates a run's process wrote (unsigned) for run ``certificate_run_id``.
+
+    Only that run's certificates are signed, and only as written (see
+    :func:`ducta.core.certificate.sign_certificate_file`); anything else is logged and
+    left unsigned, which ``ducta certify verify`` with the key then reports.
+    """
+    paths = result.get("certificates_to_sign") or []
+    run_id = result.get("certificate_run_id")
+    if key is None or not paths:
+        return
+    from ducta.core.certificate import sign_certificate_file
+
+    for path in paths if isinstance(paths, list) else []:
+        try:
+            sign_certificate_file(Path(str(path)), key, str(run_id or ""))
+            logger.debug("Run Certificate signed by the server: {}", path)
+        except (OSError, ValueError) as e:
+            logger.error("Run Certificate NOT signed: {}", e)
 
 
 def protect_server_process() -> bool:
@@ -363,6 +415,11 @@ def _run_in_child(
         read_fd, write_fd = os.pipe()
         env = child_environment()
         env[CONTROL_FD_ENV] = str(write_fd)
+        signing_key = server_signing_key(source_path)
+        if signing_key is not None:
+            from ducta.core.certificate import SIGNER_ENV
+
+            env[SIGNER_ENV] = "server"
         cmd = _child_command(spec_file, result_file)
         try:
             proc = subprocess.Popen(
@@ -422,6 +479,7 @@ def _run_in_child(
                 reader.join(timeout=5)
         result = json.loads(result_file.read_text(encoding="utf-8")) if result_file.exists() else {}
 
+    sign_child_certificates(result, signing_key)
     if result.get("certificate_run_id"):
         manager.attach_certificate(execution_id, str(result["certificate_run_id"]))
     if isinstance(result.get("retrain"), dict):

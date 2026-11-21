@@ -75,7 +75,9 @@ class LoginRequest(BaseModel):
 # "admin" gets the wildcard "*" which matches any permission check.
 # Running in a protected environment (governance.protected_environments, prod
 # by default) takes "pipeline.execute.protected": operators and admins have it,
-# developers do not.
+# developers do not. Two permissions no built-in role but admin has:
+# "data.write.protected" (changing a protected environment's data files through the
+# API) and "model.promote.production" (changing what Production serves).
 ROLE_PERMISSIONS: dict[str, List[str]] = {
     "admin": ["*"],
     "developer": [
@@ -107,6 +109,8 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "template.write",
         "model.promote",
         "model.delete",
+        # The values of the columns a dataset lists in metadata.pii (masked for others).
+        "data.read.pii",
         # Draft pipelines with the server's model. Choosing that model and its
         # key ("ai.configure") is the admin's: a remote provider receives
         # project configuration.
@@ -123,6 +127,8 @@ ROLE_PERMISSIONS: dict[str, List[str]] = {
         "pipeline.read",
         "pipeline.execute",
         "pipeline.execute.protected",
+        # Rows of a protected environment (preview, failing rows), as running there.
+        "data.read.protected",
         "node.read",
         "dataset.read",
         "git.read",
