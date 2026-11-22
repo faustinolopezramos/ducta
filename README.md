@@ -117,7 +117,7 @@ have written a line of code.
 Look around before changing anything:
 
 ```bash
-ducta config list-pipelines                          # → etl
+ducta list                                           # → etl
 ducta certify list                                   # the run you just did
 ducta certify verify --run-id <run-id>               # prove it
 ```
@@ -130,7 +130,7 @@ ducta certify verify --run-id <run-id>               # prove it
 
 **To install, scaffold, or inspect one, no.** The session is created lazily on
 first genuine access, so on a bare `pip install ducta` these all work:
-`ducta template`, `ducta config list-pipelines`, `ducta start --validate-only`,
+`ducta template`, `ducta list`, `ducta check`, `ducta start --validate-only`,
 and `ducta certify list/show/verify`. Useful in CI, where you may want to
 validate configuration or check certificates without paying for a JVM.
 
@@ -240,8 +240,9 @@ nodes:
     inputs: {raw_data: bronze.etl.raw_data}
     outputs: [silver.etl.clean_data]
     quality:
-      null_rate: {columns: [amount], threshold: 0.0}
-      range: {column: amount, min: 0}
+      checks:
+        null_rate: {columns: [amount], threshold: 0.0}
+        range: {column: amount, min: 0}
       gate: {max_errors: 0, on_fail: skip_downstream}
 
   load:
@@ -279,13 +280,13 @@ outputs = [
 [nodes.transform.inputs]
 raw_data = "bronze.etl.raw_data"
 
-[nodes.transform.quality.null_rate]
+[nodes.transform.quality.checks.null_rate]
 columns = [
     "amount",
 ]
 threshold = 0.0
 
-[nodes.transform.quality.range]
+[nodes.transform.quality.checks.range]
 column = "amount"
 min = 0
 
@@ -333,15 +334,17 @@ clean_data = "silver.etl.clean_data"
         "silver.etl.clean_data"
       ],
       "quality": {
-        "null_rate": {
-          "columns": [
-            "amount"
-          ],
-          "threshold": 0.0
-        },
-        "range": {
-          "column": "amount",
-          "min": 0
+        "checks": {
+          "null_rate": {
+            "columns": [
+              "amount"
+            ],
+            "threshold": 0.0
+          },
+          "range": {
+            "column": "amount",
+            "min": 0
+          }
         },
         "gate": {
           "max_errors": 0,
@@ -365,7 +368,7 @@ clean_data = "silver.etl.clean_data"
 </details>
 
 Pick YAML for pipelines you read and explain in comments, TOML for flat settings,
-JSON for generated files. `ducta config validate` reports errors with file and line
+JSON for generated files. `ducta check` reports errors with file and line
 in all three. Details: [File formats](https://github.com/faustinolopezramos/ducta/blob/main/docs/configuration.rst).
 
 ### 6. Prefer a visual workspace?
@@ -376,6 +379,13 @@ ducta-server --port 8000           # web app & API docs at http://localhost:8000
 ```
 
 Browse pipelines, edit configuration, launch runs, and watch logs stream live.
+
+On this machine it needs no login. To share it, turn accounts on: the server runs
+pipelines, so outside `127.0.0.1` it refuses to start without `AUTH_ENABLED=true`, a
+`JWT_SECRET_KEY` and a `DUCTA_ADMIN_PASSWORD` of your own (and, for accounts others use,
+PostgreSQL). Four roles — `viewer`, `developer`, `operator`, `admin` — decide who reads,
+edits, runs, and touches production data; `ducta-server user add` creates accounts.
+Details: [Server & API](https://github.com/faustinolopezramos/ducta/blob/main/docs/server_api.rst).
 
 ### 7. Working with an AI coding assistant?
 
@@ -405,7 +415,7 @@ flowchart LR
 
 ```jsonc
 {
-  "schema_version": "1.10",
+  "schema_version": "1.11",
   "run_id": "9f3c1a70b4d84e2ba61c07d5e8f21c3d",
   "pipeline": "sales_daily",
   "environment_name": "dev",
@@ -413,7 +423,7 @@ flowchart LR
   "started_at": "2026-01-01T09:00:00+00:00",
   "ended_at": "2026-01-01T09:01:12+00:00",
   "duration_seconds": 72.418,
-  "ducta_version": "0.3.0",
+  "ducta_version": "0.3.1",
   "config_fingerprint": "sha256:6c1f…",     // the config this ran with
   "environment": {                           // where it ran
     "python_version": "3.12.4", "os_info": "Linux 6.8.0",
@@ -451,6 +461,7 @@ flowchart LR
   "evidence_gaps": [],                       // and if not, what it could not record
   "signed": true,                            // inside the hash, so it cannot be stripped
   "evidence_level": "signed",                // the project's evidence policy, also hashed
+  "started_by": { "via": "cli", "user": "ana" },  // who started it (server runs: the account)
   "certificate_hash": "sha256:e1b7…",        // SHA-256 over everything above
   "signature": "hmac-sha256:44c9…",          // optional, when a key is configured
   "key_id": "3f9a1c…"                        // which key signed it
@@ -523,7 +534,7 @@ it ran correctly.** An honest comparison:
 | **Great Expectations / Soda / Pandera** | You want data quality as a standalone, deeply featured product with its own docs and catalog. | Ducta's checks are simpler and fewer, but they live *inside* execution: a gate can stop a run mid-DAG, and the results land in the run certificate automatically rather than in a separate report. |
 | **MLflow / Weights & Biases** | Experiment tracking is your primary need. | Ducta's `mlrun` is self-contained tracking + a model registry wired to pipeline runs, with an optional MLflow bridge. If you already run MLflow, use the bridge rather than switching. |
 | **Plain PySpark + a repo of scripts** | The pipeline is small, one person owns it, and nobody will ever ask what ran last Tuesday. | Ducta's cost is configuration; the return is dependency resolution, enforced quality, and an audit trail you get without writing it. Below a certain size that trade is not worth it. |
-| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.3.0`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
+| **Nothing yet — you are evaluating** | You need production stability today. | **Ducta is alpha (`0.3.1`).** APIs and configuration can change between releases. Read the [CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md) before depending on it. |
 
 **Where Ducta is genuinely different:** the run certificate. Most tools can
 tell you a job succeeded. Ducta gives you a portable, self-hashed and
@@ -653,6 +664,11 @@ Direction, not commitments — Ducta is alpha and priorities move. The
   training node, the CLI or the web app, every decision audit-logged), a scoring
   pipeline's `retrain:` runs the training when its drift checks fail, and the ML
   templates ship a CI workflow that trains through that gate.
+
+**Shipped in `0.3.1`** — a safer shared server: production data and `metadata.pii`
+columns guarded by role, every sensitive read audited, certificates signed by the server
+and recording who started the run. Upgrade any `0.3.0` server others can reach
+([SECURITY.md](https://github.com/faustinolopezramos/ducta/blob/main/SECURITY.md)).
 
 **Next**
 

@@ -17,14 +17,22 @@
 # Open a shell with everything installed:
 #     docker compose run --rm ducta bash
 #
-# For a PRODUCTION-style run instead (baked image, no mounts), use only the base
-# file:
-#     docker compose -f docker-compose.yml up --build
+# It runs as ENVIRONMENT=development with authentication off, for your machine
+# only. The web app is not built here: build it once on the host
+# (cd server/ui && npm ci && npm run build) and the server serves it.
+#
+# For the deployable server instead (baked image with the web app, accounts,
+# PostgreSQL), use only the base file — see its header:
+#     docker compose -f docker-compose.yml --profile accounts up --build
 # ==============================================================================
 
 services:
   ducta:
     image: ducta:dev
+    environment:
+      # The base file defaults to production, which refuses the default JWT key.
+      # This setup is local and has no accounts.
+      - ENVIRONMENT=development
     build:
       target: dev                 # the miniconda contributor image (see Dockerfile)
     # dev image has no ENTRYPOINT, so run the reload server directly.

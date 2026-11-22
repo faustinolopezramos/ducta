@@ -534,8 +534,10 @@ Some routes need more than their name suggests:
 - **A Git URL as source** (``?source=`` / ``X-Source-Path``, or
   ``POST /api/workspace/select``) needs ``repository.write``, because the server
   clones it. The operator's ``DUCTA_WORKSPACE`` is not checked.
-- **Models**: promoting a version needs ``model.promote``. Deleting a version, and
-  the garbage collection that deletes old ones, needs ``model.delete``.
+- **Models**: promoting a version needs ``model.promote``; promoting to Production,
+  taking the Production version out of it or forcing past the promotion policy needs
+  ``model.promote.production`` (admin). Deleting a version, and the garbage
+  collection that deletes old ones, needs ``model.delete``.
 - **The AI pipeline builder** (:doc:`ai`): drafting needs ``ai.use``, and applying
   a draft also ``pipeline.write``. Choosing the server's model and keeping its API
   key need ``ai.configure`` (admin only): a remote provider receives project

@@ -276,7 +276,10 @@ comments).
   imports each node's function and checks its signature — without starting
   Spark. Every problem is reported with its file and line. ``--output-format json``
   prints one JSON document instead (every problem with file, line, node and fix) for
-  CI and AI assistants; the exit code is the same.
+  CI and AI assistants; the exit code is the same. It also sums up the governance
+  advice (``governance.warnings`` in ``ducta.yaml``: owners, contracts, ``metadata.pii``)
+  in one line per kind; the JSON lists each under ``governance``. Advice never
+  changes the exit code.
 - ``schema`` prints the JSON Schema of ``ducta.yaml``, ``catalog.yaml`` and
   pipeline files; ``--out .`` refreshes ``.ducta/schema/`` for editor
   completion.
