@@ -57,3 +57,23 @@ class TestJwtAlgorithmIsConstrained:
     def test_everything_else_fails_at_startup_not_at_first_login(self, alg):
         with pytest.raises(Exception):
             _settings(jwt_algorithm=alg)
+
+
+class TestBlankJwtSecretIsUnset:
+    """`JWT_SECRET_KEY=` (an empty line in .env) passed every check — only the shipped
+    default was refused — and the server started with logins that always failed,
+    because PyJWT refuses to sign with an empty key."""
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_production_refuses_a_blank_key_like_the_default(self, value):
+        with pytest.raises(Exception, match="jwt_secret_key must be overridden"):
+            _settings(environment="production", auth_enabled=True, jwt_secret_key=value)
+
+    def test_an_exposed_server_with_accounts_reports_it_as_the_default(self):
+        from ducta_server.config import default_credentials
+
+        s = _settings(auth_enabled=True, host="0.0.0.0", jwt_secret_key="")
+        assert any("JWT_SECRET_KEY is the default" in f for f in default_credentials(s))
+
+    def test_a_real_key_is_kept(self):
+        assert _settings(jwt_secret_key="k" * 40).jwt_secret_key == "k" * 40

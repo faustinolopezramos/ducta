@@ -264,6 +264,20 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing. MUST be overridden in production.",
     )
 
+    @field_validator("jwt_secret_key", mode="before")
+    @classmethod
+    def _blank_jwt_secret_is_unset(cls, value: Any) -> Any:
+        """``JWT_SECRET_KEY=`` (an empty line in .env) means unset, not an empty key.
+
+        An empty key passed every check (only the default was refused), the server
+        started, and every login failed: PyJWT refuses to sign with an empty key.
+        As the default, it meets the same rules: refused in production and on an
+        address others reach, a warning on this machine.
+        """
+        if isinstance(value, str) and not value.strip():
+            return _DEFAULT_JWT_SECRET
+        return value
+
     run_isolation: Literal["auto", "process", "thread"] = Field(
         default="auto",
         description=(
