@@ -93,10 +93,20 @@ jobs:
       # databricks-connect overwrites pyspark and breaks every Spark test.
       - name: Install dependencies
         run: poetry install --extras all --with server
-      # Delta's Python package and its jar follow the Spark line (3.x <-> Spark 3.5).
+      # Delta's Python package and its jar follow the Spark line: on Spark 3.5 Ducta
+      # loads the delta-spark_2.12:3.2.1 jar (setting/session.py), so the Python side
+      # is the same 3.2 release, not the newest 3.x.
       - name: Switch to Spark ${{ matrix.spark }}
         if: matrix.spark == '3.5'
-        run: poetry run pip install "pyspark>=3.5,<3.6" "delta-spark>=3.2,<4"
+        run: poetry run pip install "pyspark>=3.5,<3.6" "delta-spark>=3.2,<3.3"
+      # The Delta jars Spark downloads through Ivy on first use. Cached, a run does not
+      # depend on Maven Central answering (it once said "not found" for a jar it serves).
+      - name: Cache the Spark jars (Ivy)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ~/.ivy2
+          key: ivy-${{ runner.os }}-spark${{ matrix.spark }}-${{ hashFiles('src/ducta/setting/session.py') }}
+          restore-keys: ivy-${{ runner.os }}-spark${{ matrix.spark }}-
       - name: Run tests
         run: poetry run pytest --cov --cov-report=term --cov-report=xml
       - name: Upload coverage
@@ -154,9 +164,16 @@ jobs:
           from ducta.core.executors import PipelineExecutor
           from ducta.stream.query_manager import StreamingQueryManager
           import anthropic, httpx, keyring  # the `ai` extra
-          for name in ("fastapi", "uvicorn", "sqlalchemy", "ducta_server"):
-              if importlib.util.find_spec(name) is not None:
-                  sys.exit(f"the CLI install brought {name} in")
+          import re
+          from importlib.metadata import requires
+          if importlib.util.find_spec("ducta_server") is not None:
+              sys.exit("the CLI install brought the server (ducta_server) in")
+          # What ducta itself declares, extras included. Not what is importable:
+          # mlflow (the `mlops` extra) depends on fastapi, uvicorn and sqlalchemy.
+          declared = {re.split(r"[\s;<>=!~\[(]", r, maxsplit=1)[0].lower() for r in requires("ducta") or []}
+          leaked = declared & {"fastapi", "uvicorn", "sqlalchemy", "ducta-server"}
+          if leaked:
+              sys.exit(f"ducta declares the server's dependencies: {sorted(leaked)}")
           print("CLI OK", ducta.__version__)
           PY
           # `ducta ui` without the server: says what to install, exit 5 (dependency).

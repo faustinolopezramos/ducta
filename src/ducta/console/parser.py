@@ -91,7 +91,9 @@ class _SuggestingParser(argparse.ArgumentParser):
         found = _INVALID_CHOICE.search(message)
         if found:
             typed = found.group(1)
-            choices = re.findall(r"'([^']*)'", found.group(2))
+            # argparse quotes the choices ('start', 'check') in most releases and
+            # lists them bare (start, check) in others (3.12.16): accept both.
+            choices = [c.strip().strip("'") for c in found.group(2).split(",")]
             close = difflib.get_close_matches(typed, choices, n=1, cutoff=0.6)
             if close:
                 message = f"unknown command '{typed}'. Did you mean '{close[0]}'?"

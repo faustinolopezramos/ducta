@@ -216,3 +216,18 @@ class TestOptionNames:
 
         assert exit_info.value.code == 2
         assert f"Did you mean '{suggestion}'?" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "choices",
+        ["'list', 'check', 'start'", "list, check, start"],
+        ids=["quoted", "bare"],
+    )
+    def test_the_suggestion_reads_both_argparse_formats(self, choices, capsys):
+        # Python 3.12.16 lists the choices bare; the suggestion vanished there.
+        from ducta.console.parser import _SuggestingParser
+
+        parser = _SuggestingParser(prog="ducta")
+        with pytest.raises(SystemExit):
+            parser.error(f"argument <command>: invalid choice: 'strat' (choose from {choices})")
+
+        assert "Did you mean 'start'?" in capsys.readouterr().err

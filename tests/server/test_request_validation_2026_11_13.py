@@ -86,14 +86,31 @@ def test_junk_ids_are_client_errors_not_500s(client, bad):
         assert status < 500, (path, status)
 
 
+@pytest.mark.parametrize("web_app_built", [True, False], ids=["with-web-app", "api-only"])
 def test_the_api_docs_are_not_served_to_anonymous_visitors_when_accounts_are_on(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, web_app_built
 ):
+    import ducta_server.main as server_main
     from ducta_server.config import get_settings
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("JWT_SECRET_KEY", "0123456789abcdef0123456789abcdef0123456789abcdef")
     monkeypatch.setenv("DUCTA_ADMIN_PASSWORD", "S3cure-pass-123!")
+    if not web_app_built:
+        # A source checkout (CI) has no ui_dist: switched off, the paths are a JSON 404.
+        monkeypatch.setattr(server_main, "_UI_DIR", tmp_path / "no-ui-dist")
+
+    def served(response) -> bool:
+        """Swagger UI, ReDoc or the OpenAPI schema — not the web app's page nor a 404."""
+        if response.status_code != 200:
+            return False
+        body = response.text.lower()
+        if "swagger" in body or "redoc" in body:
+            return True
+        try:
+            return "openapi" in response.json()
+        except ValueError:
+            return False
 
     def statuses(auth: str, debug: str) -> list:
         monkeypatch.setenv("AUTH_ENABLED", auth)
@@ -101,13 +118,7 @@ def test_the_api_docs_are_not_served_to_anonymous_visitors_when_accounts_are_on(
         get_settings.cache_clear()
         try:
             c = TestClient(create_app(), base_url="http://127.0.0.1:8000")
-            # Switched off, the path falls to the web app's page (HTML), not the API's schema.
-            return [
-                c.get(p).headers["content-type"].startswith("application/json")
-                or "swagger" in c.get(p).text.lower()
-                or "redoc" in c.get(p).text.lower()
-                for p in ("/docs", "/redoc", "/openapi.json")
-            ]
+            return [served(c.get(p)) for p in ("/docs", "/redoc", "/openapi.json")]
         finally:
             get_settings.cache_clear()
 

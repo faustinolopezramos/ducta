@@ -62,7 +62,9 @@ COPY --from=ui-build /build/server/src/ducta_server/ui_dist ./server/src/ducta_s
 
 # Real (non-editable) wheels; the versions pinned in poetry.lock as constraints, so
 # the images get exactly what was resolved — no ad-hoc resolution at deploy time.
-RUN poetry export --extras "spark mlops" --with server --without-hashes -o /dist/constraints.txt \
+# `poetry export -o` does not create the folder (`poetry build` does): make it first.
+RUN mkdir -p /dist \
+ && poetry export --extras "spark mlops" --with server --without-hashes -o /dist/constraints.txt \
  && poetry build -f wheel -o /dist \
  && (cd server && poetry build -f wheel -o /dist)
 
