@@ -400,7 +400,7 @@ async def _may_run_in_env(sched: "PipelineSchedule") -> bool:
     Schedules made before the create/edit routes checked this — or by a role that has
     since lost the permission — must not keep running in ``prod`` on their own.
     """
-    from ducta.project_store.governance import PROTECTED_PERMISSION, protected_environments
+    from ducta.project_store.governance import PROTECTED_PERMISSION, is_protected
 
     root: Optional[Path] = None
     try:
@@ -410,7 +410,7 @@ async def _may_run_in_env(sched: "PipelineSchedule") -> bool:
             root = ProjectService(Path(sched.source_path)).store(sched.project_id).root
     except Exception:  # noqa: BLE001 — an unreadable project is guarded by the defaults
         root = None
-    if sched.env not in protected_environments(root):
+    if not is_protected(sched.env, root):
         return True
     from ducta_server.config import get_settings
 

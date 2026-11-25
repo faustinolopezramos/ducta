@@ -196,7 +196,8 @@ class OptunaSearch(SearchStrategy):
         self._config = config
         self._optuna = optuna
         self._study = optuna.create_study(
-            direction=self.direction,
+            # The literal itself: optuna 5 types `direction` as Literal[...], not str.
+            direction="maximize" if self.direction == MAXIMIZE else "minimize",
             study_name=study_name,
             storage=config.storage,
             load_if_exists=bool(config.storage and study_name),

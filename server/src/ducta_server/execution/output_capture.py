@@ -38,6 +38,22 @@ _ansi_re = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _access_log_re = re.compile(r'^\s*[A-Z]+:\s+\S+ - "[A-Z]+ \S* HTTP/[\d.]+"')
 
 
+# The server's own loguru records in text format (utils/logging.TEXT_LOG_FORMAT):
+# `2026-11-18 12:05:30 | INFO     | ducta.core.x:run:42 - message`.
+_server_text_record_re = re.compile(
+    r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} \| [A-Z]+ +\| \S+:\S+:\d+ - "
+)
+
+
+def is_server_text_record(line: str) -> bool:
+    """Return True if *line* is a loguru record the server wrote in text format.
+
+    The log sink already attributes such a record to the run; captured from
+    stdout as well, it would show twice.
+    """
+    return bool(_server_text_record_re.match(line))
+
+
 def is_server_access_log(line: str) -> bool:
     """Return True if *line* is one of the API server's own access-log lines."""
     return bool(_access_log_re.match(line))
@@ -59,8 +75,27 @@ def looks_like_loguru_serialized(line: str) -> bool:
     return isinstance(payload, dict) and isinstance(payload.get("record"), dict)
 
 
+_TABLE_ROW_CHARS = ("│", "┃", "|")
+
+
+def _table_row_level(line: str) -> str:
+    """Level of one row of a Rich table (quality report, run summary).
+
+    A row's words are column values: the quality report has a Severity
+    column that reads ERROR on every row, PASS or not, so keyword matching
+    counted each passing check as an error. Only a failed row is a problem,
+    and its severity cell says how bad.
+    """
+    if "✗" in line or " FAIL " in line.upper():
+        cells = [cell.strip().upper() for cell in line.strip().strip("│┃|").split("│")]
+        return "WARNING" if "WARN" in cells or "WARNING" in cells else "ERROR"
+    return "INFO"
+
+
 def infer_process_output_level(line: str) -> str:
     """Infer a log level string from a plain-text process output line."""
+    if line.lstrip().startswith(_TABLE_ROW_CHARS):
+        return _table_row_level(line)
     upper = line.upper()
     if (
         "TRACEBACK" in upper
@@ -161,12 +196,20 @@ class ProcessOutputCapture:
 
 def append_output_line(manager: Any, execution_id: str, line: str) -> None:
     """Add one line a run printed to its log (this process's output, or a run's own)."""
+    from ducta.redaction import redact_text
+
     clean = strip_ansi(line)
-    if looks_like_loguru_serialized(clean) or is_server_access_log(clean):
+    if (
+        looks_like_loguru_serialized(clean)
+        or is_server_text_record(clean)
+        or is_server_access_log(clean)
+    ):
         return
 
     # `clean` (ANSI-stripped) was only ever used to classify the line —
     # the raw line, ANSI codes and all, was what actually got persisted
     # to logs.jsonl/returned by the API, leaking terminal escape
     # sequences into any consumer that isn't itself a terminal.
+    # Credentials masked as in the CLI's log file (``password=***``): viewers read run logs.
+    clean = redact_text(clean)
     manager._append_process_output(execution_id, clean, level=infer_process_output_level(clean))

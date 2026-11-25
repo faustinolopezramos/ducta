@@ -82,14 +82,15 @@ def _errors(
 ) -> List[str]:
     out = []
     for err in e.errors():
-        # Drop the discriminated-union tag pydantic inserts ('transform', ...):
-        # it is not a key anyone wrote.
-        loc = [p for p in err["loc"] if p not in ("transform", "ingest", "stream")]
+        loc, node_kind = _without_union_tag(err["loc"])
         dotted = ".".join(str(p) for p in loc)
         msg = err["msg"].removeprefix("Value error, ")
         if err["type"] == "extra_forbidden" and loc:
             key = str(loc[-1])
-            known = _schema_keys()
+            # A key written directly on a node is compared with that node
+            # kind's keys: from every key in the schema, 'inputz' matched
+            # 'input' (a key of another model), not 'inputs'.
+            known = _node_keys(node_kind) if node_kind else _schema_keys()
             if key in known:
                 # Valid somewhere else (a node's `inputs` written on the pipeline):
                 # suggesting the key itself would read "did you mean 'inputs'?".
@@ -210,6 +211,40 @@ def _check_params(
 def _suggest(name: str, options: Iterable[str]) -> str:
     close = difflib.get_close_matches(name, list(options), n=1, cutoff=0.6)
     return f" (did you mean '{close[0]}'?)" if close else ""
+
+
+_NODE_KINDS = ("transform", "ingest", "stream")
+
+
+def _without_union_tag(loc: Iterable[Any]) -> Tuple[List[Any], Optional[str]]:
+    """``loc`` without the node-kind tag pydantic inserts, and that kind when the
+    error is a key written directly on the node.
+
+    The tag is not a key anyone wrote; it sits right after the node's name
+    (``nodes.<name>.<tag>.<key>``). Only that position is dropped: a node
+    named ``transform`` used to lose its name too.
+    """
+    parts = list(loc)
+    for i in range(2, len(parts)):
+        if parts[i - 2] == "nodes" and parts[i] in _NODE_KINDS:
+            direct = len(parts) == i + 2
+            return parts[:i] + parts[i + 1 :], (str(parts[i]) if direct else None)
+    return parts, None
+
+
+def _node_keys(kind: str) -> List[str]:
+    """The keys a node of ``kind`` accepts."""
+    from pydantic import BaseModel
+
+    from ducta.setting.project.schema import IngestNode, StreamNode
+
+    models: Dict[str, type[BaseModel]] = {
+        "transform": TransformNode,
+        "ingest": IngestNode,
+        "stream": StreamNode,
+    }
+    model = models[kind]
+    return sorted(field.alias or name for name, field in model.model_fields.items())
 
 
 def _schema_keys() -> List[str]:

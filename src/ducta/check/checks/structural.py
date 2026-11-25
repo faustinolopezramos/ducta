@@ -104,10 +104,12 @@ class NullRateCheck(BaseQualityCheck):
 
         total_rows = adapter.count()
         if total_rows == 0:
+            # No row has a null: the rate holds, as range and duplicates hold on no rows.
+            # Requiring rows is `empty_dataset`'s job (an intent's `rules: row_count`).
             return self._create_result(
-                False,
-                "Cannot calculate null rate on empty dataset",
-                {},
+                True,
+                "0 rows: no null values to count",
+                {"total_rows": 0},
             )
 
         failures: Dict[str, Any] = {}

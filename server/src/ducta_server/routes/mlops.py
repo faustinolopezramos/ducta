@@ -685,6 +685,25 @@ async def promotion_check(name: str, version: int, scope: MLOpsScopeDep) -> Dict
     return await run_in_threadpool(_run)
 
 
+#: Changing which version Production serves (ADR 0001: separation of duties).
+PROMOTE_PRODUCTION = "model.promote.production"
+
+
+def _production_refused(stage: ModelStage, force: bool, leaving: bool = False) -> Exception:
+    from fastapi import HTTPException
+
+    what = (
+        "Taking the Production version out of Production"
+        if leaving
+        else "A forced promotion"
+        if force and stage != ModelStage.PRODUCTION
+        else "Promoting to Production"
+    )
+    return HTTPException(
+        status_code=403, detail=f"{what} takes the '{PROMOTE_PRODUCTION}' permission (admin)"
+    )
+
+
 @router.post("/models/{name}/promote")
 async def promote_model(
     name: str,
@@ -692,8 +711,17 @@ async def promote_model(
     scope: MLOpsScopeDep,
     user: Annotated[User, Depends(require_permission("model.promote"))],
 ) -> Dict[str, Any]:
-    """Promote a model version to a new stage, as the signed-in user (audit-logged)."""
+    """Promote a model version to a new stage, as the signed-in user (audit-logged).
+
+    What changes what Production serves — promoting to Production, taking the version
+    there out of it, or forcing past the promotion policy (which the project's own files
+    define) — takes :data:`PROMOTE_PRODUCTION` (admins), not only ``model.promote``.
+    """
     target_stage = ModelStage(body.stage.capitalize())
+    if (target_stage == ModelStage.PRODUCTION or body.force) and not user.has_permission(
+        PROMOTE_PRODUCTION
+    ):
+        raise _production_refused(target_stage, body.force)
     reason = (body.reason or "").strip() or None
     if body.force and not reason:
         raise ValidationError(
@@ -705,6 +733,11 @@ async def promote_model(
 
     def _run() -> Dict[str, Any]:
         registry = scope.registry()
+        if not user.has_permission(PROMOTE_PRODUCTION) and any(
+            v["version"] == body.version and str(v.get("stage")) == ModelStage.PRODUCTION.value
+            for v in registry.list_model_versions_lite(name)
+        ):
+            raise _production_refused(target_stage, body.force, leaving=True)
         demoted: List[int] = []
         if target_stage == ModelStage.PRODUCTION:
             demoted = [

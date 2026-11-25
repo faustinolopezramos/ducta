@@ -38,7 +38,7 @@ import json
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import yaml  # type: ignore[import-untyped]
 
@@ -166,6 +166,8 @@ class QualityFacts:
     baseline: Dict[str, Any] = field(default_factory=dict)
     #: Why the output could not be measured, when it could not.
     unmeasured: Optional[str] = None
+    #: The output's ``metadata.pii`` columns: no range is proposed or run on them.
+    pii: List[str] = field(default_factory=list)
     frame: Any = None
 
     def render(self) -> str:
@@ -199,8 +201,10 @@ class QualityFacts:
         return "\n\n".join(parts)
 
 
-def _column_facts(profile: Any) -> List[Dict[str, Any]]:
-    """Aggregates per column — never a value of a text column (no top values)."""
+def _column_facts(profile: Any, pii: Iterable[str] = ()) -> List[Dict[str, Any]]:
+    """Aggregates per column — never a value of a text column (no top values), and no
+    minimum or maximum of a ``metadata.pii`` column (a salary's extremes are values)."""
+    personal = {str(c).lower() for c in pii}
     out = []
     for c in profile.columns:
         fact: Dict[str, Any] = {
@@ -211,7 +215,7 @@ def _column_facts(profile: Any) -> List[Dict[str, Any]]:
         }
         if c.is_key_candidate:
             fact["key_candidate"] = True
-        if c.kind == "numeric" and c.minimum is not None:
+        if c.kind == "numeric" and c.minimum is not None and c.name.lower() not in personal:
             fact["min"], fact["max"] = c.minimum, c.maximum
         out.append(fact)
     return out
@@ -253,8 +257,23 @@ def quality_facts(root: Path, pipeline: str, node: str, env: str = "dev") -> Qua
     facts.frame = frame
     facts.measured_rows = len(frame)
     facts.rows = total if total is not None else len(frame)
-    facts.columns = _column_facts(profile)
-    facts.baseline = (infer_spec(profile) or {}).get("checks") or {}
+    from ducta.runs.node_tests import pii_columns_of
+
+    pii = pii_columns_of(root, env, dataset)
+    facts.pii = pii
+    facts.columns = _column_facts(profile, pii)
+    baseline = (infer_spec(profile) or {}).get("checks") or {}
+    personal = {c.lower() for c in pii}
+    # Ducta's own range on a PII column carries its extremes: left out, like in the facts.
+    facts.baseline = {
+        name: check
+        for name, check in baseline.items()
+        if not (
+            isinstance(check, dict)
+            and check.get("type") == "range"
+            and str(check.get("column", "")).lower() in personal
+        )
+    }
     return facts
 
 
@@ -294,6 +313,12 @@ def _quality_problems(block: Dict[str, Any], facts: QualityFacts) -> List[str]:
         ]
         if params.get("column"):
             named.append(params["column"])
+            if kind == "range" and str(params["column"]).lower() in {c.lower() for c in facts.pii}:
+                # Its failure message would quote the column's real extremes.
+                problems.append(
+                    f"'{name}': {params['column']} holds personal data (metadata.pii); "
+                    "propose no range on it"
+                )
         missing = [c for c in named if c not in known]
         if missing:
             problems.append(

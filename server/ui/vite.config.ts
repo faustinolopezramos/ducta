@@ -31,6 +31,8 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": { target: API_TARGET, changeOrigin: true, ws: true },
+      // The setup wizard reads /health/platform (outside /api): under dev it showed "undefined".
+      "/health": { target: API_TARGET, changeOrigin: true },
     },
   },
 

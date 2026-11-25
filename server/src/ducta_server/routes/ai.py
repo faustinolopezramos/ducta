@@ -835,6 +835,12 @@ async def start_job(
     from ducta.ai.providers import make_provider
 
     root = _project_root(svc, project_id)
+    if body.kind in ("quality", "docs"):
+        from ducta_server.services.data_access import check_can_read_rows
+
+        # Both measure the environment's data (statistics, column names) and hand what
+        # they measure to the model and back to the caller: its rows' permission applies.
+        check_can_read_rows(current_user, body.env or "dev", root)
     if body.kind == "new" and not (body.request or "").strip():
         raise AIConfigError("Describe the pipeline to build")
     if body.kind == "fix" and not body.pipeline:
@@ -879,19 +885,24 @@ async def start_job(
     error = body.error or ""
     diagnosis: Dict[str, Any] = {}
     if body.kind == "explain":
-        from ducta_server.routes.execution import build_diagnosis
+        from ducta_server.routes.execution import build_diagnosis, note_protected_run_output
 
         exec_manager = get_execution_manager(request)
         user_id = current_user.id if current_user else None
         execution = await exec_manager.load_execution(body.execution_id or "", user_id=user_id)
+        # Its errors go to the model: a protected run's are noted for the audit.
+        note_protected_run_output(execution, root=root)
         diagnosis = await asyncio.to_thread(build_diagnosis, execution, exec_manager, root)
         summary = exec_manager.get_execution_errors(body.execution_id or "", user_id=user_id)
         error = _format_run_errors(execution, summary)
     if body.kind == "fix" and body.execution_id:
         # Only now: the execution manager is not needed to draft anything else.
+        from ducta_server.routes.execution import note_protected_run_output
+
         exec_manager = get_execution_manager(request)
         user_id = current_user.id if current_user else None
         execution = await exec_manager.load_execution(body.execution_id, user_id=user_id)
+        note_protected_run_output(execution, root=root)
         summary = exec_manager.get_execution_errors(body.execution_id, user_id=user_id)
         error = (error + "\n\n" + _format_run_errors(execution, summary)).strip()
 

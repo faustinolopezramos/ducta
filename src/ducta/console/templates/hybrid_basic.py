@@ -54,7 +54,7 @@ class HybridBasicTemplate(BaseTemplate):
             f"ducta start -e dev -p {pipeline} --mode sync",
             "",
             "# Check the project without running it (no Spark)",
-            "ducta config validate -e dev",
+            "ducta check -e dev",
         ]
 
     def project_yaml(self) -> str:
@@ -115,8 +115,9 @@ products:
   options: {header: true, inferSchema: true}
   quality:
     fail_fast: true
-    empty_dataset: true
-    schema: {expected_columns: [product_id, category, unit_price]}
+    checks:
+      empty_dataset: true
+      schema: {expected_columns: [product_id, category, unit_price]}
 
 silver.shop.products:
   description: Clean product dimension, the static side of the stream join
@@ -143,9 +144,10 @@ nodes:
     inputs: {products_raw: products}
     outputs: [silver.shop.products]
     quality:
-      empty_dataset: true
-      null_rate: {columns: [product_id, unit_price], threshold: 0.0}
-      duplicates: {columns: [product_id], max_duplicate_rate: 0.0}
+      checks:
+        empty_dataset: true
+        null_rate: {columns: [product_id, unit_price], threshold: 0.0}
+        duplicates: {columns: [product_id], max_duplicate_rate: 0.0}
       gate: {max_errors: 0, on_fail: skip_downstream}
 
   # -- streaming phase ------------------------------------------------------

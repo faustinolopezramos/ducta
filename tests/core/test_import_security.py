@@ -126,3 +126,16 @@ class TestPrefixesAndTrailingNewline:
     def test_a_trailing_newline_is_not_a_valid_function_name(self):
         with pytest.raises(ModuleImportError, match="Invalid function name"):
             SecureModuleImporter().get_function_from_module("json", "dumps\n")
+
+
+class TestMissingFunctionMessage:
+    """A typo in `run:` listed `Any, Optional` (imports) as available functions
+    and gave no suggestion."""
+
+    def test_suggests_the_close_name_and_lists_only_own_functions(self):
+        imp = SecureModuleImporter(strict_mode=False)
+        with pytest.raises(ModuleImportError) as exc:
+            imp.get_function_from_module("json", "detect_encodng")
+        message = str(exc.value)
+        assert "Did you mean 'detect_encoding'?" in message
+        assert "JSONDecoder" not in message  # imported into json, not defined as a function

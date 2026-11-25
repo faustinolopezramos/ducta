@@ -198,13 +198,20 @@ and none commits.
      - A node's settings per environment and where each comes from; every
        effective value side by side across environments.
    * - ``GET .../datasets/{dataset}/preview``
-     - Columns and first rows of a dataset as materialized in ``env``.
+     - Columns and first rows of a dataset as materialized in ``env``. Rows of a
+       protected environment take ``data.read.protected``; ``metadata.pii``
+       columns read ``••••`` without ``data.read.pii`` (see *Rows and personal
+       data* below).
    * - ``GET .../pipelines/{p}/nodes/{n}/column-lineage``
      - Source columns for each column an ingest node writes (parsed from its SQL
        with sqlglot). Python transforms are not analysed.
    * - ``POST .../quality/try``, ``POST .../quality/failing-rows``
      - Run a draft quality block on a dataset's data without saving anything; the
-       rows a row-level check fails on.
+       rows a row-level check fails on. SQL rules are interpreted on the sampled
+       rows (columns, literals, comparisons, ``AND``/``OR``/``NOT``, ``IS NULL``,
+       ``IN``, ``BETWEEN``, ``LIKE``/``ILIKE``, arithmetic, ``coalesce``,
+       ``length``, ``upper``, ``lower``, ``trim``, ``abs``); a rule that uses
+       anything else is "not tried here" and still runs on Spark.
    * - ``GET .../nodes/{n}/tests``, ``POST .../nodes/{n}/tests/snapshot``,
        ``POST .../tests/run``
      - The tests that cover a node; write a snapshot test from its materialized
@@ -225,8 +232,9 @@ and none commits.
        pipelines late for their ``metadata.sla`` — call it from a schedule, or set
        ``SLA_CHECK_MINUTES``.
    * - ``GET .../governance``
-     - Protected environments (``governance.protected_environments``, default
-       ``[prod, production]``) and whether the current user may run in them —
+     - Protected environments (the server's ``DUCTA_PROTECTED_ENVIRONMENTS``,
+       default ``prod,production``, plus the project's
+       ``governance.protected_environments``) and whether the current user may run in them —
        that takes ``pipeline.execute.protected`` (operator, admin).
 
 Integration
@@ -322,6 +330,19 @@ warnings — and work through this checklist:
        other ``Host`` gets a 400, so a web page cannot reach the server through a
        DNS name it controls (DNS rebinding). Bound to ``0.0.0.0`` with no list, no
        ``Host`` is checked and the server warns at startup.
+   * - ``DUCTA_PROTECTED_ENVIRONMENTS``
+     - ``prod,production``
+     - Environments protected in every project: running there takes
+       ``pipeline.execute.protected``, their rows and data files
+       ``data.read.protected``. A project's ``governance.protected_environments``
+       adds to this list and cannot remove from it (developers edit project
+       files). Empty: only the projects' lists.
+   * - ``ALLOW_SQLITE_WITH_ACCOUNTS``
+     - ``false``
+     - With ``AUTH_ENABLED`` on a server others can reach (production, or a
+       non-loopback bind), a SQLite ``DATABASE_URL`` is refused at startup: runs
+       execute as the server's OS user and could rewrite the ``users`` table.
+       ``true`` accepts it, for a team whose developers are all trusted as admins.
    * - ``RUN_ISOLATION``
      - ``process`` (``auto`` gives it with auth)
      - Where pipelines run. ``process``: each run in its own process, whose
@@ -404,8 +425,10 @@ Other server settings, with their defaults:
      - ``500``
      - Commits returned by the Git history endpoints.
    * - ``LOG_LEVEL`` / ``LOG_FORMAT``
-     - ``INFO`` / ``json``
-     - The server's own log (``text`` for local development).
+     - ``INFO`` / ``auto``
+     - The server's own log. ``auto`` writes text on a terminal (``ducta ui``) and
+       JSON when the output is piped or collected (containers); ``json`` or ``text``
+       force one.
    * - ``DUCTA_PUBLIC_URL``
      - unset
      - The address users open; alerts link to the run with it.
@@ -436,11 +459,15 @@ the permissions regardless.
      - Read and write on workspace, configs, pipelines, nodes, datasets, Git,
        repositories, executions, projects, quality, ingestion and templates;
        ``pipeline.execute``, ``quality.run``, ``git.revert``, ``model.promote``,
-       ``model.delete``, ``ai.use`` and ``sentinel.read``.
+       ``model.delete``, ``ai.use``, ``sentinel.read`` and ``data.read.pii``
+       (the values of ``metadata.pii`` columns). Not: promoting to Production
+       (``model.promote.production``) or changing a protected environment's data
+       files (``data.write.protected``) — those are the admin's.
    * - ``operator``
      - Runs pipelines, including in protected environments
        (``pipeline.execute``, ``pipeline.execute.protected``), runs quality checks
-       (``quality.run``), cancels or resumes runs (``execution.write``) and handles
+       (``quality.run``), cancels or resumes runs (``execution.write``), reads the
+       rows of protected environments (``data.read.protected``) and handles
        Ducta Sentinel's incidents (``sentinel.read``, ``sentinel.manage``); reads
        everything a viewer reads. Edits nothing.
    * - ``viewer``
@@ -474,6 +501,31 @@ Some routes need more than their name suggests:
   modules, in a subprocess, and starts no Spark. It answers what ``ducta stream
   plan`` prints, per node: what it reads and writes, how often it fires, where it
   checkpoints and what would stop it.
+- **Rows and personal data.** The routes that return a dataset's rows (preview,
+  failing rows, stream rows, trying checks) refuse the rows of a protected
+  environment (``governance.protected_environments``, ``prod`` by default) to a role
+  without ``data.read.protected`` (operator, admin) — developers no longer see prod
+  rows, as they cannot run there. The same goes for the files those rows live in
+  (``<output>/<env>/`` and every catalog path of a protected environment): the file
+  API, git diffs, blame and ``file-at`` refuse them without ``data.read.protected``,
+  whole-commit diffs leave them out, and writing or deleting them takes
+  ``data.write.protected`` (admin). The columns a dataset lists in ``metadata.pii``
+  read ``••••`` for a role without ``data.read.pii`` (developer, admin), and a check
+  or rule that names one is refused for it (``403``): its failing-row count would
+  give the values away one guess at a time. The same holds for ``POST /api/quality/run``
+  on a workspace file (the dataset it is the data of), for snapshot tests (fixtures of a
+  protected environment take ``data.read.protected``; ``metadata.pii`` columns are
+  written as stand-ins of the same kind for everyone) and for AI ``quality``/``docs``
+  proposals measured there. Deleting a protected environment's quality reports takes
+  ``pipeline.execute.protected`` (operator, admin). An environment is compared as the
+  configuration reads its name: ``PROD`` and ``Production`` are ``prod``.
+- **A protected run's output.** Its logs, errors and diagnosis stay readable with
+  ``execution.read``: whoever sees a run can debug it. They may quote data, so keep
+  ``print(df)`` out of prod code; reading them is audited.
+- **Audit.** Every write is recorded in ``.ducta/audit.log``; with auth on, so is every
+  request that read a protected environment's rows, files or run output, or
+  ``metadata.pii`` columns unmasked, with what it read under ``data_reads``
+  (``protected_rows``, ``protected_file``, ``protected_run_output``, ``pii``).
 - **Stream rows** (``GET /api/executions/{id}/streaming/nodes/{node}/rows``) needs
   ``execution.read``, like the dataset preview. It reads the end of the node's sink
   (parquet, Delta, json or csv files, newest file and newest row first) and refuses a
@@ -482,8 +534,10 @@ Some routes need more than their name suggests:
 - **A Git URL as source** (``?source=`` / ``X-Source-Path``, or
   ``POST /api/workspace/select``) needs ``repository.write``, because the server
   clones it. The operator's ``DUCTA_WORKSPACE`` is not checked.
-- **Models**: promoting a version needs ``model.promote``. Deleting a version, and
-  the garbage collection that deletes old ones, needs ``model.delete``.
+- **Models**: promoting a version needs ``model.promote``; promoting to Production,
+  taking the Production version out of it or forcing past the promotion policy needs
+  ``model.promote.production`` (admin). Deleting a version, and the garbage
+  collection that deletes old ones, needs ``model.delete``.
 - **The AI pipeline builder** (:doc:`ai`): drafting needs ``ai.use``, and applying
   a draft also ``pipeline.write``. Choosing the server's model and keeping its API
   key need ``ai.configure`` (admin only): a remote provider receives project

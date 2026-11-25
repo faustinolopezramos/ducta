@@ -297,10 +297,20 @@ function ChainStrip({
       // Narrower still: the folds shrink to "2 up ▾" / "3 down ▾"; this pipeline stays whole.
       else setFold(3);
     };
-    const observer = new ResizeObserver(decide);
+    // Folding changes what the box holds, so deciding inside the callback can
+    // resize it again in the same frame (the "ResizeObserver loop" warning).
+    // The first decision stays synchronous (layout effect: no flash).
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(decide);
+    });
     observer.observe(box);
     decide();
-    return () => observer.disconnect();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [chain, at, downstream.length]);
 
   const pill = (pipeline: string) => {

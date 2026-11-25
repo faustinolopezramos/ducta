@@ -180,3 +180,60 @@ def test_git_routes_still_serve_ordinary_files(repo):
     )
     assert client.get(f"/api/git/blame/{path}", params=src).status_code == 200
     assert client.get(f"/api/git/diff/{sha}/{sha}", params={**src, "path": path}).status_code == 200
+
+
+# ── 2026-11-20 security review: a whole-commit diff leaves secret files out ──
+
+
+def test_commit_diffs_leave_out_committed_secrets(repo):
+    r = git.Repo(repo)
+    base = r.head.commit.hexsha
+    (repo / ".env").write_text("WAREHOUSE_PASSWORD=s3cr3t\n")
+    (repo / "conf").mkdir()
+    (repo / "conf" / "server key.pem").write_text("-----BEGIN PRIVATE KEY-----\nPEMDATA\n")
+    (repo / "pipelines" / "etl.yaml").write_text(
+        (repo / "pipelines" / "etl.yaml").read_text() + "\n# visible change\n"
+    )
+    r.git.add("-f", ".env", "conf/server key.pem", "pipelines/etl.yaml")
+    sha = r.index.commit("committed secrets by mistake").hexsha
+    client, src = _viewer(), {"source": str(repo)}
+
+    for url in (f"/api/git/diff/{sha}", f"/api/git/diff/{base}/{sha}"):
+        resp = client.get(url, params=src)
+        assert resp.status_code == 200, resp.text
+        diff = resp.json()["diff"]
+        assert "visible change" in diff
+        assert "s3cr3t" not in diff and "PEMDATA" not in diff and ".env" not in diff
+
+
+def test_a_commit_of_only_secrets_shows_an_empty_diff(repo):
+    r = git.Repo(repo)
+    (repo / ".env").write_text("WAREHOUSE_PASSWORD=s3cr3t\n")
+    r.git.add("-f", ".env")
+    sha = r.index.commit("only a .env").hexsha
+    resp = _viewer().get(f"/api/git/diff/{sha}", params={"source": str(repo)})
+    assert resp.status_code == 200 and "s3cr3t" not in resp.text
+
+
+@pytest.mark.parametrize(
+    "name, secret",
+    [
+        (".env", True), (".env.prod", True), (".ENV", True), (".env.example", False),
+        ("tls.pem", True), ("server.KEY", True), ("truststore.jks", True), ("cert.p12", True),
+        (".pgpass", True), (".netrc", True), ("credentials.json", True), ("id_ed25519", True),
+        ("id_ed25519.pub", False), ("etl.yaml", False), ("keys.py", False), ("monkey.csv", False),
+    ],
+)  # fmt: skip
+def test_which_files_hold_secrets(name, secret):
+    from ducta_server.workspace.manager import is_secret_file
+
+    assert is_secret_file(name) is secret
+
+
+def test_the_file_api_refuses_a_private_key(repo):
+    (repo / "tls.pem").write_text("-----BEGIN PRIVATE KEY-----\n")
+    client = _viewer()
+    resp = client.get(
+        "/api/workspace/files/content", params={"source": str(repo), "path": "tls.pem"}
+    )
+    assert resp.status_code == 403

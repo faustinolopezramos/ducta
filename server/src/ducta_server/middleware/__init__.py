@@ -146,7 +146,17 @@ def register_middleware(app: FastAPI) -> None:
             path=request.url.path,
         ).info("-> {method} {path}", method=request.method, path=request.url.path)
 
-        response: Response = await call_next(request)
+        # The sensitive reads the route's guards allow land here (data_access.note_read).
+        from ducta_server.services.data_access import DATA_READS
+
+        # Only with auth on: the audit records nothing without it, and a local user's
+        # previews then pay for no lookup at all.
+        reads: list = []
+        token = DATA_READS.set(reads if settings.auth_enabled else None)
+        try:
+            response: Response = await call_next(request)
+        finally:
+            DATA_READS.reset(token)
 
         duration_ms = (time.perf_counter() - start) * 1000
         logger.bind(
@@ -163,7 +173,7 @@ def register_middleware(app: FastAPI) -> None:
         response.headers["X-Request-ID"] = request_id
 
         # Audit trail — delegated to audit.py (SRP)
-        await maybe_write_audit(request, response, settings, request_id)
+        await maybe_write_audit(request, response, settings, request_id, data_reads=reads)
 
         return response
 

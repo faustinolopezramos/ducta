@@ -100,6 +100,34 @@ def check_default_credentials(settings: "Settings") -> bool:
     return True
 
 
+def check_shared_database(settings: "Settings") -> bool:
+    """With accounts on, refuse a SQLite user database where others can connect.
+
+    Runs (and node tests, preflight) execute as this server's OS user, so they can open
+    the SQLite file and write the ``users`` table: a developer's pipeline gave its author
+    the admin role (roles are read from the database on every request). A database
+    server (``DATABASE_URL=postgresql+asyncpg://…``) is out of their reach: its URL is
+    withheld from runs. On a server others reach (production, or a non-loopback bind)
+    this raises unless ``ALLOW_SQLITE_WITH_ACCOUNTS`` says every developer is trusted as
+    admin; on this machine alone it warns. Returns ``True`` when a warning was emitted.
+    """
+    url = (settings.database_url or "").strip().lower()
+    if not (settings.auth_enabled and url.startswith("sqlite")):
+        return False
+    risk = (
+        "accounts are kept in a SQLite file that pipelines, node tests and preflight run "
+        "next to as the same OS user: a developer's code can rewrite its own role to admin"
+    )
+    if settings.requires_strong_credentials() and not settings.allow_sqlite_with_accounts:
+        raise RuntimeError(
+            f"Refusing to start: {risk}. Use a database server "
+            "(DATABASE_URL=postgresql+asyncpg://…), or set ALLOW_SQLITE_WITH_ACCOUNTS=true "
+            "if everyone with the developer role is trusted as admin. See SECURITY.md."
+        )
+    logger.warning("SECURITY: {risk}.", risk=risk)
+    return True
+
+
 def warn_if_hosts_unchecked(settings: "Settings") -> bool:
     """Warn when the server answers to any ``Host``: bound to every interface, no ALLOWED_HOSTS.
 
@@ -172,6 +200,7 @@ def create_app() -> FastAPI:
 
         # ── Security posture warning ────────────────────────────────────────
         check_default_credentials(settings)
+        check_shared_database(settings)
         warn_if_insecure_exposure(settings)
         warn_if_hosts_unchecked(settings)
         warn_about_in_process_runs(settings)

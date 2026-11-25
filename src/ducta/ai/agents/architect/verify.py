@@ -78,7 +78,7 @@ def verify(
 ) -> VerifyReport:
     """Check *pipelines* as the project now has them; run and snapshot them in *env* if asked."""
     from ducta.ai.loop import describe_problem, validate_files
-    from ducta.project_store.governance import protected_environments
+    from ducta.project_store.governance import is_protected
     from ducta.setting.project.loader import ProjectConfigError, validate_project
 
     root = Path(root).resolve()
@@ -111,7 +111,7 @@ def verify(
             )
         return report
 
-    if env in protected_environments(root):
+    if is_protected(env, root):
         raise AIConfigError(
             f"{env} is a protected environment: Architect only runs in dev-like ones"
         )

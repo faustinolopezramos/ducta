@@ -8,9 +8,9 @@
 |---|---|
 | **Purpose** | Expose Ducta over HTTP/WS for tools, automation, and the web UI |
 | **Layer** | Interface (service) |
-| **Depends on** | `core`, `setting`, `console` (presentation, `ConsoleReporter`), `ai`, `check`, `mlrun`, `stream`, `gate`; optional SQLAlchemy persistence |
+| **Depends on** | `core`, `setting`, `project_store` (project files, governance), `runs` (run records, diagnosis, alerts), `ai`, `console` (presentation, `ConsoleReporter`), `check`, `mlrun`, `stream`, `gate`; optional SQLAlchemy persistence |
 | **Used by** | the web app (`server/ui`) and any external HTTP client; `ducta ui` starts it when this package is installed |
-| **Key entry points** | `create_app()` / `ducta_server.main:app`, routers under `/api`, `ducta server start` |
+| **Key entry points** | `create_app()` / `ducta_server.main:app`, routers under `/api`, the `ducta-server` command (also `ducta ui` / `ducta server start`), `ducta-server user` for accounts |
 | **Install** | `pip install ducta-server` (a separate distribution; it installs `ducta` at the same version) |
 
 ## Where it fits
@@ -37,12 +37,13 @@ Ducta API is the **backend brain** behind the web app and any automation. It let
 
 ### For Technical Users
 Ducta API is the service layer, implementing:
-*   **App factory & lifespan**: `create_app()` wires middleware, routes, exception handlers, optional DB persistence + migrations, the execution manager, and a config cache; it warns when bound to a non-local address without auth (`main.py`).
-*   **Routers under `/api`**: auth, workspace (+ files), projects, nodes, configs, environments, executions (+ WebSocket log streaming), certificates, schedules, git, mlops, quality, ingestion and templates, plus unauthenticated health probes (`routes/`).
+*   **App factory & lifespan**: `create_app()` wires middleware, routes, exception handlers, optional DB persistence + migrations, the execution manager, and a config cache; at startup it refuses default credentials, and a SQLite account database, on an address others can reach, and warns about the rest (`main.py`). The `ducta-server` command also refuses a non-local `--host` without auth unless `--allow-unauthenticated` (`launcher.py`).
+*   **Routers under `/api`**: auth, workspace (+ files), projects, nodes, editor (+ language server and debugger WebSockets), configs, environments, executions (+ WebSocket log streaming), certificates, schedules, git, mlops, quality, ingestion, templates, AI and Sentinel, plus unauthenticated health probes (`routes/`).
+*   **Data guards**: rows and files of protected environments, `metadata.pii` masking and the audit of sensitive reads (`services/data_access.py`); SQL rules tried on sampled rows are interpreted, never executed as code (`services/sql_rules.py`).
 *   **Optional JWT auth**: `AuthService` (bcrypt password hashing, jose-signed HS256 tokens with type/expiry checks); production settings refuse the default secret and require `auth_enabled` (`auth/`, `config.py`).
 *   **Execution engine**: an in-memory `ExecutionManager` with a bounded queue, concurrent-run limits, log buffering, and optional DB-backed persistence layered transparently (`execution/`).
 *   **Source resolution with SSRF defense**: per-request local paths are security-validated; Git clones are host-allow-listed and reject internal/non-routable targets (loopback, private, link-local metadata endpoint) (`source/resolver.py`).
-*   **Persistence & repositories**: optional SQLAlchemy-async engine, Alembic-style migrations, and repository/store abstractions for projects, nodes, and execution history (`db/`, `repositories/`, `repository/`).
+*   **Persistence & repositories**: optional SQLAlchemy-async engine, Alembic-style migrations, and repository/store abstractions for projects, nodes, and execution history (`db/`, `repositories/`).
 *   **Project files**: `ducta.project_store` (`store.py`, `V2ProjectStore`; the engine's package, shared with the CLI and `ducta ai`) reads and writes a project's `ducta.yaml`, `catalog.yaml` and `pipelines/*.yaml` in place — comments and key order kept — validates every edit against every environment before keeping it, and does **not** commit (committing is the user's call: the Changes panel, or git). The optimistic-concurrency token, still named `commit_sha`, is a hash of the file's content (`content_version` in `ducta/project_store/fileops.py`). A workspace is one project or a `projects/<id>/` directory of them (`workspace_stores`).
 *   **Middleware**: request-ID tagging, CORS, and configurable per-IP rate limiting (in-memory or Redis) (`middleware/`).
 
@@ -58,8 +59,12 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | `ENVIRONMENT` | `development` | `production` enforces auth + a non-default JWT secret |
 | `AUTH_ENABLED` | `false` | Require JWT authentication |
 | `JWT_SECRET_KEY` | `change-me-in-production` | HS256 signing key (must be overridden in prod, and with auth on at any non-loopback `HOST`; `DUCTA_ADMIN_PASSWORD` too) |
+| `DUCTA_ADMIN_PASSWORD` | unset (`admin` on loopback) | Password of the `admin` account created at startup when auth is on; unset or `admin` stops a server others can reach |
 | `JWT_EXPIRATION_HOURS` | `24` | Access-token lifetime |
-| `DATABASE_URL` | `""` (in-memory) | `sqlite+aiosqlite:///...` or `postgresql+asyncpg://...` |
+| `DATABASE_URL` | `""` (in-memory) | `sqlite+aiosqlite:///...` or `postgresql+asyncpg://...`. With auth on, a server others can reach refuses SQLite (runs could rewrite the accounts file) |
+| `ALLOW_SQLITE_WITH_ACCOUNTS` | `false` | Keep accounts in SQLite anyway, when every developer is trusted as admin |
+| `DUCTA_PROTECTED_ENVIRONMENTS` | `prod,production` | Environments always protected, whatever a project's `governance.protected_environments` says (it can only add) |
+| `LOGIN_MAX_ATTEMPTS` / `LOGIN_WINDOW_SECONDS` / `LOGIN_LOCKOUT_SECONDS` | `5` / `900` / `300` | Login throttling per user (`429` with `Retry-After`) |
 | `RUNS_DIR` | `~/.ducta/runs` | Where the file-based execution store writes `meta.json` + `logs.jsonl` per run. Empty disables file persistence (memory-only) |
 | `RATE_LIMIT_ENABLED` | `false` | Per-IP rate limiting (`RATE_LIMIT_REQUESTS`, `..._WINDOW_SECONDS`, `RATE_LIMIT_REDIS_URL`) |
 | `MAX_CONCURRENT_EXECUTIONS` | `5` | Parallel pipeline runs |
@@ -75,20 +80,22 @@ Settings come from environment variables (Pydantic `Settings`, `config.py`). Key
 | Role | Permissions |
 |------|-------------|
 | `admin` | `*` |
-| `operator` | read, plus run pipelines (`pipeline.execute`, `pipeline.execute.protected`), `execution.write` and `quality.run` — runs what is there, including in protected environments, but does not change projects or code |
-| `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete` |
+| `operator` | read, plus run pipelines (`pipeline.execute`, `pipeline.execute.protected`), `execution.write`, `quality.run`, the rows of protected environments (`data.read.protected`) and Sentinel's incidents (`sentinel.read`, `sentinel.manage`) — runs what is there, including in protected environments, but does not change projects or code |
+| `developer` | read + write on workspace, configs, pipelines, nodes, datasets, Git, repositories, executions, projects, quality, ingestion, templates; `pipeline.execute`, `quality.run`, `git.revert`, `model.promote`, `model.delete`, `data.read.pii`, `ai.use`, `sentinel.read`. Not: running in a protected environment, its rows, promoting to Production (`model.promote.production`) or changing a protected environment's data files (`data.write.protected`) |
 | `viewer` | read only (`*.read`, including `project.read`) |
 
 Some routes need more than their name suggests:
 - The preflight and the stream plan (`POST .../pipelines/{name}/stream-plan`) need `pipeline.execute`, because they import project code (in a subprocess).
 - A Git URL as `source` needs `repository.write`, because the server clones it.
-- Promoting a model needs `model.promote`; deleting a version or running gc needs `model.delete`.
+- Promoting a model needs `model.promote`; to Production (or out of it, or past the promotion policy) `model.promote.production` (admin). Deleting a version or running gc needs `model.delete`.
 - Testing an unsaved ingestion connection needs `ingestion.write`.
+- Rows of a protected environment (preview, failing rows, stream rows, trying checks, `POST /api/quality/run`, snapshot tests) and its data files (file API, git) need `data.read.protected`; changing those files needs `data.write.protected` (admin). The columns a dataset lists in `metadata.pii` read `••••` without `data.read.pii`, and a check naming one is refused. An environment is compared as the configuration reads it: `PROD` is `prod`.
+- Secret files (`.env*`, `*.pem`, `*.key`, keystores, `.netrc`, `.pgpass`, `id_rsa`…) are never served, written or shown in git diffs.
 - Running or retrying in a protected environment (`governance.protected_environments` in `ducta.yaml`, `[prod, production]` by default) needs `pipeline.execute.protected`: operators and admins have it, developers do not.
 
 `GET /api/auth/me` returns `roles` and `permissions`, and the UI uses them to hide or disable actions. `tests/server/test_rbac.py` fails if a route that writes is reachable by a viewer.
 
-**Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, and either bind to `127.0.0.1` or place the server behind an authenticating proxy.
+**Production checklist**: set `ENVIRONMENT=production`, `AUTH_ENABLED=true`, a strong `JWT_SECRET_KEY`, a `DUCTA_ADMIN_PASSWORD` of your own and a PostgreSQL `DATABASE_URL`; keep `RUN_ISOLATION=process` (the default with auth on); and either bind to `127.0.0.1` or place the server behind an authenticating proxy. Manage accounts with `ducta-server user add|list|set-role|set-password|disable|enable`. Details: `docs/server_api.rst` and `SECURITY.md`.
 
 **Where execution history lives**: the Execution History page reads from two layers merged together — the in-memory `ExecutionStore` (capped by `max_executions_in_memory`, evicted after `execution_retention_seconds`, lost on restart) and the file-based store at `RUNS_DIR` (persists across restarts). Setting `DATABASE_URL` adds a third, queryable layer used for single-run/log lookups once a record has aged out of both memory and `RUNS_DIR`. To fully clear history, delete `RUNS_DIR` (and the `executions`/`execution_logs` tables if `DATABASE_URL` is set) — restarting the server alone only clears memory. This is independent of Data Quality's storage, which lives under `<output_path>/<environment>/quality` (or `settings.quality.output.base_path`), not under `RUNS_DIR`.
 
@@ -97,9 +104,9 @@ Some routes need more than their name suggests:
 ## 3. Running the Server
 
 ```bash
-# Via the CLI (launches this API + serves the UI)
-ducta server start --host 127.0.0.1 --port 8000
-ducta ui --port 8000            # same server, opens a browser
+# The server's own command (API + web app, opens a browser)
+ducta-server --host 127.0.0.1 --port 8000
+ducta ui --port 8000            # the same, from the ducta CLI
 
 # Directly with uvicorn
 uvicorn ducta_server.main:app --host 127.0.0.1 --port 8000
@@ -108,11 +115,13 @@ uvicorn ducta_server.main:app --host 127.0.0.1 --port 8000
 export ENVIRONMENT=production
 export AUTH_ENABLED=true
 export JWT_SECRET_KEY="$(openssl rand -hex 32)"
+export DUCTA_ADMIN_PASSWORD="…"
 export DATABASE_URL="postgresql+asyncpg://user:pass@localhost:5432/ducta"
-uvicorn ducta_server.main:app --host 0.0.0.0 --port 8000 --workers 4
+export ALLOWED_HOSTS=ducta.example.com
+uvicorn ducta_server.main:app --host 0.0.0.0 --port 8000   # one worker: runs, logs and schedules live in its memory
 ```
 
-Interactive docs are served at `/docs` (Swagger) and `/redoc`; the OpenAPI schema at `/openapi.json`.
+Interactive docs are served at `/docs` (Swagger) and `/redoc`, the OpenAPI schema at `/openapi.json` — with auth off (or `DEBUG=true`); with auth on they are not served.
 
 ---
 
@@ -129,7 +138,7 @@ curl http://127.0.0.1:8000/health
 ```bash
 TOKEN=$(curl -s -X POST http://127.0.0.1:8000/api/auth/login \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"admin"}' | jq -r .access_token)
+  -d "{\"username\":\"admin\",\"password\":\"$DUCTA_ADMIN_PASSWORD\"}" | jq -r .access_token)
 ```
 
 ### Step 3: Connect to a source and inspect configs

@@ -1,0 +1,10 @@
+# Project settings for Poetry, read by every `poetry install` in this repository
+# (CI, the dev Docker image, contributors).
+#
+# re-resolve: poetry.lock holds two numpy versions (1.x below Python 3.13, 2.x from
+# 3.13), and Poetry 2.4 writes their markers so that both match Python 3.13. With
+# its default (re-resolve = false) the installer then installs both, in parallel,
+# into the same folder, and `import pandas` fails ("numpy._core.multiarray failed
+# to import"). Re-resolving against the lock picks exactly one per Python.
+[installer]
+re-resolve = true

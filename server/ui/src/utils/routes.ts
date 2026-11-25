@@ -93,3 +93,24 @@ export function projectIdFromPath(pathname: string): string | null {
   const m = /^\/p\/([^/]+)/.exec(pathname);
   return m ? decodeURIComponent(m[1]) : null;
 }
+
+/**
+ * The remembered project (the last one opened, kept in the browser) if this
+ * server still has it. The memory outlives the server: `ducta ui` started in
+ * another workspace kept offering the old project and the rail asked for its
+ * pipelines (404 "Project 'streaming' not found").
+ *
+ * `undefined` while the list is loading, so nothing is fetched for a project
+ * that may not exist; `null` when it is gone. A partial list (more projects
+ * than one page) cannot rule it out, so the id is kept.
+ */
+export function rememberedProject(
+  lastProjectId: string | null,
+  list: { projects?: { id: string }[]; total?: number } | undefined,
+): string | null | undefined {
+  if (!lastProjectId) return null;
+  if (!list) return undefined;
+  const projects = list.projects ?? [];
+  if (projects.some((p) => p.id === lastProjectId)) return lastProjectId;
+  return (list.total ?? projects.length) > projects.length ? lastProjectId : null;
+}

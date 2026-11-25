@@ -239,6 +239,7 @@ async def get_streaming_node_rows(
     limit: int = Query(default=50, ge=1, le=200),
 ) -> StreamRowsResponse:
     from ducta.runs.dataset_preview import PreviewUnavailable, sink_location, tail_rows
+    from ducta_server.services.data_access import check_can_read_rows, hidden_columns, mask_rows
     from ducta_server.workspace.manager import WorkspaceManager
 
     record, status = await _streaming_status_of(
@@ -259,10 +260,15 @@ async def get_streaming_node_rows(
         )
     project_dir = WorkspaceManager(source_path).for_project(record.project_id).root
     env = str(getattr(record, "env", "") or "base")
+    check_can_read_rows(current_user, env, project_dir)
 
     def read() -> Dict[str, Any]:
         fmt, path = sink_location(project_dir, env, found.sink or "")
-        return tail_rows(str(path), fmt, limit)
+        data = tail_rows(str(path), fmt, limit)
+        # A sink named after a catalog dataset carries its metadata.pii.
+        hidden = hidden_columns(current_user, project_dir, env, found.sink or "")
+        data["rows"] = mask_rows(data.get("rows") or [], hidden)
+        return data
 
     try:
         data = await asyncio.to_thread(read)
@@ -307,6 +313,43 @@ async def restart_execution_streaming_node(
     return StreamingRestartResponse(restarted=bool(restarted), node=node)
 
 
+def note_protected_run_output(
+    record: Any, source_path: Optional[Path] = None, root: Optional[Path] = None
+) -> None:
+    """Note, for the audit, that a protected environment's run output (logs, errors,
+    diagnosis) was read. Not refused: whoever sees the run debugs it — a developer who
+    cannot read its rows still needs to know why prod failed. *root* is the run's
+    project; found from *source_path* when not given."""
+    from ducta.project_store.governance import is_protected
+    from ducta_server.services.data_access import DATA_READS, note_read
+
+    if record is None or DATA_READS.get() is None:
+        return  # nothing is recorded (auth off, or outside a request): skip the lookup
+    if root is None and source_path is not None and getattr(record, "project_id", None):
+        from ducta_server.workspace.manager import WorkspaceManager
+
+        try:
+            root = WorkspaceManager(source_path).for_project(record.project_id).root
+        except Exception:  # noqa: BLE001 — unknown project: the default protected names apply
+            root = None
+    env = str(getattr(record, "env", "") or "base")
+    if is_protected(env, root):
+        note_read("protected_run_output", env=env, execution=getattr(record, "id", None))
+
+
+async def _note_run_output_read(
+    exec_manager: Any, execution_id: str, user_id: Optional[str], source_path: Optional[Path]
+) -> None:
+    """:func:`note_protected_run_output` for a route that has not loaded the run: loaded
+    only when the audit records reads (auth on), so a poll of the logs costs nothing more."""
+    from ducta_server.services.data_access import DATA_READS
+
+    if DATA_READS.get() is None:
+        return
+    record = await exec_manager.load_execution(execution_id, user_id=user_id)
+    note_protected_run_output(record, source_path)
+
+
 @router.get(
     "/{execution_id}/logs",
     response_model=List[LogEntry],
@@ -317,9 +360,11 @@ async def get_execution_logs(
     exec_manager: ExecutionManagerDep,
     current_user: CurrentUserDep,
     since: Optional[str] = None,
+    source_path: OptionalSourcePathDep = None,
 ) -> List[LogEntry]:
     """Get execution logs, optionally filtered since a timestamp (ISO format)."""
     user_id = current_user.id if current_user else None
+    await _note_run_output_read(exec_manager, execution_id, user_id, source_path)
     # ExecutionNotFoundError from load_logs propagates to the global StoreError handler.
     all_logs = await exec_manager.load_logs(execution_id, user_id=user_id)
 
@@ -350,6 +395,7 @@ async def get_execution_diagnosis(
     # Memory first, then the persisted run: a diagnosis must survive a restart.
     record = await exec_manager.load_execution(execution_id, user_id=user_id)
     root = manager.for_project(record.project_id).root if record.project_id else None
+    note_protected_run_output(record, root=root)
     return await run_in_threadpool(build_diagnosis, record, exec_manager, root)
 
 
@@ -429,10 +475,12 @@ async def get_execution_errors(
     execution_id: str,
     exec_manager: ExecutionManagerDep,
     current_user: CurrentUserDep,
+    source_path: OptionalSourcePathDep = None,
 ) -> ExecutionErrorsResponse:
     """Return categorized failures (type, category, full traceback, hint)
     for a finished execution. Empty result when the run recorded no errors."""
     user_id = current_user.id if current_user else None
+    await _note_run_output_read(exec_manager, execution_id, user_id, source_path)
     # ExecutionNotFoundError propagates to the global StoreError handler.
     summary = exec_manager.get_execution_errors(execution_id, user_id=user_id)
     if summary is None:

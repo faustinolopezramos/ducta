@@ -68,7 +68,9 @@ Data you want to keep with the project goes under ``metadata:`` (in
 nodes it is free-form except for the keys Ducta recognises and type-checks: ``owner`` (governance warnings),
 ``sla`` (``daily 06:00``, ``hourly`` or ``6h`` — late-pipeline alerts and
 freshness), ``criticality`` (``low``/``medium``/``high``), ``docs`` (a URL),
-``pii`` and ``tags`` (lists of text). The web app shows them.
+``pii`` and ``tags`` (lists of text). The web app shows them, and the API server
+masks the ``pii`` columns of a dataset's rows for roles without ``data.read.pii``
+(see :doc:`server_api`).
 
 ducta.yaml
 ----------
@@ -193,9 +195,18 @@ ducta.yaml
        ``defaults.stream``. Precedence: project < pipeline < node < environment.
    * - ``governance``
      - ``protected_environments`` (default ``[prod, production]``): running there
-       takes the ``pipeline.execute.protected`` permission. ``warnings``: report
-       pipelines and outputs without ``metadata.owner``, and outputs another
-       pipeline reads with no quality block (both on by default).
+       takes the ``pipeline.execute.protected`` permission. It adds to the
+       server's ``DUCTA_PROTECTED_ENVIRONMENTS`` (default ``prod,production``),
+       which a project cannot lower. A name is compared as the configuration reads
+       it: ``PROD`` and ``Production`` are ``prod``. ``warnings`` (each on by
+       default; ``ducta check`` sums them up per kind and the web app's Problems panel
+       lists each, neither fails on them): ``missing_owner`` — pipelines, and datasets that leave their
+       pipeline (read by another one, or by none in the project), without
+       ``metadata.owner``; ``missing_contract`` — outputs another pipeline reads with
+       no quality block; ``pii`` — a ``metadata.pii`` column the dataset does not
+       state (its ``schema`` or its contract's ``expected_columns``; a misspelt name
+       masks nothing), and a dataset built from personal data that lists no ``pii``
+       of its own (``pii: []`` says it keeps none).
    * - ``alerts``
      - Who hears about what — see :ref:`alerts`.
    * - ``sentinel``

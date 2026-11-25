@@ -150,11 +150,18 @@ class AlertRule(_Strict):
 
 class GovernanceWarnings(_Strict):
     missing_owner: bool = Field(
-        default=True, description="Report pipelines and output datasets without metadata.owner"
+        default=True,
+        description="Report pipelines, and datasets that leave their pipeline (read by another "
+        "one, or by none in the project), without metadata.owner",
     )
     missing_contract: bool = Field(
         default=True,
         description="Report output datasets read by another pipeline with no quality block",
+    )
+    pii: bool = Field(
+        default=True,
+        description="Report metadata.pii columns a dataset does not state, and datasets built "
+        "from personal data that list no metadata.pii of their own (`pii: []` says none)",
     )
 
 
@@ -342,8 +349,13 @@ class ProjectFile(_Strict):
 
     @model_validator(mode="after")
     def _sentinel_never_acts_in_protected_environments(self) -> "ProjectFile":
-        protected = set(self.governance.protected_environments)
-        clash = sorted(set(self.sentinel.environments) & protected)
+        from ducta.project_store.governance import is_protected
+
+        # Compared as the configuration reads names: `PROD` is `prod`.
+        protected = list(self.governance.protected_environments)
+        clash = sorted(
+            e for e in self.sentinel.environments if is_protected(e, protected=protected)
+        )
         if clash:
             raise ValueError(
                 f"sentinel.environments lists {', '.join(clash)}, a protected environment "

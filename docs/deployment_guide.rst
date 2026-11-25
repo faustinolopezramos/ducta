@@ -90,7 +90,11 @@ A production ``Dockerfile`` packaging Ducta with cloud connectors:
 Compose Configuration
 ~~~~~~~~~~~~~~~~~~~~~
 
-``docker-compose.yml`` running Ducta alongside PostgreSQL:
+The repository's own ``docker-compose.yml`` is ready to use for this: copy
+``.env.example`` to ``.env``, fill it in, and run ``docker compose -f
+docker-compose.yml --profile accounts up --build`` (without ``-f``, Compose also
+loads the contributor override). Written by hand, a ``docker-compose.yml`` running
+Ducta alongside PostgreSQL looks like this:
 
 .. code-block:: yaml
 

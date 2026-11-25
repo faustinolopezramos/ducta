@@ -613,19 +613,26 @@ async def preview_dataset(
     project_id: str,
     dataset: str,
     manager: WorkspaceManagerDep,
+    current_user: CurrentUserDep,
     env: str = "dev",
     limit: int = Query(default=100, ge=1, le=1000),
     scratch: bool = Query(default=False, description="Read what the last sample run wrote"),
 ) -> DatasetPreviewResponse:
     from ducta.runs.dataset_preview import PreviewUnavailable, dataset_location, preview
+    from ducta_server.services.data_access import check_can_read_rows, hidden_columns, mask_rows
 
     with http_error_on(400):
         validate_environment_name(env)
     project_dir = manager.for_project(project_id).root
+    check_can_read_rows(current_user, env, project_dir)
 
     def read() -> Dict[str, Any]:
         path, fmt = dataset_location(project_dir, env, dataset, scratch=scratch)
-        return preview(path, fmt, limit)
+        data = preview(path, fmt, limit)
+        data["rows"] = mask_rows(
+            data.get("rows") or [], hidden_columns(current_user, project_dir, env, dataset)
+        )
+        return data
 
     try:
         data = await asyncio.to_thread(read)
@@ -915,17 +922,27 @@ class SnapshotTestRequest(BaseModel):
         "Writes the first `rows` rows of each input (as materialized in `env`) to "
         "tests/fixtures/<node>/ and tests/test_<node>_snapshot.py, which runs the node's "
         "function on them and pins the output's columns. Refuses to overwrite an existing "
-        "test unless `overwrite`."
+        "test unless `overwrite`. The `metadata.pii` columns are written as stand-ins "
+        "(listed in `masked`); a protected `env` takes `data.read.protected`."
     ),
     dependencies=[Depends(require_permission("pipeline.write"))],
 )
 async def generate_node_snapshot_test(
-    project_id: str, node_name: str, body: SnapshotTestRequest, svc: ProjectServiceDep
+    project_id: str,
+    node_name: str,
+    body: SnapshotTestRequest,
+    svc: ProjectServiceDep,
+    current_user: CurrentUserDep,
 ) -> Dict[str, Any]:
     from ducta.runs.node_tests import generate_snapshot_test
+    from ducta_server.services.data_access import check_can_read_rows
 
     with http_error_on(400):
         validate_environment_name(body.env)
+    # Fixtures are rows copied into the workspace, where the file API serves them to
+    # every role: a protected environment's rows take the permission its preview takes.
+    # (Their metadata.pii columns are written as stand-ins, whoever asks.)
+    check_can_read_rows(current_user, body.env, svc.store(project_id).root)
 
     def make() -> Dict[str, Any]:
         entry = _code_entry(svc, project_id, node_name)
@@ -1107,13 +1124,21 @@ class TryChecksRequest(BaseModel):
     dependencies=[Depends(require_permission("quality.run"))],
 )
 async def try_quality_checks(
-    project_id: str, body: TryChecksRequest, svc: ProjectServiceDep
+    project_id: str, body: TryChecksRequest, svc: ProjectServiceDep, current_user: CurrentUserDep
 ) -> Dict[str, Any]:
     from ducta.runs.dataset_preview import PreviewUnavailable, dataset_location, read_frame
+    from ducta_server.services.data_access import (
+        check_can_read_rows,
+        hidden_columns,
+        names_in,
+        refuse_hidden,
+    )
 
     with http_error_on(400):
         validate_environment_name(body.env)
     root = svc.store(project_id).root
+    check_can_read_rows(current_user, body.env, root)
+    refuse_hidden(names_in(body.checks), hidden_columns(current_user, root, body.env, body.dataset))
 
     def run() -> Dict[str, Any]:
         import tempfile
@@ -1149,7 +1174,7 @@ async def try_quality_checks(
                     from ducta_server.services.failing_rows import failing_mask
 
                     failing = int(failing_mask(df, "business_rules", params).sum())
-                except Exception:  # noqa: BLE001 — a rule sqlglot cannot evaluate
+                except Exception:  # noqa: BLE001 — a rule not interpreted here (sql_rules)
                     r["passed"] = None
                     r["not_tried"] = True
                     r["message"] = (
@@ -1161,7 +1186,7 @@ async def try_quality_checks(
                 r["message"] = (
                     f"{failing} row(s) break the rules"
                     + (f" (up to {allowed} allowed)" if allowed else "")
-                    + " — evaluated here with sqlglot"
+                    + " — evaluated here on the sampled rows"
                 )
         return {
             "dataset": body.dataset,
@@ -1194,14 +1219,24 @@ class FailingRowsRequest(BaseModel):
     dependencies=[Depends(require_permission("quality.read"))],
 )
 async def get_failing_rows(
-    project_id: str, body: FailingRowsRequest, svc: ProjectServiceDep
+    project_id: str, body: FailingRowsRequest, svc: ProjectServiceDep, current_user: CurrentUserDep
 ) -> Dict[str, Any]:
     from ducta.runs.dataset_preview import PreviewUnavailable, dataset_location, read_frame
+    from ducta_server.services.data_access import (
+        check_can_read_rows,
+        hidden_columns,
+        mask_rows,
+        names_in,
+        refuse_hidden,
+    )
     from ducta_server.services.failing_rows import failing_rows
 
     with http_error_on(400):
         validate_environment_name(body.env)
     root = svc.store(project_id).root
+    check_can_read_rows(current_user, body.env, root)
+    hidden = hidden_columns(current_user, root, body.env, body.dataset)
+    refuse_hidden(names_in(body.params), hidden)
 
     def run() -> Dict[str, Any]:
         try:
@@ -1212,7 +1247,9 @@ async def get_failing_rows(
         except PreviewUnavailable as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
         try:
-            return failing_rows(df, body.check, body.params, body.limit)
+            out = failing_rows(df, body.check, body.params, body.limit)
+            out["rows"] = mask_rows(out["rows"], hidden)
+            return out
         except (ValueError, KeyError) as e:
             raise HTTPException(status_code=422, detail=str(e)) from e
 

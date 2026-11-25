@@ -503,3 +503,17 @@ class TestUnreadableProjectFile:
         from ducta.setting.project.reader import other_format
 
         assert other_format(tmp_path) is None
+
+
+class TestYamlErrorsNameTheLine:
+    """A YAML error read `in "<unicode string>", line 3` twice (the text is parsed
+    from memory)."""
+
+    def test_line_and_column_without_unicode_string(self):
+        from ducta.setting.project import files as pf
+
+        with pytest.raises(ValueError) as exc:
+            pf.parse(Path("p.yaml"), "nodes:\n  a:\n    run: x\n   bad: [1\n")
+        message = str(exc.value)
+        assert "<unicode string>" not in message
+        assert message.startswith("not valid YAML at line ")

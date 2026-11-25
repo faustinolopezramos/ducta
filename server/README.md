@@ -22,11 +22,45 @@ ducta-server            # http://127.0.0.1:8000, opens a browser
 ```
 
 Options: `--host`, `--port`, `--no-browser`, `--source <workspace>`,
-`--db <sqlite file>` and `--allow-unauthenticated`. Run `ducta-server --help`.
+`--db <sqlite file>`, `--allow-unauthenticated` and `--version`. Run
+`ducta-server --help`.
 
-On an address other than this machine's, the server refuses to start without
-authentication (`AUTH_ENABLED=true` and a `JWT_SECRET_KEY`): it runs pipelines,
-so reaching it is reaching code execution.
+## On your machine
+
+Bound to `127.0.0.1` (the default) the server needs no login: every request runs as
+a local admin. Nothing more to set up.
+
+## Shared with a team
+
+The server runs pipelines, so reaching it is reaching code execution. On an address
+other than this machine's it refuses to start unless accounts are on and their
+credentials are your own:
+
+```bash
+export AUTH_ENABLED=true
+export JWT_SECRET_KEY="$(openssl rand -hex 32)"
+export DUCTA_ADMIN_PASSWORD="…"                       # the admin account's password
+export DATABASE_URL="postgresql+asyncpg://user:pass@db:5432/ducta"
+ducta-server --host 0.0.0.0 --no-browser
+
+ducta-server user add ana --role developer           # then manage accounts
+ducta-server user list
+```
+
+- **Roles**: `viewer` reads; `developer` edits and runs outside protected environments;
+  `operator` runs what is there, production included; `admin` does everything,
+  including promoting models to Production.
+- **Production data** (`prod`/`production` by default, and whatever
+  `DUCTA_PROTECTED_ENVIRONMENTS` adds) is out of a developer's reach: its rows, files
+  and runs. Columns listed in `metadata.pii` read `••••` for roles without access to
+  personal data. Every read of either is audited.
+- **PostgreSQL for accounts.** Runs execute as the server's OS user and could rewrite
+  a SQLite accounts file, so a shared server refuses SQLite unless
+  `ALLOW_SQLITE_WITH_ACCOUNTS=true` (every developer trusted as admin).
+
+Upgrading from `0.3.0`: do it for any server others can reach — see
+[SECURITY.md](https://github.com/faustinolopezramos/ducta/blob/main/SECURITY.md) and the
+[CHANGELOG](https://github.com/faustinolopezramos/ducta/blob/main/CHANGELOG.md).
 
 Documentation: <https://github.com/faustinolopezramos/ducta/tree/main/docs>
 (see *Server & API* and *Deployment*). License: Apache-2.0.

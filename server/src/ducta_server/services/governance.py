@@ -28,16 +28,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Optional
 
-from ducta.project_store.governance import PROTECTED_PERMISSION, protected_environments
+from ducta.project_store.governance import PROTECTED_PERMISSION, is_protected
 
 
 def check_can_run(user: Any, env: str, project_root: Optional[Path]) -> None:
     """Raise 403 when *user* may not run in *env*."""
     from fastapi import HTTPException
 
-    if env in protected_environments(project_root) and not user.has_permission(
-        PROTECTED_PERMISSION
-    ):
+    if is_protected(env, project_root) and not user.has_permission(PROTECTED_PERMISSION):
         raise HTTPException(
             status_code=403,
             detail=(

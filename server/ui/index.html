@@ -6,9 +6,9 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <!-- Typefaces are self-hosted (src/theme/fonts.css → /fonts/*.woff2). They used
          to load from the Google Fonts CDN, which the production CSP blocked, so no
-         real user ever saw them. Preloaded because they are render-blocking for
-         every screen. -->
-    <link rel="preload" href="/fonts/Inter-Variable.woff2" as="font" type="font/woff2" crossorigin>
+         real user ever saw them. Not preloaded: the app draws no text until its
+         script has run, so Safari reported the preload as unused; the font comes
+         from the same server and fonts.css swaps it in (font-display: swap). -->
     <title>Ducta</title>
   </head>
   <body>

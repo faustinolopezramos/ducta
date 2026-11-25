@@ -20,7 +20,7 @@ SPDX-License-Identifier: Apache-2.0
 
 import json
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
 
@@ -172,6 +172,49 @@ def _environment_warnings(context: Any = None) -> List[str]:
     return found
 
 
+def _governance_problems() -> list:
+    """The project's governance warnings (missing owners and contracts, ``metadata.pii``
+    that protects nothing): advice, never a reason to fail. Empty when the project in the
+    working directory does not load as a v2 project."""
+    try:
+        from ducta.project_store.governance import governance_problems
+        from ducta.setting.project.loader import validate_project
+
+        return governance_problems(validate_project(Path.cwd()))
+    except Exception:  # noqa: BLE001 — config problems are reported on their own
+        return []
+
+
+#: One line per kind of advice: what a new project lacks is no reason for a wall of text.
+_GOVERNANCE_KINDS = {
+    "governance.missing_owner": "{n} pipeline(s) or dataset(s) without an owner (metadata.owner): {names}",
+    "governance.missing_contract": "{n} dataset(s) other pipelines read with no quality "
+    "contract: {names}",
+    "governance.pii_downstream": "{n} dataset(s) built from personal data that list no "
+    "metadata.pii (`pii: []` if none): {names}",
+}
+
+
+def _governance_summary(problems: list) -> List[tuple]:
+    """``(level, line)`` to print: each warning on its own (a ``metadata.pii`` column that
+    masks nothing is a mistake to fix), the advice one line per kind, a few names shown."""
+    lines: List[tuple] = []
+    grouped: Dict[str, List[str]] = {}
+    for problem in problems:
+        if problem.severity == "warning" or problem.code not in _GOVERNANCE_KINDS:
+            lines.append((problem.severity, problem.message))
+        else:
+            grouped.setdefault(problem.code, []).append(
+                str(problem.dataset or problem.pipeline or "?")
+            )
+    for code, names in grouped.items():
+        shown = ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+        lines.append(("info", _GOVERNANCE_KINDS[code].format(n=len(names), names=shown)))
+    if grouped:
+        lines.append(("info", "details: ducta check --output-format json"))
+    return lines
+
+
 def _validation_document(
     env: str, reports: dict, error: Optional[BaseException], context: Any = None
 ) -> dict:
@@ -202,6 +245,8 @@ def _validation_document(
         # Python/Spark/Java/pandas combinations known to fail, and Spark defaults
         # left unset that change results: warnings, not errors.
         "environment": _environment_warnings(context),
+        # Owners, contracts and personal data the project leaves undeclared: advice.
+        "governance": [p.to_dict() for p in _governance_problems()] if error is None else [],
     }
 
 
@@ -243,6 +288,8 @@ def _handle_validate(parsed_args, config_manager: ConfigManager) -> int:
 
         for warning in _environment_warnings(context):
             logger.warning("Environment: {}", warning)
+        for level, line in _governance_summary(_governance_problems()):
+            (logger.warning if level == "warning" else logger.info)("Governance: {}", line)
 
         total_errors = 0
         for name in sorted(reports):

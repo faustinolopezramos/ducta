@@ -92,20 +92,23 @@ class TemplateCommand:
         """List all available templates."""
         templates = TemplateFactory.list_available_templates()
 
-        logger.info("Available template types:")
+        # Data for the user, not log records: plain stdout, so lines keep
+        # their width (the logger prefixed and wrapped every one) and the
+        # list can be piped.
+        lines = ["Available template types:", ""]
         for template in templates:
-            logger.info("  {:20} - {}", template["type"], template["name"])
-            logger.info("  {}   {}", " " * 20, template["description"])
-            logger.info("")
-
-        logger.info("Usage:")
-        logger.info("  ducta template --template <type> --project-name <name> [options]")
-        logger.info("")
-        logger.info("Examples:")
-        logger.info("  ducta template --template medallion_basic --project-name my_pipeline")
-        logger.info(
-            "  ducta template --template streaming_basic --project-name events --evidence-level signed"
-        )
+            lines.append(f"  {template['type']:20} {template['name']}")
+            lines.append(f"  {'':20} {template['description']}")
+            lines.append("")
+        lines += [
+            "Usage:",
+            "  ducta template --template <type> --project-name <name> [options]",
+            "",
+            "Examples:",
+            "  ducta template --template medallion_basic --project-name my_pipeline",
+            "  ducta template --template streaming_basic --project-name events --evidence-level signed",
+        ]
+        print("\n".join(lines))
 
         return ExitCode.SUCCESS.value
 

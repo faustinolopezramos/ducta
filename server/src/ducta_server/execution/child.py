@@ -47,6 +47,7 @@ import threading
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
+from ducta.core.certificate import TO_SIGN_ATTR
 from ducta.core.context_utils import get_context_value
 from ducta.core.ledger import RETRAIN_ATTR, RUN_ID_ATTR
 
@@ -176,6 +177,7 @@ def prepare(raw: Dict[str, Any]) -> Tuple[Any, Any]:
     from ducta_server.execution.runner import (
         RunSpec,
         _resolve_execution_context,
+        mark_started_by,
         redirect_run_writes,
     )
 
@@ -196,6 +198,7 @@ def prepare(raw: Dict[str, Any]) -> Tuple[Any, Any]:
     os.chdir(cwd)
     normalize_execution_context_paths(ctx, cwd)
     redirect_run_writes(ctx, spec)
+    mark_started_by(ctx, spec)
     return spec, ctx
 
 
@@ -278,6 +281,7 @@ def main(argv: list) -> int:
                     "error": error,
                     "error_details": details,
                     "certificate_run_id": get_context_value(ctx, RUN_ID_ATTR),
+                    "certificates_to_sign": get_context_value(ctx, TO_SIGN_ATTR) or [],
                     "retrain": get_context_value(ctx, RETRAIN_ATTR),
                 },
                 default=str,

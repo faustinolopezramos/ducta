@@ -81,7 +81,10 @@ def _options(parser: argparse.ArgumentParser) -> List[str]:
         notes = []
         if action.choices and not isinstance(action.choices, dict):
             notes.append("one of " + ", ".join(f"`{c}`" for c in action.choices))
-        if action.required:
+        # A positional taking `*` or `?` can be left out. argparse before Python 3.13
+        # still marks it required, so the reference would differ by Python version.
+        optional_positional = not action.option_strings and action.nargs in ("*", "?")
+        if action.required and not optional_positional:
             notes.append("*(required)*")
         default = action.default
         if (

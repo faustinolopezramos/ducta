@@ -8,7 +8,7 @@
 # ==============================================================================
 [tool.poetry]
 name = "ducta-server"
-version = "0.3.0"
+version = "0.3.1"
 description = "Ducta's web server: the REST API and the web app for Ducta data pipelines."
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
@@ -59,7 +59,7 @@ python = ">=3.11,<3.15"
 # The engine, at least this server's own version and within its minor: the server
 # runs it in-process and in child processes and uses its public API, which a
 # patch release may extend (an older patch of the engine may lack what it calls).
-ducta = ">=0.3.0,<0.4.0"
+ducta = ">=0.3.1,<0.4.0"
 
 fastapi = ">=0.104.0,<1.0.0"
 msgpack = "^1.0.0"

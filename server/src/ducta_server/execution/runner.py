@@ -340,6 +340,9 @@ class RunSpec:
     debug: bool = False
     #: Data breakpoints: pause after each of these nodes until resumed.
     pause_after: Optional[List[str]] = None
+    #: The id of the user who asked for the run (None with auth off): sealed in its
+    #: certificate as ``started_by``.
+    started_by: Optional[str] = None
 
 
 def print_run_header(spec: RunSpec) -> None:
@@ -420,6 +423,11 @@ def redirect_to_scratch(ctx: Any, env: str, rows: int, pipeline_name: Optional[s
     return scratch
 
 
+def mark_started_by(ctx: Any, spec: "RunSpec") -> None:
+    """Tell the run's certificate who started it (``core.certificate._started_by``)."""
+    ctx.started_by = {"via": "server", "user_id": spec.started_by}
+
+
 def redirect_run_writes(ctx: Any, spec: "RunSpec") -> None:
     """Send a sample run's or a reproduction's writes away from the real datasets."""
     if spec.sample_rows:
@@ -477,6 +485,11 @@ def _run_debug_child(
     import tempfile
     import time
 
+    from ducta_server.execution.child_runner import (
+        child_environment,
+        server_signing_key,
+        sign_child_certificates,
+    )
     from ducta_server.services import debugger
 
     if not debugger.available():
@@ -498,11 +511,17 @@ def _run_debug_child(
         # settrace, not sys.monitoring: under 3.12+ monitoring, a node run on an
         # executor thread stopped where pydevd could not find the thread again
         # (no variables, no evaluate).
+        # The same environment as any run's process: without the server's secrets.
         env = {
-            **os.environ,
+            **child_environment(),
             "PYDEVD_DISABLE_FILE_VALIDATION": "1",
             "PYDEVD_USE_SYS_MONITORING": "0",
         }
+        signing_key = server_signing_key(source_path)
+        if signing_key is not None:
+            from ducta.core.certificate import SIGNER_ENV
+
+            env[SIGNER_ENV] = "server"
         logger.info(
             "Debug run: waiting for a debugger on {}:{} — the browser's Debug panel, or "
             "'Attach to Ducta' in your IDE",
@@ -530,6 +549,7 @@ def _run_debug_child(
             if proc.poll() is None:
                 proc.kill()
         result = json.loads(result_file.read_text(encoding="utf-8")) if result_file.exists() else {}
+    sign_child_certificates(result, signing_key)
     if result.get("certificate_run_id"):
         manager.attach_certificate(execution_id, str(result["certificate_run_id"]))
     if isinstance(result.get("retrain"), dict):
@@ -616,6 +636,7 @@ def run_pipeline_sync(
                     os.chdir(execution_cwd)
                     normalize_execution_context_paths(ctx, execution_cwd)
                     redirect_run_writes(ctx, spec)
+                    mark_started_by(ctx, spec)
 
                     if spec.debug:
                         # Its own process, under debugpy: a breakpoint there can

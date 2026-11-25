@@ -7,7 +7,7 @@ build-backend = "poetry.core.masonry.api"
 # ==============================================================================
 [tool.poetry]
 name = "ducta"
-version = "0.3.0"
+version = "0.3.1"
 description = "A unified data-pipeline framework for batch, streaming, ML, and hybrid workflows."
 authors = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]
 maintainers = ["Faustino Lopez Ramos <faustinolopezramos@gmail.com>"]

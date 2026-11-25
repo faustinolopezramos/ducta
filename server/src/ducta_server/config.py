@@ -275,6 +275,16 @@ class Settings(BaseSettings):
         ),
     )
 
+    allow_sqlite_with_accounts: bool = Field(
+        default=False,
+        description=(
+            "Let a server others can reach keep its accounts in SQLite. Runs execute as the "
+            "server's OS user and can write that file (their author's role included), so "
+            "this is only for a team whose developers are all trusted as admins. Prefer "
+            "DATABASE_URL=postgresql+asyncpg://…"
+        ),
+    )
+
     jwt_algorithm: Literal["HS256", "HS384", "HS512"] = Field(default="HS256")
     jwt_expiration_hours: int = Field(default=24)
     auth_enabled: bool = Field(

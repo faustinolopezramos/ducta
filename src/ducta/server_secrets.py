@@ -35,6 +35,32 @@ SERVER_SECRETS: FrozenSet[str] = frozenset(
 )
 
 
+#: Not secrets of the server's own login, but not a run's either: the key that signs Run
+#: Certificates (when the server runs a pipeline in its own process the server signs the
+#: certificate, so the pipeline's code cannot sign one for a run that never happened) and
+#: the keys of the model behind Ducta's AI features. A pipeline that calls a model itself
+#: sets its key in the project's ``.env``, which the run still reads.
+RUN_WITHHELD: FrozenSet[str] = frozenset(
+    {
+        "DUCTA_CERTIFICATE_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+    }
+)
+#: Ducta's AI settings (``DUCTA_AI_PROVIDER``, ``DUCTA_AI_API_KEY`` …).
+RUN_WITHHELD_PREFIXES = ("DUCTA_AI_",)
+
+
 def is_server_secret(name: str) -> bool:
     """Whether the environment variable *name* is one of the server's own secrets."""
     return str(name).strip().upper() in SERVER_SECRETS
+
+
+def withheld_from_runs(name: str) -> bool:
+    """Whether *name* stays out of the environment of a run's process (and of node tests)."""
+    upper = str(name).strip().upper()
+    return (
+        upper in SERVER_SECRETS
+        or upper in RUN_WITHHELD
+        or any(upper.startswith(p) for p in RUN_WITHHELD_PREFIXES)
+    )

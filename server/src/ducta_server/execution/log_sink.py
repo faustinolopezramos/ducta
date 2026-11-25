@@ -24,6 +24,7 @@ import logging
 from typing import Any, Optional
 
 from ducta.core.execution.node_status import NODE_STATUS_RE
+from ducta.redaction import redact_text
 from ducta_server.execution.context import execution_id_var, node_id_var
 from ducta_server.models.execution import LogEntry
 
@@ -45,7 +46,8 @@ def log_entry(timestamp: Any, level: str, message: str, node_id: Optional[str]) 
     Shared by the in-process sink below and the reader of a run in its own
     process (``child_runner``), so both give the UI the same rows.
     """
-    entry = LogEntry(timestamp=timestamp, level=level, message=message)
+    # Credentials masked as in the CLI's log file (``password=***``): viewers read run logs.
+    entry = LogEntry(timestamp=timestamp, level=level, message=redact_text(message))
     m = NODE_STATUS_RE.match(message)
     if m:
         entry.extra.update({"type": "node_status", "node_id": m.group(1), "status": m.group(2)})

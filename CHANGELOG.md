@@ -11,6 +11,40 @@ headline of everything else; `git log` has the detail.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-21
+
+Server security fixes. **Upgrade notes:** new permissions `data.read.protected`,
+`data.read.pii`, `data.write.protected`, `model.promote.production`; a reachable server
+with accounts in SQLite refuses to start (`ALLOW_SQLITE_WITH_ACCOUNTS=true` to override);
+certificates are schema `1.11`.
+
+### Security
+
+- **Critical:** any signed-in account could run code on the server through SQL rules
+  (sqlglot `eval`; affects 0.2.0+). Rules now go through an interpreter, `ducta_server.services.sql_rules`.
+- Protected environments: names compared case-insensitively (`PROD`); floor set by
+  `DUCTA_PROTECTED_ENVIRONMENTS`; prod rows and files, snapshots, quality runs and report
+  deletes now need permissions. Developers no longer see prod data.
+- PII: `metadata.pii` columns masked without `data.read.pii`, detected in any script,
+  not sent to the AI; stand-in values in test fixtures.
+- The server signs certificates; runs no longer get the signing key, AI keys or server secrets.
+- Secret files (`*.pem`, `.netrc`, `id_rsa`…) hidden, and left out of git diffs; run logs redacted.
+- Reads of sensitive data audited; `LIKE` in linear time; SQLite accounts refused.
+
+### Added
+
+- Governance warnings: `pii_unknown_column`, `pii_downstream`, `missing_owner` on unread outputs.
+- Certificates record `started_by` (schema `1.11`).
+
+### Changed
+
+- Generated projects use `checks:` and point to `ducta check`.
+
+### Fixed
+
+- `null_rate` on empty datasets; generated `requirements.txt` version; clearer config, YAML
+  and `run:` errors; web UI: false "8 err", stale project 404, ResizeObserver errors.
+
 ## [0.3.0] - 2026-11-16
 
 AI-assisted pipelines, a live stream monitor, ML retraining and the web server as its own
@@ -156,7 +190,8 @@ First public release: batch, streaming, ML and hybrid pipelines from declarative
 configuration, with data quality, MLOps, run certificates, a CLI, a REST + WebSocket server
 and a web workspace.
 
-[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/faustinolopezramos/ducta/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/faustinolopezramos/ducta/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/faustinolopezramos/ducta/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/faustinolopezramos/ducta/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/faustinolopezramos/ducta/compare/v0.1.0...v0.1.1

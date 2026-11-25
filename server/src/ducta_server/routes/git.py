@@ -57,6 +57,7 @@ from ducta_server.models.git_sync import (
     GitSyncStatus,
     GitWorkingDiffResponse,
 )
+from ducta_server.services.data_access import hidden_data, refuse_protected_data
 from ducta_server.workspace.manager import SecretFileError
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$", re.IGNORECASE)
@@ -75,16 +76,20 @@ def _safe_rel(root, path: str) -> str:
         return str(safe_path(root, path).relative_to(root))
 
 
-def _refuse_unreadable(manager, path: str) -> None:
-    """403 for a path the file API refuses to read (``.env``, ``.git/``): git must not serve it either."""
+def _refuse_unreadable(manager, path: str, user: Any = None) -> None:
+    """403 for a path the file API refuses to read (``.env``, ``.git/``, a protected
+    environment's data for *user*): git must not serve it either."""
     with http_error_on(403, SecretFileError):
         manager.ensure_readable(path)
+    refuse_protected_data(user, manager.root, path)
 
 
-def _refuse_unwritable(manager, path: str) -> None:
-    """403 for a path the file API refuses to write (secrets, ``.git/``, ``.ducta/``)."""
+def _refuse_unwritable(manager, path: str, user: Any = None) -> None:
+    """403 for a path the file API refuses to write (secrets, ``.git/``, ``.ducta/``, a
+    protected environment's data for *user*)."""
     with http_error_on(403, SecretFileError):
         manager.ensure_writable(path)
+    refuse_protected_data(user, manager.root, path, write=True)
 
 
 def _build_git_status(status: dict) -> GitSyncStatus:
@@ -161,10 +166,14 @@ async def get_commit(sha: str, manager: WorkspaceManagerDep) -> CommitInfo:
     response_model=DiffResponse,
     dependencies=[Depends(require_permission("git.read"))],
 )
-async def get_commit_diff(sha: str, manager: WorkspaceManagerDep) -> DiffResponse:
+async def get_commit_diff(
+    sha: str, manager: WorkspaceManagerDep, user: CurrentUserDep
+) -> DiffResponse:
     _validate_sha(sha)
     with http_error_on(404):
-        diff_text, parent_sha = manager.get_commit_diff(sha)
+        diff_text, parent_sha = await run_in_threadpool(
+            manager.get_commit_diff, sha, hidden_data(user, manager.root)
+        )
     return DiffResponse(commit_a=parent_sha, commit_b=sha, diff=diff_text)
 
 
@@ -177,14 +186,17 @@ async def get_diff_between(
     sha1: str,
     sha2: str,
     manager: WorkspaceManagerDep,
+    user: CurrentUserDep,
     path: Optional[str] = Query(default=None, description="Restrict diff to a specific file"),
 ) -> DiffResponse:
     _validate_sha(sha1)
     _validate_sha(sha2)
     safe_file_path = _safe_rel(manager.root, path) if path else None
     if safe_file_path:
-        _refuse_unreadable(manager, safe_file_path)
-    diff_text = manager.get_git_diff(sha1, sha2, path=safe_file_path)
+        _refuse_unreadable(manager, safe_file_path, user)
+    diff_text = await run_in_threadpool(
+        manager.get_git_diff, sha1, sha2, safe_file_path, hidden_data(user, manager.root)
+    )
     return DiffResponse(commit_a=sha1, commit_b=sha2, path=safe_file_path, diff=diff_text)
 
 
@@ -193,10 +205,12 @@ async def get_diff_between(
     response_model=RevertResponse,
     dependencies=[Depends(require_permission("git.revert"))],
 )
-async def revert_file(body: RevertRequest, manager: WorkspaceManagerDep) -> RevertResponse:
+async def revert_file(
+    body: RevertRequest, manager: WorkspaceManagerDep, user: CurrentUserDep
+) -> RevertResponse:
     _validate_sha(body.commit)
     safe_file_path = _safe_rel(manager.root, body.path)
-    _refuse_unwritable(manager, safe_file_path)
+    _refuse_unwritable(manager, safe_file_path, user)
     with http_error_on(400):
         new_sha = manager.revert_file(safe_file_path, body.commit, message=body.message)
     return RevertResponse(path=safe_file_path, restored_from=body.commit, new_commit_sha=new_sha)
@@ -207,9 +221,9 @@ async def revert_file(body: RevertRequest, manager: WorkspaceManagerDep) -> Reve
     response_model=BlameResponse,
     dependencies=[Depends(require_permission("git.read"))],
 )
-async def git_blame(path: str, manager: WorkspaceManagerDep) -> BlameResponse:
+async def git_blame(path: str, manager: WorkspaceManagerDep, user: CurrentUserDep) -> BlameResponse:
     safe_file_path = _safe_rel(manager.root, path)
-    _refuse_unreadable(manager, safe_file_path)
+    _refuse_unreadable(manager, safe_file_path, user)
     with http_error_on(400):
         lines = [BlameLine(**line) for line in manager.get_file_blame(safe_file_path)]
     return BlameResponse(path=safe_file_path, lines=lines)
@@ -376,11 +390,11 @@ def _changes(git_sync) -> GitChangesResponse:
     dependencies=[Depends(require_permission("git.read"))],
 )
 async def get_working_diff(
-    path: str, git_sync: GitSyncManagerDep, manager: WorkspaceManagerDep
+    path: str, git_sync: GitSyncManagerDep, manager: WorkspaceManagerDep, user: CurrentUserDep
 ) -> GitWorkingDiffResponse:
     with http_error_on(400):
         safe_path(git_sync.workspace_root, path)
-    _refuse_unreadable(manager, path)  # git would hand over the .env the file API refuses
+    _refuse_unreadable(manager, path, user)  # git would hand over what the file API refuses
     if not git_sync.is_available():
         raise HTTPException(status_code=409, detail="Git is not available in this workspace")
     result = await run_in_threadpool(git_sync.working_diff, path)
@@ -412,12 +426,16 @@ class GitFileAtResponse(BaseModel):
     dependencies=[Depends(require_permission("git.read"))],
 )
 async def get_file_at(
-    path: str, rev: str, git_sync: GitSyncManagerDep, manager: WorkspaceManagerDep
+    path: str,
+    rev: str,
+    git_sync: GitSyncManagerDep,
+    manager: WorkspaceManagerDep,
+    user: CurrentUserDep,
 ) -> GitFileAtResponse:
     with http_error_on(400):
         safe_path(git_sync.workspace_root, path)
         _validate_sha(rev)
-    _refuse_unreadable(manager, path)
+    _refuse_unreadable(manager, path, user)
     if not git_sync.is_available():
         raise HTTPException(status_code=409, detail="Git is not available in this workspace")
     content = await run_in_threadpool(git_sync.file_at, path, rev)

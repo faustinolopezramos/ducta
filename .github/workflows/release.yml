@@ -6,13 +6,18 @@ name: Release
 # the server: `server/src/ducta_server/ui_dist` is gitignored, so `poetry build` on
 # a clean tree silently produces a server wheel with no UI and no error. This
 # workflow makes the whole sequence the only way to ship.
+#
+#   guard  →  ci (the whole of ci.yml)  →  build  →  publish  →  github-release
+#
+# PyPI only from a `v*` tag whose version both pyprojects carry; TestPyPI from
+# anywhere, by hand (Actions → Release → Run workflow).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       target:
-        description: "Where to publish"
+        description: "Where to publish (PyPI only when run from a v* tag)"
         required: true
         default: testpypi
         type: choice
@@ -21,20 +26,61 @@ on:
 permissions:
   contents: read
 
+# One release per ref at a time, and never cancelled halfway: a publish cut short
+# leaves one package on PyPI without the other.
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   # The Poetry that writes poetry.lock (format 2.1): 1.8 cannot read it.
   POETRY_VERSION: "2.4.1"
 
 jobs:
-  build:
-    name: Build distributions
+  # Cheap checks first, so a release that cannot ship fails in seconds and not
+  # after the whole test suite.
+  guard:
+    name: Check what is being released
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: PyPI only from a v* tag
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'pypi' && !startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "::error::publishing to PyPI needs a v* tag (this run is on $GITHUB_REF). Push the tag, or choose testpypi."
+          exit 1
+      - name: The tag, ducta and ducta-server agree on the version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          python3 - <<'PY'
+          import os, sys, tomllib
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          def version(path):
+              with open(path, "rb") as fh:
+                  return tomllib.load(fh)["tool"]["poetry"]["version"]
+          engine, server = version("pyproject.toml"), version("server/pyproject.toml")
+          if not (tag == engine == server):
+              sys.exit(f"::error::tag v{tag}, ducta {engine} and ducta-server {server} must agree")
+          print(f"tag, ducta and ducta-server agree on {engine}")
+          PY
+
+  # Every CI job — lint, mypy, the test matrix, clean installs, Docker images, the
+  # web app, the docs and the dependency audit — on the commit being released.
+  ci:
+    name: CI
+    needs: guard
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build distributions
+    needs: ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "20"
           cache: "npm"
@@ -43,18 +89,6 @@ jobs:
         run: |
           pipx install "poetry==$POETRY_VERSION"
           pipx inject poetry poetry-plugin-export
-
-      - name: Refuse to release a tag that disagrees with either pyproject
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          engine="$(poetry version --short)"
-          server="$(cd server && poetry version --short)"
-          if [ "$tag" != "$engine" ] || [ "$tag" != "$server" ]; then
-            echo "::error::tag v$tag, ducta $engine and ducta-server $server must agree"
-            exit 1
-          fi
-          echo "tag, ducta and ducta-server agree on $engine"
 
       - name: Build the web app
         working-directory: server/ui
@@ -88,24 +122,40 @@ jobs:
           print(f"{engine}: engine and CLI; {server}: the web app ({len(assets)} assets)")
           PY
 
+      # Installs exactly the two wheels built above (never a ducta from PyPI) and
+      # starts the server as a user would.
       - name: Smoke-test the built wheels
         run: |
           python -m venv /tmp/cli
           /tmp/cli/bin/pip install --upgrade pip
           /tmp/cli/bin/pip install "$(ls dist/ducta-[0-9]*.whl)[all]"
           /tmp/cli/bin/ducta --version
+
           python -m venv /tmp/server
           /tmp/server/bin/pip install --upgrade pip
-          /tmp/server/bin/pip install "$(ls dist/ducta_server-*.whl)" --find-links dist
-          /tmp/server/bin/ducta-server --version
+          /tmp/server/bin/pip install "$(ls dist/ducta-[0-9]*.whl)" "$(ls dist/ducta_server-*.whl)"
           /tmp/server/bin/python - <<'PY'
-          from ducta_server.main import create_app
-          app = create_app()
-          assert "/health" in app.openapi()["paths"]
-          print("smoke OK")
+          from importlib.metadata import version
+          engine, server = version("ducta"), version("ducta-server")
+          assert engine == server, f"installed ducta {engine} but ducta-server {server}"
+          print("installed ducta and ducta-server", engine)
           PY
 
-      - uses: actions/upload-artifact@v4
+          /tmp/server/bin/ducta-server --no-browser --port 8765 > /tmp/server.log 2>&1 &
+          pid=$!
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8765/health > /dev/null 2>&1 && break
+            sleep 1
+          done
+          status=0
+          curl -fsS http://127.0.0.1:8765/health || status=1
+          echo
+          curl -fsS http://127.0.0.1:8765/ | grep -qi "<!doctype html" || { echo "::error::GET / does not serve the web app"; status=1; }
+          kill "$pid" || true
+          if [ "$status" != 0 ]; then cat /tmp/server.log; exit 1; fi
+          echo "smoke OK: the server starts, answers /health and serves the web app"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
@@ -120,7 +170,7 @@ jobs:
           poetry export --extras all --with server --without-hashes -o exported.txt
           python -m pip install packaging
           python scripts/constraints.py exported.txt 3.11 3.12 3.13 3.14
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: constraints
           path: constraints-py*.txt
@@ -130,49 +180,77 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     # Gate publication behind a GitHub Environment so a tag push cannot ship on
-    # its own — configure it with required reviewers under
-    # Settings → Environments. Trusted publishing (OIDC) means no API token is
-    # stored anywhere; register the publisher on PyPI for this repo/workflow —
-    # once per project: `ducta` AND `ducta-server` (dist/ holds both, uploaded together).
+    # its own — configure it with required reviewers under Settings →
+    # Environments (an environment that does not exist is created unprotected).
+    # Trusted publishing (OIDC) means no API token is stored anywhere; register
+    # the publisher on PyPI (and TestPyPI) for this repo/workflow — once per
+    # project: `ducta` AND `ducta-server` (dist/ holds both, uploaded together).
     environment: ${{ github.event.inputs.target || 'pypi' }}
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
+      # PyPI never accepts a file twice and twine stops at the first refusal, so
+      # an upload cut short (e.g. one project without a trusted publisher) can
+      # only be completed by skipping what is already there. Both steps.
       - name: Publish to TestPyPI
         if: github.event.inputs.target == 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
       - name: Publish to PyPI
         if: github.event.inputs.target != 'testpypi'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          skip-existing: true
 
-  # Attach the constraints files to the GitHub release of the tag, so
+  # The GitHub release of the tag: its CHANGELOG section as notes, and the
+  # constraints files, so
   #   pip install "ducta[all]==X.Y.Z" "ducta-server==X.Y.Z" -c https://github.com/faustinolopezramos/ducta/releases/download/vX.Y.Z/constraints-py3.13.txt
-  # installs what was tested. Only for tag pushes, after PyPI accepted the release.
+  # installs what was tested. Only for a tag published to PyPI, after PyPI accepted it.
   github-release:
-    name: Attach constraints to the GitHub release
+    name: GitHub release
     needs: publish
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') && github.event.inputs.target != 'testpypi'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: constraints
-      - name: Create the release or add the file to it
+      - name: Release notes from the CHANGELOG
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          # The lines under "## [X.Y.Z]", up to the next "## [" heading.
+          awk -v v="$version" '
+            /^## \[/ { if (on) exit; on = (index($0, "## [" v "]") == 1); next }
+            on
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then
+            echo "::warning::CHANGELOG.md has no section for $version"
+            echo "See CHANGELOG.md." > notes.md
+          fi
+          printf '\n---\nConstraints for a reproducible install are attached (`pip install … -c constraints-py3.X.txt`).\n' >> notes.md
+      - name: Create the release or update it
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
             gh release upload "$TAG" constraints-py*.txt --clobber
           else
-            gh release create "$TAG" constraints-py*.txt --title "$TAG" --notes "See CHANGELOG.md."
+            gh release create "$TAG" constraints-py*.txt --title "$TAG" --notes-file notes.md
           fi

@@ -46,10 +46,23 @@ from ducta.redaction import redact_text
 # 1.10: ``triggered_by`` (the run whose failed checks started this one through its
 # pipeline's ``retrain:``), and an ML node's ``ml.registered`` (the versions it
 # registered), each only when set.
-SCHEMA_VERSION = "1.10"
+# 1.11: ``started_by`` — who started the run: ``{"via": "server", "user_id": ...}`` (the
+# API server's user; no id when auth is off) or ``{"via": "cli", "user": <OS user>}``.
+SCHEMA_VERSION = "1.11"
 _HASH_PREFIX = "sha256:"
 _SIG_PREFIX = "hmac-sha256:"
 _SIGNING_KEY_ENV = "DUCTA_CERTIFICATE_KEY"
+#: Set to ``server`` by the API server in the environment of a run's own process: the run
+#: writes its certificate unsigned and the server signs it once the process has ended
+#: (:func:`sign_certificate_file`). The key never reaches the pipeline's code.
+SIGNER_ENV = "DUCTA_CERTIFICATE_SIGNER"
+#: The context attribute listing the certificates this process wrote for the server to sign.
+TO_SIGN_ATTR = "_certificates_to_sign"
+
+
+def signed_by_server() -> bool:
+    """Whether this run's certificates are signed by the server that started the process."""
+    return os.environ.get(SIGNER_ENV, "").strip().lower() == "server"
 
 
 def resolve_signing_key(context: Any) -> Optional[bytes]:
@@ -191,6 +204,7 @@ class RunCertificate:
     run_window: Optional[Dict[str, Optional[str]]] = None
     reproduction_of: Optional[str] = None
     triggered_by: Optional[Dict[str, Any]] = None
+    started_by: Optional[Dict[str, Any]] = None
     evidence_complete: bool = True
     evidence_gaps: List[str] = field(default_factory=list)
     signed: bool = False
@@ -234,6 +248,8 @@ class RunCertificate:
             data["reproduction_of"] = self.reproduction_of
         if self.triggered_by:
             data["triggered_by"] = self.triggered_by
+        if self.started_by:
+            data["started_by"] = self.started_by
         return data
 
     def compute_hash(self) -> str:
@@ -293,6 +309,20 @@ def _triggered_by(context: Any) -> Optional[Dict[str, Any]]:
     return dict(value) if isinstance(value, dict) and value else None
 
 
+def _started_by(context: Any) -> Optional[Dict[str, Any]]:
+    """Who started the run: what the API server set on the context, else the OS user of a
+    CLI run. Sealed with the rest, so the certificate says who as well as what."""
+    value = getattr(context, "started_by", None)
+    if isinstance(value, dict) and value:
+        return {str(k): str(v) for k, v in value.items() if v is not None}
+    try:
+        import getpass
+
+        return {"via": "cli", "user": getpass.getuser()}
+    except Exception:  # noqa: BLE001 — no login name (a container without one)
+        return {"via": "cli"}
+
+
 def build_certificate(
     context: Any,
     *,
@@ -345,6 +375,7 @@ def build_certificate(
         ),
         reproduction_of=_reproduction_of(context),
         triggered_by=_triggered_by(context),
+        started_by=_started_by(context),
         evidence_complete=ledger.evidence_complete,
         evidence_gaps=ledger.record_failures,
         evidence_level=_evidence_level(context),
@@ -454,9 +485,46 @@ def write_certificate(cert: RunCertificate, run_dir: Path) -> Path:
 
     Also copied to the StorageBackend when one is configured (:func:`_storage_configured`).
     """
+    return _write_sealed(cert.sealed(), run_dir, cert.run_id)
+
+
+def sign_certificate_file(path: Path, key: bytes, run_id: str) -> Path:
+    """Sign the unsigned certificate at *path*, written by run *run_id*'s own process.
+
+    For the API server, which keeps the signing key out of that process. Refused
+    (``ValueError``) when the file is not that run's certificate, is already signed, or
+    was altered after it was written (its hash no longer matches): the server signs only
+    the certificate of a run it started, as that run wrote it.
+    """
+    path = Path(path)
+    if path.name != "certificate.json" or path.parent.name != run_id:
+        raise ValueError(f"{path} is not the certificate of run {run_id}")
+    data = load_certificate(path)
+    if data.get("run_id") != run_id:
+        raise ValueError(f"{path} names run {data.get('run_id')!r}, not {run_id}")
+    if data.get("signature"):
+        raise ValueError(f"{path} is already signed")
+    content = {
+        k: v for k, v in data.items() if k not in ("certificate_hash", "signature", "key_id")
+    }
+    if _sha256(_canonical_json(content)) != data.get("certificate_hash"):
+        raise ValueError(f"{path} was altered after the run wrote it (hash mismatch)")
+    content["signed"] = True
+    digest = _sha256(_canonical_json(content))
+    sealed = {
+        **content,
+        "certificate_hash": digest,
+        "signature": _SIG_PREFIX
+        + hmac.new(key, digest.encode("utf-8"), hashlib.sha256).hexdigest(),
+        "key_id": key_id_of(key),
+    }
+    return _write_sealed(sealed, path.parent, run_id)
+
+
+def _write_sealed(sealed: Dict[str, Any], run_dir: Path, run_id: str) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / "certificate.json"
-    payload = json.dumps(cert.sealed(), indent=2, default=str)
+    payload = json.dumps(sealed, indent=2, default=str)
     fd, tmp = tempfile.mkstemp(dir=str(run_dir), suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -472,11 +540,9 @@ def write_certificate(cert: RunCertificate, run_dir: Path) -> Path:
         from ducta.core.storage import get_storage_backend
 
         storage = get_storage_backend()
-        storage.put_object(f"certificates/{cert.run_id}/certificate.json", payload.encode("utf-8"))
+        storage.put_object(f"certificates/{run_id}/certificate.json", payload.encode("utf-8"))
     except Exception as exc:  # noqa: BLE001
-        logger.debug(
-            "StorageBackend certificate sync failed for {id}: {exc}", id=cert.run_id, exc=exc
-        )
+        logger.debug("StorageBackend certificate sync failed for {id}: {exc}", id=run_id, exc=exc)
 
     return target
 

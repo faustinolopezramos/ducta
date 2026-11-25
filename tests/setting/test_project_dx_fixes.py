@@ -234,3 +234,17 @@ nodes:
 """
         text = _problems(self._root(tmp_path, "{a: same}", CATALOG, template))
         assert "both become 'same'" in text
+
+
+class TestANodeNamedLikeItsKindKeepsItsName:
+    """The node-kind tag pydantic inserts was dropped wherever it appeared, so a
+    node called `transform` lost its name ("pipelines/p.nodes.inputz"), and the
+    suggestion came from every schema key ("did you mean 'input'")."""
+
+    def test_node_named_transform_is_named_in_the_error(self, tmp_path):
+        pipeline = PIPELINE.replace("first", "transform").replace(
+            "inputs: {raw: raw}", "inputz: {raw: raw}"
+        )
+        text = _problems(_project(tmp_path, pipeline=pipeline))
+        assert "nodes.transform.inputz" in text, text
+        assert "did you mean 'inputs'" in text, text
